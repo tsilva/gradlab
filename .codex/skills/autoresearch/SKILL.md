@@ -25,7 +25,7 @@ Resolve exactly one checked-in goal and recipe. The current study contract accep
 with explicit training start states and distinct quantized 20%, 50%, and full training caps.
 It uses success evidence when the task declares success termination and return evidence when the
 goal ranks episode return but declares no success event.
-Only current schema-v4 studies can be resumed.
+Only current schema-v5 studies can be resumed.
 
 ## Initialize or resume
 
@@ -37,9 +37,10 @@ uv run python .codex/skills/autoresearch/scripts/study.py init \
   [--strong-threshold 0.90]
 ```
 
-The helper resumes the sole matching current study. A new study resolves
-`GRADLAB_LOCAL_FLEET` (or the explicit `--target` override) once, then pins that
-fleet, committed `HEAD`, all composed source hashes, the runtime triplet, rung
+The helper resumes the sole matching current study. A new study resolves the
+schema-v3 operator `dstack.default_fleet` (or the explicit `--target` override)
+once, then pins that fleet and its coordinator, committed `HEAD`, all composed
+source hashes, the runtime triplet, rung
 caps, seeds, and threshold in `~/.config/gradlab/runs/autoresearch/<study>/study.json`. Existing
 studies retain their recorded fleet. Never hand-edit the state.
 

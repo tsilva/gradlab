@@ -176,6 +176,9 @@ class RunSupervisorTests(unittest.TestCase):
                     "allow_on_demand": False,
                     "max_duration_seconds": 3600,
                 },
+                "dstack_coordinator_id": "primary",
+                "dstack_project": "main",
+                "coordinator_binding_basis": "launch-selection",
                 "dstack_task": self.run_id,
                 "runtime_workflow_run_id": "123",
                 "runtime_input_sha256": RUNTIME_INPUT_SHA256,
@@ -1301,9 +1304,7 @@ class RunSupervisorTests(unittest.TestCase):
                 return self.value.items()
 
         class RemoteRun:
-            summary = {
-                "orchestration/event/sequence": SummarySubDict({"max": 10})
-            }
+            summary = {"orchestration/event/sequence": SummarySubDict({"max": 10})}
 
         class Api:
             def flush(self) -> None:
@@ -1492,8 +1493,7 @@ class RunSupervisorTests(unittest.TestCase):
             complete_result,
         )
         before = sum(
-            row["kind"] == "eval_by_start"
-            for row in complete.store.pending_metric_frames(limit=10)
+            row["kind"] == "eval_by_start" for row in complete.store.pending_metric_frames(limit=10)
         )
         self.assertEqual(before, 1)
         partial_result = result(episode_count=1)
@@ -1506,8 +1506,7 @@ class RunSupervisorTests(unittest.TestCase):
             partial_result,
         )
         after = sum(
-            row["kind"] == "eval_by_start"
-            for row in complete.store.pending_metric_frames(limit=10)
+            row["kind"] == "eval_by_start" for row in complete.store.pending_metric_frames(limit=10)
         )
         self.assertEqual(after, before)
 

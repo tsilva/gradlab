@@ -9,6 +9,7 @@ from pathlib import Path
 
 from gradlab.goal_catalog import GOAL_CATALOG_SCHEMA_VERSION
 from gradlab.goal_variants import build_goal_variant_descriptor
+from gradlab.json_utils import canonical_json_sha256 as document_sha256
 from gradlab.r2_store import BucketConfig, ConditionalWriteConflict, RunStorageConfig
 from gradlab.run_authority import LeaseUnavailable, RunAuthority
 from gradlab.run_contracts import (
@@ -85,6 +86,9 @@ class RunAuthorityTests(unittest.TestCase):
                     "target": "local-gpu",
                     "max_duration_seconds": 86_400,
                 },
+                "dstack_coordinator_id": "primary",
+                "dstack_project": "main",
+                "coordinator_binding_basis": "launch-selection",
                 "dstack_task": run_id,
                 "runtime_workflow_run_id": "123",
                 "runtime_input_sha256": SHA,
@@ -126,9 +130,7 @@ class RunAuthorityTests(unittest.TestCase):
         manifest = self.manifest(new_run_id(), new_attempt_id())
         source = manifest.to_dict()
         source["goal_variant"]["schema_version"] = 1
-        source_key = (
-            f"runs/{manifest.run_id}/attempts/{manifest.attempt_id}/manifest.json"
-        )
+        source_key = f"runs/{manifest.run_id}/attempts/{manifest.attempt_id}/manifest.json"
         self.authority.control.put_json(source_key, source, create_only=True)
 
         report = self.authority.replace_goal_variant_catalog([(manifest, None)])
@@ -162,6 +164,33 @@ class RunAuthorityTests(unittest.TestCase):
                 changed,
                 create_only=True,
             )
+
+    def test_manifest_creation_writes_hash_bound_coordinator_before_attempt_state(self) -> None:
+        manifest = self.manifest(new_run_id(), new_attempt_id())
+
+        self.authority.create_manifest(manifest)
+
+        binding = self.authority.coordinator_binding(manifest.run_id, manifest.attempt_id)
+        self.assertEqual(binding.coordinator_id, "primary")
+        self.assertEqual(binding.project, "main")
+        self.assertEqual(binding.target, "local-gpu")
+        self.assertEqual(binding.manifest_sha256, document_sha256(manifest.to_dict()))
+        self.assertEqual(binding.basis, "launch-selection")
+        self.assertEqual(
+            self.authority.semantic_state(manifest.run_id)["coordinator_bindings"],
+            [binding.to_dict()],
+        )
+
+    def test_manifest_creation_without_coordinator_provenance_fails_closed(self) -> None:
+        manifest = self.manifest(new_run_id(), new_attempt_id())
+        compute = dict(manifest.compute)
+        compute.pop("dstack_coordinator_id")
+        document = {**manifest.to_dict(), "compute": compute}
+        unbound = RunManifest.from_dict(document)
+
+        with self.assertRaisesRegex(ValueError, "dstack_coordinator_id"):
+            self.authority.create_manifest(unbound)
+        self.assertIsNone(self.authority.manifest(unbound.run_id))
 
     def test_cancel_request_is_durable_idempotent_and_semantically_visible(self) -> None:
         run_id = new_run_id()

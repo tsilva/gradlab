@@ -6,10 +6,12 @@ from pathlib import Path
 import pytest
 
 from gradlab.operator_credentials import (
+    DstackCoordinatorProfile,
     KeychainReference,
     OperatorConfigurationError,
     load_operator_environment,
     reject_protected_dotenv,
+    resolve_dstack_token,
 )
 from gradlab.operator_environment import load_repository_operator_environment
 
@@ -37,15 +39,26 @@ active = true
     config_path = _write(
         tmp_path / "operator.toml",
         f"""
-schema_version = 2
+schema_version = 3
 
 [environment]
-DSTACK_SERVER_URL = "http://127.0.0.1:3000"
 WANDB_ENTITY = "example"
 
-[keychain.DSTACK_TOKEN]
-service = "gradlab-dstack-admin"
-account = "operator"
+[dstack]
+default_coordinator = "primary"
+default_fleet = "local-gpu"
+
+[dstack.coordinators.primary]
+project = "main"
+server_url = "http://127.0.0.1:3000"
+token = {{ service = "gradlab-dstack-admin", account = "operator" }}
+
+[dstack.fleets.local-gpu]
+coordinator = "primary"
+cpu = 12
+memory = "40GB"
+gpu = "1"
+disk = "50GB"
 
 [keychain.WANDB_API_KEY]
 service = "gradlab-wandb"
@@ -69,24 +82,197 @@ path = "{modal_path}"
     )
 
     assert environment == {
-        "DSTACK_SERVER_URL": "http://127.0.0.1:3000",
         "WANDB_ENTITY": "example",
-        "DSTACK_TOKEN": "dstack-token",
         "WANDB_API_KEY": "wandb-key",
         "MODAL_TOKEN_ID": "modal-id",
         "MODAL_TOKEN_SECRET": "modal-secret",
     }
-    assert report.loaded_sources["DSTACK_SERVER_URL"] == "operator-config"
-    assert report.loaded_sources["DSTACK_TOKEN"] == "macos-keychain"
+    assert report.dstack is not None
+    assert report.dstack.fleet().coordinator_id == "primary"
+    assert report.dstack.coordinator().token == KeychainReference(
+        "gradlab-dstack-admin", "operator"
+    )
     assert report.loaded_sources["MODAL_TOKEN_SECRET"] == "modal-profile"
     assert not report.unavailable_sources
+
+
+def test_operator_config_loads_private_per_fleet_dstack_resources(tmp_path: Path) -> None:
+    config_path = _write(
+        tmp_path / "operator.toml",
+        """
+schema_version = 3
+
+[dstack]
+default_coordinator = "primary"
+default_fleet = "small-gpu"
+
+[dstack.coordinators.primary]
+project = "main"
+server_url = "http://127.0.0.1:3000"
+token = { service = "gradlab-dstack-admin", account = "operator" }
+
+[dstack.fleets.small-gpu]
+coordinator = "primary"
+cpu = 12
+memory = "28GB"
+gpu = "1"
+disk = "50GB"
+""".strip()
+        + "\n",
+    )
+
+    report = load_operator_environment(
+        environment={},
+        config_path=config_path,
+        keychain_lookup=lambda _reference: None,
+    )
+
+    assert report.dstack is not None
+    assert report.dstack.fleet("small-gpu").resources.as_manifest() == {
+        "cpu": 12,
+        "memory": "28GB",
+        "gpu": "1",
+        "disk": "50GB",
+    }
+
+
+def test_operator_config_rejects_invalid_dstack_resource_profile(tmp_path: Path) -> None:
+    config_path = _write(
+        tmp_path / "operator.toml",
+        """
+schema_version = 3
+
+[dstack]
+default_coordinator = "primary"
+default_fleet = "small-gpu"
+
+[dstack.coordinators.primary]
+project = "main"
+server_url = "http://127.0.0.1:3000"
+token = { service = "gradlab-dstack-admin", account = "operator" }
+
+[dstack.fleets.small-gpu]
+coordinator = "primary"
+cpu = 12
+memory = "28 gigabytes"
+gpu = "1"
+disk = "50GB"
+""".strip()
+        + "\n",
+    )
+
+    with pytest.raises(OperatorConfigurationError, match="memory must be"):
+        load_operator_environment(
+            environment={},
+            config_path=config_path,
+            keychain_lookup=lambda _reference: None,
+        )
+
+
+def test_dual_coordinator_tokens_are_resolved_only_after_fleet_selection(
+    tmp_path: Path,
+) -> None:
+    config_path = _write(
+        tmp_path / "operator.toml",
+        """
+schema_version = 3
+
+[dstack]
+default_coordinator = "b3"
+default_fleet = "b3"
+
+[dstack.coordinators.b3]
+project = "main"
+server_url = "http://127.0.0.1:3000"
+token = { service = "dstack-b3", account = "operator" }
+
+[dstack.coordinators.b2]
+project = "main"
+server_url = "http://127.0.0.1:3002"
+token = { service = "dstack-b2", account = "operator" }
+
+[dstack.fleets.b3]
+coordinator = "b3"
+cpu = 12
+memory = "40GB"
+gpu = "1"
+disk = "50GB"
+
+[dstack.fleets.b2]
+coordinator = "b2"
+cpu = 12
+memory = "28GB"
+gpu = "1"
+disk = "50GB"
+""".strip()
+        + "\n",
+    )
+    calls: list[KeychainReference] = []
+    report = load_operator_environment(
+        environment={},
+        config_path=config_path,
+        keychain_lookup=lambda reference: calls.append(reference) or "unexpected",
+    )
+
+    assert calls == []
+    assert report.dstack is not None
+    fleet = report.dstack.fleet("b2")
+    assert fleet.coordinator_id == "b2"
+    token, source = resolve_dstack_token(
+        report.dstack.coordinator(fleet.coordinator_id),
+        environment={},
+        keychain_lookup=lambda reference: calls.append(reference) or "b2-token",
+    )
+    assert token == "b2-token"
+    assert source == "macos-keychain"
+    assert calls == [KeychainReference("dstack-b2", "operator")]
+
+
+def test_process_dstack_token_overrides_only_the_selected_profile() -> None:
+    profile = DstackCoordinatorProfile(
+        coordinator_id="b2",
+        project="main",
+        server_url="http://127.0.0.1:3002",
+        token=KeychainReference("dstack-b2", "operator"),
+    )
+    calls: list[KeychainReference] = []
+
+    token, source = resolve_dstack_token(
+        profile,
+        environment={"DSTACK_TOKEN": "process-token"},
+        keychain_lookup=lambda reference: calls.append(reference) or "stored-token",
+    )
+
+    assert token == "process-token"
+    assert source == "process-environment"
+    assert calls == []
+
+
+def test_schema_v3_rejects_ambient_dstack_routing_metadata(tmp_path: Path) -> None:
+    config_path = _write(
+        tmp_path / "operator.toml",
+        """
+schema_version = 3
+
+[environment]
+DSTACK_SERVER_URL = "http://127.0.0.1:3000"
+""".strip()
+        + "\n",
+    )
+
+    with pytest.raises(OperatorConfigurationError, match="routing belongs under"):
+        load_operator_environment(
+            environment={},
+            config_path=config_path,
+            keychain_lookup=lambda _reference: None,
+        )
 
 
 def test_process_environment_wins_without_reading_keychain(tmp_path: Path) -> None:
     config_path = _write(
         tmp_path / "operator.toml",
         """
-schema_version = 2
+schema_version = 3
 
 [keychain.WANDB_API_KEY]
 service = "gradlab-wandb"
@@ -111,7 +297,7 @@ def test_plaintext_protected_operator_value_is_rejected(tmp_path: Path) -> None:
     config_path = _write(
         tmp_path / "operator.toml",
         """
-schema_version = 2
+schema_version = 3
 
 [environment]
 WANDB_API_KEY = "plaintext-is-not-allowed"
@@ -145,7 +331,7 @@ active = true
     config_path = _write(
         tmp_path / "operator.toml",
         f"""
-schema_version = 2
+schema_version = 3
 
 [modal]
 path = "{modal_path}"
@@ -193,7 +379,7 @@ def test_missing_keychain_item_is_reported_without_a_value(tmp_path: Path) -> No
     config_path = _write(
         tmp_path / "operator.toml",
         """
-schema_version = 2
+schema_version = 3
 
 [keychain.WANDB_API_KEY]
 service = "gradlab-wandb"
@@ -219,7 +405,7 @@ def test_scoped_load_does_not_resolve_unrelated_keychain_or_modal(
     config_path = _write(
         tmp_path / "operator.toml",
         """
-schema_version = 2
+schema_version = 3
 
 [environment]
 WANDB_ENTITY = "research"
@@ -263,7 +449,7 @@ def test_scoped_load_does_not_validate_unrelated_entries(tmp_path: Path) -> None
     config_path = _write(
         tmp_path / "operator.toml",
         """
-schema_version = 2
+schema_version = 3
 
 [environment]
 WANDB_ENTITY = "research"
@@ -288,8 +474,7 @@ path = "/missing/unrelated-modal.toml"
         config_path=config_path,
         keychain_lookup=lambda reference: (
             "control-access"
-            if reference
-            == KeychainReference("gradlab-control", "access-key")
+            if reference == KeychainReference("gradlab-control", "access-key")
             else None
         ),
         requested_names={

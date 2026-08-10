@@ -13,6 +13,7 @@ from gradlab.json_utils import canonical_json_sha256 as document_sha256
 
 SCHEMA_VERSION = 2
 RUN_MANIFEST_SCHEMA_VERSION = 5
+COORDINATOR_BINDING_SCHEMA_VERSION = 1
 CANCEL_REQUEST_SCHEMA_VERSION = 1
 DSTACK_STOP_DURATION_SECONDS = 10 * 60
 DEFAULT_LIVENESS_POLICY: dict[str, float] = {
@@ -138,6 +139,46 @@ def validate_liveness_policy(
     if teardown_and_drain >= DSTACK_STOP_DURATION_SECONDS:
         raise ValueError("liveness teardown and failure drain must fit inside dstack stop_duration")
     return normalized
+
+
+@dataclass(frozen=True)
+class CoordinatorBinding(_CurrentContract):
+    run_id: str
+    attempt_id: str
+    coordinator_id: str
+    project: str
+    target: str | None
+    manifest_sha256: str
+    basis: str
+    bound_at: str
+    schema_version: int = COORDINATOR_BINDING_SCHEMA_VERSION
+
+    def validate(self) -> None:
+        _require_current_schema(
+            self.schema_version,
+            expected=COORDINATOR_BINDING_SCHEMA_VERSION,
+            label="coordinator binding",
+        )
+        _require_run_id(self.run_id)
+        _require_attempt_id(self.attempt_id)
+        for label, value in (
+            ("coordinator_id", self.coordinator_id),
+            ("project", self.project),
+            ("basis", self.basis),
+            ("bound_at", self.bound_at),
+        ):
+            text = _require_text(value, label)
+            if any(character in text for character in "\r\n\0"):
+                raise ValueError(f"{label} must be single-line text")
+        if self.target is not None:
+            target = _require_text(self.target, "target")
+            if any(character in target for character in "\r\n\0"):
+                raise ValueError("target must be single-line text")
+        _require_sha256(self.manifest_sha256, "manifest_sha256")
+
+    def to_dict(self) -> dict[str, Any]:
+        self.validate()
+        return asdict(self)
 
 
 @dataclass(frozen=True)
@@ -272,9 +313,7 @@ class RunManifest(_CurrentContract):
 
             validate_vizdoom_iwad_binding(vizdoom_iwad)
             if rom_asset is not None:
-                raise ValueError(
-                    "run manifest cannot combine ROM and ViZDoom IWAD asset bindings"
-                )
+                raise ValueError("run manifest cannot combine ROM and ViZDoom IWAD asset bindings")
         locations = [
             _require_text(self.storage.get(name), f"storage.{name}")
             for name in ("control", "evaluation", "models")
@@ -642,11 +681,11 @@ class TerminalReceipt(_CurrentContract):
                 raise ValueError("canceled terminal requires a complete drain")
             checkpoints = [dict(row) for row in self.checkpoint_inventory]
             if int(self.final_step) > 0:
-                finals = [
-                    row for row in checkpoints if str(row.get("purpose") or "") == "final"
-                ]
+                finals = [row for row in checkpoints if str(row.get("purpose") or "") == "final"]
                 if not finals:
-                    raise ValueError("canceled terminal with training progress requires a final checkpoint")
+                    raise ValueError(
+                        "canceled terminal with training progress requires a final checkpoint"
+                    )
                 maximum_step = max(int(row.get("step") or 0) for row in checkpoints)
                 if int(self.final_step) != maximum_step:
                     raise ValueError(
@@ -662,9 +701,7 @@ class TerminalReceipt(_CurrentContract):
                 ):
                     raise ValueError("canceled terminal W&B delivery is not remotely visible")
         early_stop = (
-            EarlyStopReceipt.from_dict(self.early_stop)
-            if self.early_stop is not None
-            else None
+            EarlyStopReceipt.from_dict(self.early_stop) if self.early_stop is not None else None
         )
         if self.state == "stopped":
             if early_stop is None or early_stop.outcome != "neutral":
@@ -688,9 +725,7 @@ class TerminalReceipt(_CurrentContract):
                 raise ValueError("stopped terminal requires a complete drain")
             if int(self.wandb_high_water_mark) <= 0:
                 raise ValueError("stopped terminal requires W&B metric delivery")
-            if int(drain.get("metric_segment_high_water") or 0) != int(
-                self.wandb_high_water_mark
-            ):
+            if int(drain.get("metric_segment_high_water") or 0) != int(self.wandb_high_water_mark):
                 raise ValueError("stopped terminal R2 and W&B high-water marks do not match")
             if int(drain.get("wandb_remote_high_water_mark") or 0) < int(
                 self.wandb_high_water_mark

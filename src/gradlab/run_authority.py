@@ -29,6 +29,7 @@ from gradlab.r2_store import (
 from gradlab.run_contracts import (
     CancelRequest,
     CheckpointManifest,
+    CoordinatorBinding,
     EarlyStopReceipt,
     EVAL_INVENTORY_SETTLED_STATUSES,
     EvalIntent,
@@ -123,7 +124,68 @@ class RunAuthority:
     def run_prefix(run_id: str) -> str:
         return f"runs/{run_id}"
 
+    @classmethod
+    def coordinator_binding_key(cls, run_id: str, attempt_id: str) -> str:
+        return f"{cls.run_prefix(run_id)}/attempts/{attempt_id}/coordinator.json"
+
+    def coordinator_binding_for_manifest(self, manifest: RunManifest) -> CoordinatorBinding:
+        coordinator_id = str(manifest.compute.get("dstack_coordinator_id") or "").strip()
+        project = str(manifest.compute.get("dstack_project") or "").strip()
+        if not coordinator_id or not project:
+            raise ValueError(
+                "new run manifests require compute.dstack_coordinator_id and dstack_project"
+            )
+        selected = manifest.compute.get("selected")
+        request = manifest.compute.get("request")
+        target = (
+            str(
+                (
+                    selected.get("target")
+                    if isinstance(selected, Mapping) and selected.get("target") is not None
+                    else request.get("target")
+                    if isinstance(request, Mapping)
+                    else ""
+                )
+                or ""
+            ).strip()
+            or None
+        )
+        return CoordinatorBinding(
+            run_id=manifest.run_id,
+            attempt_id=manifest.attempt_id,
+            coordinator_id=coordinator_id,
+            project=project,
+            target=target,
+            manifest_sha256=canonical_json_sha256(manifest.to_dict()),
+            basis=str(manifest.compute.get("coordinator_binding_basis") or "launch-selection"),
+            bound_at=manifest.created_at,
+        )
+
+    def create_coordinator_binding(self, binding: CoordinatorBinding) -> str:
+        return self.control.put_json(
+            self.coordinator_binding_key(binding.run_id, binding.attempt_id),
+            binding.to_dict(),
+            create_only=True,
+        )
+
+    def coordinator_binding(self, run_id: str, attempt_id: str) -> CoordinatorBinding:
+        document = self.control.get_json_optional(self.coordinator_binding_key(run_id, attempt_id))
+        if document is None:
+            raise RuntimeError(
+                f"attempt has no immutable coordinator binding: {run_id}/{attempt_id}"
+            )
+        binding = CoordinatorBinding.from_dict(document)
+        if binding.run_id != run_id or binding.attempt_id != attempt_id:
+            raise RuntimeError("coordinator binding identity does not match its R2 key")
+        manifest = self.control.get_json_optional(
+            f"{self.run_prefix(run_id)}/attempts/{attempt_id}/manifest.json"
+        )
+        if manifest is not None and canonical_json_sha256(manifest) != binding.manifest_sha256:
+            raise RuntimeError("coordinator binding manifest hash does not match attempt manifest")
+        return binding
+
     def create_manifest(self, manifest: RunManifest) -> str:
+        self.create_coordinator_binding(self.coordinator_binding_for_manifest(manifest))
         event = self._goal_catalog_event_for_manifest(manifest)
         self._put_goal_catalog_event(event)
         etag = self.control.put_json(
@@ -143,6 +205,7 @@ class RunAuthority:
         return etag
 
     def create_attempt_manifest(self, manifest: RunManifest) -> str:
+        self.create_coordinator_binding(self.coordinator_binding_for_manifest(manifest))
         event = self._goal_catalog_event_for_manifest(manifest)
         self._put_goal_catalog_event(event)
         etag = self.control.put_json(
@@ -241,7 +304,7 @@ class RunAuthority:
         try:
             recipe = self.recipe_document(manifest.recipe_sha256)
             resolved_goal = self._catalog_resolved_goal(recipe, descriptor=descriptor)
-        except (FileNotFoundError, KeyError, ValueError):
+        except FileNotFoundError, KeyError, ValueError:
             pass
         source_key = (
             f"{self.run_prefix(manifest.run_id)}/attempts/{manifest.attempt_id}/manifest.json"
@@ -253,9 +316,7 @@ class RunAuthority:
             attempt_id=manifest.attempt_id,
             source_bucket="control",
             source_key=source_key,
-            source_document=(
-                manifest.to_dict() if source_document is None else source_document
-            ),
+            source_document=(manifest.to_dict() if source_document is None else source_document),
             created_at=manifest.created_at,
             variant=descriptor,
             run=self._catalog_run_record(
@@ -552,8 +613,7 @@ class RunAuthority:
         goal_slugs: set[str] = set()
         for manifest, terminal in records:
             manifest_source_key = (
-                f"{self.run_prefix(manifest.run_id)}/attempts/"
-                f"{manifest.attempt_id}/manifest.json"
+                f"{self.run_prefix(manifest.run_id)}/attempts/{manifest.attempt_id}/manifest.json"
             )
             manifest_source = self.control.get_json_optional(manifest_source_key)
             manifest_event = self._goal_catalog_event_for_manifest(
@@ -574,9 +634,7 @@ class RunAuthority:
                     metrics=None,
                 )
                 self._put_goal_catalog_event(terminal_event)
-            for eval_key in self.evaluation.iter_keys(
-                f"{self.run_prefix(manifest.run_id)}/evals/"
-            ):
+            for eval_key in self.evaluation.iter_keys(f"{self.run_prefix(manifest.run_id)}/evals/"):
                 if not eval_key.endswith("/verified-result.json"):
                     continue
                 result = EvalResult.from_dict(self.evaluation.get_json(eval_key))
@@ -646,9 +704,7 @@ class RunAuthority:
     ) -> dict[str, Any]:
         if state == "running" and stop_reason is None:
             return self.register_goal_variant(manifest)
-        raise ValueError(
-            "terminal goal catalog updates require an authoritative terminal receipt"
-        )
+        raise ValueError("terminal goal catalog updates require an authoritative terminal receipt")
 
     def clear_goal_variant_catalog(self) -> dict[str, int]:
         catalog_keys = sorted(self.control.iter_keys(f"{GOAL_CATALOG_ROOT}/"))
@@ -1212,8 +1268,7 @@ class RunAuthority:
 
     def put_verified_eval_result(self, result: EvalResult) -> str:
         key = (
-            f"{self.run_prefix(result.run_id)}/evals/"
-            f"{result.idempotency_key}/verified-result.json"
+            f"{self.run_prefix(result.run_id)}/evals/{result.idempotency_key}/verified-result.json"
         )
         try:
             manifest = self._manifest_for_attempt(result.run_id)
@@ -1485,9 +1540,7 @@ class RunAuthority:
             manifest = self._manifest_for_attempt(receipt.run_id, receipt.attempt_id)
         except ValueError:
             manifest = None
-        attempt_terminal_exists = (
-            self.control.get_json_optional(attempt_terminal_key) is not None
-        )
+        attempt_terminal_exists = self.control.get_json_optional(attempt_terminal_key) is not None
         event = (
             self._goal_catalog_event_for_terminal(
                 manifest,
@@ -1583,8 +1636,7 @@ class RunAuthority:
             manifest,
             receipt,
             source_key=(
-                f"{self.run_prefix(receipt.run_id)}/attempts/"
-                f"{receipt.attempt_id}/terminal.json"
+                f"{self.run_prefix(receipt.run_id)}/attempts/{receipt.attempt_id}/terminal.json"
             ),
             metrics=metrics,
         )
@@ -1622,9 +1674,13 @@ class RunAuthority:
             for key in control_keys
             if key.endswith("/cancel-request.json")
         ]
+        coordinator_bindings = [
+            self.control.get_json(key) for key in control_keys if key.endswith("/coordinator.json")
+        ]
         attempt_manifests.sort(key=lambda row: str(row.get("created_at") or ""))
         attempt_terminals.sort(key=lambda row: str(row.get("completed_at") or ""))
         cancel_requests.sort(key=lambda row: str(row.get("requested_at") or ""))
+        coordinator_bindings.sort(key=lambda row: str(row.get("bound_at") or ""))
         return {
             "run_id": run_id,
             "manifest": manifest,
@@ -1637,6 +1693,7 @@ class RunAuthority:
                 key.endswith("/verified-result.json") for key in eval_keys
             ),
             "attempts": attempt_manifests,
+            "coordinator_bindings": coordinator_bindings,
             "attempt_terminals": attempt_terminals,
             "cancel_requests": cancel_requests,
             "observed_at": self.clock.time(),

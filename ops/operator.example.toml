@@ -1,11 +1,8 @@
-schema_version = 2
+schema_version = 3
 
 # Non-sensitive operator metadata. Copy this file to:
 #   ~/.config/gradlab/operator.toml
 [environment]
-DSTACK_PROJECT = "<dstack-project>"
-DSTACK_SERVER_URL = "http://127.0.0.1:3000"
-GRADLAB_LOCAL_FLEET = "<local-fleet>"
 WANDB_ENTITY = "<wandb-entity>"
 GRADLAB_CONTROL_R2_URI = "s3://<control-bucket>"
 GRADLAB_CONTROL_R2_ENDPOINT_URL = "https://<account-id>.r2.cloudflarestorage.com"
@@ -18,10 +15,37 @@ GRADLAB_MODELS_R2_ENDPOINT_URL = "https://<account-id>.r2.cloudflarestorage.com"
 GRADLAB_MODELS_R2_REGION = "auto"
 GRADLAB_MODELS_R2_PUBLIC_BASE_URL = "https://<public-bucket-id>.r2.dev"
 
-# Secret values stay in macOS Keychain. These entries contain references only.
-[keychain.DSTACK_TOKEN]
-service = "gradlab-dstack-admin"
-account = "<operator-account>"
+# Coordinator metadata is explicit so each fleet has exactly one control plane.
+# The selected coordinator token is resolved lazily from its Keychain reference.
+[dstack]
+default_coordinator = "primary"
+default_fleet = "primary-gpu"
+
+[dstack.coordinators.primary]
+project = "<dstack-project>"
+server_url = "http://127.0.0.1:3000"
+token = { service = "gradlab-dstack-admin", account = "<operator-account>" }
+
+[dstack.coordinators.secondary]
+project = "<dstack-project>"
+server_url = "http://127.0.0.1:3002"
+token = { service = "gradlab-dstack-admin-secondary", account = "<operator-account>" }
+
+[dstack.fleets.primary-gpu]
+coordinator = "primary"
+cpu = 12
+memory = "40GB"
+gpu = "1"
+disk = "50GB"
+
+[dstack.fleets.secondary-gpu]
+coordinator = "secondary"
+cpu = 12
+memory = "28GB"
+gpu = "1"
+disk = "50GB"
+
+# Other secret values stay in macOS Keychain. These entries contain references only.
 
 [keychain.WANDB_API_KEY]
 service = "gradlab-wandb"

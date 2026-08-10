@@ -18,8 +18,6 @@ from gradlab.run_contracts import RUN_ID_PATTERN
 
 
 DSTACK_VERSION = "0.20.28"
-DSTACK_PROJECT_ENV = "DSTACK_PROJECT"
-LOCAL_FLEET_ENV = "GRADLAB_LOCAL_FLEET"
 TERMINAL_DSTACK_STATUSES = {
     "done",
     "failed",
@@ -30,30 +28,7 @@ TERMINAL_DSTACK_STATUSES = {
 SECRET_ENV_NAME_PATTERN = re.compile(r"[A-Z][A-Z0-9_]*")
 DSTACK_TASK_NAME_PATTERN = re.compile(r"[a-z][a-z0-9-]{1,40}")
 SENSITIVE_ENV_NAME_PATTERN = re.compile(r"(?:API_KEY|ACCESS_KEY|CREDENTIAL|PASSWORD|SECRET|TOKEN)")
-
-
-def resolve_dstack_project(
-    project: str | None = None,
-    *,
-    environment: Mapping[str, str] | None = None,
-) -> str:
-    values = os.environ if environment is None else environment
-    resolved = str(project or values.get(DSTACK_PROJECT_ENV) or "").strip()
-    if not resolved:
-        raise ValueError("DSTACK_PROJECT must identify the operator's dstack project")
-    return resolved
-
-
-def resolve_local_fleet(
-    target: str | None = None,
-    *,
-    environment: Mapping[str, str] | None = None,
-) -> str:
-    values = os.environ if environment is None else environment
-    resolved = str(target or values.get(LOCAL_FLEET_ENV) or "").strip()
-    if not resolved:
-        raise ValueError(f"local compute requires --target or {LOCAL_FLEET_ENV}")
-    return resolved
+RESOURCE_SIZE_PATTERN = re.compile(r"[1-9][0-9]*(?:MB|GB|TB)")
 
 
 @dataclass(frozen=True)
@@ -69,7 +44,7 @@ class ComputeRequest:
         if self.kind not in {"auto", "local", "spot", "on-demand"}:
             raise ValueError(f"unsupported compute policy: {self.kind}")
         if self.kind in {"auto", "local"} and not str(self.target or "").strip():
-            raise ValueError(f"local compute requires --target or {LOCAL_FLEET_ENV}")
+            raise ValueError("local compute requires a configured dstack fleet target")
         if int(self.max_duration_seconds) <= 0:
             raise ValueError("max_duration_seconds must be finite and positive")
         for label, value in (
@@ -113,6 +88,40 @@ class ComputeRequest:
 
 
 @dataclass(frozen=True)
+class DstackResources:
+    cpu: int = 12
+    memory: str = "40GB"
+    gpu: str = "1"
+    disk: str = "50GB"
+
+    def validate(self) -> None:
+        if isinstance(self.cpu, bool) or int(self.cpu) <= 0:
+            raise ValueError("dstack resource cpu must be a positive integer")
+        for label, value in (("memory", self.memory), ("disk", self.disk)):
+            if RESOURCE_SIZE_PATTERN.fullmatch(str(value)) is None:
+                raise ValueError(
+                    f"dstack resource {label} must be a positive whole MB, GB, or TB value"
+                )
+        if not str(self.gpu).strip() or any(character in str(self.gpu) for character in "\r\n\0"):
+            raise ValueError("dstack resource gpu must be non-empty single-line text")
+
+    def as_manifest(self) -> dict[str, Any]:
+        self.validate()
+        return {
+            "cpu": int(self.cpu),
+            "memory": str(self.memory),
+            "gpu": str(self.gpu),
+            "disk": str(self.disk),
+        }
+
+    @classmethod
+    def from_manifest(cls, value: Mapping[str, Any] | None) -> DstackResources:
+        resources = cls(**dict(value or {}))
+        resources.validate()
+        return resources
+
+
+@dataclass(frozen=True)
 class TaskRequest:
     run_id: str
     task_name: str
@@ -121,10 +130,7 @@ class TaskRequest:
     compute: ComputeRequest
     secret_env: Sequence[str]
     plain_env: Mapping[str, str] = field(default_factory=dict)
-    cpu: int = 12
-    memory: str = "40GB"
-    gpu: str = "1"
-    disk: str = "50GB"
+    resources: DstackResources = field(default_factory=DstackResources)
     retry_duration: str = "24h"
     rom_mount: str | None = None
 
@@ -137,10 +143,7 @@ class TaskRequest:
             raise ValueError("dstack task image must be immutable")
         if not self.manifest_uri:
             raise ValueError("manifest URI must not be empty")
-        if int(self.cpu) <= 0:
-            raise ValueError("cpu must be positive")
-        if not self.memory or not self.gpu or not self.disk:
-            raise ValueError("memory, gpu, and disk requirements must not be empty")
+        self.resources.validate()
         invalid_secret_names = sorted(
             {
                 str(name)
@@ -237,10 +240,10 @@ def render_task_config(request: TaskRequest) -> dict[str, Any]:
             # An unsplit SSH fleet contributes the whole machine as one block.
             # Minimum ranges admit that block while retaining the resource floor
             # for cloud offers; exact CPU/RAM values reject larger local hosts.
-            "cpu": f"{int(request.cpu)}..",
-            "memory": f"{request.memory}..",
-            "gpu": request.gpu,
-            "disk": f"{request.disk}..",
+            "cpu": f"{int(request.resources.cpu)}..",
+            "memory": f"{request.resources.memory}..",
+            "gpu": request.resources.gpu,
+            "disk": f"{request.resources.disk}..",
         },
         "max_duration": _duration_text(compute.bounded_duration_seconds),
         "stop_duration": "10m",
@@ -306,12 +309,26 @@ class DstackBackend:
     def __init__(
         self,
         *,
-        project: str | None = None,
+        project: str,
+        server_url: str,
+        token: str,
         executable: str = "dstack",
         environment: Mapping[str, str] | None = None,
     ):
         self.environment = dict(os.environ if environment is None else environment)
-        self.project = resolve_dstack_project(project, environment=self.environment)
+        self.project = str(project or "").strip()
+        if not self.project:
+            raise ValueError("dstack project must identify the selected coordinator project")
+        resolved_server_url = str(server_url or "").strip().rstrip("/")
+        resolved_token = str(token or "").strip()
+        if not resolved_server_url:
+            raise ValueError("dstack server_url must identify the selected coordinator")
+        if not resolved_token:
+            raise ValueError("dstack token must authenticate the selected coordinator")
+        self.server_url = resolved_server_url
+        self.environment["DSTACK_PROJECT"] = self.project
+        self.environment["DSTACK_SERVER_URL"] = self.server_url
+        self.environment["DSTACK_TOKEN"] = resolved_token
         self.executable = executable
 
     def _command(
@@ -388,8 +405,12 @@ class DstackBackend:
     def select_compute(
         self,
         request: ComputeRequest,
+        *,
+        resources: DstackResources | None = None,
     ) -> tuple[ComputeRequest, Mapping[str, Any] | None]:
         request.validate()
+        resolved_resources = resources or DstackResources()
+        resolved_resources.validate()
         if request.kind != "auto":
             return request, None
         local = replace(
@@ -412,13 +433,13 @@ class DstackBackend:
                 str(request.target),
                 "--reuse",
                 "--cpu",
-                "12..",
+                f"{int(resolved_resources.cpu)}..",
                 "--memory",
-                "40GB..",
+                f"{resolved_resources.memory}..",
                 "--gpu",
-                "1",
+                resolved_resources.gpu,
                 "--disk",
-                "50GB..",
+                f"{resolved_resources.disk}..",
             ],
             timeout=60,
         )

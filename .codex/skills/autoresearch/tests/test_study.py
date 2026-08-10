@@ -132,8 +132,22 @@ class StudyDiscoveryTests(unittest.TestCase):
                 strong_threshold=study.DEFAULT_STRONG_THRESHOLD,
                 target="local-gpu",
             )
-            with mock.patch.object(
-                study, "compose_train_document", side_effect=RuntimeError("new-study")
+            with (
+                mock.patch.object(
+                    study, "compose_train_document", side_effect=RuntimeError("new-study")
+                ),
+                mock.patch.object(
+                    study,
+                    "load_repository_operator_environment",
+                    return_value=SimpleNamespace(
+                        dstack=SimpleNamespace(
+                            fleet=lambda _name=None: SimpleNamespace(
+                                name="local-gpu",
+                                coordinator_id="primary",
+                            )
+                        )
+                    ),
+                ),
             ):
                 with self.assertRaisesRegex(RuntimeError, "new-study"):
                     study.command_init(args)

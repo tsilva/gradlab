@@ -16,7 +16,7 @@ def test_wandb_loader_uses_scoped_operator_credentials(
     config_path = tmp_path / "operator.toml"
     config_path.write_text(
         """
-schema_version = 2
+schema_version = 3
 
 [environment]
 WANDB_ENTITY = "research"
