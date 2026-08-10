@@ -24,6 +24,10 @@ and requires every emitted metric to match an exact registry entry or a bounded 
   than the checkpoint step, but only after W&B's metrics schema, selection rank, and checkpoint
   acceptance contract match the immutable recipe. Any contract mismatch suppresses all optional
   W&B enrichment and surfaces a warning rather than displaying potentially misbound proxy values.
+  When `checkpoint_eval_backend` is `none`, the supervisor intentionally omits
+  `checkpoint_eval_contract`; the catalog must validate that expected absence against the immutable
+  recipe and W&B run dimensions without suppressing otherwise compatible training-proxy history.
+  Full-evaluation columns remain unavailable until verified checkpoint-evaluation evidence exists.
 - W&B config contains run-defining dimensions: `metrics_schema_version: 19`,
   `metrics_episode_window_size: 100`, `training_backend_id`,
   `training_backend_config_hash`, `algorithm_id`, goal,

@@ -296,6 +296,7 @@ def checkpoint_row(*, step: int, digest: str, purpose: str) -> dict[str, object]
 def deathmatch_checkpoint_train_config() -> dict[str, object]:
     return {
         "metrics_schema_version": METRICS_SCHEMA_VERSION,
+        "checkpoint_eval_backend": "modal",
         "selection_rank": [
             "max(eval/full/progress/kills/mean)",
             "max(eval/full/progress/kills/max)",
@@ -315,6 +316,7 @@ def deathmatch_checkpoint_train_config() -> dict[str, object]:
 def mario_checkpoint_train_config() -> dict[str, object]:
     return {
         "metrics_schema_version": METRICS_SCHEMA_VERSION,
+        "checkpoint_eval_backend": "modal",
         "selection_rank": [
             "max(eval/full/outcome/success/starts/rate/mean)",
             "max(eval/full/episode/return/shaped/mean)",
@@ -1375,6 +1377,7 @@ def test_catalog_attaches_latest_training_metrics_at_each_checkpoint(
         config = {
             "metrics_schema_version": METRICS_SCHEMA_VERSION,
             "seed": 7,
+            "checkpoint_eval_backend": "modal",
             "selection_rank": train_config["selection_rank"],
             "checkpoint_eval_contract": {
                 "seed": 42_000,
@@ -1456,6 +1459,105 @@ def test_catalog_attaches_latest_training_metrics_at_each_checkpoint(
     assert len(filtered) == 1
     assert filtered[0]["checkpoint_id"] == periodic["checkpoint_id"]
     assert filtered[0]["best_metrics"] == []
+
+
+@pytest.mark.parametrize(
+    "location_kwargs",
+    (
+        pytest.param(
+            {"control_bucket": WandbRunControlBucket()},
+            id="control-manifest",
+        ),
+        pytest.param(
+            {
+                "wandb_run_location": WandbRunLocation(
+                    entity="research",
+                    project="Mario",
+                    run_id=RUN_ID,
+                )
+            },
+            id="explicit-wandb-url",
+        ),
+    ),
+)
+def test_catalog_attaches_training_metrics_when_checkpoint_evaluation_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+    location_kwargs: dict[str, object],
+) -> None:
+    final = checkpoint_row(step=500_000, digest="3" * 64, purpose="final")
+    monkeypatch.setattr(
+        "gradlab.play_catalog._public_json",
+        lambda _url: {
+            "schema_version": 1,
+            "run_id": RUN_ID,
+            "checkpoints": [final],
+            "promotion": None,
+        },
+    )
+
+    train_config = mario_checkpoint_train_config()
+    train_config["checkpoint_eval_backend"] = "none"
+
+    class TrainingOnlyRun:
+        config = {
+            "metrics_schema_version": METRICS_SCHEMA_VERSION,
+            "seed": 7,
+            "checkpoint_eval_backend": "none",
+            "checkpoint_eval_acceptance": train_config["checkpoint_eval_acceptance"],
+            "selection_rank": train_config["selection_rank"],
+        }
+
+        @staticmethod
+        def scan_history(*, keys, page_size):
+            assert page_size == 10_000
+            if keys == [
+                "train/global_step",
+                "train/outcome/success/starts/all/rolling/rate/min",
+            ]:
+                return [
+                    {
+                        "train/global_step": 490_000,
+                        "train/outcome/success/starts/all/rolling/rate/min": 1.0,
+                    }
+                ]
+            if keys == [
+                "train/global_step",
+                "train/episode/return/shaped/origin/target/rolling/mean",
+            ]:
+                return [
+                    {
+                        "train/global_step": 480_000,
+                        "train/episode/return/shaped/origin/target/rolling/mean": 22.0,
+                    }
+                ]
+            return []
+
+    class TrainingOnlyApi:
+        @staticmethod
+        def run(path):
+            assert path == f"research/Mario/{RUN_ID}"
+            return TrainingOnlyRun()
+
+    catalog = PlayCatalog(
+        public_models_base_url="https://models.example",
+        **location_kwargs,
+    )
+    bind_checkpoint_recipe(catalog, monkeypatch, (final,), train_config)
+    catalog._api = TrainingOnlyApi()
+
+    page = catalog.checkpoints(run_id=RUN_ID)
+    row = page.items[0]
+
+    assert page.warnings == ()
+    assert row["evaluation"] is None
+    assert row["metrics"] == {
+        "eval/full/outcome/success/starts/rate/mean": None,
+        "train/outcome/success/starts/all/rolling/rate/mean": None,
+        "eval/full/episode/return/shaped/mean": None,
+        "train/episode/return/shaped/origin/target/rolling/mean": 22.0,
+        "eval/full/outcome/success/starts/rate/min": None,
+        "train/outcome/success/starts/all/rolling/rate/min": 1.0,
+    }
 
 
 def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
@@ -1640,6 +1742,7 @@ def test_catalog_uses_training_seed_when_checkpoint_has_no_eval_result(
         config = {
             "metrics_schema_version": METRICS_SCHEMA_VERSION,
             "seed": 7,
+            "checkpoint_eval_backend": "modal",
             "selection_rank": train_config["selection_rank"],
             "checkpoint_eval_contract": {
                 "seed": 42_000,
