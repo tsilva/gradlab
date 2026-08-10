@@ -56,6 +56,8 @@
   --color-evaluation-text: #8DF5E4;
   --color-training-surface: #5A3829;
   --color-training-text: #FFDCC6;
+  --color-training-success-surface: #234C32;
+  --color-training-success-text: #B1F5C4;
   --color-error-surface: #5A302F;
   --color-error-text: #FFDAD6;
   --color-inverse-surface: #09090A;
@@ -414,10 +416,10 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
   align-items: center;
   width: max-content;
   padding: .2rem .38rem;
-  border: 1px solid var(--color-training-text);
+  border: 1px solid var(--color-training-success-text);
   border-radius: 99rem;
-  background: var(--color-training-surface);
-  color: var(--color-training-text);
+  background: var(--color-training-success-surface);
+  color: var(--color-training-success-text);
   font: 800 .56rem/1 "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
   letter-spacing: .025em;
   white-space: nowrap;
@@ -694,6 +696,14 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
 .goal-row:last-child { border-bottom: 0; }
 .environment-row strong,
 .goal-row strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.goal-row-identity { min-width: 0; }
+.goal-row-heading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .45rem;
+  min-width: 0;
+}
 .environment-row span { color: var(--color-text-muted); font-size: .72rem; white-space: nowrap; }
 .environment-row .environment-row-identity {
   display: flex;
@@ -708,7 +718,7 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
   flex-wrap: wrap;
   gap: .28rem;
   width: max-content;
-  margin-top: .3rem;
+  margin-top: 0;
   color: inherit;
   font-size: inherit;
   white-space: normal;
@@ -718,7 +728,7 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
 .goal-row .success-badge {
   display: inline-flex;
   margin-top: 0;
-  color: var(--color-training-text);
+  color: var(--color-training-success-text);
   font-size: .56rem;
   white-space: nowrap;
 }

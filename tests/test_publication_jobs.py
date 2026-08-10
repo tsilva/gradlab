@@ -20,7 +20,7 @@ def _snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[dict[str
     queue.mkdir()
     basis = {
         "document_type": "gradlab.player_publication_request",
-        "format_version": 2,
+        "format_version": 3,
         "capture_id": "capture-" + "1" * 32,
         "capture_fence_sha256": "2" * 64,
         "repo_id": "tsilva/example",
@@ -52,6 +52,7 @@ def _snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[dict[str
         },
         "evidence_sha256": "3" * 64,
         "comparison": {"comparable": False, "reason": "no prior release selected"},
+        "history": [],
         "feature": False,
     }
     fingerprint = canonical_json_sha256(basis)

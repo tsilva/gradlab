@@ -59,8 +59,6 @@ queries, W&B reports, and workspace management are also available through the
 
 ## Research results
 
-Evidence-backed research releases are indexed in the pinned
-[Research Results Discussion](https://github.com/tsilva/gradlab/discussions/7).
 Start with [Featured Research on Hugging Face](https://huggingface.co/collections/tsilva/gradlab-featured-research-6a76017e31c4e6f8fd5593f3)
 or its [YouTube playlist](https://www.youtube.com/playlist?list=PLKUQZsKUoinA).
 

@@ -28,8 +28,7 @@ class FakeApi:
     def list_repo_refs(self, repo_id: str, **kwargs: object) -> SimpleNamespace:
         return SimpleNamespace(
             tags=[
-                SimpleNamespace(name="v3", target_commit=self.tag_sha),
-                SimpleNamespace(name="checkpoint-10", target_commit=self.tag_sha),
+                SimpleNamespace(name="v4", target_commit=self.tag_sha),
             ]
         )
 
@@ -53,7 +52,7 @@ class FakeApi:
                     SimpleNamespace(
                         item_id="tsilva/model",
                         item_type="model",
-                        note="Immutable research release: https://huggingface.co/tsilva/model/tree/v3",
+                        note="Immutable research release: https://huggingface.co/tsilva/model/tree/v4",
                     )
                 ],
         )
@@ -77,8 +76,8 @@ def test_remote_release_audit_checks_commit_files_collection_and_bundle(
                 "repo_id": "tsilva/model",
                 "canonical_environment_id": "VizdoomDeathmatch-v1",
             },
-            "release": {"version": "v3", "checkpoint_tag": "checkpoint-10"},
-            "format_version": 3,
+            "release": {"version": "v4", "tier": "research"},
+            "format_version": 4,
         },
     )
     monkeypatch.setattr(
@@ -87,7 +86,7 @@ def test_remote_release_audit_checks_commit_files_collection_and_bundle(
         lambda path: {"codec_name": "h264", "frames": 100},
     )
 
-    result = MODULE.audit_huggingface_release("tsilva/model", "v3", api=FakeApi())
+    result = MODULE.audit_huggingface_release("tsilva/model", "v4", api=FakeApi())
 
     assert result["status"] == "passed"
     assert result["collection"] == "tsilva/gradlab-vizdoom-id"
@@ -97,6 +96,6 @@ def test_remote_release_audit_rejects_main_tag_drift() -> None:
     with pytest.raises(ValueError, match="do not point to the same commit"):
         MODULE.audit_huggingface_release(
             "tsilva/model",
-            "v3",
+            "v4",
             api=FakeApi(main_sha="a" * 40, tag_sha="b" * 40),
         )

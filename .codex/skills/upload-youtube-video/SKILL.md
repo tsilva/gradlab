@@ -54,8 +54,9 @@ gradlab: https://github.com/tsilva/gradlab
 
 Rules:
 
-- Include the exact checkpoint, evaluation protocol/count, every acceptance outcome, key ranking
-  metrics, separately labeled replay result, immutable HF tag, W&B, R2 manifest, source
+- Include the exact checkpoint step and identity, evaluation protocol/count, every acceptance
+  outcome, key ranking metrics, separately labeled replay result, immutable repo-wide HF `vN`
+  tag, W&B, R2 manifest, source
   commit/recipe, GitHub, environment collection, and environment playlist in the description.
 - Never invent generic success or win-rate claims; render the materialized goal metrics documented
   by `METRICS.md`.

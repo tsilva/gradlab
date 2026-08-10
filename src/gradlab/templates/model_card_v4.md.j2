@@ -1,0 +1,132 @@
+---
+library_name: {{ library_name }}
+pipeline_tag: reinforcement-learning
+license: mit
+tags:
+  - reinforcement-learning
+  - {{ library_name }}
+  - {{ algorithm }}
+  - {{ provider }}
+{% if library_name != "gradlab" %}
+  - gradlab
+{% endif %}
+  - {{ game }}
+---
+
+# {{ goal_title }} — {{ trainer }} {{ algorithm_upper }} @ {{ checkpoint_step_compact }} env steps
+
+An immutable {{ algorithm_upper }} {{ release_tier }} release for `{{ canonical_environment_id }}` / `{{ goal }}`, backed by accepted exact-contract evaluation evidence and a separately labeled representative replay.
+
+## Identity
+
+| Item | Value |
+|---|---|
+| Goal | `{{ goal }}` — {{ goal_title }} |
+| Environment | `{{ canonical_environment_id }}` (`{{ qualified_env_id }}`) |
+| Trainer | {{ trainer }} |
+| Algorithm | {{ algorithm_upper }} |
+| Model class | `{{ model_class }}` |
+| Compatibility | {{ compatibility }} |
+| Checkpoint | Exact step `{{ checkpoint_step }}` |
+| Immutable release | `{{ version }}` |
+| Release tier | `{{ release_tier }}` |
+| Lineage | `{{ lineage_digest }}` |
+| Environment index | {{ environment_container }} |
+| Featured | {{ featured }} |
+
+## Evaluation Status
+
+Status: **{% if accepted %}Accepted{% else %}Not accepted{% endif %}** under a `{{ action_sampling }}` full evaluation of `{{ episodes }}` episodes.
+
+| Metric | Meaning | Observed | Requirement | Outcome |
+|---|---|---:|---:|---|
+{{ acceptance_rows }}
+
+Ranking metrics:
+
+| Metric | Meaning | Observed | Direction |
+|---|---|---:|---|
+{{ ranking_rows }}
+
+The normalized per-episode results, aggregates, rules, contracts, outcomes, and authoritative hashes are in [`evaluation_evidence.json`](evaluation_evidence.json). Evidence SHA-256: `{{ evidence_sha256 }}`.
+
+## Trainer, Algorithm, and Compatibility
+
+- Trainer: **{{ trainer }}**
+- Algorithm: **{{ algorithm_upper }}**
+- Model class: `{{ model_class }}`
+- Compatibility: **{{ compatibility }}**
+- Hugging Face library: `{{ library_name }}`
+
+## Release History
+
+| Release | Tier | Trainer / algorithm | Lineage | Checkpoint step | Evidence |
+|---|---|---|---|---:|---|
+{{ history_rows }}
+
+## Comparable Changes
+
+{{ comparison_status }}: {{ comparison_reason }}. Releases are compared only when lineage, run, seed, and evaluation-contract hash all match.
+
+## Representative Replay
+
+{{ youtube_value }}. The root `replay.mp4` is one validated `{{ replay_contract_mode }}` episode. It is representative media and is not evaluation or promotion evidence.
+
+| Item | Value |
+|---|---|
+| Outcome | `{{ replay_outcome }}` |
+| Goal success | `{{ replay_success }}` |
+| Seed | `{{ replay_seed }}` |
+| Start | `{{ replay_start_id }}` |
+| Policy steps | `{{ replay_steps }}` |
+| Episode return | `{{ replay_return }}` |
+| Player runtime | `{{ replay_runtime }}` |
+
+## Quick Start
+
+{{ quick_start }}
+
+The immutable model reference is `{{ model_ref }}`.
+
+## Full Evaluation
+
+Evaluation used `{{ action_sampling }}` action selection for all `{{ episodes }}` declared episodes. See `evaluation_evidence.json` for every normalized episode and all materialized acceptance and ranking outcomes.
+
+## Contracts
+
+| Item | Value |
+|---|---|
+| Environment hash | `{{ environment_hash }}` |
+| Preprocessing and model inputs | `{{ preprocessing }}` |
+| Action semantics | `{{ action }}` |
+
+## Provenance
+
+| Item | Value |
+|---|---|
+| Source | [gradlab](https://github.com/tsilva/gradlab) |
+| Run | {{ run_value }} |
+| Recipe | `{{ recipe }}` |
+| Seed | `{{ seed }}` |
+| Source commit | `{{ source_commit }}` |
+| Evaluated artifact | `{{ checkpoint_artifact }}` |
+
+## Limitations
+
+Evaluation establishes performance only for the published environment, policy, action-selection, start, boundary, and evaluation contracts. It does not establish generalization to other tasks or contracts. The representative replay cannot establish or change acceptance, ranking, promotion, or featured status.
+
+## Files
+
+| File | Purpose |
+|---|---|
+| `model.zip` | Immutable policy checkpoint |
+| `model.json` | Trainer, algorithm, model class, checkpoint identity, and provenance |
+| `recipe.json` | Materialized training, playback, and evaluation contracts |
+| `evaluation_evidence.json` | Normalized authoritative evaluation evidence and rule outcomes |
+| `release_manifest.json` | {{ manifest_purpose }} |
+| `replay.mp4` | Browser-safe representative completed episode |
+| `LICENSE` | License for GradLab-authored weights and publication material |
+
+## Licensing
+
+GradLab-authored policy weights and publication material are licensed under the MIT License in `LICENSE`. Emulator/runtime software and game assets remain governed by their own licenses and terms. This repository does not redistribute a game ROM.

@@ -19,6 +19,11 @@ and requires every emitted metric to match an exact registry entry or a bounded 
 - Public model R2 contains immutable checkpoint closures and a mutable no-cache run index. Private
   eval R2 contains intents, results, and episode evidence. Private control R2 contains leases,
   journals, promotions, and terminal receipts.
+- Player checkpoint tables populate full-evaluation columns only from verified checkpoint-evaluation
+  evidence. Training-proxy columns sample W&B history at the latest `train/global_step` no greater
+  than the checkpoint step, but only after W&B's metrics schema, selection rank, and checkpoint
+  acceptance contract match the immutable recipe. Any contract mismatch suppresses all optional
+  W&B enrichment and surfaces a warning rather than displaying potentially misbound proxy values.
 - W&B config contains run-defining dimensions: `metrics_schema_version: 19`,
   `metrics_episode_window_size: 100`, `training_backend_id`,
   `training_backend_config_hash`, `algorithm_id`, goal,
@@ -304,6 +309,17 @@ durable `orchestration/event/sequence` is also W&B's internal step, so replay af
 local acknowledgement cannot append a second scientific point. The event ID remains a transport
 invariant and is not duplicated as a W&B metric. Promotion, terminal state, and early-stop
 authority are exactly once through conditional private-R2 receipts.
+
+Attempt-receipt fields `drain.metric_segment_high_water` and
+`drain.wandb_remote_high_water_mark` both contain highest event-sequence IDs despite the former's
+historical name. Their difference counts events not yet remotely visible at receipt creation, not
+metric-segment objects. Because an attempt receipt is immutable, W&B may later catch up after a
+failure receipt without changing the recorded drain completeness or terminal state.
+
+Historical publication imports may display retired, source-bound metric names from their immutable
+evaluation contracts. Those names are evidence labels only: they are not current emitted metrics,
+registry aliases, or permission to translate a historical acceptance rule to a similar current
+metric.
 
 The supervisor seals immutable metric-journal segments to private R2 every five seconds or 1,000
 events and batches pending frames to W&B. A retry reconstructs its local SQLite state from those

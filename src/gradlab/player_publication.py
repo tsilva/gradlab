@@ -35,13 +35,14 @@ from gradlab.publication import (
     MIT_LICENSE_TEXT,
     build_model_repo_id,
     build_release_manifest,
+    latest_comparable_release,
     normalize_publication_evaluation,
     publication_identity_from_policy_bundle,
     publication_source_from_policy_bundle,
-    release_comparison,
     release_artifact_records,
     release_replay_from_capture,
     render_model_card,
+    validate_release_manifest_document,
     validate_release_bundle,
 )
 from gradlab.publication_credentials import (
@@ -67,9 +68,9 @@ from gradlab.youtube_publication import (
 
 
 PLAYER_PUBLICATION_JOB_TYPE = "player-publication"
-PLAYER_PUBLICATION_JOB_VERSION = 2
+PLAYER_PUBLICATION_JOB_VERSION = 3
 REQUEST_DOCUMENT_TYPE = "gradlab.player_publication_request"
-REQUEST_FORMAT_VERSION = 2
+REQUEST_FORMAT_VERSION = 3
 REQUEST_ROOT_NAME = "player_publications"
 YOUTUBE_PLACEHOLDER_URL = "https://www.youtube.com/watch?v=00000000000"
 PRIVACY_VALUES = frozenset({"public", "unlisted", "private"})
@@ -300,35 +301,70 @@ def _remote_release_manifest(
     return dict(value) if isinstance(value, Mapping) else None
 
 
-def assert_lineage_repository_compatible(
+def assert_goal_repository_compatible(
     api: Any,
     *,
     repo_id: str,
     identity: Any,
-    token: str,
-) -> dict[str, Any] | None:
+    token: str | bool | None,
+) -> list[dict[str, Any]]:
     try:
         api.model_info(repo_id=repo_id)
     except HfHubHTTPError as exc:
         if getattr(exc.response, "status_code", None) == 404:
-            return None
+            return []
         raise
     except Exception as exc:
         if type(exc).__name__ == "RepositoryNotFoundError":
-            return None
+            return []
         raise
     manifest = _remote_release_manifest(repo_id, token=token)
     if manifest is None:
         raise ValueError(
-            "computed lineage repository already exists without a current v3 release manifest"
+            "computed goal repository already exists without a current v4 release manifest"
         )
+    manifest = validate_release_manifest_document(manifest, source=f"{repo_id}@main")
     repository = manifest.get("repository")
-    stored_digest = repository.get("lineage_digest") if isinstance(repository, Mapping) else None
-    if stored_digest != identity.lineage_digest:
-        raise ValueError(
-            "eight-character lineage prefix collision: stored full digest differs"
-        )
-    return manifest
+    if not isinstance(repository, Mapping) or (
+        repository.get("canonical_environment_id") != identity.canonical_environment_id
+        or repository.get("goal_id") != identity.goal_id
+    ):
+        raise ValueError("computed goal repository belongs to a different goal")
+    refs = api.list_repo_refs(repo_id=repo_id, repo_type="model")
+    releases: list[dict[str, Any]] = []
+    for tag in getattr(refs, "tags", ()):
+        name = str(getattr(tag, "name", ""))
+        if re.fullmatch(r"v[1-9][0-9]*", name) is None:
+            continue
+        value = _remote_release_manifest(repo_id, token=token, revision=name)
+        if value is None or value.get("format_version") != 4:
+            continue
+        current = validate_release_manifest_document(value, source=f"{repo_id}@{name}")
+        current_repository = current.get("repository") or {}
+        if (
+            current_repository.get("canonical_environment_id") != identity.canonical_environment_id
+            or current_repository.get("goal_id") != identity.goal_id
+        ):
+            raise ValueError("goal repository contains a current release for another goal")
+        stored = (current.get("lineage") or {}).get("digest")
+        if (
+            isinstance(stored, str)
+            and stored[:8] == identity.lineage_prefix
+            and stored != identity.lineage_digest
+        ):
+            raise ValueError("eight-character lineage prefix collision: stored full digest differs")
+        releases.append(current)
+    return releases
+
+
+def _release_history(releases: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    if not releases:
+        return []
+    latest = max(
+        releases,
+        key=lambda value: int(str((value.get("release") or {}).get("version") or "v0")[1:]),
+    )
+    return [deepcopy(dict(row)) for row in latest.get("history") or ()]
 
 
 def generated_metadata(
@@ -408,7 +444,7 @@ def generated_metadata(
         [
             f"{trainer} {algorithm} research release for {goal_title}.",
             "",
-            f"Exact checkpoint: {step} environment steps (`checkpoint-{step}`).",
+            f"Exact checkpoint: {step} environment steps from run `{source_value.get('run_id')}`.",
             f"Evaluation: {evaluation.get('protocol')} / {evaluation.get('action_sampling')}, {evaluation.get('episodes')} episodes.",
             "Acceptance results:",
             *acceptance_lines,
@@ -493,6 +529,7 @@ def prepare_release_bundle(
     youtube_url: str,
     output: Path,
     comparison: Mapping[str, Any] | None = None,
+    history: Sequence[Mapping[str, Any]] = (),
     featured: bool = False,
     correction_note: str | None = None,
 ) -> dict[str, Any]:
@@ -555,6 +592,7 @@ def prepare_release_bundle(
         publication=publication,
         evaluation_evidence=evaluation_evidence_document,
         comparison=comparison,
+        history=history,
         featured=featured,
         correction_note=correction_note,
     )
@@ -572,6 +610,7 @@ def prepare_release_bundle(
         publication=publication,
         evaluation_evidence=evaluation_evidence_document,
         comparison=comparison,
+        history=history,
         featured=featured,
         correction_note=correction_note,
     )
@@ -685,16 +724,18 @@ class PlayerPublicationService:
         repo_id = build_model_repo_id(identity)
         api = self.hf_api_factory()
         version, _parent = next_release_version(api, repo_id)
-        previous = _remote_release_manifest(repo_id, token=None)
+        previous = assert_goal_repository_compatible(
+            api, repo_id=repo_id, identity=identity, token=False
+        )
         source = publication_source_from_policy_bundle(bundle, normalized_evaluation)
         checkpoint_manifest = _required_mapping(
             evidence.get("checkpoint_manifest"), label="checkpoint manifest"
         )
         source["model_document_url"] = checkpoint_manifest.get("model_document_url")
         source["recipe_document_url"] = checkpoint_manifest.get("recipe_document_url")
-        comparison = release_comparison(
+        comparison = latest_comparable_release(
             {
-                "repository": {"lineage_digest": identity.lineage_digest},
+                "lineage": {"digest": identity.lineage_digest},
                 "source": source,
                 "evaluation": {
                     "evaluation_contract_sha256": (
@@ -719,7 +760,7 @@ class PlayerPublicationService:
             "description": metadata["description"],
             "repo_id": repo_id,
             "release_tag": version,
-            "checkpoint_tag": f"checkpoint-{normalized['checkpoint_step']}",
+            "release_tier": "research",
             "acceptance": deepcopy(evidence_document["acceptance"]),
             "replay": {
                 "status": "validated completed episode",
@@ -877,7 +918,7 @@ class PlayerPublicationService:
             )
         hf_credential = resolve_huggingface_credential()
         api = self.hf_api_factory(token=hf_credential.token)
-        previous_manifest = assert_lineage_repository_compatible(
+        previous_manifests = assert_goal_repository_compatible(
             api,
             repo_id=repo_id,
             identity=identity,
@@ -891,9 +932,7 @@ class PlayerPublicationService:
         source["model_document_url"] = checkpoint_manifest.get("model_document_url")
         source["recipe_document_url"] = checkpoint_manifest.get("recipe_document_url")
         comparison_basis = {
-            "repository": {
-                "lineage_digest": identity.lineage_digest,
-            },
+            "lineage": {"digest": identity.lineage_digest},
             "source": source,
             "evaluation": {
                 "evaluation_contract_sha256": (
@@ -901,7 +940,8 @@ class PlayerPublicationService:
                 ).get("evaluation_contract_sha256")
             },
         }
-        comparison = release_comparison(comparison_basis, previous_manifest)
+        comparison = latest_comparable_release(comparison_basis, previous_manifests)
+        history = _release_history(previous_manifests)
         metadata = generated_metadata(
             capture=capture,
             bundle=bundle,
@@ -932,6 +972,7 @@ class PlayerPublicationService:
             },
             "evidence_sha256": canonical_json_sha256(evidence),
             "comparison": comparison,
+            "history": history,
             "feature": bool(settings.get("feature", False)),
         }
         request_fingerprint = canonical_json_sha256(basis)
@@ -998,6 +1039,7 @@ class PlayerPublicationService:
                     JobSubject(
                         subject_type="player-publication-repo",
                         subject_id=repo_id,
+                        exclusive_key=f"player-publication:repo:{repo_id}@{version}",
                         detail={"release_version": version},
                     ),
                 ],
@@ -1159,6 +1201,7 @@ class PlayerPublicationService:
                 youtube_url=YOUTUBE_PLACEHOLDER_URL,
                 output=temporary / "provisional_release",
                 comparison=request.get("comparison"),
+                history=request.get("history") or (),
                 featured=bool(request.get("feature")),
             )
             atomic_write_json(temporary / "request.json", dict(request))
@@ -1182,6 +1225,7 @@ __all__ = [
     "PLAYER_PUBLICATION_JOB_VERSION",
     "PlayerPublicationService",
     "PublicationConflict",
+    "assert_goal_repository_compatible",
     "credential_preflight",
     "generated_metadata",
     "next_release_version",

@@ -1910,11 +1910,15 @@ export class SourceBrowser {
       navigate.className = "goal-row-navigation";
       navigate.disabled = !this.hasControl();
       const identity = document.createElement("div");
+      identity.className = "goal-row-identity";
+      const heading = document.createElement("div");
+      heading.className = "goal-row-heading";
       const name = document.createElement("strong");
       name.textContent = goal.goal_id;
-      identity.append(name);
+      heading.append(name);
       const success = renderSuccessBadges(goal);
-      if (success) identity.append(success);
+      if (success) heading.append(success);
+      identity.append(heading);
       const meta = document.createElement("span");
       const recipeLabel = Number(goal.recipe_count) === 1 ? "recipe" : "recipes";
       meta.textContent = `${goal.title || goal.goal_slug} · ${Number(goal.recipe_count).toLocaleString()} ${recipeLabel}`;
