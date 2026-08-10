@@ -19,7 +19,7 @@ When changing dstack host behavior, preserve the root-owned runtime-image cleanu
 ## Stable Retro
 
 - Use PyPI `stable-retro-turbo`; import path remains `stable_retro`.
-- Current required Turbo API v1 runtimes are `stable-retro-turbo==1.0.1.post37`, `supermariobrosnes-turbo==0.6.2`, `breakout-turbo-env==0.5.2`, and `vizdoom-turbo==1.3.0.post23`.
+- Current required Turbo API v1 runtimes are `stable-retro-turbo==1.0.1.post37`, `supermariobrosnes-turbo==0.6.2`, `breakout-turbo-env==0.5.2`, `vizdoom-turbo==1.3.0.post24`, and `gradoom==0.1.0a0`.
 - Native-vector code should use `stable_retro.RetroVecEnv`, whose constructor follows the original `RetroEnv` positional signature plus vector-only keyword arguments.
 - Runtime version source of truth: the exact pins in `pyproject.toml` and the resolved versions in `uv.lock`. Use `uv sync --frozen`; make overrides explicit in recipes, compute policy, run descriptions, and W&B tags.
 - Every Turbo provider must declare and pass the strict Turbo Vector API v1 contract before gradlab consumes it. Do not add provider probing or legacy fallbacks.
@@ -62,4 +62,4 @@ When asked to build, cut, tag, publish, or verify a GradLab PyPI release, use th
 ## Dependencies
 
 Use `uv` for dependency resolution and keep `uv.lock` committed. Preserve Python supply-chain hardening in `pyproject.toml`.
-The intentional exceptions to the seven-day `exclude-newer` window are `breakout-turbo-env`, `stable-retro-turbo`, `supermariobrosnes-turbo`, and `vizdoom-turbo`, because this project tracks current forward native Breakout, Stable Retro, Mario, and ViZDoom runtimes while keeping the rest of the dependency graph age-gated. Keep the per-package cutoffs in `[tool.uv.exclude-newer-package]`, `uv-tool.toml`, and the user-level uv config in sync so `uv tool install . --editable` remains installable without extra flags.
+The intentional exceptions to the seven-day `exclude-newer` window are `breakout-turbo-env`, `gradoom`, `stable-retro-turbo`, `supermariobrosnes-turbo`, and `vizdoom-turbo`, because this project tracks current forward native Breakout, GraDOOM, Stable Retro, Mario, and ViZDoom runtimes while keeping the rest of the dependency graph age-gated. Keep the per-package cutoffs in `[tool.uv.exclude-newer-package]`, `uv-tool.toml`, and the user-level uv config in sync so `uv tool install . --editable` remains installable without extra flags.
