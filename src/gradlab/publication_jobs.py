@@ -507,6 +507,7 @@ class PlayerPublicationJobHandler:
             youtube_url=str(state["urls"]["youtube"]),
             output=release_root,
             comparison=request.get("comparison"),
+            history=request.get("history") or (),
             featured=bool(request.get("feature")),
         )
         if manifest.get("publication", {}).get("request_fingerprint") != request[
@@ -683,20 +684,6 @@ class PlayerPublicationJobHandler:
                     revision=commit,
                     exist_ok=False,
                 )
-            release_manifest = _json_object(
-                release_root / "release_manifest.json", label="release manifest"
-            )
-            checkpoint_tag = f"checkpoint-{release_manifest['evaluation']['checkpoint_step']}"
-            if checkpoint_tag in tags and tags[checkpoint_tag] != commit:
-                raise ValueError("Hugging Face checkpoint tag points to a different commit")
-            if checkpoint_tag not in tags:
-                api.create_tag(
-                    repo_id,
-                    repo_type="model",
-                    tag=checkpoint_tag,
-                    revision=commit,
-                    exist_ok=False,
-                )
             state["phase"] = "huggingface_tagged"
             self._save_state(state_path, state)
             self._checkpoint(store, job_id, request, state, kind="huggingface_tagged")
@@ -759,13 +746,23 @@ class PlayerPublicationJobHandler:
         repo_id = str(request["repo_id"])
         version = str(request["release_version"])
         immutable_url = f"https://huggingface.co/{repo_id}/tree/{version}"
-        api.add_collection_item(
-            slug,
-            repo_id,
-            "model",
-            note=f"Immutable research release: {immutable_url}",
-            exists_ok=True,
-        )
+        note = f"Immutable research release: {immutable_url}"
+        current_collection = api.get_collection(slug)
+        matching = [
+            item
+            for item in current_collection.items
+            if str(item.item_type) == "model" and str(item.item_id) == repo_id
+        ]
+        if len(matching) > 1:
+            raise ValueError("Hugging Face environment collection contains duplicate models")
+        if matching:
+            api.update_collection_item(
+                slug,
+                str(matching[0].item_object_id),
+                note=note,
+            )
+        else:
+            api.add_collection_item(slug, repo_id, "model", note=note, exists_ok=False)
         playlist_id = client.find_or_create_playlist(title, privacy="public")
         client.add_video_to_playlist(
             playlist_id=playlist_id,
@@ -825,14 +822,6 @@ class PlayerPublicationJobHandler:
         tag_targets = {
             str(tag.name): str(tag.target_commit) for tag in getattr(refs, "tags", ())
         }
-        checkpoint_step = int(
-            _json_object(
-                Path(snapshot["root"]) / "evidence/evaluation.json",
-                label="publication evaluation",
-            )["checkpoint_step"]
-        )
-        if tag_targets.get(f"checkpoint-{checkpoint_step}") != str(state["huggingface_commit"]):
-            raise ValueError("Hugging Face exact checkpoint tag failed final audit")
         if set(api.list_repo_files(repo_id, revision=version, repo_type="model")) != set(
             HUGGINGFACE_RELEASE_FILES
         ):
@@ -1054,13 +1043,30 @@ class FeaturedPublicationJobHandler:
                 f"https://huggingface.co/{payload['repo_id']}/tree/"
                 f"{payload['release_version']}"
             )
-            api.add_collection_item(
-                str(collection.slug),
-                str(payload["repo_id"]),
-                "model",
-                note=f"Immutable featured release: {immutable_url}",
-                exists_ok=True,
-            )
+            note = f"Immutable featured release: {immutable_url}"
+            current_collection = api.get_collection(str(collection.slug))
+            matching = [
+                item
+                for item in current_collection.items
+                if str(item.item_type) == "model"
+                and str(item.item_id) == str(payload["repo_id"])
+            ]
+            if len(matching) > 1:
+                raise ValueError("Featured Research contains duplicate models")
+            if matching:
+                api.update_collection_item(
+                    str(collection.slug),
+                    str(matching[0].item_object_id),
+                    note=note,
+                )
+            else:
+                api.add_collection_item(
+                    str(collection.slug),
+                    str(payload["repo_id"]),
+                    "model",
+                    note=note,
+                    exists_ok=False,
+                )
             playlist_id = client.find_or_create_playlist(title, privacy="public")
             client.add_video_to_playlist(
                 playlist_id=playlist_id,

@@ -120,6 +120,15 @@ test("scientific success badges are ordered, independent, and evidence-labelled"
   assert.match(source, /renderSuccessBadges\(variant\)/);
   assert.match(source, /renderSuccessBadges\(run\)/);
   assert.match(source, /renderSuccessBadges\(item\)/);
+  assert.match(source, /heading\.className = "goal-row-heading"/);
+  assert.match(
+    styles,
+    /\.goal-row-heading\s*\{[^}]*display: flex;[^}]*align-items: center;[^}]*gap: \.45rem;/,
+  );
+  assert.match(
+    styles,
+    /\.success-badge\s*\{[^}]*background: var\(--color-training-success-surface\);[^}]*color: var\(--color-training-success-text\);/,
+  );
   assert.match(styles, /\.success-badge\.evaluation/);
 });
 

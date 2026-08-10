@@ -41,11 +41,12 @@ If a required fact is ambiguous and cannot be safely inferred from source artifa
    - Run the repository-owned `scripts/prepare_huggingface_release.py` with
      `--identity-only` before creating or moving any repository.
    - The only supported namespace is `tsilva`.
-   - The generated schema-v3 name is
-     `<goal-id>_<trainer-slug>-<algorithm>_<lineage8>`; do not accept a manual repo name.
-   - Store and verify the full lineage digest. Fail closed when an existing eight-character prefix
-     belongs to another full digest. The lineage covers policy semantics and excludes run, seed,
-     step, evaluation thresholds, provider version, concurrency, source commit, and editorial state.
+   - The generated schema-v4 name is `<canonical-environment-id>_<goal-id>`, with the duplicate
+     component collapsed when environment and goal are identical; do not accept a manual repo name.
+   - One repository owns all policy lineages for that goal. Store and verify every full lineage
+     digest and fail closed when an eight-character display prefix belongs to another full digest.
+     The lineage covers policy semantics and excludes run, seed, step, evaluation thresholds,
+     provider version, concurrency, source commit, and editorial state.
 
 3. Prepare the generated model card and preview with `$model-card-author` as the quality standard.
    - Do not hand-author `README.md`. The repository-owned release helper renders it from the
@@ -68,8 +69,9 @@ If a required fact is ambiguous and cannot be safely inferred from source artifa
    - The bundle must contain exactly `.gitattributes`, `README.md`, `LICENSE`, `model.zip`,
      `model.json`, `recipe.json`, `evaluation_evidence.json`, `release_manifest.json`, and
      `replay.mp4`.
-   - Upload the bundle in one Hugging Face commit, then create the next sequential immutable
-     `vN` tag and `checkpoint-<exact-step>` tag. `main` is the latest research release.
+   - Upload the bundle in one Hugging Face commit, then create only the next repo-wide sequential
+     immutable `vN` tag. `main` is the latest completed publication. Existing historical checkpoint
+     tags remain untouched, but current publication never creates new checkpoint aliases.
    - Do not publish a new current release until stochastic evaluation and replay evidence exist.
 
 6. Cross-link and verify.

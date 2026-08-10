@@ -27,7 +27,9 @@ EVALUATION_EQUIVALENCE_FIELDS = (
     "acceptance",
 )
 EVALUATION_EVIDENCE_DOCUMENT_TYPE = "gradlab.evaluation_evidence"
-EVALUATION_EVIDENCE_FORMAT_VERSION = 1
+EVALUATION_EVIDENCE_FORMAT_VERSION = 2
+RESEARCH_EVIDENCE_TIER = "research"
+HISTORICAL_EVIDENCE_TIER = "historical-import"
 
 
 def _metric_record(metric: str, value: object) -> dict[str, Any]:
@@ -243,6 +245,7 @@ def build_evaluation_evidence_document(evidence: Mapping[str, Any]) -> dict[str,
     return {
         "document_type": EVALUATION_EVIDENCE_DOCUMENT_TYPE,
         "format_version": EVALUATION_EVIDENCE_FORMAT_VERSION,
+        "tier": RESEARCH_EVIDENCE_TIER,
         "status": "accepted",
         "identity": {
             "run_id": checkpoint.run_id,
@@ -282,6 +285,7 @@ def build_evaluation_evidence_document(evidence: Mapping[str, Any]) -> dict[str,
             "checkpoint_sha256": checkpoint.sha256,
             "evaluation_contract_sha256": evaluation_contract_sha256(recipe),
         },
+        "provenance": {"origin": "gradlab-verified-evaluation"},
     }
 
 
@@ -289,6 +293,7 @@ def validate_evaluation_evidence_document(document: Mapping[str, Any]) -> dict[s
     expected_fields = {
         "document_type",
         "format_version",
+        "tier",
         "status",
         "identity",
         "protocol",
@@ -298,6 +303,7 @@ def validate_evaluation_evidence_document(document: Mapping[str, Any]) -> dict[s
         "ranking",
         "contracts",
         "authoritative_hashes",
+        "provenance",
     }
     if set(document) != expected_fields:
         raise ValueError("evaluation_evidence.json has an unsupported field set")
@@ -305,25 +311,80 @@ def validate_evaluation_evidence_document(document: Mapping[str, Any]) -> dict[s
         raise ValueError("evaluation_evidence.json has an invalid document_type")
     if document.get("format_version") != EVALUATION_EVIDENCE_FORMAT_VERSION:
         raise ValueError("evaluation_evidence.json has an unsupported format_version")
-    if document.get("status") != "accepted":
-        raise ValueError("research release evidence must be accepted")
+    tier = document.get("tier")
+    if tier not in {RESEARCH_EVIDENCE_TIER, HISTORICAL_EVIDENCE_TIER}:
+        raise ValueError("evaluation_evidence.json has an unsupported tier")
+    status = document.get("status")
     acceptance = document.get("acceptance")
-    if not isinstance(acceptance, Mapping) or acceptance.get("passed") is not True:
-        raise ValueError("research release evidence did not pass acceptance")
+    if not isinstance(acceptance, Mapping):
+        raise ValueError("evaluation_evidence.json is missing acceptance outcomes")
+    if tier == RESEARCH_EVIDENCE_TIER:
+        if status != "accepted" or acceptance.get("passed") is not True:
+            raise ValueError("research release evidence must be accepted")
+    elif status != "evaluated-not-accepted" or acceptance.get("passed") is not False:
+        raise ValueError("historical-import evidence must record failed acceptance")
     episodes = document.get("episode_results")
     protocol = document.get("protocol")
     if not isinstance(episodes, list) or not isinstance(protocol, Mapping):
         raise ValueError("evaluation_evidence.json is missing episode results or protocol")
     if len(episodes) != int(protocol.get("episodes") or 0):
         raise ValueError("evaluation_evidence.json episode count is incomplete")
+    provenance = document.get("provenance")
+    if not isinstance(provenance, Mapping) or not str(provenance.get("origin") or ""):
+        raise ValueError("evaluation_evidence.json is missing evidence provenance")
     return deepcopy(dict(document))
+
+
+def validate_research_evaluation_evidence_document(
+    document: Mapping[str, Any],
+) -> dict[str, Any]:
+    validated = validate_evaluation_evidence_document(document)
+    if validated.get("tier") != RESEARCH_EVIDENCE_TIER:
+        raise ValueError("player publication requires research evidence")
+    return validated
+
+
+def build_historical_evaluation_evidence_document(
+    *,
+    identity: Mapping[str, Any],
+    protocol: Mapping[str, Any],
+    episode_results: list[Mapping[str, Any]],
+    aggregates: Mapping[str, Any],
+    acceptance: Mapping[str, Any],
+    ranking: Mapping[str, Any],
+    contracts: Mapping[str, Any],
+    authoritative_hashes: Mapping[str, Any],
+    provenance: Mapping[str, Any],
+) -> dict[str, Any]:
+    if acceptance.get("passed") is not False:
+        raise ValueError("historical evidence must preserve failed acceptance")
+    document = {
+        "document_type": EVALUATION_EVIDENCE_DOCUMENT_TYPE,
+        "format_version": EVALUATION_EVIDENCE_FORMAT_VERSION,
+        "tier": HISTORICAL_EVIDENCE_TIER,
+        "status": "evaluated-not-accepted",
+        "identity": deepcopy(dict(identity)),
+        "protocol": deepcopy(dict(protocol)),
+        "episode_results": [deepcopy(dict(row)) for row in episode_results],
+        "aggregates": deepcopy(dict(aggregates)),
+        "acceptance": deepcopy(dict(acceptance)),
+        "ranking": deepcopy(dict(ranking)),
+        "contracts": deepcopy(dict(contracts)),
+        "authoritative_hashes": deepcopy(dict(authoritative_hashes)),
+        "provenance": deepcopy(dict(provenance)),
+    }
+    return validate_evaluation_evidence_document(document)
 
 
 __all__ = [
     "EVALUATION_EQUIVALENCE_FIELDS",
     "EVALUATION_EVIDENCE_DOCUMENT_TYPE",
     "EVALUATION_EVIDENCE_FORMAT_VERSION",
+    "HISTORICAL_EVIDENCE_TIER",
+    "RESEARCH_EVIDENCE_TIER",
     "build_evaluation_evidence_document",
+    "build_historical_evaluation_evidence_document",
     "validate_evaluation_evidence_document",
+    "validate_research_evaluation_evidence_document",
     "validate_publication_evidence",
 ]

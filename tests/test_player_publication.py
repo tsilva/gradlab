@@ -9,7 +9,7 @@ from gradlab.job_queue import JobStore, WorkerStart
 from gradlab.player_publication import (
     PlayerPublicationService,
     PublicationConflict,
-    assert_lineage_repository_compatible,
+    assert_goal_repository_compatible,
     generated_metadata,
 )
 from gradlab.policy_bundle import PolicyBundle
@@ -147,15 +147,15 @@ def _service(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> PlayerPublicati
     )
     monkeypatch.setattr(
         "gradlab.player_publication.build_model_repo_id",
-        lambda _identity: "tsilva/VizdoomDeathmatch-v1_gradlab-ppo_11111111",
+        lambda _identity: "tsilva/VizdoomDeathmatch-v1",
     )
     monkeypatch.setattr(
         "gradlab.player_publication.resolve_huggingface_credential",
         lambda: SimpleNamespace(token="secret"),
     )
     monkeypatch.setattr(
-        "gradlab.player_publication.assert_lineage_repository_compatible",
-        lambda *_args, **_kwargs: None,
+        "gradlab.player_publication.assert_goal_repository_compatible",
+        lambda *_args, **_kwargs: [],
     )
     monkeypatch.setattr(
         "gradlab.player_publication.next_release_version",
@@ -239,8 +239,8 @@ def test_generated_metadata_never_truncates_and_uses_goal_metrics(
             },
             "ranking": {"outcomes": []},
         },
-        repo_id="tsilva/VizdoomDeathmatch-v1_gradlab-ppo_11111111",
-        release_version="v3",
+        repo_id="tsilva/VizdoomDeathmatch-v1",
+        release_version="v4",
         source={
             "wandb_project": "VizdoomDeathmatch-v1",
             "run_id": "gradlab-" + "e" * 32,
@@ -305,7 +305,7 @@ def test_publication_render_materializes_pending_capture_on_explicit_action(
     assert result["capture"]["capture_id"] == capture["capture_id"]
 
 
-def test_admission_v2_is_idempotent_and_playlist_is_not_operator_input(
+def test_admission_v3_is_idempotent_and_playlist_is_not_operator_input(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     service = _service(tmp_path, monkeypatch)
@@ -315,7 +315,7 @@ def test_admission_v2_is_idempotent_and_playlist_is_not_operator_input(
     assert first["created"] is True
     assert repeated["created"] is False
     subject = service.store.job(first["job"]["job_id"])
-    assert subject["handler_version"] == 2
+    assert subject["handler_version"] == 3
     assert "playlist" not in subject["payload"]
 
 
@@ -329,14 +329,36 @@ def test_admission_rejects_changed_editorial_request_for_same_capture(
 
 
 def test_full_digest_prefix_collision_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
-    identity = SimpleNamespace(lineage_digest="a" * 64)
+    identity = SimpleNamespace(
+        canonical_environment_id="VizdoomDeathmatch-v1",
+        goal_id="VizdoomDeathmatch-v1",
+        lineage_digest="a" * 64,
+        lineage_prefix="aaaaaaaa",
+    )
     monkeypatch.setattr(
         "gradlab.player_publication._remote_release_manifest",
-        lambda *_args, **_kwargs: {"repository": {"lineage_digest": "b" * 64}},
+        lambda *_args, **_kwargs: {
+            "format_version": 4,
+            "repository": {
+                "canonical_environment_id": "VizdoomDeathmatch-v1",
+                "goal_id": "VizdoomDeathmatch-v1",
+            },
+            "lineage": {"digest": "a" * 8 + "b" * 56, "prefix": "aaaaaaaa"},
+            "release": {"version": "v1"},
+        },
+    )
+    monkeypatch.setattr(
+        "gradlab.player_publication.validate_release_manifest_document",
+        lambda value, **_kwargs: value,
     )
     with pytest.raises(ValueError, match="prefix collision"):
-        assert_lineage_repository_compatible(
-            SimpleNamespace(model_info=lambda **_kwargs: object()),
+        assert_goal_repository_compatible(
+            SimpleNamespace(
+                model_info=lambda **_kwargs: object(),
+                list_repo_refs=lambda **_kwargs: SimpleNamespace(
+                    tags=[SimpleNamespace(name="v1")]
+                ),
+            ),
             repo_id="tsilva/example",
             identity=identity,
             token="secret",

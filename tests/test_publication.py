@@ -185,8 +185,10 @@ def evaluation_evidence() -> dict:
     }
     return {
         "document_type": "gradlab.evaluation_evidence",
-        "format_version": 1,
+        "format_version": 2,
+        "tier": "research",
         "status": "accepted",
+        "provenance": {"origin": "gradlab-verified-evaluation"},
         "identity": {
             "run_id": "gradlab-" + "d" * 32,
             "checkpoint_id": "checkpoint-4000000-" + "b" * 16,
@@ -348,7 +350,7 @@ def manifest() -> dict:
     return build_release_manifest(
         publication_identity_from_policy_bundle("VizdoomDeathmatch-v1", bundle()),
         bundle(),
-        release_version="v3",
+        release_version="v4",
         published_at="2026-08-07T12:00:00Z",
         source=source,
         evaluation=evaluation_summary(),
@@ -361,14 +363,12 @@ def manifest() -> dict:
     )
 
 
-def test_schema_v3_identity_uses_trainer_and_full_lineage_digest() -> None:
+def test_schema_v4_identity_uses_one_repository_per_goal() -> None:
     identity = publication_identity_from_policy_bundle("VizdoomDeathmatch-v1", bundle())
     assert identity.trainer == "GradLab"
     assert identity.trainer_slug == "gradlab"
     assert len(identity.lineage_digest) == 64
-    assert build_model_repo_id(identity) == (
-        f"tsilva/VizdoomDeathmatch-v1_gradlab-ppo_{identity.lineage_digest[:8]}"
-    )
+    assert build_model_repo_id(identity) == "tsilva/VizdoomDeathmatch-v1"
 
 
 @pytest.mark.parametrize(
@@ -412,15 +412,20 @@ def test_operational_and_evaluation_changes_do_not_change_lineage() -> None:
     ).lineage_digest
 
 
-def test_manifest_v3_is_the_only_supported_release_contract() -> None:
+def test_manifest_v4_is_the_only_supported_release_contract() -> None:
     value = manifest()
-    assert value["format_version"] == RELEASE_MANIFEST_VERSION == 3
-    assert value["repo_naming_schema"] == REPO_NAMING_SCHEMA_VERSION == 3
-    assert value["release"]["checkpoint_tag"] == "checkpoint-4000000"
+    assert value["format_version"] == RELEASE_MANIFEST_VERSION == 4
+    assert value["repo_naming_schema"] == REPO_NAMING_SCHEMA_VERSION == 4
+    assert value["release"]["tier"] == "research"
+    assert "checkpoint_tag" not in value["release"]
+    assert value["lineage"]["digest"] == publication_identity_from_policy_bundle(
+        "VizdoomDeathmatch-v1", bundle()
+    ).lineage_digest
+    assert value["history"][-1]["version"] == "v4"
     assert value["evaluation"]["evidence_file"] == "evaluation_evidence.json"
     assert validate_release_manifest_document(value) == value
     old = deepcopy(value)
-    old["format_version"] = 2
+    old["format_version"] = 3
     with pytest.raises(UnsupportedPolicyDocumentVersion):
         validate_release_manifest_document(old)
 
@@ -445,7 +450,7 @@ def test_release_comparison_requires_all_four_contract_axes() -> None:
     previous["release"]["version"] = "v2"
     assert release_comparison(current, previous)["comparable"] is True
     for section, key in (
-        ("repository", "lineage_digest"),
+        ("lineage", "digest"),
         ("source", "run_id"),
         ("source", "seed"),
         ("evaluation", "evaluation_contract_sha256"),

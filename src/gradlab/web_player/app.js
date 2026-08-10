@@ -442,7 +442,7 @@ function renderPublicationPreview(preview) {
   publicationFact("Generated title", preview.title, "#publication-generated");
   publicationFact("Generated description", preview.description, "#publication-generated");
   publicationFact("Repository", `${preview.repo_id}@${preview.release_tag}`, "#publication-generated");
-  publicationFact("Checkpoint tag", preview.checkpoint_tag, "#publication-generated");
+  publicationFact("Release tier", preview.release_tier, "#publication-generated");
   publicationFact("Acceptance", preview.acceptance?.passed ? "Accepted" : "Not accepted", "#publication-generated");
   publicationFact("Replay", `${preview.replay?.status}: ${preview.replay?.outcome}`, "#publication-generated");
   publicationFact("Comparison", preview.comparison?.reason, "#publication-generated");

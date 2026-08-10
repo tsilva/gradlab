@@ -10,8 +10,10 @@ from gradlab.publication_evidence import validate_evaluation_evidence_document
 def document() -> dict:
     return {
         "document_type": "gradlab.evaluation_evidence",
-        "format_version": 1,
+        "format_version": 2,
+        "tier": "research",
         "status": "accepted",
+        "provenance": {"origin": "gradlab-verified-evaluation"},
         "identity": {"checkpoint_step": 10},
         "protocol": {"episodes": 2, "action_sampling": "stochastic"},
         "episode_results": [{"episode": 0}, {"episode": 1}],
@@ -40,3 +42,17 @@ def test_evaluation_evidence_rejects_unknown_contract_fields() -> None:
     changed["legacy_alias"] = True
     with pytest.raises(ValueError, match="unsupported field set"):
         validate_evaluation_evidence_document(changed)
+
+
+def test_historical_evidence_must_preserve_failed_acceptance() -> None:
+    historical = deepcopy(document())
+    historical["tier"] = "historical-import"
+    historical["status"] = "evaluated-not-accepted"
+    historical["acceptance"]["passed"] = False
+    historical["acceptance"]["outcomes"][0]["passed"] = False
+    historical["provenance"] = {"origin": "legacy-exact-contract-rerun"}
+    assert validate_evaluation_evidence_document(historical) == historical
+
+    historical["acceptance"]["passed"] = True
+    with pytest.raises(ValueError, match="failed acceptance"):
+        validate_evaluation_evidence_document(historical)

@@ -44,11 +44,13 @@ from gradlab.validation import require_mapping as _require_mapping
 
 
 HUGGINGFACE_NAMESPACE = "tsilva"
-REPO_NAMING_SCHEMA_VERSION = 3
+REPO_NAMING_SCHEMA_VERSION = 4
 RELEASE_MANIFEST_DOCUMENT_TYPE = "gradlab.release_manifest"
-RELEASE_MANIFEST_VERSION = 3
+RELEASE_MANIFEST_VERSION = 4
 EVALUATION_EVIDENCE_DOCUMENT_TYPE = "gradlab.evaluation_evidence"
-EVALUATION_EVIDENCE_VERSION = 1
+EVALUATION_EVIDENCE_VERSION = 2
+RESEARCH_RELEASE_TIER = "research"
+HISTORICAL_RELEASE_TIER = "historical-import"
 HUGGINGFACE_RELEASE_FILES = frozenset(
     {
         ".gitattributes",
@@ -93,16 +95,19 @@ class _ReleaseRepository(BoundaryModel):
     repo_id: NonEmptyText
     canonical_environment_id: NonEmptyText
     goal_id: NonEmptyText
+
+
+class _ReleaseLineage(BoundaryModel):
     trainer: NonEmptyText
     trainer_slug: NonEmptyText
     algorithm: NonEmptyText
-    lineage_digest: Sha256
-    lineage_prefix: NonEmptyText
+    digest: Sha256
+    prefix: NonEmptyText
 
 
 class _ReleaseDetails(BoundaryModel):
     version: NonEmptyText
-    checkpoint_tag: NonEmptyText
+    tier: Literal["research", "historical-import"]
     published_at: NonEmptyText
     youtube_url: NonEmptyText | None = None
     correction_note: Any = None
@@ -211,19 +216,22 @@ class _ReleasePublisher(BoundaryModel):
     youtube_privacy: Literal["public", "unlisted", "private"]
 
 
-class _ReleaseManifestV3(BoundaryModel):
+class _ReleaseManifestV4(BoundaryModel):
     document_type: Literal[RELEASE_MANIFEST_DOCUMENT_TYPE]
-    format_version: Literal[3]
+    format_version: Literal[4]
     repo_naming_schema: Literal[REPO_NAMING_SCHEMA_VERSION]
     repository: _ReleaseRepository
+    lineage: _ReleaseLineage
     release: _ReleaseDetails
-    model: _ReleaseModel
-    source: _ReleaseSource
-    evaluation: _ReleaseEvaluation
-    replay: _ReleaseReplay
-    publication: _ReleasePublisher
+    model: Any
+    source: Any
+    evaluation: Any
+    replay: Any
+    publication: Any
     containers: Any
     comparison: Any
+    history: Any
+    historical_import: Any = None
     featured: bool
     artifacts: dict[str, _ArtifactRecord]
 
@@ -243,7 +251,9 @@ class PublicationIdentity:
 
     @property
     def repo_name(self) -> str:
-        return f"{self.goal_id}_{self.trainer_slug}-{self.algorithm}_{self.lineage_prefix}"
+        if self.canonical_environment_id == self.goal_id:
+            return self.goal_id
+        return f"{self.canonical_environment_id}_{self.goal_id}"
 
 
 @dataclass(frozen=True)
@@ -776,8 +786,8 @@ def release_comparison(
     checks = (
         (
             "lineage",
-            (current.get("repository") or {}).get("lineage_digest"),
-            (previous.get("repository") or {}).get("lineage_digest"),
+            (current.get("lineage") or {}).get("digest"),
+            (previous.get("lineage") or {}).get("digest"),
         ),
         (
             "run",
@@ -809,11 +819,28 @@ def release_comparison(
     }
 
 
+def latest_comparable_release(
+    current: Mapping[str, Any],
+    previous_releases: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    ordered = sorted(
+        previous_releases,
+        key=lambda value: int(str((value.get("release") or {}).get("version") or "v0")[1:]),
+        reverse=True,
+    )
+    for previous in ordered:
+        result = release_comparison(current, previous)
+        if result.get("comparable") is True:
+            return result
+    return {"comparable": False, "reason": "no prior comparable release in goal repository"}
+
+
 def render_model_card(
     manifest: Mapping[str, Any],
     bundle: PolicyBundle,
 ) -> str:
     repository = _require_mapping(manifest.get("repository"), label="manifest repository")
+    lineage = _require_mapping(manifest.get("lineage"), label="manifest lineage")
     release = _require_mapping(manifest.get("release"), label="manifest release")
     model = _require_mapping(manifest.get("model"), label="manifest model")
     source = _require_mapping(manifest.get("source"), label="manifest source")
@@ -902,7 +929,20 @@ def render_model_card(
         replay.get("execution") if isinstance(replay, Mapping) else None
     )
     comparison = _require_mapping(manifest.get("comparison"), label="manifest comparison")
-    card = _MODEL_CARD_TEMPLATE_ENV.get_template("model_card_v3.md.j2").render(
+    history_rows = "\n".join(
+        "| `{version}` | {tier} | {trainer} {algorithm} | `{lineage}` | {step} | {status} |".format(
+            version=_markdown_value(row.get("version")),
+            tier=_markdown_value(row.get("tier")),
+            trainer=_markdown_value(row.get("trainer")),
+            algorithm=_markdown_value(str(row.get("algorithm") or "").upper()),
+            lineage=_markdown_value(row.get("lineage_prefix")),
+            step=_markdown_value(row.get("checkpoint_step")),
+            status=_markdown_value(row.get("evidence_status")),
+        )
+        for row in manifest.get("history") or ()
+        if isinstance(row, Mapping)
+    )
+    card = _MODEL_CARD_TEMPLATE_ENV.get_template("model_card_v4.md.j2").render(
         {
             "library_name": library_name,
             "algorithm": algorithm,
@@ -922,9 +962,7 @@ def render_model_card(
             "ranking_rows": ranking_rows,
             "accepted": bool(evaluation.get("accepted")),
             "version": version,
-            "checkpoint_tag": _required_text(
-                release.get("checkpoint_tag"), label="release checkpoint_tag"
-            ),
+            "release_tier": _required_text(release.get("tier"), label="release tier"),
             "youtube_value": youtube_value,
             "quick_start": quick_start,
             "model_ref": model_ref,
@@ -954,7 +992,8 @@ def render_model_card(
                 )
             ),
             "manifest_purpose": manifest_purpose,
-            "lineage_digest": repository.get("lineage_digest"),
+            "lineage_digest": lineage.get("digest"),
+            "history_rows": history_rows,
             "comparison_status": (
                 "Comparable" if comparison.get("comparable") else "Not compared"
             ),
@@ -996,6 +1035,110 @@ def validate_model_card(
     expected = render_model_card(manifest, bundle)
     if card_text != expected:
         raise ValueError("README.md does not match the generated model card")
+
+
+def render_historical_model_card(manifest: Mapping[str, Any]) -> str:
+    repository = _require_mapping(manifest.get("repository"), label="manifest repository")
+    lineage = _require_mapping(manifest.get("lineage"), label="manifest lineage")
+    release = _require_mapping(manifest.get("release"), label="manifest release")
+    model = _require_mapping(manifest.get("model"), label="manifest model")
+    source = _require_mapping(manifest.get("source"), label="manifest source")
+    evaluation = _require_mapping(manifest.get("evaluation"), label="manifest evaluation")
+    historical = _require_mapping(
+        manifest.get("historical_import"), label="manifest historical_import"
+    )
+    repo_id = _required_text(repository.get("repo_id"), label="repository repo_id")
+    version = _required_text(release.get("version"), label="release version")
+    goal_id = _required_text(repository.get("goal_id"), label="repository goal_id")
+    trainer = _required_text(lineage.get("trainer"), label="lineage trainer")
+    algorithm = _required_text(lineage.get("algorithm"), label="lineage algorithm")
+    checkpoint_step = _required_int(
+        evaluation.get("checkpoint_step"), label="evaluation checkpoint_step"
+    )
+    acceptance_rows = "\n".join(
+        f"| `{_markdown_value(row.get('metric'))}` | {_markdown_value(row.get('label'))} | "
+        f"{_metric_value(row.get('value'), row.get('unit'))} | "
+        f"`{row.get('operator')} {_markdown_value(row.get('threshold'))}` | "
+        f"{'Pass' if row.get('passed') else 'Fail'} |"
+        for row in (_require_mapping(
+            evaluation.get("acceptance"), label="evaluation acceptance"
+        ).get("outcomes") or ())
+        if isinstance(row, Mapping)
+    )
+    history_rows = "\n".join(
+        f"| `{row.get('version')}` | {row.get('tier')} | {row.get('trainer')} "
+        f"{str(row.get('algorithm') or '').upper()} | `{row.get('lineage_prefix')}` | "
+        f"{row.get('checkpoint_step')} | {row.get('evidence_status')} |"
+        for row in manifest.get("history") or ()
+        if isinstance(row, Mapping)
+    )
+    runtime = str(historical.get("runtime_image_ref") or "")
+    runtime_ref = runtime.removeprefix("docker:")
+    model_url = f"https://huggingface.co/{repo_id}/resolve/{version}/model.zip"
+    quick_start = (
+        "```bash\n"
+        f"docker run --rm {runtime_ref} rlab play {model_url}\n"
+        "```"
+        if runtime_ref
+        else f"Download the immutable checkpoint from `{model_url}` and use its recorded runtime."
+    )
+    youtube_url = str(release.get("youtube_url") or "")
+    youtube = f"[Watch on YouTube]({youtube_url})" if youtube_url else "Not available"
+    return (
+        "---\n"
+        "library_name: stable-baselines3\n"
+        "pipeline_tag: reinforcement-learning\n"
+        "license: mit\n"
+        "tags:\n"
+        "  - reinforcement-learning\n"
+        "  - stable-baselines3\n"
+        f"  - {algorithm}\n"
+        "  - historical-import\n"
+        "---\n\n"
+        f"# {goal_id} — {trainer} {algorithm.upper()} @ {_compact_steps(checkpoint_step)} env steps\n\n"
+        "This is an immutable historical import of an `rlab` policy. It is not a GradLab-trained "
+        "checkpoint, does not claim GradLab compatibility, and is not an accepted research release.\n\n"
+        "## At a Glance\n\n"
+        "| Item | Value |\n|---|---|\n"
+        f"| Environment | `{repository.get('canonical_environment_id')}` |\n"
+        f"| Goal | `{goal_id}` |\n| Trainer | {trainer} |\n"
+        f"| Algorithm | {algorithm.upper()} |\n| Model class | `{model.get('model_class')}` |\n"
+        f"| Exact checkpoint | Step `{checkpoint_step}` |\n| Immutable release | `{version}` |\n"
+        f"| Lineage | `{lineage.get('digest')}` |\n| Acceptance | Not accepted |\n\n"
+        "## Quick Start\n\n"
+        f"{quick_start}\n\n"
+        "A legally obtained compatible game image is required and is not included.\n\n"
+        "## Evaluation\n\n"
+        f"The unchanged checkpoint was rerun for `{evaluation.get('episodes')}` episodes under its "
+        f"source-bound `{evaluation.get('action_sampling')}` contract.\n\n"
+        "| Metric | Meaning | Observed | Requirement | Outcome |\n|---|---|---:|---:|---|\n"
+        f"{acceptance_rows}\n\n"
+        "The complete normalized episode evidence is in `evaluation_evidence.json`. Retired metric "
+        "names are source-bound evidence labels, not aliases for current GradLab metrics.\n\n"
+        "## Release History\n\n"
+        "| Release | Tier | Trainer / algorithm | Lineage | Checkpoint step | Evidence |\n"
+        "|---|---|---|---|---:|---|\n"
+        f"{history_rows}\n\n"
+        "## Representative Replay\n\n"
+        f"{youtube}. The root `replay.mp4` is representative media and is not evaluation evidence.\n\n"
+        "## Provenance\n\n"
+        "| Item | Value |\n|---|---|\n"
+        f"| Source run | `{source.get('run_id')}` |\n| Source commit | `{source.get('commit')}` |\n"
+        f"| Source release | `{historical.get('source_repo_id')}@{historical.get('source_revision')}` |\n"
+        f"| Evidence origin | `{historical.get('evidence_origin')}` |\n"
+        f"| Archived runtime | `{runtime}` |\n\n"
+        "## Files\n\n"
+        "`model.zip`, `model.json`, and `recipe.json` preserve the legacy artifact bytes; "
+        "`evaluation_evidence.json` records the exact-contract rerun; `release_manifest.json` binds "
+        "the current publication identity; and `replay.mp4` is representative media.\n\n"
+        "## Limitations\n\n"
+        "This historical import failed its recorded acceptance contract and cannot establish "
+        "acceptance, promotion, or featured status. Results apply only to the recorded source "
+        "runtime, environment, checkpoint, seeds, and evaluation contract.\n\n"
+        "## Licensing\n\n"
+        "The policy weights and publication material are licensed under the repository `LICENSE`. "
+        "Runtime software and game assets retain their own licenses and terms; no game image is redistributed.\n"
+    )
 
 
 def verify_replay(path: Path) -> dict[str, object]:
@@ -1095,6 +1238,7 @@ def build_release_manifest(
     publication: Mapping[str, Any] | None = None,
     evaluation_evidence: Mapping[str, Any] | None = None,
     comparison: Mapping[str, Any] | None = None,
+    history: Sequence[Mapping[str, Any]] = (),
     featured: bool = False,
     correction_note: str | None = None,
     format_version: int = RELEASE_MANIFEST_VERSION,
@@ -1109,16 +1253,16 @@ def build_release_manifest(
     if identity.algorithm == "cell-graph" and evaluation.get("action_sampling") != "route":
         raise ValueError("cell-graph releases require route action sampling")
     if format_version != RELEASE_MANIFEST_VERSION:
-        raise ValueError("release manifest format_version must be 3")
+        raise ValueError("release manifest format_version must be 4")
     if not isinstance(replay, Mapping):
-        raise ValueError("release manifest v3 requires replay provenance")
+        raise ValueError("release manifest v4 requires replay provenance")
     if not isinstance(publication, Mapping):
-        raise ValueError("release manifest v3 requires publication provenance")
+        raise ValueError("release manifest v4 requires publication provenance")
     if not isinstance(evaluation_evidence, Mapping):
-        raise ValueError("release manifest v3 requires evaluation_evidence.json")
-    from gradlab.publication_evidence import validate_evaluation_evidence_document
+        raise ValueError("release manifest v4 requires evaluation_evidence.json")
+    from gradlab.publication_evidence import validate_research_evaluation_evidence_document
 
-    evidence_document = validate_evaluation_evidence_document(evaluation_evidence)
+    evidence_document = validate_research_evaluation_evidence_document(evaluation_evidence)
     evidence_hash = policy_document_sha256(evidence_document)
     evidence_identity = _require_mapping(
         evidence_document.get("identity"), label="evaluation evidence identity"
@@ -1135,20 +1279,41 @@ def build_release_manifest(
         "acceptance": deepcopy(evidence_document["acceptance"]),
         "ranking": deepcopy(evidence_document["ranking"]),
     }
-    checkpoint_step = int(evaluation_value["checkpoint_step"])
     environment_container = f"GradLab — {identity.canonical_environment_id}"
+    lineage = {
+        "trainer": identity.trainer,
+        "trainer_slug": identity.trainer_slug,
+        "algorithm": identity.algorithm,
+        "digest": identity.lineage_digest,
+        "prefix": identity.lineage_prefix,
+    }
+    current_history = {
+        "version": release_version,
+        "tier": RESEARCH_RELEASE_TIER,
+        "published_at": published_at,
+        "trainer": identity.trainer,
+        "algorithm": identity.algorithm,
+        "lineage_prefix": identity.lineage_prefix,
+        "checkpoint_step": int(evaluation_value["checkpoint_step"]),
+        "evidence_status": "accepted",
+    }
+    history_value = [deepcopy(dict(row)) for row in history]
+    if any(row.get("version") == release_version for row in history_value):
+        raise ValueError("release history already contains the current version")
+    history_value.append(current_history)
     manifest: dict[str, Any] = {
         "document_type": RELEASE_MANIFEST_DOCUMENT_TYPE,
         "format_version": format_version,
         "repo_naming_schema": REPO_NAMING_SCHEMA_VERSION,
         "repository": {
             "repo_id": build_model_repo_id(identity),
-            **asdict(identity),
-            "lineage_prefix": identity.lineage_prefix,
+            "canonical_environment_id": identity.canonical_environment_id,
+            "goal_id": identity.goal_id,
         },
+        "lineage": lineage,
         "release": {
             "version": release_version,
-            "checkpoint_tag": f"checkpoint-{checkpoint_step}",
+            "tier": RESEARCH_RELEASE_TIER,
             "published_at": published_at,
             **({"correction_note": correction_note} if correction_note else {}),
         },
@@ -1162,11 +1327,112 @@ def build_release_manifest(
             "featured": "GradLab — Featured Research",
         },
         "comparison": dict(comparison or {"comparable": False, "reason": "no prior release selected"}),
+        "history": history_value,
         "featured": bool(featured),
         "artifacts": dict(artifacts),
     }
     if youtube_url:
         manifest["release"]["youtube_url"] = youtube_url
+    _assert_no_absolute_paths(manifest)
+    return manifest
+
+
+def build_historical_release_manifest(
+    identity: PublicationIdentity,
+    *,
+    release_version: str,
+    published_at: str,
+    model: Mapping[str, Any],
+    source: Mapping[str, Any],
+    evaluation: Mapping[str, Any],
+    replay: Mapping[str, Any],
+    publication: Mapping[str, Any],
+    historical_import: Mapping[str, Any],
+    evaluation_evidence: Mapping[str, Any],
+    artifacts: Mapping[str, Any],
+    history: Sequence[Mapping[str, Any]] = (),
+    youtube_url: str | None = None,
+) -> dict[str, Any]:
+    if not re.fullmatch(r"v[1-9][0-9]*", release_version):
+        raise ValueError("release_version must be a sequential vN tag")
+    from gradlab.publication_evidence import (
+        HISTORICAL_EVIDENCE_TIER,
+        validate_evaluation_evidence_document,
+    )
+
+    evidence_document = validate_evaluation_evidence_document(evaluation_evidence)
+    if evidence_document.get("tier") != HISTORICAL_EVIDENCE_TIER:
+        raise ValueError("historical release requires historical-import evidence")
+    evidence_identity = _require_mapping(
+        evidence_document.get("identity"), label="historical evidence identity"
+    )
+    checkpoint_step = int(evaluation.get("checkpoint_step") or -1)
+    if checkpoint_step < 0 or int(evidence_identity.get("checkpoint_step") or -2) != checkpoint_step:
+        raise ValueError("historical evidence checkpoint step disagrees with release")
+    evidence_hash = policy_document_sha256(evidence_document)
+    evaluation_value = {
+        **deepcopy(dict(evaluation)),
+        "accepted": False,
+        "evidence_file": "evaluation_evidence.json",
+        "evidence_sha256": evidence_hash,
+        "acceptance": deepcopy(evidence_document["acceptance"]),
+        "ranking": deepcopy(evidence_document["ranking"]),
+    }
+    history_value = [deepcopy(dict(row)) for row in history]
+    if any(row.get("version") == release_version for row in history_value):
+        raise ValueError("release history already contains the current version")
+    history_value.append(
+        {
+            "version": release_version,
+            "tier": HISTORICAL_RELEASE_TIER,
+            "published_at": published_at,
+            "trainer": identity.trainer,
+            "algorithm": identity.algorithm,
+            "lineage_prefix": identity.lineage_prefix,
+            "checkpoint_step": checkpoint_step,
+            "evidence_status": "evaluated-not-accepted",
+        }
+    )
+    manifest: dict[str, Any] = {
+        "document_type": RELEASE_MANIFEST_DOCUMENT_TYPE,
+        "format_version": RELEASE_MANIFEST_VERSION,
+        "repo_naming_schema": REPO_NAMING_SCHEMA_VERSION,
+        "repository": {
+            "repo_id": build_model_repo_id(identity),
+            "canonical_environment_id": identity.canonical_environment_id,
+            "goal_id": identity.goal_id,
+        },
+        "lineage": {
+            "trainer": identity.trainer,
+            "trainer_slug": identity.trainer_slug,
+            "algorithm": identity.algorithm,
+            "digest": identity.lineage_digest,
+            "prefix": identity.lineage_prefix,
+        },
+        "release": {
+            "version": release_version,
+            "tier": HISTORICAL_RELEASE_TIER,
+            "published_at": published_at,
+            **({"youtube_url": youtube_url} if youtube_url else {}),
+        },
+        "model": deepcopy(dict(model)),
+        "source": deepcopy(dict(source)),
+        "evaluation": evaluation_value,
+        "replay": deepcopy(dict(replay)),
+        "publication": deepcopy(dict(publication)),
+        "containers": {
+            "environment": f"GradLab — {identity.canonical_environment_id}",
+            "featured": "GradLab — Featured Research",
+        },
+        "comparison": {
+            "comparable": False,
+            "reason": "historical imports are not research comparisons",
+        },
+        "history": history_value,
+        "historical_import": deepcopy(dict(historical_import)),
+        "featured": False,
+        "artifacts": deepcopy(dict(artifacts)),
+    }
     _assert_no_absolute_paths(manifest)
     return manifest
 
@@ -1199,9 +1465,9 @@ def release_replay_from_capture(capture: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _validate_release_manifest_v3(document: Mapping[str, Any], source: str) -> dict[str, Any]:
+def _validate_release_manifest_v4(document: Mapping[str, Any], source: str) -> dict[str, Any]:
     manifest = validate_boundary(
-        _ReleaseManifestV3,
+        _ReleaseManifestV4,
         document,
         label=source,
         error_type=PolicyDocumentError,
@@ -1210,11 +1476,37 @@ def _validate_release_manifest_v3(document: Mapping[str, Any], source: str) -> d
         raise PolicyDocumentError(
             f"{source}.artifacts must describe exactly: " + ", ".join(sorted(HASHED_RELEASE_FILES))
         )
-    if not str(manifest.replay.capture_id).startswith("capture-"):
-        raise PolicyDocumentError(f"{source}.replay.capture_id is invalid")
-    media = manifest.replay.media
-    if not isinstance(media, Mapping) or int(media.get("frames") or 0) != manifest.replay.steps + 1:
-        raise PolicyDocumentError(f"{source}.replay.media frames must equal replay steps + 1")
+    tier = manifest.release.tier
+    if tier == RESEARCH_RELEASE_TIER:
+        if manifest.featured not in {True, False}:
+            raise PolicyDocumentError(f"{source}.featured is invalid")
+        replay = manifest.replay
+        if not isinstance(replay, Mapping) or not str(replay.get("capture_id") or "").startswith(
+            "capture-"
+        ):
+            raise PolicyDocumentError(f"{source}.replay.capture_id is invalid")
+        media = replay.get("media")
+        if not isinstance(media, Mapping) or int(media.get("frames") or 0) != int(
+            replay.get("steps") or -1
+        ) + 1:
+            raise PolicyDocumentError(f"{source}.replay.media frames must equal replay steps + 1")
+        if not isinstance(manifest.evaluation, Mapping) or manifest.evaluation.get("accepted") is not True:
+            raise PolicyDocumentError(f"{source}.research evaluation must be accepted")
+    else:
+        if manifest.featured:
+            raise PolicyDocumentError(f"{source}.historical imports cannot be featured")
+        if not isinstance(manifest.historical_import, Mapping):
+            raise PolicyDocumentError(f"{source}.historical import provenance is required")
+        if not isinstance(manifest.evaluation, Mapping) or manifest.evaluation.get("accepted") is not False:
+            raise PolicyDocumentError(f"{source}.historical evaluation must be not accepted")
+    history = manifest.history
+    if not isinstance(history, list) or not history:
+        raise PolicyDocumentError(f"{source}.history must be a non-empty list")
+    versions = [str(row.get("version") or "") for row in history if isinstance(row, Mapping)]
+    if len(versions) != len(history) or len(versions) != len(set(versions)):
+        raise PolicyDocumentError(f"{source}.history versions must be unique")
+    if versions[-1] != manifest.release.version:
+        raise PolicyDocumentError(f"{source}.history must end with the current release")
     return deepcopy(dict(document))
 
 
@@ -1227,7 +1519,7 @@ def validate_release_manifest_document(
         raise PolicyDocumentError(f"{source} has an invalid document_type")
     version = document.get("format_version")
     if version == RELEASE_MANIFEST_VERSION:
-        return _validate_release_manifest_v3(document, source)
+        return _validate_release_manifest_v4(document, source)
     raise UnsupportedPolicyDocumentVersion(
         source=source,
         document_type=RELEASE_MANIFEST_DOCUMENT_TYPE,
@@ -1250,35 +1542,30 @@ def validate_release_bundle(root: Path) -> dict[str, Any]:
     if not isinstance(manifest_value, Mapping):
         raise PolicyDocumentError(f"{manifest_path} must contain a JSON object")
     manifest = validate_release_manifest_document(manifest_value, source=str(manifest_path))
-    bundle = load_policy_bundle(root, source=str(root))
     card_text = (root / "README.md").read_text(encoding="utf-8")
     _assert_no_absolute_paths(manifest)
     repository = _require_mapping(manifest.get("repository"), label="manifest repository")
-    identity = publication_identity_from_policy_bundle(repository.get("goal_id"), bundle)
+    lineage = _require_mapping(manifest.get("lineage"), label="manifest lineage")
+    identity = PublicationIdentity(
+        canonical_environment_id=_required_text(
+            repository.get("canonical_environment_id"), label="repository environment"
+        ),
+        goal_id=_required_text(repository.get("goal_id"), label="repository goal"),
+        trainer=_required_text(lineage.get("trainer"), label="lineage trainer"),
+        trainer_slug=_required_text(lineage.get("trainer_slug"), label="lineage trainer_slug"),
+        algorithm=_required_text(lineage.get("algorithm"), label="lineage algorithm"),
+        lineage_digest=_required_text(lineage.get("digest"), label="lineage digest"),
+    )
     if repository.get("repo_id") != build_model_repo_id(identity):
-        raise ValueError("release manifest repository id does not match model metadata")
-    if repository.get("lineage_digest") != identity.lineage_digest:
-        raise ValueError("release manifest full lineage digest does not match model metadata")
-    if repository.get("lineage_prefix") != identity.lineage_prefix:
+        raise ValueError("release manifest repository id does not match goal identity")
+    if lineage.get("prefix") != identity.lineage_prefix:
         raise ValueError("release manifest lineage prefix does not match its full digest")
     if int(manifest.get("repo_naming_schema") or 0) != REPO_NAMING_SCHEMA_VERSION:
         raise ValueError("release manifest has an unsupported repository naming schema")
-    expected_model = publication_model_contract(bundle)
-    if manifest.get("model") != expected_model:
-        raise ValueError("release manifest model contract does not match model.json")
     expected_records = release_artifact_records(root)
     if manifest.get("artifacts") != expected_records:
         raise ValueError("release manifest artifact hashes or sizes do not match the bundle")
     evidence = _require_mapping(manifest.get("evaluation"), label="manifest evaluation")
-    expected_evidence = {
-        "checkpoint_sha256": bundle.checkpoint_sha256,
-        "recipe_sha256": bundle.recipe_sha256,
-        "recipe_format_version": bundle.recipe["format_version"],
-        "evaluation_contract_sha256": evaluation_contract_sha256(bundle.recipe),
-    }
-    for key, expected in expected_evidence.items():
-        if evidence.get(key) != expected:
-            raise ValueError(f"release evaluation {key} does not match the policy bundle")
     if evidence.get("exact_contract") is not True:
         raise ValueError("release evaluation evidence is not exact-contract")
     from gradlab.publication_evidence import validate_evaluation_evidence_document
@@ -1289,6 +1576,9 @@ def validate_release_bundle(root: Path) -> dict[str, Any]:
     if not isinstance(evidence_document_value, Mapping):
         raise ValueError("evaluation_evidence.json must contain an object")
     evidence_document = validate_evaluation_evidence_document(evidence_document_value)
+    tier = str((_require_mapping(manifest.get("release"), label="manifest release")).get("tier"))
+    if evidence_document.get("tier") != tier:
+        raise ValueError("release and evaluation evidence tiers disagree")
     evidence_record = _require_mapping(
         expected_records.get("evaluation_evidence.json"),
         label="release evaluation evidence artifact",
@@ -1313,5 +1603,38 @@ def validate_release_bundle(root: Path) -> dict[str, Any]:
             raise ValueError(f"release replay {key} does not match replay.mp4")
     if abs(float(media.get("fps") or 0.0) - float(replay_probe.get("fps") or 0.0)) > 1e-6:
         raise ValueError("release replay fps does not match replay.mp4")
-    validate_model_card(card_text, manifest, bundle)
+    if tier == RESEARCH_RELEASE_TIER:
+        bundle = load_policy_bundle(root, source=str(root))
+        expected_identity = publication_identity_from_policy_bundle(identity.goal_id, bundle)
+        if identity != expected_identity:
+            raise ValueError("release lineage does not match current model metadata")
+        expected_model = publication_model_contract(bundle)
+        if manifest.get("model") != expected_model:
+            raise ValueError("release manifest model contract does not match model.json")
+        expected_evidence = {
+            "checkpoint_sha256": bundle.checkpoint_sha256,
+            "recipe_sha256": bundle.recipe_sha256,
+            "recipe_format_version": bundle.recipe["format_version"],
+            "evaluation_contract_sha256": evaluation_contract_sha256(bundle.recipe),
+        }
+        for key, expected in expected_evidence.items():
+            if evidence.get(key) != expected:
+                raise ValueError(f"release evaluation {key} does not match the policy bundle")
+        validate_model_card(card_text, manifest, bundle)
+    else:
+        if manifest.get("featured") is not False:
+            raise ValueError("historical imports cannot be featured")
+        historical = _require_mapping(
+            manifest.get("historical_import"), label="historical import provenance"
+        )
+        for filename in ("model.zip", "model.json", "recipe.json", "replay.mp4"):
+            expected = (_require_mapping(
+                historical.get("preserved_artifacts"), label="preserved artifacts"
+            ).get(filename) or {}).get("sha256")
+            if expected != expected_records[filename]["sha256"]:
+                raise ValueError(f"historical import changed preserved {filename}")
+        expected_card = render_historical_model_card(manifest)
+        ModelCard(card_text).validate(repo_type="model")
+        if card_text != expected_card:
+            raise ValueError("README.md does not match the historical model card")
     return manifest

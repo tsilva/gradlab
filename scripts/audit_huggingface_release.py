@@ -100,9 +100,6 @@ def audit_huggingface_release(
         raise ValueError(
             f"release manifest version {manifest_version!r} disagrees with {revision!r}"
         )
-    checkpoint_tag = str(manifest["release"]["checkpoint_tag"])
-    if tags.get(checkpoint_tag) != str(tagged.sha):
-        raise ValueError(f"tag {checkpoint_tag!r} is missing or points elsewhere")
     environment_id = str(manifest["repository"]["canonical_environment_id"])
     expected_title = f"GradLab — {environment_id}"
     owner = repo_id.split("/", 1)[0]
