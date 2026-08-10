@@ -669,6 +669,57 @@ class TerminalReceipt(_CurrentContract):
             raise ValueError("final_step must be non-negative")
         if int(self.wandb_high_water_mark) < 0:
             raise ValueError("wandb_high_water_mark must be non-negative")
+        if not isinstance(self.drain, Mapping):
+            raise ValueError("terminal receipt drain must be an object")
+        learner_log = self.drain.get("learner_log")
+        if learner_log is not None:
+            if not isinstance(learner_log, Mapping):
+                raise ValueError("terminal receipt learner_log must be an object")
+            if str(learner_log.get("path") or "") != "learner.log":
+                raise ValueError("terminal receipt learner_log path must be learner.log")
+            if int(learner_log.get("size_bytes") or 0) < 0:
+                raise ValueError("terminal receipt learner_log size must be non-negative")
+            raw_sha256 = _require_sha256(
+                learner_log.get("sha256"),
+                "terminal receipt learner_log sha256",
+            )
+            tail = learner_log.get("tail")
+            if tail is not None and (not isinstance(tail, str) or len(tail) > 12_000):
+                raise ValueError("terminal receipt learner_log tail is invalid")
+            archive = learner_log.get("archive")
+            if archive is not None:
+                if not isinstance(archive, Mapping):
+                    raise ValueError("terminal receipt learner_log archive must be an object")
+                archive_state = str(archive.get("state") or "")
+                if archive_state not in {"complete", "failed"}:
+                    raise ValueError("terminal receipt learner_log archive state is invalid")
+                if int(archive.get("attempts") or 0) < 1:
+                    raise ValueError("terminal receipt learner_log archive attempts is invalid")
+                if str(archive.get("content_encoding") or "") != "gzip":
+                    raise ValueError("terminal receipt learner_log archive must use gzip")
+                if archive_state == "complete":
+                    expected_key = (
+                        f"runs/{self.run_id}/attempts/{self.attempt_id}/evidence/"
+                        f"learner-{raw_sha256}.log.gz"
+                    )
+                    if str(archive.get("object_key") or "") != expected_key:
+                        raise ValueError("terminal receipt learner_log archive key is invalid")
+                    if int(archive.get("size_bytes") or 0) <= 0:
+                        raise ValueError("terminal receipt learner_log archive size is invalid")
+                    _require_sha256(
+                        archive.get("sha256"),
+                        "terminal receipt learner_log archive sha256",
+                    )
+                    if archive.get("failure") is not None:
+                        raise ValueError("complete learner_log archive cannot contain a failure")
+                else:
+                    if any(
+                        archive.get(key) is not None
+                        for key in ("object_key", "size_bytes", "sha256")
+                    ):
+                        raise ValueError("failed learner_log archive cannot claim an object")
+                    if not isinstance(archive.get("failure"), Mapping):
+                        raise ValueError("failed learner_log archive requires failure evidence")
         for row in self.eval_inventory:
             if not isinstance(row, Mapping):
                 raise ValueError("eval inventory entries must be objects")

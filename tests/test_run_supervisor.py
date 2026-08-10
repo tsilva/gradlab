@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import gzip
+import hashlib
 import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 from gradlab.checkpoint_contract import checkpoint_manifest_contract_sha256
 from gradlab.early_stop import MetricEarlyStopStateMachine, MetricSample
@@ -740,6 +742,46 @@ class RunSupervisorTests(unittest.TestCase):
 
         self.assertNotIn("discarded-prefix", tail)
         self.assertIn("latest learner traceback", tail)
+
+    def test_learner_log_evidence_archives_full_log_and_bounded_tail(self) -> None:
+        supervisor = self.supervisor()
+        payload = b"discarded-prefix\n" + b"x" * 20_000 + b"\nlatest native failure\n"
+        supervisor.learner_log_path.parent.mkdir(parents=True, exist_ok=True)
+        supervisor.learner_log_path.write_bytes(payload)
+
+        evidence = supervisor._learner_log_evidence()
+
+        assert evidence is not None
+        self.assertEqual(evidence["size_bytes"], len(payload))
+        self.assertEqual(evidence["sha256"], hashlib.sha256(payload).hexdigest())
+        self.assertNotIn("discarded-prefix", evidence["tail"])
+        self.assertIn("latest native failure", evidence["tail"])
+        self.assertEqual(evidence["archive"]["state"], "complete")
+        self.assertEqual(evidence["archive"]["attempts"], 1)
+        archived = self.authority.control.get_bytes(evidence["archive"]["object_key"])
+        self.assertEqual(gzip.decompress(archived), payload)
+
+    def test_learner_log_archive_failure_is_retried_without_raising(self) -> None:
+        supervisor = self.supervisor()
+        supervisor.learner_log_path.parent.mkdir(parents=True, exist_ok=True)
+        supervisor.learner_log_path.write_text("latest native failure\n")
+
+        with (
+            patch.object(
+                supervisor.authority,
+                "archive_learner_log",
+                side_effect=RuntimeError("R2 archive unavailable"),
+            ) as archive,
+            patch.object(supervisor.clock, "sleep") as sleep,
+        ):
+            evidence = supervisor._learner_log_evidence()
+
+        assert evidence is not None
+        self.assertEqual(archive.call_count, 3)
+        self.assertEqual(sleep.call_args_list, [call(1.0), call(2.0)])
+        self.assertEqual(evidence["archive"]["state"], "failed")
+        self.assertIn("R2 archive unavailable", evidence["archive"]["failure"]["message"])
+        self.assertIn("latest native failure", evidence["tail"])
 
     def test_supervisor_starts_learner_with_explicit_execution_mode(self) -> None:
         supervisor = self.supervisor()
