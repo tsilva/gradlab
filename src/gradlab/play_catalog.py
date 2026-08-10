@@ -165,6 +165,7 @@ class CatalogPage:
 @dataclass(frozen=True)
 class CheckpointMetricContract:
     metrics_schema_version: int
+    evaluation_backend: Literal["modal", "none"]
     rank: tuple[RankCriterion, ...]
     acceptance: tuple[Mapping[str, Any], ...]
     columns: tuple[Mapping[str, Any], ...]
@@ -500,6 +501,13 @@ def checkpoint_metric_contract(
     train_config: Mapping[str, Any],
 ) -> CheckpointMetricContract:
     schema_version = require_current_metrics_schema(train_config.get("metrics_schema_version"))
+    raw_evaluation_backend = str(train_config.get("checkpoint_eval_backend") or "").strip()
+    if raw_evaluation_backend == "modal":
+        evaluation_backend: Literal["modal", "none"] = "modal"
+    elif raw_evaluation_backend == "none":
+        evaluation_backend = "none"
+    else:
+        raise ValueError("recipe.train_config.checkpoint_eval_backend is invalid")
     rank = require_objective_rank(
         train_config.get("selection_rank"),
         metrics_schema_version=schema_version,
@@ -617,6 +625,7 @@ def checkpoint_metric_contract(
     )
     return CheckpointMetricContract(
         metrics_schema_version=schema_version,
+        evaluation_backend=evaluation_backend,
         rank=rank,
         acceptance=acceptance,
         columns=tuple(columns),
@@ -2861,6 +2870,11 @@ class PlayCatalog:
             schema_version = require_current_metrics_schema(config.get("metrics_schema_version"))
             if schema_version != metric_contract.metrics_schema_version:
                 raise ValueError("W&B metrics schema disagrees with the immutable recipe")
+            observed_backend = str(config.get("checkpoint_eval_backend") or "").strip()
+            if observed_backend != metric_contract.evaluation_backend:
+                raise ValueError(
+                    "W&B checkpoint evaluation backend disagrees with the immutable recipe"
+                )
             observed_rank = require_objective_rank(
                 config.get("selection_rank"),
                 metrics_schema_version=schema_version,
@@ -2870,7 +2884,31 @@ class PlayCatalog:
             ):
                 raise ValueError("W&B checkpoint ranking disagrees with the immutable recipe")
             raw_contract = config.get("checkpoint_eval_contract")
-            if metric_contract.acceptance:
+            if metric_contract.evaluation_backend == "none":
+                if raw_contract is not None:
+                    raise ValueError(
+                        "W&B exposes a checkpoint evaluation contract for an evaluation-disabled recipe"
+                    )
+                raw_acceptance = config.get("checkpoint_eval_acceptance")
+                observed_acceptance = (
+                    tuple(
+                        normalize_metric_threshold_rules(
+                            raw_acceptance,
+                            label="W&B checkpoint_eval_acceptance",
+                            metric_validator=lambda name: validate_evaluation_scientific_metric(
+                                name,
+                                schema_version=schema_version,
+                            ),
+                        )
+                    )
+                    if raw_acceptance is not None
+                    else ()
+                )
+                if observed_acceptance != metric_contract.acceptance:
+                    raise ValueError(
+                        "W&B checkpoint acceptance disagrees with the immutable recipe"
+                    )
+            elif metric_contract.acceptance:
                 if not isinstance(raw_contract, Mapping):
                     raise ValueError("W&B checkpoint evaluation contract is missing")
                 observed_acceptance = tuple(
@@ -3005,7 +3043,7 @@ class PlayCatalog:
             require_current_metrics_schema(metric_contract.metrics_schema_version)
             training_seed = _safe_int(config.get("seed"))
             contract = config.get("checkpoint_eval_contract")
-            if not metric_contract.acceptance:
+            if metric_contract.evaluation_backend == "none" or not metric_contract.acceptance:
                 evaluations = {}
                 evaluation_seed = None
             else:
