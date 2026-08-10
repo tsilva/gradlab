@@ -1048,11 +1048,39 @@ class RunSupervisor:
         if not self.learner_log_path.is_file():
             return None
         payload = self.learner_log_path.read_bytes()
-        return {
+        evidence = {
             "path": self.learner_log_path.name,
             "size_bytes": len(payload),
             "sha256": hashlib.sha256(payload).hexdigest(),
+            "tail": self._learner_log_tail(),
         }
+        failure: Exception | None = None
+        for attempt in range(1, 4):
+            try:
+                evidence["archive"] = {
+                    **self.authority.archive_learner_log(
+                        run_id=self.manifest.run_id,
+                        attempt_id=self.manifest.attempt_id,
+                        payload=payload,
+                    ),
+                    "attempts": attempt,
+                }
+                return evidence
+            except Exception as exc:
+                failure = exc
+                if attempt < 3:
+                    self.clock.sleep(float(attempt))
+        assert failure is not None
+        evidence["archive"] = {
+            "state": "failed",
+            "attempts": 3,
+            "object_key": None,
+            "content_encoding": "gzip",
+            "size_bytes": None,
+            "sha256": None,
+            "failure": _bounded_exception_document(failure),
+        }
+        return evidence
 
     def _close_learner_log(self) -> None:
         if self.learner is None:

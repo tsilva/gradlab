@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 import re
@@ -843,6 +844,41 @@ class RunAuthority:
             metadata={"sha256": digest},
         )
         return key, digest
+
+    def archive_learner_log(
+        self,
+        *,
+        run_id: str,
+        attempt_id: str,
+        payload: bytes,
+    ) -> dict[str, Any]:
+        raw_sha256 = hashlib.sha256(payload).hexdigest()
+        compressed = gzip.compress(payload, compresslevel=6, mtime=0)
+        compressed_sha256 = hashlib.sha256(compressed).hexdigest()
+        object_key = (
+            f"{self.run_prefix(run_id)}/attempts/{attempt_id}/evidence/learner-{raw_sha256}.log.gz"
+        )
+        self.control.put_bytes(
+            object_key,
+            compressed,
+            content_type="application/gzip",
+            metadata={
+                "content-encoding": "gzip",
+                "raw-sha256": raw_sha256,
+                "sha256": compressed_sha256,
+            },
+            create_only=True,
+        )
+        if self.control.get_bytes(object_key) != compressed:
+            raise ValueError("learner log archive read-back verification failed")
+        return {
+            "state": "complete",
+            "object_key": object_key,
+            "content_encoding": "gzip",
+            "size_bytes": len(compressed),
+            "sha256": compressed_sha256,
+            "failure": None,
+        }
 
     def archive_metric_journals(
         self,

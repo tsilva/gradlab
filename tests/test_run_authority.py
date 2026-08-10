@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 import tempfile
@@ -125,6 +126,29 @@ class RunAuthorityTests(unittest.TestCase):
         assert rebuilt is not None
         self.assertEqual(rebuilt["schema_version"], GOAL_CATALOG_SCHEMA_VERSION)
         self.assertEqual(rebuilt["active_runs"][0]["run_id"], manifest.run_id)
+
+    def test_learner_log_archive_is_deterministic_idempotent_and_readable(self) -> None:
+        run_id = new_run_id()
+        attempt_id = new_attempt_id()
+        payload = b"learner output\nlatest native failure\n"
+
+        first = self.authority.archive_learner_log(
+            run_id=run_id,
+            attempt_id=attempt_id,
+            payload=payload,
+        )
+        second = self.authority.archive_learner_log(
+            run_id=run_id,
+            attempt_id=attempt_id,
+            payload=payload,
+        )
+
+        self.assertEqual(first, second)
+        self.assertEqual(first["state"], "complete")
+        self.assertEqual(first["content_encoding"], "gzip")
+        archived = self.authority.control.get_bytes(first["object_key"])
+        self.assertEqual(gzip.decompress(archived), payload)
+        self.assertEqual(hashlib.sha256(archived).hexdigest(), first["sha256"])
 
     def test_catalog_rebuild_hashes_the_unchanged_authoritative_manifest(self) -> None:
         manifest = self.manifest(new_run_id(), new_attempt_id())

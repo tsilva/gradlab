@@ -104,6 +104,53 @@ def test_neutral_plateau_normalization_hashing_and_stopped_receipt_validation() 
     assert receipt.state == "stopped"
 
 
+def test_terminal_receipt_validates_durable_learner_log_evidence() -> None:
+    receipt = _stopped_receipt()
+    document = receipt.to_dict()
+    raw_sha256 = "b" * 64
+    object_key = (
+        f"runs/{receipt.run_id}/attempts/{receipt.attempt_id}/evidence/learner-{raw_sha256}.log.gz"
+    )
+    document["drain"]["learner_log"] = {
+        "path": "learner.log",
+        "size_bytes": 123,
+        "sha256": raw_sha256,
+        "tail": "latest native failure",
+        "archive": {
+            "state": "complete",
+            "attempts": 1,
+            "object_key": object_key,
+            "content_encoding": "gzip",
+            "size_bytes": 80,
+            "sha256": "c" * 64,
+            "failure": None,
+        },
+    }
+
+    assert TerminalReceipt.from_dict(document).drain["learner_log"]["archive"]["state"] == (
+        "complete"
+    )
+
+    failed_archive = copy.deepcopy(document)
+    failed_archive["drain"]["learner_log"]["archive"] = {
+        "state": "failed",
+        "attempts": 3,
+        "object_key": None,
+        "content_encoding": "gzip",
+        "size_bytes": None,
+        "sha256": None,
+        "failure": {"type": "RuntimeError", "message": "R2 archive unavailable"},
+    }
+    assert (
+        TerminalReceipt.from_dict(failed_archive).drain["learner_log"]["archive"]["state"]
+        == "failed"
+    )
+
+    document["drain"]["learner_log"]["archive"]["object_key"] = "wrong/key"
+    with pytest.raises(ValueError, match="archive key is invalid"):
+        TerminalReceipt.from_dict(document)
+
+
 def test_canceled_receipt_requires_complete_drain_and_final_checkpoint() -> None:
     run_id = new_run_id()
     attempt_id = new_attempt_id()
