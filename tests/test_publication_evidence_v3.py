@@ -56,3 +56,10 @@ def test_historical_evidence_must_preserve_failed_acceptance() -> None:
     historical["acceptance"]["passed"] = True
     with pytest.raises(ValueError, match="failed acceptance"):
         validate_evaluation_evidence_document(historical)
+
+
+def test_evaluation_evidence_rejects_duplicate_episode_identity() -> None:
+    changed = deepcopy(document())
+    changed["episode_results"][1]["episode"] = 0
+    with pytest.raises(ValueError, match="complete and unique"):
+        validate_evaluation_evidence_document(changed)

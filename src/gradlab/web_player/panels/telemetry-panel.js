@@ -618,7 +618,7 @@ function makeNamespaceBlock(block, definition, services) {
   canvas.className = "chart telemetry-chart";
   canvas.setAttribute("aria-label", `${caption.textContent} history`);
   const table = document.createElement("div");
-  table.className = "table-scroll";
+  table.className = "telemetry-namespace-table";
   const tableElement = document.createElement("table");
   const body = document.createElement("tbody");
   tableElement.append(body);

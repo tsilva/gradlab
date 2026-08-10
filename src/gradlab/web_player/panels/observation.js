@@ -59,6 +59,7 @@ export function mount({ definition }) {
   const legend = element.querySelector("[data-cnn-winner-legend]");
   const input = element.querySelector("[data-input]");
   let snapshot = null;
+  let targetSnapshot = null;
   let activity = { attribution: false, cnn: false };
   let activityInitialized = false;
   let selectedOverlay = OVERLAY_NONE;
@@ -69,12 +70,19 @@ export function mount({ definition }) {
   let cnnBitmap = null;
   let cnnIdentity = null;
   let baseBitmapRequest = 0;
+  let baseBitmapCommittedRequest = 0;
   let attributionBitmapRequest = 0;
+  let attributionBitmapCommittedRequest = 0;
   let cnnBitmapRequest = 0;
+  let cnnBitmapCommittedRequest = 0;
+  let mounted = true;
 
   const expectedBaseIdentity = () => observationFrameIdentity(snapshot);
   const expectedAttributionIdentity = () => attributionFrameIdentity(snapshot);
   const expectedCnnIdentity = () => cnnFrameIdentity(snapshot);
+  const targetBaseIdentity = () => observationFrameIdentity(targetSnapshot);
+  const targetAttributionIdentity = () => attributionFrameIdentity(targetSnapshot);
+  const targetCnnIdentity = () => cnnFrameIdentity(targetSnapshot);
   const baseIsExact = () => sameFrameIdentity(baseIdentity, expectedBaseIdentity());
   const attributionIsExact = () => (
     baseIsExact() && sameFrameIdentity(attributionIdentity, expectedAttributionIdentity())
@@ -132,15 +140,13 @@ export function mount({ definition }) {
   const draw = () => {
     const exactBase = Boolean(baseBitmap && baseIsExact());
     if (!exactBase) {
-      baseCanvas.width = 1;
-      baseCanvas.height = 1;
-      overlayCanvas.width = 1;
-      overlayCanvas.height = 1;
+      baseCanvas.hidden = true;
       overlayCanvas.hidden = true;
       empty.hidden = false;
       renderLegend();
       return;
     }
+    baseCanvas.hidden = false;
     for (const canvas of [baseCanvas, overlayCanvas]) {
       canvas.width = baseBitmap.width;
       canvas.height = baseBitmap.height;
@@ -183,56 +189,61 @@ export function mount({ definition }) {
     statusLabel.textContent = presentation.label;
     statusDetail.textContent = presentation.detail;
   };
+  const commitSnapshot = (nextSnapshot) => {
+    snapshot = nextSnapshot;
+    const nextActivity = diagnosticActivity(snapshot);
+    selectedOverlay = reconcileOverlaySelection({
+      selection: selectedOverlay,
+      previousActivity: activity,
+      activity: nextActivity,
+      initialized: activityInitialized,
+    });
+    activity = nextActivity;
+    activityInitialized = true;
+    input.textContent = snapshot?.transition?.before?.model_input?.join("\n")
+      || "No policy input yet.";
+    updateStatus();
+    updateContext();
+    draw();
+  };
 
   return {
     element,
     render(nextSnapshot) {
-      snapshot = nextSnapshot;
-      const nextActivity = diagnosticActivity(snapshot);
-      selectedOverlay = reconcileOverlaySelection({
-        selection: selectedOverlay,
-        previousActivity: activity,
-        activity: nextActivity,
-        initialized: activityInitialized,
-      });
-      activity = nextActivity;
-      activityInitialized = true;
-
-      if (!sameFrameIdentity(baseIdentity, expectedBaseIdentity())) closeBase();
-      if (!sameFrameIdentity(attributionIdentity, expectedAttributionIdentity())) closeAttribution();
-      if (!sameFrameIdentity(cnnIdentity, expectedCnnIdentity())) closeCnn();
-      input.textContent = snapshot?.transition?.before?.model_input?.join("\n")
-        || "No policy input yet.";
-      updateStatus();
-      updateContext();
-      draw();
+      targetSnapshot = nextSnapshot;
+      if (sameFrameIdentity(baseIdentity, targetBaseIdentity())) {
+        commitSnapshot(nextSnapshot);
+      }
     },
     async renderFrame(kind, blob, metadata = {}) {
       if (kind === FRAME_OBSERVATION) {
         const incoming = { sequence: Number(metadata.sequence) };
-        if (!sameFrameIdentity(incoming, expectedBaseIdentity())) return true;
+        if (!sameFrameIdentity(incoming, targetBaseIdentity())) return true;
+        const frameSnapshot = targetSnapshot;
         const request = ++baseBitmapRequest;
         if (!blob) {
+          baseBitmapCommittedRequest = request;
           closeBase();
           empty.textContent = "No exact pre-action observation frame was retained for this transition.";
-          updateStatus();
-          draw();
+          commitSnapshot(frameSnapshot);
+          return true;
+        }
+        if (sameFrameIdentity(incoming, baseIdentity)) {
+          baseBitmapCommittedRequest = request;
+          commitSnapshot(frameSnapshot);
           return true;
         }
         const bitmap = await createImageBitmap(blob);
-        if (
-          request !== baseBitmapRequest
-          || !sameFrameIdentity(incoming, expectedBaseIdentity())
-        ) {
+        if (!mounted || request < baseBitmapCommittedRequest) {
           bitmap.close();
           return true;
         }
+        baseBitmapCommittedRequest = request;
         closeBase();
         baseBitmap = bitmap;
         baseIdentity = incoming;
         empty.textContent = "No image stack is available.";
-        updateStatus();
-        draw();
+        commitSnapshot(frameSnapshot);
         return true;
       }
       if (kind === FRAME_ATTRIBUTION) {
@@ -240,22 +251,21 @@ export function mount({ definition }) {
           sequence: Number(metadata.sequence),
           generation: Number(metadata.generation),
         };
-        if (!sameFrameIdentity(incoming, expectedAttributionIdentity())) return true;
+        if (!sameFrameIdentity(incoming, targetAttributionIdentity())) return true;
         const request = ++attributionBitmapRequest;
         if (!blob) {
+          attributionBitmapCommittedRequest = request;
           closeAttribution();
           updateStatus();
           draw();
           return true;
         }
         const bitmap = await createImageBitmap(blob);
-        if (
-          request !== attributionBitmapRequest
-          || !sameFrameIdentity(incoming, expectedAttributionIdentity())
-        ) {
+        if (!mounted || request < attributionBitmapCommittedRequest) {
           bitmap.close();
           return true;
         }
+        attributionBitmapCommittedRequest = request;
         closeAttribution();
         attributionBitmap = bitmap;
         attributionIdentity = incoming;
@@ -268,19 +278,21 @@ export function mount({ definition }) {
         sequence: Number(metadata.sequence),
         generation: Number(metadata.generation),
       };
-      if (!sameFrameIdentity(incoming, expectedCnnIdentity())) return true;
+      if (!sameFrameIdentity(incoming, targetCnnIdentity())) return true;
       const request = ++cnnBitmapRequest;
       if (!blob) {
+        cnnBitmapCommittedRequest = request;
         closeCnn();
         updateStatus();
         draw();
         return true;
       }
       const bitmap = await createImageBitmap(blob);
-      if (request !== cnnBitmapRequest || !sameFrameIdentity(incoming, expectedCnnIdentity())) {
+      if (!mounted || request < cnnBitmapCommittedRequest) {
         bitmap.close();
         return true;
       }
+      cnnBitmapCommittedRequest = request;
       closeCnn();
       cnnBitmap = bitmap;
       cnnIdentity = incoming;
@@ -290,6 +302,7 @@ export function mount({ definition }) {
       return true;
     },
     destroy() {
+      mounted = false;
       baseBitmapRequest += 1;
       attributionBitmapRequest += 1;
       cnnBitmapRequest += 1;

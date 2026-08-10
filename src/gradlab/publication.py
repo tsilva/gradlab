@@ -110,7 +110,18 @@ class _ReleaseDetails(BoundaryModel):
     tier: Literal["research", "historical-import"]
     published_at: NonEmptyText
     youtube_url: NonEmptyText | None = None
-    correction_note: Any = None
+    correction_note: NonEmptyText | None = None
+
+
+class _ReleaseHistoryEntry(BoundaryModel):
+    version: NonEmptyText
+    tier: Literal["research", "historical-import"]
+    published_at: NonEmptyText
+    trainer: NonEmptyText
+    algorithm: NonEmptyText
+    lineage_prefix: NonEmptyText
+    checkpoint_step: PositiveInt
+    evidence_status: NonEmptyText
 
 
 class _ReleaseModel(BoundaryModel):
@@ -230,7 +241,7 @@ class _ReleaseManifestV4(BoundaryModel):
     publication: Any
     containers: Any
     comparison: Any
-    history: Any
+    history: list[_ReleaseHistoryEntry]
     historical_import: Any = None
     featured: bool
     artifacts: dict[str, _ArtifactRecord]
@@ -1076,8 +1087,12 @@ def render_historical_model_card(manifest: Mapping[str, Any]) -> str:
     runtime_ref = runtime.removeprefix("docker:")
     model_url = f"https://huggingface.co/{repo_id}/resolve/{version}/model.zip"
     quick_start = (
+        "Mount a directory containing a legally obtained compatible game image, then use the "
+        "archived source runtime:\n\n"
         "```bash\n"
-        f"docker run --rm {runtime_ref} rlab play {model_url}\n"
+        f"docker run --rm -it -v /path/to/roms:/roms:ro {runtime_ref} sh -lc \\\n"
+        f"  '.venv/bin/python scripts/import_roms.py /roms && "
+        f".venv/bin/rlab-play --model {model_url}'\n"
         "```"
         if runtime_ref
         else f"Download the immutable checkpoint from `{model_url}` and use its recorded runtime."
@@ -1476,6 +1491,22 @@ def _validate_release_manifest_v4(document: Mapping[str, Any], source: str) -> d
         raise PolicyDocumentError(
             f"{source}.artifacts must describe exactly: " + ", ".join(sorted(HASHED_RELEASE_FILES))
         )
+    if re.fullmatch(r"v[1-9][0-9]*", manifest.release.version) is None:
+        raise PolicyDocumentError(f"{source}.release.version must be a sequential vN tag")
+    lineage_digest = str(manifest.lineage.digest)
+    lineage_prefix = str(manifest.lineage.prefix)
+    if lineage_prefix != lineage_digest[:8]:
+        raise PolicyDocumentError(f"{source}.lineage.prefix must match the full digest")
+    identity = PublicationIdentity(
+        canonical_environment_id=str(manifest.repository.canonical_environment_id),
+        goal_id=str(manifest.repository.goal_id),
+        trainer=str(manifest.lineage.trainer),
+        trainer_slug=str(manifest.lineage.trainer_slug),
+        algorithm=str(manifest.lineage.algorithm),
+        lineage_digest=lineage_digest,
+    )
+    if str(manifest.repository.repo_id) != build_model_repo_id(identity):
+        raise PolicyDocumentError(f"{source}.repository.repo_id does not match its goal identity")
     tier = manifest.release.tier
     if tier == RESEARCH_RELEASE_TIER:
         if manifest.featured not in {True, False}:
@@ -1500,13 +1531,24 @@ def _validate_release_manifest_v4(document: Mapping[str, Any], source: str) -> d
         if not isinstance(manifest.evaluation, Mapping) or manifest.evaluation.get("accepted") is not False:
             raise PolicyDocumentError(f"{source}.historical evaluation must be not accepted")
     history = manifest.history
-    if not isinstance(history, list) or not history:
+    if not history:
         raise PolicyDocumentError(f"{source}.history must be a non-empty list")
-    versions = [str(row.get("version") or "") for row in history if isinstance(row, Mapping)]
-    if len(versions) != len(history) or len(versions) != len(set(versions)):
+    versions = [str(row.version) for row in history]
+    if len(versions) != len(set(versions)) or any(
+        re.fullmatch(r"v[1-9][0-9]*", version) is None for version in versions
+    ):
         raise PolicyDocumentError(f"{source}.history versions must be unique")
     if versions[-1] != manifest.release.version:
         raise PolicyDocumentError(f"{source}.history must end with the current release")
+    current = history[-1]
+    if (
+        current.tier != manifest.release.tier
+        or current.published_at != manifest.release.published_at
+        or current.lineage_prefix != manifest.lineage.prefix
+        or current.checkpoint_step
+        != int((_require_mapping(document.get("evaluation"), label="evaluation")).get("checkpoint_step") or 0)
+    ):
+        raise PolicyDocumentError(f"{source}.history current entry disagrees with the release")
     return deepcopy(dict(document))
 
 

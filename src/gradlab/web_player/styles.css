@@ -114,7 +114,26 @@ h3 {
 }
 
 [hidden] { display: none !important; }
-* { box-sizing: border-box; }
+* {
+  box-sizing: border-box;
+  scrollbar-color: var(--color-outline-strong) transparent;
+  scrollbar-width: thin;
+}
+
+*::-webkit-scrollbar {
+  width: .65rem;
+  height: .65rem;
+}
+*::-webkit-scrollbar-track,
+*::-webkit-scrollbar-corner { background: transparent; }
+*::-webkit-scrollbar-thumb {
+  border: .16rem solid transparent;
+  border-radius: 999px;
+  background: var(--color-outline-strong);
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-thumb:hover { background-color: var(--color-interaction); }
+*::-webkit-scrollbar-thumb:active { background-color: var(--color-interaction-active); }
 
 body {
   margin: 0;
@@ -1485,6 +1504,7 @@ select {
 .json-null { color: var(--color-error-text); font-style: italic; }
 details + details { margin-top: .5rem; }
 summary { color: var(--color-text-muted); cursor: pointer; font-size: .76rem; }
+.telemetry-namespace-table { margin-top: .55rem; }
 .table-scroll { max-height: 16rem; overflow: auto; margin-top: .55rem; }
 table { border-collapse: collapse; width: 100%; font: .7rem "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace; }
 td { border-bottom: 1px solid var(--color-border); padding: .32rem .26rem; }
