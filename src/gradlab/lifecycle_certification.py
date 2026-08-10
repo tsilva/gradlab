@@ -521,6 +521,11 @@ class CertificationFixture:
                 "allow_on_demand": False,
                 "max_duration_seconds": 3600,
             },
+            "dstack_coordinator_id": "simulated",
+            "dstack_project": "main",
+            "coordinator_binding_basis": (
+                "launch-selection" if attempt_number == 1 else "retry-preserved"
+            ),
             "dstack_task": run_id,
             "runtime_workflow_run_id": "tier1",
             "runtime_input_sha256": RUNTIME_INPUT_SHA256,
@@ -1808,8 +1813,7 @@ def _scenario_early_stop_outcomes(root: Path) -> dict[str, Any]:
     )
     recorder.require(
         "training-only-plateau-stops-neutrally",
-        plateau_state == "stopped"
-        and plateau_reason == "early_stop_neutral:return_plateau",
+        plateau_state == "stopped" and plateau_reason == "early_stop_neutral:return_plateau",
         evidence={"state": plateau_state, "reason": plateau_reason},
     )
 
@@ -2138,9 +2142,7 @@ def _scenario_local_background_jobs(root: Path) -> dict[str, Any]:
         writer_id="manual-eval-writer-81",
         evidence_path=root / "evaluation" / "evidence" / "manual-wandb-events.json",
     )
-    manual_runtime.summary[
-        ORCHESTRATION_EVENT_SEQUENCE
-    ] = training_terminal.wandb_high_water_mark
+    manual_runtime.summary[ORCHESTRATION_EVENT_SEQUENCE] = training_terminal.wandb_high_water_mark
 
     def manual_supervisor() -> ManualEvaluationSupervisor:
         return ManualEvaluationSupervisor(

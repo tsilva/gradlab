@@ -1107,8 +1107,19 @@ def test_run_and_goal_variant_inspection_use_the_verified_v2_control_recipe(
         seed=3,
         run_description="inspect an exact queued run",
         compute={
-            "request": {"kind": "local", "max_duration_seconds": 3600},
-            "selected": {"kind": "local", "max_duration_seconds": 3600},
+            "request": {
+                "kind": "local",
+                "target": "local-gpu",
+                "max_duration_seconds": 3600,
+            },
+            "selected": {
+                "kind": "local",
+                "target": "local-gpu",
+                "max_duration_seconds": 3600,
+            },
+            "dstack_coordinator_id": "primary",
+            "dstack_project": "main",
+            "coordinator_binding_basis": "launch-selection",
             "dstack_task": run_id,
             "runtime_workflow_run_id": "1",
             "runtime_input_sha256": "c" * 64,

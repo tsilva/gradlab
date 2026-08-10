@@ -48,9 +48,10 @@ explicitly asks to combine them. Repeatable `--set KEY=VALUE` overrides are
 allowed when each launch row records its complete isolated override list; they
 are composed, validated, and hash-bound in the immutable recipe contract.
 
-Default to `--compute auto`, which uses `GRADLAB_LOCAL_FLEET` from the private
-operator configuration. Use `--target <fleet>` only for an explicit per-launch
-override. Spot requires finite `--max-price` and `--max-cost-usd`. On-demand
+Default to `--compute auto`, which uses `dstack.default_fleet` from the private
+schema-v3 operator configuration. Use `--target <fleet>` only for an explicit
+per-launch override; its configured coordinator is selected with it. Spot
+requires finite `--max-price` and `--max-cost-usd`. On-demand
 additionally requires `--allow-on-demand`. Always use a finite `--max-duration`.
 
 ```bash

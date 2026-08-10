@@ -23,7 +23,9 @@ and requires every emitted metric to match an exact registry entry or a bounded 
   `metrics_episode_window_size: 100`, `training_backend_id`,
   `training_backend_config_hash`, `algorithm_id`, goal,
   environment, starts, seed, frame skip, environment count, hyperparameters, eval protocol, and
-  runtime versions.
+  runtime versions. Operational attribution includes `compute_target`,
+  `dstack_coordinator_id`, `dstack_project`, `dstack_task`, and `attempt_id`; these are immutable
+  run/attempt dimensions, not scientific metrics.
 - `experiments/goals/_workspaces.yaml` is the presentation source for managed W&B project
   workspace views. It selects registered metrics without emitting aliases or changing their
   scientific axes or semantics; every project resolved from an active checked-in goal inherits its

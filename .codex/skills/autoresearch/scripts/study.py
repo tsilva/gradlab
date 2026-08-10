@@ -22,7 +22,6 @@ from statistics import median
 from typing import Any, Iterator, Mapping
 from urllib.parse import urlparse
 
-from gradlab.dstack_backend import resolve_local_fleet
 from gradlab.local_paths import default_runs_dir
 from gradlab.metric_names import (
     TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN,
@@ -37,7 +36,7 @@ from gradlab.run_contracts import RUN_ID_PATTERN
 from gradlab.training_backend import training_backend_id
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 SUPPORTED_BACKENDS = frozenset({"sb3.ppo", "sb3.a2c"})
 TRACE_ONLY_OVERRIDES = frozenset({"campaign_id", "description", "recipe_id"})
 FROZEN_BACKEND_KEYS = frozenset({"n_steps"})
@@ -56,9 +55,7 @@ EVIDENCE_RETURN = "return"
 EVIDENCE_MODES = frozenset({EVIDENCE_SUCCESS, EVIDENCE_RETURN})
 DESIGNED_EARLY_STOP_FAILURE = "designed_early_stop_failure"
 DESIGNED_PLATEAU_STOP = "designed_plateau_stop"
-DESIGNED_PLATEAU_CLASSIFICATIONS = frozenset(
-    {DESIGNED_PLATEAU_STOP, DESIGNED_EARLY_STOP_FAILURE}
-)
+DESIGNED_PLATEAU_CLASSIFICATIONS = frozenset({DESIGNED_PLATEAU_STOP, DESIGNED_EARLY_STOP_FAILURE})
 
 SCREEN_PHASES = frozenset({"baseline-screen", "search-screen"})
 PAIR_PHASES = frozenset({"baseline-pair", "search-pair"})
@@ -724,11 +721,12 @@ def command_init(args: argparse.Namespace) -> None:
             emit({"study": str(matches[0]), "resumed": True, "next": next_action(state)})
             return
 
-        load_repository_operator_environment(
-            root,
-            requested_names={"GRADLAB_LOCAL_FLEET"},
-        )
-        compute_target = resolve_local_fleet(getattr(args, "target", None))
+        operator = load_repository_operator_environment(root)
+        if operator.dstack is None:
+            raise RuntimeError("operator config has no schema-v3 dstack profiles")
+        fleet = operator.dstack.fleet(getattr(args, "target", None))
+        compute_target = fleet.name
+        coordinator_id = fleet.coordinator_id
         input_hash = digest(
             {
                 "schema_version": SCHEMA_VERSION,
@@ -737,6 +735,7 @@ def command_init(args: argparse.Namespace) -> None:
                 "source_sha": head,
                 "strong_threshold": threshold,
                 "compute_target": compute_target,
+                "dstack_coordinator_id": coordinator_id,
             }
         )
         document = compose_train_document(goal, recipe)
@@ -805,6 +804,7 @@ def command_init(args: argparse.Namespace) -> None:
             "runtime": None,
             "policy": {
                 "compute_target": compute_target,
+                "dstack_coordinator_id": coordinator_id,
                 "max_reserved_jobs": MAX_RESERVED_JOBS,
                 "stale_round_limit": DEFAULT_STALE_ROUNDS,
                 "confirmation_runs": CONFIRMATION_RUNS,
@@ -1247,8 +1247,7 @@ def command_record_terminal(args: argparse.Namespace) -> None:
             and stop_reason == f"early_stop_neutral:{condition_id}"
             and bool(condition_id)
             and str(early_stop.get("outcome") or "") == "neutral"
-            and str(early_stop.get("trigger") or condition.get("trigger") or "")
-            == "no_improvement"
+            and str(early_stop.get("trigger") or condition.get("trigger") or "") == "no_improvement"
             and str(condition.get("outcome") or "") == "neutral"
             and str(condition.get("action") or "") == "stop"
         )
@@ -1289,9 +1288,7 @@ def command_record_terminal(args: argparse.Namespace) -> None:
             "classification": classification,
             "stop_reason": stop_reason,
             "early_stop": (
-                copy.deepcopy(early_stop)
-                if designed_plateau_stop or designed_failure
-                else None
+                copy.deepcopy(early_stop) if designed_plateau_stop or designed_failure else None
             ),
             "wandb_run_id": wandb.get("run_id"),
             "wandb_url": wandb.get("url"),
@@ -1793,7 +1790,7 @@ def build_parser() -> argparse.ArgumentParser:
     initialize.add_argument("--recipe", required=True)
     initialize.add_argument(
         "--target",
-        help="local dstack fleet (defaults to GRADLAB_LOCAL_FLEET)",
+        help="local dstack fleet (defaults to operator dstack.default_fleet)",
     )
     initialize.add_argument("--strong-threshold", type=float, default=DEFAULT_STRONG_THRESHOLD)
     initialize.set_defaults(handler=command_init)

@@ -10,18 +10,19 @@ from unittest import mock
 
 import pytest
 
-from gradlab.dstack_backend import DstackTask
+from gradlab.dstack_backend import DstackResources, DstackTask
 from gradlab.metric_names import METRICS_SCHEMA_VERSION
 from gradlab.experiment_cli import (
     _bind_launch_contract,
     _bind_vizdoom_iwad_for_launch,
+    _bound_retry_compute_request,
     _catalog_rebuild_contract_failures,
     _compute,
+    _dstack_backend_for_attempt,
     _follow_fingerprint,
     _latest_attempt_terminal,
     _manifest_rom_asset,
     _manifest_vizdoom_iwad,
-    _manifest_dstack_project,
     _operator_preflight,
     _poll_status,
     _project_reconciled_terminal,
@@ -30,11 +31,11 @@ from gradlab.experiment_cli import (
     _record_terminal_task_without_receipt,
     _reconciliation_manifest,
     _require_retryable_attempt_terminal,
-    _retry_compute_request,
     _required_operator_environment,
     _run_completed,
     _stage_rom,
     _stage_vizdoom_iwad,
+    _status,
     _task_name,
     _task_request,
     _wandb_identity,
@@ -207,7 +208,9 @@ def _manifest_only_run() -> RunManifest:
             "max_duration_seconds": 3600,
         },
         "selected_offer": None,
+        "dstack_coordinator_id": "primary",
         "dstack_project": "research",
+        "coordinator_binding_basis": "launch-selection",
         "dstack_task": run_id,
         "runtime_workflow_run_id": "12345",
         "runtime_input_sha256": "b" * 64,
@@ -328,17 +331,17 @@ def test_fault_test_is_bounded_and_not_exposed_as_a_launch_override() -> None:
 
 
 def test_auto_without_cloud_budget_uses_operator_local_fleet() -> None:
-    with mock.patch.dict("os.environ", {"GRADLAB_LOCAL_FLEET": "local-gpu"}):
-        compute = _compute(
-            SimpleNamespace(
-                compute="auto",
-                target=None,
-                max_price=None,
-                max_cost_usd=None,
-                allow_on_demand=False,
-                max_duration=3600,
-            )
-        )
+    compute = _compute(
+        SimpleNamespace(
+            compute="auto",
+            target=None,
+            max_price=None,
+            max_cost_usd=None,
+            allow_on_demand=False,
+            max_duration=3600,
+        ),
+        default_local_fleet="local-gpu",
+    )
     assert compute.kind == "auto"
     assert compute.target == "local-gpu"
     assert compute.max_price is None
@@ -361,17 +364,8 @@ def test_operator_preflight_parser_accepts_local_target_override() -> None:
     assert args.target == "alternate-local"
 
 
-def test_manifest_project_binding_wins_and_legacy_manifest_uses_operator_project(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("DSTACK_PROJECT", "operator-project")
-
-    assert _manifest_dstack_project({"dstack_project": "bound-project"}) == "bound-project"
-    assert _manifest_dstack_project({}) == "operator-project"
-
-
-def test_targetless_legacy_retry_reuses_previously_selected_local_fleet() -> None:
-    request = _retry_compute_request(
+def test_retry_uses_immutable_binding_target() -> None:
+    request = _bound_retry_compute_request(
         {
             "request": {
                 "kind": "local",
@@ -382,20 +376,73 @@ def test_targetless_legacy_retry_reuses_previously_selected_local_fleet() -> Non
                 "max_duration_seconds": 3600,
             },
             "selected": {"kind": "local", "target": "recorded-local"},
-        }
+        },
+        binding_target="recorded-local",
     )
 
     assert request["target"] == "recorded-local"
 
 
-def test_targetless_legacy_retry_without_selected_fleet_fails_closed() -> None:
-    with pytest.raises(RuntimeError, match="no recorded local fleet"):
-        _retry_compute_request(
+def test_local_retry_without_binding_target_fails_closed() -> None:
+    with pytest.raises(RuntimeError, match="binding has no local fleet"):
+        _bound_retry_compute_request(
             {
                 "request": {"kind": "auto", "target": None},
                 "selected": {"kind": "spot", "target": None},
-            }
+            },
+            binding_target=None,
         )
+
+
+def test_bound_attempt_resolves_only_its_selected_coordinator(tmp_path: Path) -> None:
+    manifest = _manifest_only_run()
+    compute = {
+        **manifest.compute,
+        "request": {**manifest.compute["request"], "target": "b2"},
+        "selected": {**manifest.compute["selected"], "target": "b2"},
+        "dstack_coordinator_id": "b2",
+        "dstack_project": "main",
+    }
+    attempt = {**manifest.to_dict(), "compute": compute}
+    binding = SimpleNamespace(
+        coordinator_id="b2",
+        project="main",
+        target="b2",
+    )
+    authority = mock.MagicMock()
+    authority.coordinator_binding.return_value = binding
+    coordinator = SimpleNamespace(
+        coordinator_id="b2",
+        project="main",
+        server_url="http://127.0.0.1:3002",
+    )
+    fleet = SimpleNamespace(name="b2", coordinator_id="b2")
+    config = SimpleNamespace(
+        coordinator=mock.Mock(return_value=coordinator),
+        fleet=mock.Mock(return_value=fleet),
+    )
+    report = SimpleNamespace(dstack=config, config_path=tmp_path / "operator.toml")
+
+    with (
+        mock.patch("gradlab.experiment_cli._load_environment", return_value=report),
+        mock.patch(
+            "gradlab.experiment_cli.resolve_dstack_token",
+            return_value=("b2-token", "macos-keychain"),
+        ) as token,
+    ):
+        backend, observed_binding = _dstack_backend_for_attempt(
+            tmp_path,
+            authority,
+            attempt,
+        )
+
+    assert observed_binding is binding
+    assert backend.project == "main"
+    assert backend.server_url == "http://127.0.0.1:3002"
+    assert backend.environment["DSTACK_TOKEN"] == "b2-token"
+    config.coordinator.assert_called_once_with("b2")
+    config.fleet.assert_called_once_with("b2")
+    token.assert_called_once_with(coordinator)
 
 
 def test_operator_preflight_reports_resolved_project_fleet_and_sources(
@@ -404,12 +451,26 @@ def test_operator_preflight_reports_resolved_project_fleet_and_sources(
 ) -> None:
     for name in _required_operator_environment("none"):
         monkeypatch.setenv(name, "operator-value")
-    monkeypatch.setenv("DSTACK_PROJECT", "research")
-    monkeypatch.setenv("GRADLAB_LOCAL_FLEET", "configured-local")
-
+    coordinator = SimpleNamespace(
+        coordinator_id="primary",
+        project="research",
+        server_url="http://127.0.0.1:3000",
+    )
+    fleet = SimpleNamespace(
+        name="configured-local",
+        coordinator_id="primary",
+        resources=DstackResources(),
+    )
+    dstack = SimpleNamespace(
+        default_coordinator="primary",
+        default_fleet="configured-local",
+        coordinator=lambda _name=None: coordinator,
+        fleet=lambda _name=None: fleet,
+    )
     environment_report = SimpleNamespace(
         config_path=tmp_path / "operator.toml",
         config_present=True,
+        dstack=dstack,
         source_for=lambda name, environment: (
             "operator-config" if str(environment.get(name) or "").strip() else "missing"
         ),
@@ -434,6 +495,10 @@ def test_operator_preflight_reports_resolved_project_fleet_and_sources(
         mock.patch("gradlab.experiment_cli.R2Bucket", return_value=bucket),
         mock.patch("gradlab.experiment_cli.DstackBackend.preflight"),
         mock.patch(
+            "gradlab.experiment_cli.resolve_dstack_token",
+            return_value=("token", "macos-keychain"),
+        ),
+        mock.patch(
             "gradlab.experiment_cli.wandb_entity_from_env",
             return_value="example-entity",
         ),
@@ -444,10 +509,13 @@ def test_operator_preflight_reports_resolved_project_fleet_and_sources(
         )
 
     assert backend.project == "research"
+    assert report["dstack"]["coordinator_id"] == "primary"
     assert report["dstack"]["project"] == "research"
     assert report["compute"] == {
         "local_fleet": "configured-local",
         "source": "operator-config",
+        "resources": {"cpu": 12, "memory": "40GB", "gpu": "1", "disk": "50GB"},
+        "resources_source": "operator-config",
     }
 
 
@@ -522,7 +590,7 @@ def test_operator_configuration_error_is_concise_without_traceback(
 
     error = capsys.readouterr().err
     assert "operator configuration error" in error
-    assert "DSTACK_TOKEN" in error
+    assert "GRADLAB_CONTROL_R2_ACCESS_KEY_ID" in error
     assert "Traceback" not in error
 
 
@@ -572,6 +640,53 @@ def test_status_poller_observes_once_before_an_immediate_timeout(tmp_path: Path)
 
     status.assert_called_once()
     sleep.assert_not_called()
+
+
+def test_status_preserves_r2_semantics_when_bound_coordinator_is_unreachable(
+    tmp_path: Path,
+) -> None:
+    manifest = _manifest_only_run()
+    attempt = manifest.to_dict()
+    semantic = {
+        "run_id": manifest.run_id,
+        "manifest": attempt,
+        "terminal": None,
+        "promotion": None,
+        "public_index": None,
+        "attempts": [attempt],
+        "attempt_terminals": [],
+        "cancel_requests": [],
+    }
+    authority = mock.MagicMock()
+    authority.semantic_state.return_value = semantic
+    authority.coordinator_binding.return_value = SimpleNamespace(
+        coordinator_id="b2",
+        project="main",
+    )
+
+    with (
+        mock.patch(
+            "gradlab.experiment_cli._storage",
+            return_value=(SimpleNamespace(), authority),
+        ),
+        mock.patch(
+            "gradlab.experiment_cli._dstack_backend_for_attempt",
+            side_effect=RuntimeError("selected coordinator is offline"),
+        ),
+    ):
+        value = _status(tmp_path, manifest.run_id)
+
+    assert value["semantic"] == semantic
+    assert value["dstack"] == {
+        "coordinator_id": "b2",
+        "project": "main",
+        "task": manifest.compute["dstack_task"],
+        "status": "unreachable",
+        "terminal": False,
+        "error_type": "RuntimeError",
+    }
+    assert value["completed"] is False
+    assert value["scientific_success"] is False
 
 
 @pytest.mark.parametrize("command", (cmd_follow, cmd_wait))
@@ -855,9 +970,7 @@ def test_reconcile_acquires_lease_writes_r2_before_wandb_and_releases(
     )
     authority.acquire_lease.return_value = lease
     events: list[str] = []
-    authority.create_attempt_terminal.side_effect = (
-        lambda _receipt, **_kwargs: events.append("r2")
-    )
+    authority.create_attempt_terminal.side_effect = lambda _receipt, **_kwargs: events.append("r2")
     backend = mock.MagicMock()
     backend.status.return_value = DstackTask(
         project="research",
@@ -877,7 +990,10 @@ def test_reconcile_acquires_lease_writes_r2_before_wandb_and_releases(
             "gradlab.experiment_cli._storage",
             return_value=(SimpleNamespace(), authority),
         ),
-        mock.patch("gradlab.experiment_cli.DstackBackend", return_value=backend),
+        mock.patch(
+            "gradlab.experiment_cli._dstack_backend_for_attempt",
+            return_value=(backend, SimpleNamespace(coordinator_id="primary")),
+        ),
         mock.patch(
             "gradlab.experiment_cli._project_reconciled_terminal",
             side_effect=lambda *_args: events.append("wandb"),
@@ -955,6 +1071,8 @@ def test_resume_submit_recovers_only_the_original_manifest(
     prefix = f"runs/{manifest.run_id}"
     authority = mock.MagicMock()
     authority.run_prefix.return_value = prefix
+    binding_key = f"{prefix}/attempts/{manifest.attempt_id}/coordinator.json"
+    authority.coordinator_binding_key.return_value = binding_key
     authority.semantic_state.return_value = {
         "run_id": manifest.run_id,
         "manifest": document,
@@ -971,6 +1089,7 @@ def test_resume_submit_recovers_only_the_original_manifest(
         [
             f"{prefix}/manifest.json",
             f"{prefix}/attempts/{manifest.attempt_id}/manifest.json",
+            binding_key,
         ]
     )
     authority.control.uri.side_effect = lambda key: f"s3://control-private/{key}"
@@ -994,9 +1113,10 @@ def test_resume_submit_recovers_only_the_original_manifest(
             "gradlab.experiment_cli._storage",
             return_value=(storage, authority),
         ),
+        mock.patch("gradlab.experiment_cli._required_operator_environment", return_value=()),
         mock.patch(
-            "gradlab.experiment_cli._operator_preflight",
-            return_value=(storage, authority, backend, {"status": "ready"}),
+            "gradlab.experiment_cli._dstack_backend_for_attempt",
+            return_value=(backend, SimpleNamespace(coordinator_id="primary")),
         ),
     ):
         assert cmd_resume_submit(SimpleNamespace(run_id=manifest.run_id, json=True)) == 0
@@ -1237,8 +1357,8 @@ def test_cancel_persists_request_before_optional_dstack_abort(
             return_value=(mock.Mock(), authority),
         ),
         mock.patch(
-            "gradlab.experiment_cli._dstack_backend_for_compute",
-            return_value=backend,
+            "gradlab.experiment_cli._dstack_backend_for_attempt",
+            return_value=(backend, SimpleNamespace(coordinator_id="primary")),
         ),
     ):
         assert cmd_cancel(SimpleNamespace(run_id=run_id, abort=abort)) == 0

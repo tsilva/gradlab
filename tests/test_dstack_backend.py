@@ -6,16 +6,13 @@ import unittest
 from unittest import mock
 
 from gradlab.dstack_backend import (
-    DSTACK_PROJECT_ENV,
-    LOCAL_FLEET_ENV,
     DSTACK_VERSION,
     ComputeRequest,
     DstackBackend,
+    DstackResources,
     TaskRequest,
     render_fleet_config,
     render_task_config,
-    resolve_dstack_project,
-    resolve_local_fleet,
 )
 from gradlab.run_contracts import new_run_id
 
@@ -72,6 +69,23 @@ class DstackBackendTests(unittest.TestCase):
         )
         self.assertNotIn("GRADLAB_CONTROL_R2_ACCESS_KEY_ID", config["env"])
         self.assertIn("MODAL_ENVIRONMENT=gradlab-eval", config["env"])
+
+    def test_local_config_uses_bound_fleet_resource_profile(self) -> None:
+        config = render_task_config(
+            self.task(
+                resources=DstackResources(
+                    cpu=12,
+                    memory="28GB",
+                    gpu="1",
+                    disk="50GB",
+                )
+            )
+        )
+
+        self.assertEqual(
+            config["resources"],
+            {"cpu": "12..", "memory": "28GB..", "gpu": "1", "disk": "50GB.."},
+        )
 
     def test_task_rejects_inline_secret_values(self) -> None:
         with self.assertRaisesRegex(ValueError, "names only"):
@@ -130,7 +144,12 @@ class DstackBackendTests(unittest.TestCase):
         self.assertEqual(config["max_duration"], "3h")
 
     def test_auto_selection_uses_idle_local_fleet_before_spot(self) -> None:
-        backend = DstackBackend(project="research", environment={})
+        backend = DstackBackend(
+            project="research",
+            server_url="http://127.0.0.1:3000",
+            token="token",
+            environment={},
+        )
         request = self.compute(
             kind="auto",
             max_price=1.0,
@@ -165,7 +184,12 @@ class DstackBackendTests(unittest.TestCase):
         self.assertEqual(offer["backend"], "ssh")
 
     def test_auto_selection_falls_back_to_bounded_spot_when_local_fleet_is_busy(self) -> None:
-        backend = DstackBackend(project="research", environment={})
+        backend = DstackBackend(
+            project="research",
+            server_url="http://127.0.0.1:3000",
+            token="token",
+            environment={},
+        )
         request = self.compute(
             kind="auto",
             max_price=1.0,
@@ -199,26 +223,32 @@ class DstackBackendTests(unittest.TestCase):
         self.assertEqual(config["blocks"], 1)
         self.assertEqual(config["ssh_config"]["hosts"], ["gpu-host.internal"])
 
-    def test_operator_placement_requires_project_and_local_fleet(self) -> None:
-        with self.assertRaisesRegex(ValueError, DSTACK_PROJECT_ENV):
-            resolve_dstack_project(environment={})
-        with self.assertRaisesRegex(ValueError, LOCAL_FLEET_ENV):
-            resolve_local_fleet(environment={})
-        self.assertEqual(
-            resolve_dstack_project(environment={DSTACK_PROJECT_ENV: "research"}),
-            "research",
+    def test_backend_requires_explicit_coordinator_project(self) -> None:
+        with self.assertRaisesRegex(ValueError, "selected coordinator project"):
+            DstackBackend(
+                project="",
+                server_url="http://127.0.0.1:3000",
+                token="token",
+                environment={"DSTACK_PROJECT": "ambient-project"},
+            )
+
+    def test_explicit_coordinator_metadata_overwrites_ambient_routing(self) -> None:
+        backend = DstackBackend(
+            project="bound-project",
+            server_url="http://127.0.0.1:3002",
+            token="bound-token",
+            environment={
+                "DSTACK_PROJECT": "ambient-project",
+                "DSTACK_SERVER_URL": "http://127.0.0.1:3999",
+                "DSTACK_TOKEN": "ambient-token",
+            },
         )
-        self.assertEqual(
-            resolve_local_fleet(environment={LOCAL_FLEET_ENV: "local-gpu"}),
-            "local-gpu",
-        )
-        self.assertEqual(
-            resolve_local_fleet(
-                "explicit-gpu",
-                environment={LOCAL_FLEET_ENV: "local-gpu"},
-            ),
-            "explicit-gpu",
-        )
+
+        self.assertEqual(backend.project, "bound-project")
+        self.assertEqual(backend.server_url, "http://127.0.0.1:3002")
+        self.assertEqual(backend.environment["DSTACK_PROJECT"], "bound-project")
+        self.assertEqual(backend.environment["DSTACK_SERVER_URL"], "http://127.0.0.1:3002")
+        self.assertEqual(backend.environment["DSTACK_TOKEN"], "bound-token")
 
     @mock.patch("gradlab.dstack_backend.urllib.request.urlopen")
     @mock.patch("gradlab.dstack_backend.shutil.which", return_value="/bin/dstack")
@@ -238,14 +268,17 @@ class DstackBackendTests(unittest.TestCase):
         response.__enter__.return_value.read.return_value = b"{}"
         urlopen.return_value = response
         backend = DstackBackend(
+            project="research",
+            server_url="http://127.0.0.1:3000",
+            token="secret",
             environment={
                 "PATH": "/bin",
-                DSTACK_PROJECT_ENV: "research",
+                "DSTACK_PROJECT": "research",
                 "DSTACK_SERVER_URL": "http://127.0.0.1:3000",
                 "DSTACK_TOKEN": "secret",
                 "GRADLAB_CONTROL_R2_ACCESS_KEY_ID": "access-key",
                 "GRADLAB_CONTROL_R2_SECRET_ACCESS_KEY": "secret-key",
-            }
+            },
         )
         request = self.task()
         task = backend.submit(request)
@@ -262,12 +295,15 @@ class DstackBackendTests(unittest.TestCase):
             subprocess.CompletedProcess(["dstack", "ps"], 0, '{"runs": []}\n', ""),
         ]
         backend = DstackBackend(
+            project="research",
+            server_url="http://127.0.0.1:3000",
+            token="admin-token",
             environment={
                 "PATH": "/bin",
-                DSTACK_PROJECT_ENV: "research",
+                "DSTACK_PROJECT": "research",
                 "DSTACK_SERVER_URL": "http://127.0.0.1:3000",
                 "DSTACK_TOKEN": "admin-token",
-            }
+            },
         )
 
         backend.preflight()
@@ -296,13 +332,16 @@ class DstackBackendTests(unittest.TestCase):
         response.__enter__.return_value.read.return_value = b"{}"
         urlopen.return_value = response
         backend = DstackBackend(
+            project="research",
+            server_url="http://127.0.0.1:3000",
+            token="admin-token",
             environment={
                 "PATH": "/bin",
-                DSTACK_PROJECT_ENV: "research",
+                "DSTACK_PROJECT": "research",
                 "DSTACK_SERVER_URL": "http://127.0.0.1:3000",
                 "DSTACK_TOKEN": "admin-token",
                 "WANDB_API_KEY": "credential-value",
-            }
+            },
         )
 
         backend.sync_project_secrets(["WANDB_API_KEY"])
@@ -340,7 +379,12 @@ class DstackBackendTests(unittest.TestCase):
             ),
             "",
         )
-        backend = DstackBackend(project="research", environment={})
+        backend = DstackBackend(
+            project="research",
+            server_url="http://127.0.0.1:3000",
+            token="token",
+            environment={},
+        )
         self.assertEqual(backend.status("run-one").status, "running")
 
     @mock.patch("gradlab.dstack_backend.subprocess.run")
@@ -363,7 +407,12 @@ class DstackBackendTests(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(ValueError, "run_spec.configuration"):
-            DstackBackend(project="research", environment={}).status("run-one")
+            DstackBackend(
+                project="research",
+                server_url="http://127.0.0.1:3000",
+                token="token",
+                environment={},
+            ).status("run-one")
 
 
 if __name__ == "__main__":

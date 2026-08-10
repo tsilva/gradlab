@@ -8,12 +8,10 @@ host-specific capacity belong in the operator-local inventory at
 ## Operator configuration
 
 Copy `ops/operator.example.toml` to
-`~/.config/gradlab/operator.toml`. Its `[environment]` section must identify:
-
-- `DSTACK_PROJECT`: the operator's dstack project;
-- `DSTACK_SERVER_URL`: the private dstack endpoint;
-- `GRADLAB_LOCAL_FLEET`: the default local fleet used by `auto`, `local`,
-  benchmarks, fault fixtures, and newly initialized autoresearch studies.
+`~/.config/gradlab/operator.toml`. Its schema-v3 `[dstack]` section names the
+default coordinator and fleet. Each coordinator records an immutable ID,
+project, private endpoint, and Keychain token reference; each fleet records its
+owning coordinator and task resources.
 
 The file may contain non-sensitive metadata and Keychain references only.
 Secrets remain in the referenced credential store or an explicit process
@@ -24,8 +22,8 @@ before launching:
 gradlab experiment operator-preflight --json
 ```
 
-An explicit `--target` overrides `GRADLAB_LOCAL_FLEET`. Local or automatic
-compute fails closed when neither is present.
+An explicit `--target` overrides `dstack.default_fleet`. Local or automatic
+compute fails closed when the selected fleet is not configured.
 
 ## Selection policy
 
@@ -45,7 +43,11 @@ finite `max_duration`.
 
 GradLab v1 schedules one training container per single-GPU host. The generic
 workload floor remains 12 CPU, 40 GiB memory, one GPU, and 50 GiB disk; local
-inventory records whether a particular host satisfies it.
+inventory records whether a particular host satisfies it. An explicitly
+authorized host-specific exception may declare a different task request under
+`[dstack.fleets.<fleet>]` in private `operator.toml`; the resolved CPU, memory,
+GPU, and disk request is frozen into the run manifest and applies only to that
+fleet.
 
 ## dstack control plane
 
@@ -60,10 +62,13 @@ references, never credential values. Use `gradlab experiment status`, `follow`,
 `logs`, and `cancel` instead of treating raw dstack inventory as the run
 authority.
 
-Each new run manifest binds both the resolved dstack project and selected
-compute target. Retries retain that provenance. Older manifests without a
-project use the currently configured project; an older targetless local retry
-uses its previously selected target and otherwise fails closed.
+Each attempt has a create-only `coordinator.json` beside its immutable manifest.
+It binds the coordinator ID, project, target, manifest hash, basis, and binding
+time before dstack submission. Every lifecycle command resolves only that
+coordinator and never probes another server. Retries retain the coordinator,
+fleet, and resources without failover. Read-only status can report an
+unreachable coordinator alongside authoritative R2 state; dstack mutations fail
+closed.
 
 Automatic retries are limited to dstack `no-capacity` and genuine
 `interruption`. Generic errors require an evidence-backed manual retry. The CLI

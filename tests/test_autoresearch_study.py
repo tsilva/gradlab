@@ -284,6 +284,18 @@ class AutoresearchStudyTests(unittest.TestCase):
                     side_effect=lambda _root, _sha, path: study.file_sha256(root / path),
                 ),
                 mock.patch.object(study, "compose_train_document", return_value=document),
+                mock.patch.object(
+                    study,
+                    "load_repository_operator_environment",
+                    return_value=SimpleNamespace(
+                        dstack=SimpleNamespace(
+                            fleet=lambda _name=None: SimpleNamespace(
+                                name="local-gpu",
+                                coordinator_id="primary",
+                            )
+                        )
+                    ),
+                ),
             ):
                 with redirect_stdout(first_output):
                     study.command_init(args)
@@ -308,7 +320,7 @@ class AutoresearchStudyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "study.json"
             path.write_text(json.dumps({"schema_version": 1}), encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "only schema 4 is current"):
+            with self.assertRaisesRegex(ValueError, "only schema 5 is current"):
                 study.load_state(path)
 
     def test_candidate_identity_and_validation_remain_bounded(self) -> None:

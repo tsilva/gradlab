@@ -20,15 +20,12 @@ from urllib.parse import quote
 from gradlab.cli_parser import ExactArgumentParser
 from gradlab.clock import parse_utc_datetime
 from gradlab.dstack_backend import (
-    DSTACK_PROJECT_ENV,
-    LOCAL_FLEET_ENV,
     TERMINAL_DSTACK_STATUSES,
     ComputeRequest,
     DstackBackend,
+    DstackResources,
     TaskRequest,
     DstackTask,
-    resolve_dstack_project,
-    resolve_local_fleet,
 )
 from gradlab.env_registry import resolve_env_provider
 from gradlab.file_utils import file_sha256
@@ -42,8 +39,10 @@ from gradlab.json_utils import canonical_json_text, json_safe
 from gradlab.metric_names import METRICS_SCHEMA_VERSION
 from gradlab.modal_eval_config import load_modal_eval_config
 from gradlab.operator_credentials import (
+    DstackOperatorConfig,
     OperatorConfigurationError,
     OperatorEnvironmentReport,
+    resolve_dstack_token,
 )
 from gradlab.operator_environment import load_repository_operator_environment
 from gradlab.r2_store import R2Bucket, RunStorageConfig
@@ -115,11 +114,6 @@ COMMON_SECRET_ENV = (
     "GRADLAB_MODELS_R2_ACCESS_KEY_ID",
     "GRADLAB_MODELS_R2_SECRET_ACCESS_KEY",
     "GRADLAB_MODELS_R2_PUBLIC_BASE_URL",
-)
-OPERATOR_DSTACK_ENV = (
-    DSTACK_PROJECT_ENV,
-    "DSTACK_SERVER_URL",
-    "DSTACK_TOKEN",
 )
 OPERATOR_MODAL_ENV = (
     "MODAL_TOKEN_ID",
@@ -224,7 +218,6 @@ def _storage(root: Path) -> tuple[RunStorageConfig, RunAuthority]:
 
 def _required_operator_environment(checkpoint_eval_backend: str) -> tuple[str, ...]:
     return (
-        *OPERATOR_DSTACK_ENV,
         *COMMON_SECRET_ENV,
         *(OPERATOR_MODAL_ENV if str(checkpoint_eval_backend) == "modal" else ()),
     )
@@ -234,8 +227,8 @@ def _operator_preflight(
     root: Path,
     *,
     checkpoint_eval_backend: str,
-    dstack_project: str | None = None,
     local_target: str | None = None,
+    coordinator_id: str | None = None,
 ) -> tuple[
     RunStorageConfig,
     RunAuthority,
@@ -262,7 +255,28 @@ def _operator_preflight(
         storage = RunStorageConfig.from_env()
     except ValueError as exc:
         raise OperatorConfigurationError(str(exc)) from exc
-    dstack_backend = DstackBackend(project=dstack_project)
+    dstack_config = environment_report.dstack
+    if dstack_config is None:
+        raise OperatorConfigurationError(
+            f"operator config has no schema-v3 dstack profiles: {environment_report.config_path}"
+        )
+    if local_target is not None:
+        fleet = dstack_config.fleet(local_target)
+        if coordinator_id is not None and fleet.coordinator_id != coordinator_id:
+            raise OperatorConfigurationError(
+                "bound dstack coordinator disagrees with the configured fleet profile"
+            )
+        selected_coordinator_id = fleet.coordinator_id
+    else:
+        fleet = dstack_config.fleet()
+        selected_coordinator_id = str(coordinator_id or dstack_config.default_coordinator)
+    coordinator = dstack_config.coordinator(selected_coordinator_id)
+    token, token_source = resolve_dstack_token(coordinator)
+    dstack_backend = DstackBackend(
+        project=coordinator.project,
+        server_url=coordinator.server_url,
+        token=token,
+    )
     try:
         dstack_backend.preflight()
     except (RuntimeError, ValueError) as exc:
@@ -281,12 +295,9 @@ def _operator_preflight(
                 f"verify the {label} endpoint, bucket, and credential pair"
             ) from exc
     sources = {name: environment_report.source_for(name, os.environ) for name in sorted(required)}
-    configured_local_fleet = str(local_target or os.environ.get(LOCAL_FLEET_ENV) or "").strip()
-    local_fleet_source = (
-        "command-line"
-        if str(local_target or "").strip()
-        else environment_report.source_for(LOCAL_FLEET_ENV, os.environ)
-    )
+    configured_local_fleet = fleet.name
+    local_fleet_source = "command-line" if local_target is not None else "operator-config"
+    local_resources = fleet.resources
     report = {
         "status": "ready",
         "checkpoint_eval_backend": checkpoint_eval_backend,
@@ -297,12 +308,17 @@ def _operator_preflight(
         "resolved_sources": sources,
         "storage": {name: "readable" for name in scopes},
         "dstack": {
+            "coordinator_id": coordinator.coordinator_id,
             "project": dstack_backend.project,
+            "server_url": coordinator.server_url,
             "server": "authenticated",
+            "token_source": token_source,
         },
         "compute": {
             "local_fleet": configured_local_fleet or None,
             "source": local_fleet_source,
+            "resources": local_resources.as_manifest(),
+            "resources_source": "operator-config",
         },
         "wandb": {"entity": wandb_entity_from_env()},
         "modal": {
@@ -396,11 +412,15 @@ def _stage_vizdoom_iwad(
     return validate_vizdoom_iwad_binding(staged)
 
 
-def _compute(args: argparse.Namespace) -> ComputeRequest:
+def _compute(
+    args: argparse.Namespace,
+    *,
+    default_local_fleet: str | None = None,
+) -> ComputeRequest:
     target = (
-        resolve_local_fleet(args.target)
+        str(args.target or default_local_fleet or "").strip() or None
         if str(args.compute) in {"auto", "local"}
-        else (str(args.target).strip() or None)
+        else (str(args.target or "").strip() or None)
     )
     request = ComputeRequest(
         kind=args.compute,
@@ -414,27 +434,73 @@ def _compute(args: argparse.Namespace) -> ComputeRequest:
     return request
 
 
-def _manifest_dstack_project(compute: Mapping[str, Any]) -> str:
-    return resolve_dstack_project(str(compute.get("dstack_project") or "") or None)
+def _require_dstack_config(report: OperatorEnvironmentReport) -> DstackOperatorConfig:
+    if report.dstack is None:
+        raise OperatorConfigurationError(
+            f"operator config has no schema-v3 dstack profiles: {report.config_path}"
+        )
+    return report.dstack
 
 
-def _dstack_backend_for_compute(compute: Mapping[str, Any]) -> DstackBackend:
-    return DstackBackend(project=_manifest_dstack_project(compute))
+def _dstack_backend_for_attempt(
+    root: Path,
+    authority: RunAuthority,
+    attempt: Mapping[str, Any],
+) -> tuple[DstackBackend, Any]:
+    run_id = str(attempt.get("run_id") or "")
+    attempt_id = str(attempt.get("attempt_id") or "")
+    binding = authority.coordinator_binding(run_id, attempt_id)
+    report = _load_environment(root)
+    config = _require_dstack_config(report)
+    coordinator = config.coordinator(binding.coordinator_id)
+    if coordinator.project != binding.project:
+        raise OperatorConfigurationError(
+            "immutable coordinator binding project disagrees with operator metadata"
+        )
+    compute = attempt.get("compute")
+    if not isinstance(compute, Mapping):
+        raise RuntimeError("attempt compute contract is missing")
+    manifest_coordinator = str(compute.get("dstack_coordinator_id") or "").strip()
+    if manifest_coordinator and manifest_coordinator != binding.coordinator_id:
+        raise RuntimeError("attempt manifest coordinator disagrees with immutable binding")
+    manifest_project = str(compute.get("dstack_project") or "").strip()
+    if manifest_project and manifest_project != binding.project:
+        raise RuntimeError("attempt manifest project disagrees with immutable binding")
+    selected = compute.get("selected")
+    selected_kind = str(selected.get("kind") or "") if isinstance(selected, Mapping) else ""
+    if selected_kind in {"auto", "local"}:
+        if binding.target is None:
+            raise RuntimeError("local attempt coordinator binding has no fleet target")
+        fleet = config.fleet(binding.target)
+        if fleet.coordinator_id != binding.coordinator_id:
+            raise OperatorConfigurationError(
+                "immutable coordinator binding disagrees with configured fleet ownership"
+            )
+    token, _source = resolve_dstack_token(coordinator)
+    return (
+        DstackBackend(
+            project=coordinator.project,
+            server_url=coordinator.server_url,
+            token=token,
+        ),
+        binding,
+    )
 
 
-def _retry_compute_request(compute: Mapping[str, Any]) -> dict[str, Any]:
+def _bound_retry_compute_request(
+    compute: Mapping[str, Any],
+    *,
+    binding_target: str | None,
+) -> dict[str, Any]:
     request = dict(compute["request"])
-    if (
-        str(request.get("kind") or "") in {"auto", "local"}
-        and not str(request.get("target") or "").strip()
-    ):
-        selected = compute.get("selected")
-        selected_target = str(
-            (selected.get("target") or "") if isinstance(selected, Mapping) else ""
-        ).strip()
-        if not selected_target:
-            raise RuntimeError("current run has no recorded local fleet for retry")
-        request["target"] = selected_target
+    if str(request.get("kind") or "") in {"auto", "local"}:
+        target = str(binding_target or "").strip()
+        if not target:
+            raise RuntimeError("immutable coordinator binding has no local fleet for retry")
+        recorded = str(request.get("target") or "").strip()
+        if recorded and recorded != target:
+            raise RuntimeError("retry request target disagrees with immutable coordinator binding")
+        request["target"] = target
     return request
 
 
@@ -464,6 +530,7 @@ def _task_request(manifest: RunManifest, *, manifest_uri: str) -> TaskRequest:
         image=manifest.image_digest,
         manifest_uri=manifest_uri,
         compute=compute,
+        resources=DstackResources.from_manifest(manifest.compute.get("resources")),
         plain_env=plain_env,
         secret_env=(
             *COMMON_SECRET_ENV,
@@ -594,13 +661,20 @@ def cmd_launch(args: argparse.Namespace) -> int:
         env_provider=env_provider,
         rom_path=args.rom_path,
     )
-    storage, authority, dstack_backend, _preflight_report = _operator_preflight(
+    storage, authority, dstack_backend, preflight_report = _operator_preflight(
         root,
         checkpoint_eval_backend=checkpoint_eval_backend,
-        local_target=args.target,
+        local_target=(args.target if str(args.compute) in {"auto", "local"} else None),
     )
-    compute = _compute(args)
-    selected_compute, selected_offer = dstack_backend.select_compute(compute)
+    compute = _compute(
+        args,
+        default_local_fleet=str(preflight_report["compute"]["local_fleet"]),
+    )
+    resources = DstackResources.from_manifest(preflight_report["compute"]["resources"])
+    selected_compute, selected_offer = dstack_backend.select_compute(
+        compute,
+        resources=resources,
+    )
     release = runtime_release_from_args(
         args,
         repo_root=root,
@@ -675,7 +749,11 @@ def cmd_launch(args: argparse.Namespace) -> int:
         "request": compute.as_manifest(),
         "selected": selected_compute.as_manifest(),
         "selected_offer": selected_offer,
+        "resources": resources.as_manifest(),
+        "resources_source": str(preflight_report["compute"]["resources_source"]),
+        "dstack_coordinator_id": str(preflight_report["dstack"]["coordinator_id"]),
         "dstack_project": dstack_backend.project,
+        "coordinator_binding_basis": "launch-selection",
         "dstack_task": dstack_task,
         "source_branch": branch,
         "runtime_workflow_run_id": release.workflow_run_id,
@@ -736,11 +814,18 @@ def cmd_launch(args: argparse.Namespace) -> int:
         "schema_version": 1,
         "run_id": run_id,
         "attempt_id": attempt_id,
-        "dstack": {"project": task.project, "task": task.name, "status": task.status},
+        "dstack": {
+            "coordinator_id": str(preflight_report["dstack"]["coordinator_id"]),
+            "project": task.project,
+            "task": task.name,
+            "status": task.status,
+        },
         "compute": {
             "request": compute.as_manifest(),
             "selected": selected_compute.as_manifest(),
             "offer": selected_offer,
+            "resources": resources.as_manifest(),
+            "resources_source": str(preflight_report["compute"]["resources_source"]),
         },
         "source_sha": source_sha,
         "image_digest": release.runtime_image_ref,
@@ -1078,8 +1163,9 @@ def _status(root: Path, run_id: str) -> dict[str, Any]:
     semantic = authority.semantic_state(run_id)
     attempt = _latest_attempt(semantic)
     task_name = str(attempt["compute"]["dstack_task"])
-    dstack_backend = _dstack_backend_for_compute(attempt["compute"])
+    binding = authority.coordinator_binding(run_id, str(attempt["attempt_id"]))
     try:
+        dstack_backend, _binding = _dstack_backend_for_attempt(root, authority, attempt)
         dstack = dstack_backend.status(task_name)
         dstack_value = _public_dstack_state(dstack)
     except KeyError:
@@ -1089,6 +1175,17 @@ def _status(root: Path, run_id: str) -> dict[str, Any]:
             "status": "not-found",
             "terminal": False,
         }
+    except (OperatorConfigurationError, RuntimeError, OSError, subprocess.SubprocessError) as exc:
+        dstack_value = {
+            "coordinator_id": binding.coordinator_id,
+            "project": binding.project,
+            "task": task_name,
+            "status": "unreachable",
+            "terminal": False,
+            "error_type": type(exc).__name__,
+        }
+    else:
+        dstack_value["coordinator_id"] = binding.coordinator_id
     attempt_terminal = _latest_attempt_terminal(semantic)
     return {
         "schema_version": 1,
@@ -1198,7 +1295,8 @@ def cmd_cancel(args: argparse.Namespace) -> int:
         attempt_id=str(attempt["attempt_id"]),
     )
     if args.abort:
-        _dstack_backend_for_compute(attempt["compute"]).cancel(task_name, abort=True)
+        backend, _binding = _dstack_backend_for_attempt(root, authority, attempt)
+        backend.cancel(task_name, abort=True)
     print(
         json.dumps(
             {
@@ -1246,9 +1344,8 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
     _storage_config, authority = _storage(root)
     state = authority.semantic_state(args.run_id)
     manifest = _reconciliation_manifest(_latest_attempt(state))
-    task = _dstack_backend_for_compute(manifest.compute).status(
-        str(manifest.compute["dstack_task"])
-    )
+    backend, _binding = _dstack_backend_for_attempt(root, authority, manifest.to_dict())
+    task = backend.status(str(manifest.compute["dstack_task"]))
     if not task.terminal:
         raise RuntimeError("cannot reconcile while the dstack task is active")
     lease = authority.acquire_lease(
@@ -1345,7 +1442,8 @@ def cmd_logs(args: argparse.Namespace) -> int:
     root = repository_root()
     _storage_config, authority = _storage(root)
     attempt = _latest_attempt(authority.semantic_state(args.run_id))
-    text = _dstack_backend_for_compute(attempt["compute"]).logs(
+    backend, _binding = _dstack_backend_for_attempt(root, authority, attempt)
+    text = backend.logs(
         str(attempt["compute"]["dstack_task"]),
         since=args.since,
     )
@@ -1384,6 +1482,7 @@ def _manifest_only_submission(
     allowed_control_keys = {
         f"{prefix}/manifest.json",
         f"{prefix}/attempts/{manifest.attempt_id}/manifest.json",
+        authority.coordinator_binding_key(manifest.run_id, manifest.attempt_id),
     }
     unexpected_control_keys = sorted(
         set(authority.control.iter_keys(prefix)) - allowed_control_keys
@@ -1408,11 +1507,18 @@ def cmd_resume_submit(args: argparse.Namespace) -> int:
     storage, authority = _storage(root)
     manifest = _manifest_only_submission(authority, args.run_id)
     checkpoint_eval_backend = "modal" if bool(manifest.modal["enabled"]) else "none"
-    _storage_config, _authority, dstack_backend, _report = _operator_preflight(
+    required = _required_operator_environment(checkpoint_eval_backend)
+    missing = [name for name in required if not str(os.environ.get(name) or "").strip()]
+    if missing:
+        raise OperatorConfigurationError(
+            "operator environment is incomplete; missing " + ", ".join(sorted(missing))
+        )
+    dstack_backend, binding = _dstack_backend_for_attempt(
         root,
-        checkpoint_eval_backend=checkpoint_eval_backend,
-        dstack_project=_manifest_dstack_project(manifest.compute),
+        authority,
+        manifest.to_dict(),
     )
+    dstack_backend.preflight()
     task_name = str(manifest.compute["dstack_task"])
     try:
         existing = dstack_backend.status(task_name)
@@ -1427,6 +1533,7 @@ def cmd_resume_submit(args: argparse.Namespace) -> int:
         "run_id": manifest.run_id,
         "attempt_id": manifest.attempt_id,
         "dstack": {
+            "coordinator_id": binding.coordinator_id,
             "project": task.project,
             "task": task.name,
             "status": task.status,
@@ -1472,7 +1579,7 @@ def cmd_retry(args: argparse.Namespace) -> int:
     previous = _latest_attempt(state)
     previous_manifest = RunManifest.from_dict(previous)
     attempt_terminal = _latest_attempt_terminal(state)
-    dstack_backend = _dstack_backend_for_compute(previous["compute"])
+    dstack_backend, previous_binding = _dstack_backend_for_attempt(root, authority, previous)
     try:
         previous_task = dstack_backend.status(str(previous["compute"]["dstack_task"]))
     except KeyError:
@@ -1523,12 +1630,17 @@ def cmd_retry(args: argparse.Namespace) -> int:
     task_name = _task_name(args.run_id, attempt_id, initial=False)
     compute = dict(previous["compute"])
     compute["dstack_task"] = task_name
-    request_compute = _retry_compute_request(compute)
+    request_compute = _bound_retry_compute_request(
+        compute,
+        binding_target=previous_binding.target,
+    )
     compute["request"] = request_compute
     compute["dstack_project"] = dstack_backend.project
-    selected_compute, selected_offer = dstack_backend.select_compute(
-        ComputeRequest(**request_compute)
-    )
+    compute["dstack_coordinator_id"] = previous_binding.coordinator_id
+    compute["coordinator_binding_basis"] = "retry-preserved"
+    selected_compute = ComputeRequest(**dict(compute["selected"]))
+    selected_compute.validate()
+    selected_offer = compute.get("selected_offer")
     compute["selected"] = selected_compute.as_manifest()
     compute["selected_offer"] = selected_offer
     public_checkpoints = list((state.get("public_index") or {}).get("checkpoints") or [])
@@ -1913,7 +2025,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     fault_test.add_argument(
         "--target",
-        help="Local dstack fleet; defaults to GRADLAB_LOCAL_FLEET.",
+        help="Local dstack fleet; defaults to operator dstack.default_fleet.",
     )
     fault_test.add_argument("--runtime-image-ref-file", type=Path)
     fault_test.add_argument("--image-workflow", default=DEFAULT_IMAGE_WORKFLOW)

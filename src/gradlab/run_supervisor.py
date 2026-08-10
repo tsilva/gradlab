@@ -778,7 +778,7 @@ class RunSupervisor:
             cached_rom = cache_path(CONTAINER_ROM_CACHE, normalized_asset)
             try:
                 verify_rom_file(cached_rom, normalized_asset)
-            except (FileNotFoundError, ValueError):
+            except FileNotFoundError, ValueError:
                 if str(os.environ.get("GRADLAB_ROM_CACHE_READ_ONLY") or "") == "1":
                     raise
                 object_key = self.authority.evaluation.key_from_uri(
@@ -869,6 +869,10 @@ class RunSupervisor:
                     ).get("target")
                     or ""
                 ),
+                "dstack_coordinator_id": str(
+                    self.manifest.compute.get("dstack_coordinator_id") or ""
+                ),
+                "dstack_project": str(self.manifest.compute.get("dstack_project") or ""),
                 "attempt_id": self.manifest.attempt_id,
                 "dstack_task": str(self.manifest.compute.get("dstack_task") or ""),
                 "wandb_mode": "online",
@@ -1312,8 +1316,7 @@ class RunSupervisor:
             )
             self._request_learner_stop("canceled")
             print(
-                "durable cancel request observed: "
-                f"requested_at={request['requested_at']}",
+                f"durable cancel request observed: requested_at={request['requested_at']}",
                 flush=True,
             )
         return True
@@ -1473,9 +1476,7 @@ class RunSupervisor:
             "goal_sha256": self.manifest.goal_sha256,
             "recipe_sha256": self.manifest.recipe_sha256,
             "environment_sha256": self.manifest.environment_sha256,
-            "evaluation_contract_sha256": checkpoint_manifest_contract_sha256(
-                self.recipe_document
-            ),
+            "evaluation_contract_sha256": checkpoint_manifest_contract_sha256(self.recipe_document),
         }
         for checkpoint in self.store.checkpoints():
             ledger_id = int(checkpoint["id"])
@@ -1969,9 +1970,7 @@ class RunSupervisor:
         self._probe_wandb_remote(now, local_high_water=local_high_water)
         usage = self.runtime.disk_usage(self.output_root)
         metrics = {
-            ORCHESTRATION_OUTBOX_PENDING_COUNT: float(
-                self.store.metric_outbox_stats()["frames"]
-            ),
+            ORCHESTRATION_OUTBOX_PENDING_COUNT: float(self.store.metric_outbox_stats()["frames"]),
             ORCHESTRATION_OUTBOX_OLDEST_AGE_SECONDS: self._oldest_unpublished_age(),
             ORCHESTRATION_OUTBOX_REMOTE_VISIBILITY_LAG_SECONDS: (
                 self.wandb_remote_visible_lag_seconds
@@ -2615,9 +2614,7 @@ class RunSupervisor:
             if self.cancel_requested:
                 self._cancel_outstanding_evals()
             self._publish_state_archive(
-                require_closed=(
-                    not self.cancel_requested or self.learner_started_at is not None
-                )
+                require_closed=(not self.cancel_requested or self.learner_started_at is not None)
             )
             self._publish_checkpoints()
             self.store.set_state(
@@ -2809,9 +2806,7 @@ class RunSupervisor:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = ExactArgumentParser(
-        description="Supervise one immutable dstack gradlab training run."
-    )
+    parser = ExactArgumentParser(description="Supervise one immutable dstack gradlab training run.")
     parser.add_argument("--manifest-uri", required=True)
     return parser
 
