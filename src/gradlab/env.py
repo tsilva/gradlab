@@ -30,6 +30,7 @@ from gradlab.env_registry import (
     resolve_native_episode_horizon,
     resolve_env_provider,
     validate_provider_constructor_args,
+    validate_provider_resolved_config,
 )
 from gradlab.environment_fields import (
     DEFAULT_OBS_RESIZE_ALGORITHM as DEFAULT_OBS_RESIZE_ALGORITHM,
@@ -101,6 +102,11 @@ def resolve_env_config(config: EnvConfig) -> EnvConfig:
     if config.obs_crop is None and spec.default_obs_crop is not None:
         updates["obs_crop"] = spec.default_obs_crop
     config = replace(config, **updates) if updates else config
+    validate_provider_resolved_config(
+        config.env_provider,
+        config,
+        label="environment",
+    )
     if config.task:
         validate_task_config(config.task)
         canonical_task = task_config_from_train_config(

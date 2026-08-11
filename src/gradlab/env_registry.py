@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import math
 import re
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any
 
@@ -21,6 +21,9 @@ class ProviderConstructorContract:
     explicit_env_args: frozenset[str]
     required_values: Mapping[str, object]
     optional_env_args: frozenset[str] = frozenset()
+    required_config_values: Mapping[str, object] = field(default_factory=dict)
+    required_nested_values: Mapping[str, Mapping[str, object]] = field(default_factory=dict)
+    allowed_nested_args: Mapping[str, frozenset[str]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         overlap = (
@@ -35,7 +38,43 @@ class ProviderConstructorContract:
             raise ValueError(
                 f"provider required values are not explicit env args: {sorted(unknown_required)}"
             )
+        unknown_config = set(self.required_config_values) - set(self.canonical_args)
+        if unknown_config:
+            raise ValueError(
+                f"provider required config values are not canonical args: {sorted(unknown_config)}"
+            )
+        nested_parents = set(self.required_nested_values) | set(self.allowed_nested_args)
+        unknown_nested = nested_parents - set(self.explicit_env_args)
+        if unknown_nested:
+            raise ValueError(
+                f"provider nested contracts are not explicit env args: {sorted(unknown_nested)}"
+            )
+        required_nested_values = {
+            str(parent): MappingProxyType(dict(values))
+            for parent, values in self.required_nested_values.items()
+        }
+        allowed_nested_args = {
+            str(parent): frozenset(values) for parent, values in self.allowed_nested_args.items()
+        }
+        for parent, values in required_nested_values.items():
+            unknown_children = set(values) - set(allowed_nested_args.get(parent, ()))
+            if parent in allowed_nested_args and unknown_children:
+                raise ValueError(
+                    f"provider required nested values are not allowed for {parent}: "
+                    f"{sorted(unknown_children)}"
+                )
         object.__setattr__(self, "required_values", MappingProxyType(dict(self.required_values)))
+        object.__setattr__(
+            self,
+            "required_config_values",
+            MappingProxyType(dict(self.required_config_values)),
+        )
+        object.__setattr__(
+            self,
+            "required_nested_values",
+            MappingProxyType(required_nested_values),
+        )
+        object.__setattr__(self, "allowed_nested_args", MappingProxyType(allowed_nested_args))
 
 
 @dataclass(frozen=True)
@@ -412,6 +451,17 @@ GRADOOM_PROVIDER = EnvProvider(
         },
         required_values={"doom_skill": 3},
         optional_env_args=frozenset({"compile_engine"}),
+        required_config_values={
+            "obs_crop": (0, 32, 0, 0),
+            "obs_crop_mode": "mask",
+            "obs_crop_fill": 0,
+        },
+        required_nested_values={"vizdoom_config": {"render_hud": False}},
+        allowed_nested_args={
+            "vizdoom_config": frozenset(
+                {"episode_timeout", "render_hud", "render_screen_flashes"}
+            )
+        },
     ),
 )
 
@@ -726,7 +776,62 @@ def validate_provider_constructor_args(
         )
     for key, expected in contract.required_values.items():
         actual = env_args.get(key)
-        if actual == expected:
+        if _provider_contract_values_equal(actual, expected):
+            continue
+        expected_text = "null" if expected is None else repr(expected)
+        raise ValueError(f"{label}.{key} must be {expected_text}; got {actual!r}")
+    for parent, allowed in contract.allowed_nested_args.items():
+        nested = env_args.get(parent)
+        if not isinstance(nested, Mapping):
+            raise ValueError(f"{label}.{parent} must be an object")
+        unexpected_nested = sorted(set(nested) - set(allowed))
+        if unexpected_nested:
+            raise ValueError(
+                f"{label}.{parent} has unsupported {provider.provider_id} option(s): "
+                + ", ".join(unexpected_nested)
+            )
+    for parent, required in contract.required_nested_values.items():
+        nested = env_args.get(parent)
+        if not isinstance(nested, Mapping):
+            raise ValueError(f"{label}.{parent} must be an object")
+        for key, expected in required.items():
+            actual = nested.get(key)
+            if _provider_contract_values_equal(actual, expected):
+                continue
+            expected_text = "null" if expected is None else repr(expected)
+            raise ValueError(
+                f"{label}.{parent}.{key} must be {expected_text}; got {actual!r}"
+            )
+
+
+def _provider_contract_values_equal(actual: object, expected: object) -> bool:
+    if isinstance(expected, Sequence) and not isinstance(expected, str | bytes):
+        if not isinstance(actual, Sequence) or isinstance(actual, str | bytes):
+            return False
+        if len(actual) != len(expected):
+            return False
+        return all(
+            _provider_contract_values_equal(actual_item, expected_item)
+            for actual_item, expected_item in zip(actual, expected)
+        )
+    if isinstance(expected, bool):
+        return isinstance(actual, bool) and actual is expected
+    return actual == expected
+
+
+def validate_provider_resolved_config(
+    provider_id: str,
+    config: Mapping[str, object] | object,
+    *,
+    label: str,
+) -> None:
+    provider = resolve_env_provider(provider_id)
+    contract = provider.constructor_contract
+    if contract is None:
+        return
+    for key, expected in contract.required_config_values.items():
+        actual = config.get(key) if isinstance(config, Mapping) else getattr(config, key, None)
+        if _provider_contract_values_equal(actual, expected):
             continue
         expected_text = "null" if expected is None else repr(expected)
         raise ValueError(f"{label}.{key} must be {expected_text}; got {actual!r}")

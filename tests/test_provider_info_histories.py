@@ -565,7 +565,17 @@ def test_vizdoom_constructor_receives_base_keys_and_augmented_info_filter() -> N
 
 def test_gradoom_constructor_receives_provider_history_keys() -> None:
     config = _vizdoom_config()
-    config = replace(config, env_provider="gradoom")
+    config = replace(
+        config,
+        env_provider="gradoom",
+        obs_crop=(0, 32, 0, 0),
+        obs_crop_mode="mask",
+        obs_crop_fill=0,
+        env_args={
+            **config.env_args,
+            "vizdoom_config": {"episode_timeout": 4200, "render_hud": False},
+        },
+    )
     with mock.patch(
         "gradlab.vizdoom_assets.resolve_vizdoom_iwad_path",
         return_value="/fake/doom2.wad",
@@ -579,6 +589,7 @@ def test_gradoom_constructor_receives_provider_history_keys() -> None:
 
     assert kwargs["device"] == "cuda"
     assert kwargs["transport"] == "torch"
+    assert kwargs["vizdoom_config"] == {"episode_timeout": 4200}
     assert kwargs["info_frame_stack_keys"] == ("health", "position", "selected_weapon")
     assert kwargs["info_filter"] == {
         "mode": "all",

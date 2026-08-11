@@ -4,7 +4,11 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from gradlab.config_loader import RECIPE_TEMPLATE_VALUES, validate_template_string
-from gradlab.env_registry import env_supports_states, validate_provider_constructor_args
+from gradlab.env_registry import (
+    env_supports_states,
+    validate_provider_constructor_args,
+    validate_provider_resolved_config,
+)
 from gradlab.goal_schema import validate_goal_document_shape
 from gradlab.seeds import validate_training_seed
 from gradlab.train_config import validate_and_normalize_train_config
@@ -158,6 +162,11 @@ def validate_materialized_train_recipe(
             provider_id,
             train_config.get("env_args"),
             label=label_path(label_path(label, "train_config"), "env_args"),
+        )
+        validate_provider_resolved_config(
+            provider_id,
+            train_config,
+            label=label_path(label, "train_config"),
         )
     supports_states = env_supports_states(provider_id, game) if provider_id else True
     if supports_states and not has_state and not has_states:

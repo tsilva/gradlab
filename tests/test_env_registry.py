@@ -141,6 +141,15 @@ def test_resolves_gradoom_only_for_the_certified_deathmatch_profile() -> None:
     provider = resolve_env_provider("gradoom")
     assert provider.turbo_api_version == 1
     assert provider.native_episode_horizon is not None
+    assert provider.constructor_contract is not None
+    assert provider.constructor_contract.required_config_values == {
+        "obs_crop": (0, 32, 0, 0),
+        "obs_crop_mode": "mask",
+        "obs_crop_fill": 0,
+    }
+    assert provider.constructor_contract.required_nested_values == {
+        "vizdoom_config": {"render_hud": False}
+    }
     assert policy_environment_compatibility_id(
         "gradoom", "VizdoomDeathmatch-v1"
     ) == policy_environment_compatibility_id("vizdoom-turbo", "VizdoomDeathmatch-v1")

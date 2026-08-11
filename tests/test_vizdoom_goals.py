@@ -242,7 +242,7 @@ def test_vizdoom_goal_has_complete_evaluated_ppo_contract(
         "steps": 1,
     }
     expected_vizdoom_config = {"episode_timeout": NATIVE_HORIZONS[goal_id]}
-    expected_vizdoom_config["render_hud"] = True
+    expected_vizdoom_config["render_hud"] = goal_id != "VizdoomDeathmatch-v1"
     assert train_config["env_args"]["vizdoom_config"] == expected_vizdoom_config
     assert train_config["task"]["reward"]["reward_scale"] == expected["reward_scale"]
     termination = train_config["task"]["termination"]
@@ -632,7 +632,7 @@ def test_vizdoom_deathmatch_declares_complete_single_player_combat_semantics() -
     assert train_config["episode_progress_fields"] == ["kills"]
     assert train_config["env_args"]["vizdoom_config"] == {
         "episode_timeout": 4200,
-        "render_hud": True,
+        "render_hud": False,
     }
     assert (
         eval_environment["env_config"]["env_args"]["use_restricted_actions"] == DEATHMATCH_ACTIONS
