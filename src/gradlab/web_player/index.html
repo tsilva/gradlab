@@ -15,6 +15,7 @@
       <div class="app-brand">
         <span class="app-wordmark eyebrow">GRADLAB</span>
         <span class="header-divider" aria-hidden="true"></span>
+        <button id="source-back" class="quiet button-with-icon header-back" type="button" aria-label="Back to source selection" title="Choose another playback source" hidden><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-arrow-left"></use></svg><span>Back</span></button>
         <h1 id="page-title" hidden>Environment</h1>
         <nav id="source-breadcrumbs" class="source-breadcrumbs header-breadcrumbs" aria-label="Playback source" hidden></nav>
       </div>
@@ -25,7 +26,7 @@
           <button class="quiet checkpoint-navigation-button" type="button" data-checkpoint-next>Next</button>
         </nav>
         <label id="workspace-preset-picker" class="workspace-preset-picker" title="Choose a task-focused workspace">
-          <span>View</span>
+          <span class="visually-hidden">View</span>
           <select id="workspace-preset" aria-label="Workspace view">
             <option value="watch">Watch</option>
             <option value="explain">Explain</option>
@@ -33,15 +34,22 @@
             <option value="custom">Customize</option>
           </select>
         </label>
-        <button id="publish-episode" class="quiet button-with-icon" type="button" title="Publish the completed episode to YouTube and Hugging Face" hidden><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-external-link"></use></svg><span>Publish episode</span></button>
-        <button id="inspect-active" class="quiet icon-only" type="button" aria-label="Inspect active goal and recipe YAML" title="Inspect active goal and recipe YAML" hidden><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-code"></use></svg></button>
-        <button id="change-source" class="quiet icon-only" type="button" aria-label="Choose another checkpoint" title="Choose another checkpoint" hidden><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-folder-search"></use></svg></button>
-        <button id="layouts-toggle" class="quiet icon-only" type="button" aria-label="Layouts" title="Layouts"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-layout-dashboard"></use></svg></button>
-        <button id="panels-toggle" class="quiet icon-only" type="button" aria-label="Panels" title="Panels" aria-controls="panel-shelf" aria-expanded="false"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-layout-grid"></use></svg></button>
-        <button id="new-window" class="quiet icon-only" type="button" aria-label="Open synchronized window" title="Open synchronized window"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-external-link"></use></svg></button>
         <span id="connection-status" class="sync-status warning" aria-live="polite">Connecting</span>
+        <button id="more-toggle" class="quiet button-with-icon" type="button" aria-label="More playback actions" title="More playback actions" aria-controls="player-menu" aria-expanded="false" hidden><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-dots-vertical"></use></svg><span>More</span></button>
       </div>
     </header>
+
+    <div id="player-menu" class="floating-menu player-menu" hidden>
+      <button id="change-source" class="quiet button-with-icon" type="button" title="Choose another checkpoint" hidden><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-folder-search"></use></svg><span>Change checkpoint</span></button>
+      <button id="inspect-active" class="quiet button-with-icon" type="button" title="Inspect active goal and recipe YAML" hidden><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-code"></use></svg><span>Goal & recipe YAML</span></button>
+      <button id="publish-episode" class="quiet button-with-icon" type="button" title="Publish the completed episode to YouTube and Hugging Face" hidden><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-external-link"></use></svg><span>Publish episode</span></button>
+      <div class="player-menu-customize" data-customize-actions>
+        <span class="menu-section-label">Customize</span>
+        <button id="layouts-toggle" class="quiet button-with-icon" type="button" title="Saved layouts"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-layout-dashboard"></use></svg><span>Saved layouts</span></button>
+        <button id="panels-toggle" class="quiet button-with-icon" type="button" title="Panels" aria-controls="panel-shelf" aria-expanded="false"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-layout-grid"></use></svg><span>Panels</span></button>
+        <button id="new-window" class="quiet button-with-icon" type="button" title="Open synchronized window"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-external-link"></use></svg><span>Open synchronized window</span></button>
+      </div>
+    </div>
 
     <div id="layout-menu" class="floating-menu layout-menu" hidden>
       <label>Layout name <input id="layout-name-input" value="Default layout" maxlength="48"></label>
@@ -72,38 +80,39 @@
     </div>
 
     <main id="source-browser" class="source-browser" hidden></main>
-    <section id="episode-report" class="episode-report" aria-labelledby="episode-report-heading" hidden>
-      <header class="episode-report-heading">
-        <div>
-          <span class="eyebrow">CURRENT EPISODE</span>
-          <h2 id="episode-report-heading">Episode report</h2>
-        </div>
-        <span class="episode-report-outcome active" data-episode-outcome>In progress</span>
-      </header>
-      <dl class="episode-report-facts">
-        <div><dt>Boundary</dt><dd data-episode-boundary>Not reached</dd></div>
-        <div><dt>Return</dt><dd data-episode-return>—</dd></div>
-        <div><dt>Steps</dt><dd data-episode-steps>—</dd></div>
-        <div><dt>Seed</dt><dd data-episode-seed>—</dd></div>
-        <div><dt>Semantics</dt><dd data-episode-semantics>Training contract</dd></div>
-        <div><dt>Source</dt><dd data-episode-source>Local checkpoint</dd></div>
-      </dl>
-      <p class="episode-report-disclaimer" data-episode-disclaimer></p>
+    <section id="unavailable-diagnostics" class="unavailable-diagnostics" aria-label="Unavailable diagnostics" hidden>
+      <details>
+        <summary><span data-unavailable-diagnostics-title>Unavailable diagnostics</span></summary>
+        <ul data-unavailable-diagnostics-list></ul>
+      </details>
     </section>
     <main id="dashboard" class="dashboard grid-stack"></main>
 
     <section id="timeline" class="timeline" aria-label="Bounded trajectory inspection">
       <div class="timeline-labels">
         <strong id="timeline-label">STEP —</strong>
+        <span id="playback-evidence-status" class="playback-evidence-status" role="status" hidden></span>
       </div>
       <div class="timeline-track">
-        <button id="timeline-playback-toggle" class="primary icon-only" type="button" aria-label="Play" title="Play current episode"><svg class="icon" aria-hidden="true"><use id="timeline-playback-icon" href="/assets/tabler-icons.svg#ti-player-play"></use></svg></button>
+        <div class="timeline-actions">
+          <button id="timeline-playback-toggle" class="primary button-with-icon" type="button" aria-label="Play" title="Play current episode"><svg class="icon" aria-hidden="true"><use id="timeline-playback-icon" href="/assets/tabler-icons.svg#ti-player-play"></use></svg><span id="timeline-playback-label">Play</span></button>
+          <button id="timeline-reset" class="quiet button-with-icon" type="button" title="Reset episode"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-refresh"></use></svg><span>Reset</span></button>
+          <button id="playback-settings-toggle" class="quiet button-with-icon" type="button" title="Playback settings" aria-controls="playback-settings-menu" aria-expanded="false"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-layout-dashboard"></use></svg><span>Settings</span></button>
+        </div>
         <div class="timeline-scrubber-track">
           <input id="timeline-scrubber" type="range" min="0" max="0" step="1" value="0" aria-label="Inspect a retained transition one step at a time" title="Left/Right: move one step · Space: play or pause">
           <div id="timeline-markers" class="timeline-markers" aria-hidden="true"></div>
         </div>
       </div>
     </section>
+
+    <div id="playback-settings-menu" class="floating-menu playback-settings-menu" hidden>
+      <div class="floating-menu-heading">
+        <strong>Playback settings</strong>
+        <button id="playback-settings-close" class="quiet icon-only" type="button" aria-label="Close playback settings" title="Close"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-x"></use></svg></button>
+      </div>
+      <div id="playback-settings-content"></div>
+    </div>
 
     <dialog id="panel-editor" class="panel-editor" aria-labelledby="panel-editor-heading">
       <form id="panel-editor-form" method="dialog">

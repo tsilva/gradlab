@@ -2409,6 +2409,8 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
         root / "index.html",
         root / "oauth_complete.html",
         root / "oauth_complete.js",
+        root / "playback-settings.js",
+        root / "player-presentation.js",
         root / "favicon.svg",
         root / "styles.css",
         root / "tabler-icons.svg",
@@ -2465,6 +2467,7 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     contract_syntax = (root / "documents" / "syntax.js").read_text(encoding="utf-8")
     catalog = (panel_root / "catalog.js").read_text(encoding="utf-8")
     controls = (panel_root / "controls.js").read_text(encoding="utf-8")
+    playback_settings = (root / "playback-settings.js").read_text(encoding="utf-8")
     manager = (panel_root / "manager.js").read_text(encoding="utf-8")
     runtime = (panel_root / "runtime.js").read_text(encoding="utf-8")
     telemetry = (panel_root / "telemetry.js").read_text(encoding="utf-8")
@@ -2491,7 +2494,9 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert "window.opener.postMessage(message, location.origin)" in oauth_script
     assert "location.replace(`/#token=${encodeURIComponent(token)}`)" in oauth_script
     assert '$("#player-home")' not in script
-    assert '$("#page-title").hidden = Boolean(state.sourceMode || activeCheckpointRoute);' in script
+    assert '$("#page-title").hidden = state.sourceMode;' in script
+    assert 'id="more-toggle"' in markup
+    assert 'id="playback-settings-menu"' in markup
     assert '$("#page-title").textContent = "Select checkpoint"' not in script
     assert "approval_required" not in source_browser
     assert "approve_source" not in source_browser
@@ -2513,10 +2518,11 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert '"namespace-explorer"' in catalog
     assert 'data-driver-option="human"' not in controls
     assert 'data-driver-option="policy"' not in controls
-    assert 'driver: "policy"' in controls
-    assert 'data-command="set-fps"' not in controls
-    assert 'fps.addEventListener("input"' in controls
-    assert 'services.command("set_fps", { fps: Number(fps.value) })' in controls
+    assert 'driver: "policy"' in script
+    assert 'data-command="set-fps"' not in playback_settings
+    assert 'fps.addEventListener("input"' in playback_settings
+    assert 'services.command("set_fps", { fps: Number(fps.value) })' in playback_settings
+    assert "mountPlaybackSettings" in controls
     assert "WORKSPACE_VERSION = 7" in workspace
     assert "createTelemetryInstance" in workspace
     assert "value.version !== WORKSPACE_VERSION" in workspace

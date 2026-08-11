@@ -79,9 +79,9 @@ export const PANEL_TYPES = Object.freeze({
 });
 
 const EXPLAIN_LAYOUT = Object.freeze({
-  game: { x: 0, y: 0, w: 7, h: 15, visible: true, window: "main" },
-  controls: { x: 7, y: 0, w: 2, h: 15, visible: true, window: "main" },
-  policy: { x: 9, y: 0, w: 3, h: 15, visible: true, window: "main" },
+  game: { x: 0, y: 0, w: 8, h: 15, visible: true, window: "main" },
+  controls: { x: 8, y: 0, w: 2, h: 15, visible: false, window: "main" },
+  policy: { x: 8, y: 0, w: 4, h: 15, visible: true, window: "main" },
   value: { x: 0, y: 15, w: 4, h: 7, visible: true, window: "main" },
   "step-reward": { x: 4, y: 15, w: 4, h: 7, visible: true, window: "main" },
   "episode-return": { x: 8, y: 15, w: 4, h: 7, visible: true, window: "main" },
@@ -96,8 +96,8 @@ const EXPLAIN_LAYOUT = Object.freeze({
 
 const WATCH_LAYOUT = Object.freeze({
   ...EXPLAIN_LAYOUT,
-  game: { x: 0, y: 0, w: 9, h: 15, visible: true, window: "main" },
-  controls: { x: 9, y: 0, w: 3, h: 15, visible: true, window: "main" },
+  game: { x: 0, y: 0, w: 12, h: 15, visible: true, window: "main" },
+  controls: { x: 9, y: 0, w: 3, h: 15, visible: false, window: "main" },
   policy: { ...EXPLAIN_LAYOUT.policy, visible: false },
   value: { ...EXPLAIN_LAYOUT.value, visible: false },
   "step-reward": { ...EXPLAIN_LAYOUT["step-reward"], visible: false },
@@ -106,9 +106,9 @@ const WATCH_LAYOUT = Object.freeze({
 
 const DEBUG_LAYOUT = Object.freeze({
   ...EXPLAIN_LAYOUT,
-  game: { x: 0, y: 0, w: 7, h: 15, visible: true, window: "main" },
-  controls: { x: 7, y: 0, w: 2, h: 15, visible: true, window: "main" },
-  observation: { x: 9, y: 0, w: 3, h: 15, visible: true, window: "main" },
+  game: { x: 0, y: 0, w: 8, h: 15, visible: true, window: "main" },
+  controls: { x: 8, y: 0, w: 2, h: 15, visible: false, window: "main" },
+  observation: { x: 8, y: 0, w: 4, h: 15, visible: true, window: "main" },
   policy: { x: 0, y: 15, w: 4, h: 8, visible: true, window: "main" },
   signals: { x: 4, y: 15, w: 4, h: 8, visible: true, window: "main" },
   events: { x: 8, y: 15, w: 4, h: 8, visible: true, window: "main" },
@@ -120,8 +120,8 @@ const DEBUG_LAYOUT = Object.freeze({
 });
 
 const PAIRED_LAYOUT = Object.freeze({
-  game: { x: 0, y: 0, w: 9, h: 15, visible: true, window: "main" },
-  controls: { x: 9, y: 0, w: 3, h: 15, visible: true, window: "main" },
+  game: { x: 0, y: 0, w: 12, h: 15, visible: true, window: "main" },
+  controls: { x: 9, y: 0, w: 3, h: 15, visible: false, window: "main" },
   policy: { x: 0, y: 0, w: 6, h: 8, visible: true, window: "stats" },
   value: { x: 6, y: 0, w: 6, h: 8, visible: true, window: "stats" },
   "step-reward": { x: 0, y: 8, w: 6, h: 7, visible: true, window: "stats" },
@@ -295,7 +295,7 @@ export function telemetryPanelProcessing(config) {
 }
 
 export const WORKSPACE_PRESETS = Object.freeze({
-  watch: { label: "Watch", description: "Game, controls, and the episode report" },
+  watch: { label: "Watch", description: "Game-first playback and the episode summary" },
   explain: { label: "Explain", description: "Policy, value, and reward evidence" },
   debug: { label: "Debug", description: "Observation, signals, events, and raw transition data" },
   custom: { label: "Customize", description: "Your current panel arrangement" },

@@ -143,5 +143,5 @@ explicitly authorized. See [COMPUTE.md](COMPUTE.md) and the
 
 ## License
 
-This repository does not currently include a project license. Third-party
-attributions are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+GradLab is licensed under the [MIT License](LICENSE). Third-party attributions
+are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
