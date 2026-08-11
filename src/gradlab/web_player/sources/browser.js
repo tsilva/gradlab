@@ -658,10 +658,80 @@ export function checkpointMetricBestBadge(column) {
   return "Best observed";
 }
 
+export function checkpointEvidencePresentation(item) {
+  const evaluation = item?.evaluation || {};
+  const accepted = evaluation.pass === true || String(evaluation.status || "") === "accepted";
+  const best = Array.isArray(item?.best_metrics) ? item.best_metrics : [];
+  const hasEvaluationLead = best.some((metric) => /^(eval\/|leader\/)/.test(String(metric)));
+  const hasTrainingLead = best.some((metric) => String(metric).startsWith("train/"));
+  if (item?.promoted) {
+    return { label: "Promoted", detail: "Authoritative promoted checkpoint", tone: "evaluation", rank: 0 };
+  }
+  if (accepted) {
+    return { label: "Accepted", detail: "Accepted checkpoint evaluation", tone: "evaluation", rank: 1 };
+  }
+  if (hasEvaluationLead) {
+    return { label: "Evaluation lead", detail: "Best available frozen evaluation evidence", tone: "evaluation", rank: 2 };
+  }
+  if (hasTrainingLead) {
+    return { label: "Training lead", detail: "Diagnostic training evidence; evaluation remains authoritative", tone: "training", rank: 3 };
+  }
+  if (/final/i.test(String(item?.purpose || ""))) {
+    return { label: "Final checkpoint", detail: "Final checkpoint with no stronger evaluation signal", tone: "neutral", rank: 4 };
+  }
+  return { label: "Available", detail: "Playable checkpoint; no acceptance claim", tone: "neutral", rank: 5 };
+}
+
+export function checkpointRecommendation(items) {
+  const ranked = (Array.isArray(items) ? items : [])
+    .map((item, index) => ({ item, index, evidence: checkpointEvidencePresentation(item) }))
+    .sort((left, right) => (
+      left.evidence.rank - right.evidence.rank
+      || (Number(right.item?.step) || 0) - (Number(left.item?.step) || 0)
+      || left.index - right.index
+    ));
+  return ranked[0] || null;
+}
+
+export function humanSourceLabel(value, kind) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (kind === "environment") {
+    const base = raw
+      .replace(/-v\d+$/i, "")
+      .replace(/-(nes|snes|genesis|atari\d*)$/i, "");
+    if (/^vizdoom$/i.test(base)) return "ViZDoom";
+    return base
+      .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+      .replaceAll("-", " ");
+  }
+  if (kind === "goal") {
+    return raw
+      .replace(/-v\d+$/i, "")
+      .replace(/^Level(?=\d)/i, "Level ")
+      .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+      .replaceAll("_", " ");
+  }
+  if (kind === "variant") return "Goal configuration";
+  if (kind === "run") return "Run";
+  if (kind === "checkpoint") {
+    const match = raw.match(/^checkpoint-(\d+)-/);
+    return match ? `Checkpoint · ${Number(match[1]).toLocaleString()} steps` : "Checkpoint";
+  }
+  return raw;
+}
+
 export function catalogItemMatchesSearch(item, query) {
   const normalized = String(query || "").trim().toLocaleLowerCase();
   if (!normalized) return true;
   return JSON.stringify(item ?? {}).toLocaleLowerCase().includes(normalized);
+}
+
+export function environmentEvidenceRank(item) {
+  const badges = successBadgeLabels(item);
+  if (badges.includes("eval/success")) return 0;
+  if (badges.includes("train/success")) return 1;
+  return 2;
 }
 
 function decodePathPart(value) {
@@ -825,7 +895,8 @@ export function sourceBreadcrumbItems(route) {
   }];
   if (route?.environment_id) {
     items.push({
-      label: route.environment_id,
+      label: humanSourceLabel(route.environment_id, "environment"),
+      title: route.environment_id,
       current: route.level === "goals" && !hasActiveCheckpoint,
       route: {
         level: "goals",
@@ -838,7 +909,8 @@ export function sourceBreadcrumbItems(route) {
   }
   if (route?.goal_id) {
     items.push({
-      label: route.goal_id,
+      label: humanSourceLabel(route.goal_id, "goal"),
+      title: route.goal_id,
       current: route.level === "goal_variants" && !hasActiveCheckpoint,
       route: {
         level: "goal_variants",
@@ -850,7 +922,8 @@ export function sourceBreadcrumbItems(route) {
   }
   if (route?.goal_variant_id) {
     items.push({
-      label: route.goal_variant_id,
+      label: humanSourceLabel(route.goal_variant_id, "variant"),
+      title: route.goal_variant_id,
       current: route.level === "runs" && !route.run_id && !hasActiveCheckpoint,
       route: {
         level: "runs",
@@ -861,7 +934,8 @@ export function sourceBreadcrumbItems(route) {
   }
   if (route?.run_id) {
     items.push({
-      label: route.run_id,
+      label: humanSourceLabel(route.run_id, "run"),
+      title: route.run_id,
       current: !route.checkpoint_id,
       route: {
         level: "runs",
@@ -871,7 +945,8 @@ export function sourceBreadcrumbItems(route) {
   }
   if (route?.checkpoint_id) {
     items.push({
-      label: route.checkpoint_id,
+      label: humanSourceLabel(route.checkpoint_id, "checkpoint"),
+      title: route.checkpoint_id,
       current: true,
       route: null,
     });
@@ -891,6 +966,7 @@ export class SourceBrowser {
       checkpointNavigationRoot = null,
       openInspection,
       openSourceRoute,
+      resumePlayback = null,
       catalogRequestTimeoutMs = 30_000,
     },
   ) {
@@ -912,6 +988,7 @@ export class SourceBrowser {
     ) || null;
     this.openInspection = openInspection;
     this.openSourceRoute = openSourceRoute;
+    this.resumePlayback = resumePlayback;
     this.route = {
       level: "environments",
       environment_id: "",
@@ -947,6 +1024,7 @@ export class SourceBrowser {
     this.pollTimer = null;
     this.selectedCheckpoints = new Set();
     this.evaluating = false;
+    this.checkpointToolsOpen = false;
     this.selectedGoalVariantId = "";
     this.goalVariantDiff = null;
     this.goalVariantDiffController = null;
@@ -1039,6 +1117,7 @@ export class SourceBrowser {
       this.loadedKey = "";
       this.error = "";
       this.selectedCheckpoints.clear();
+      this.checkpointToolsOpen = false;
       this.resetGoalVariantDetail();
       this.autoSelectedRoute = "";
       this.syncUrl("replace");
@@ -1623,8 +1702,10 @@ export class SourceBrowser {
 
   navigate(route, { historyMode = "push", seedItems = null } = {}) {
     const nextRoute = { ...this.route, ...route };
-    const commandId = this.command("browse_sources", { route: nextRoute });
-    if (commandId === null) return false;
+    if (!this.app?.has_active_runner) {
+      const commandId = this.command("browse_sources", { route: nextRoute });
+      if (commandId === null) return false;
+    }
     this.applyRoute(route, { seedItems });
     if (historyMode) this.syncUrl(historyMode);
     this.openSourceRoute?.({ ...this.route });
@@ -1809,9 +1890,10 @@ export class SourceBrowser {
         );
         shell.append(description);
       }
+      if (this.app.has_active_runner) shell.append(this.renderContinuePlayback());
       shell.append(this.renderSearch());
       if (this.route.level === "runs" && this.route.run_id) {
-        shell.append(this.renderEvaluationActions());
+        shell.append(this.renderCheckpointRecommendation(), this.renderCheckpointTools());
       }
       shell.append(this.renderResults());
     }
@@ -1843,6 +1925,7 @@ export class SourceBrowser {
     nav.replaceChildren();
     sourceBreadcrumbItems(this.route).forEach((item) => {
       const crumb = button(item.label, { quiet: true });
+      if (item.title) crumb.title = item.title;
       crumb.disabled = item.current;
       if (item.route) {
         crumb.addEventListener("click", () => this.navigate(item.route));
@@ -1875,6 +1958,24 @@ export class SourceBrowser {
     return wrap;
   }
 
+  renderContinuePlayback() {
+    const card = document.createElement("section");
+    card.className = "continue-playback-card";
+    const copy = document.createElement("div");
+    const heading = document.createElement("strong");
+    heading.textContent = "Continue current playback";
+    const detail = document.createElement("p");
+    detail.textContent = "Return without changing the loaded checkpoint or episode.";
+    copy.append(heading, detail);
+    const resume = button("Continue watching", { iconName: "arrow-left", primary: true });
+    resume.disabled = !this.hasControl();
+    resume.addEventListener("click", () => {
+      if (!this.resumePlayback?.()) this.command("cancel_source");
+    });
+    card.append(copy, resume);
+    return card;
+  }
+
   renderEvaluationActions() {
     const actions = document.createElement("div");
     actions.className = "source-evaluation-actions";
@@ -1901,6 +2002,46 @@ export class SourceBrowser {
     });
     actions.append(summary, inspect, evaluate);
     return actions;
+  }
+
+  renderCheckpointRecommendation() {
+    const recommendation = checkpointRecommendation(this.items);
+    const card = document.createElement("section");
+    card.className = "checkpoint-recommendation";
+    if (!recommendation) {
+      card.hidden = true;
+      return card;
+    }
+    const copy = document.createElement("div");
+    const eyebrow = document.createElement("span");
+    eyebrow.className = "eyebrow";
+    eyebrow.textContent = "BEST AVAILABLE TO WATCH";
+    const heading = document.createElement("strong");
+    heading.textContent = `${recommendation.evidence.label} · step ${Number(recommendation.item.step).toLocaleString()}`;
+    const detail = document.createElement("p");
+    detail.textContent = recommendation.evidence.detail;
+    copy.append(eyebrow, heading, detail);
+    const play = button("Watch checkpoint", { iconName: "player-play", primary: true });
+    play.disabled = !this.hasControl();
+    play.addEventListener("click", () => this.selectCheckpoint(recommendation.item));
+    card.classList.add(recommendation.evidence.tone);
+    card.append(copy, play);
+    return card;
+  }
+
+  renderCheckpointTools() {
+    const details = document.createElement("details");
+    details.className = "checkpoint-tools";
+    details.open = this.checkpointToolsOpen;
+    const summary = document.createElement("summary");
+    summary.textContent = "Evaluation & technical details";
+    details.append(summary, this.renderEvaluationActions());
+    details.addEventListener("toggle", () => {
+      if (this.checkpointToolsOpen === details.open) return;
+      this.checkpointToolsOpen = details.open;
+      this.renderView();
+    });
+    return details;
   }
 
   async evaluateSelected() {
@@ -2039,7 +2180,9 @@ export class SourceBrowser {
   renderEnvironments() {
     const list = document.createElement("div");
     list.className = "environment-list";
-    this.items.forEach((environment) => {
+    [...this.items].sort((left, right) => (
+      environmentEvidenceRank(left) - environmentEvidenceRank(right)
+    )).forEach((environment) => {
       const row = document.createElement("button");
       row.type = "button";
       row.className = "environment-row";
@@ -2105,8 +2248,10 @@ export class SourceBrowser {
         run_id: "",
         checkpoint_id: "",
       }));
-      const inspect = button("Inspect", { iconName: "code", quiet: true });
-      inspect.classList.add("goal-row-inspect");
+      const inspect = button("", { iconName: "code", quiet: true });
+      inspect.classList.add("goal-row-inspect", "icon-only");
+      inspect.title = `Inspect ${goal.goal_id} YAML`;
+      inspect.setAttribute("aria-label", inspect.title);
       inspect.addEventListener("click", () => {
         void this.inspectGoal(goal).catch(
           (error) => this.showToast(String(error?.message || error), true),
@@ -2522,6 +2667,7 @@ export class SourceBrowser {
     const headerRow = document.createElement("tr");
     const showingRuns = this.route.level === "runs" && !this.route.run_id;
     const showingCheckpoints = this.route.level === "runs" && Boolean(this.route.run_id);
+    const showingCheckpointTools = showingCheckpoints && this.checkpointToolsOpen;
     const runRankingColumns = showingRuns ? this.activeRunMetricColumns() : [];
     const runMetricColumns = availableRunMetricColumns(this.items, runRankingColumns);
     const checkpointMetricColumns = showingCheckpoints ? this.metricColumns : [];
@@ -2539,16 +2685,16 @@ export class SourceBrowser {
           { label: "Contract" },
         ]
       : [
-          { label: "", selection: true },
+          ...(showingCheckpointTools ? [{ label: "", selection: true }] : []),
           { label: "Checkpoint" },
-          { label: "Purpose" },
+          { label: "Evidence" },
+          ...(showingCheckpointTools ? [{ label: "Purpose" }] : []),
           { label: "Step" },
           ...checkpointMetricColumns.map((column) => ({
             ...column,
             label: column.label || metricLabel(column.metric),
           })),
-          { label: "Size" },
-          { label: "Created" },
+          ...(showingCheckpointTools ? [{ label: "Size" }, { label: "Created" }] : []),
         ];
     columns.forEach((column) => {
       const cell = document.createElement("th");
@@ -2665,29 +2811,39 @@ export class SourceBrowser {
             [formatDate(item.updated_at || item.created_at)],
             [null, "", "inspection-cell"],
           ]
-        : [
-            [null, "", "source-selection-cell"],
-            [
-              item.promoted ? `${item.checkpoint_id} · promoted` : item.checkpoint_id,
-              item.sha256,
-              "checkpoint-cell",
-            ],
-            [item.purpose],
-            [Number(item.step).toLocaleString()],
-            ...checkpointMetricColumns.map((column) => [
-              formatMetricValue(column.metric, item.metrics?.[column.metric]),
-              "",
-              "checkpoint-metric-cell",
-              null,
-              {
-                isBest: checkpointMetricIsBest(item, column.metric),
-                label: column.label || metricLabel(column.metric),
-                column,
-              },
-            ]),
-            [formatBytes(item.size_bytes)],
-            [formatDate(item.created_at)],
-          ];
+        : (() => {
+            const evidence = checkpointEvidencePresentation(item);
+            const checkpointName = /final/i.test(String(item.purpose || ""))
+              ? "Final checkpoint"
+              : `Checkpoint at ${Number(item.step).toLocaleString()} steps`;
+            return [
+              ...(showingCheckpointTools ? [[null, "", "source-selection-cell"]] : []),
+              [
+                checkpointName,
+                showingCheckpointTools
+                  ? [item.checkpoint_id, item.sha256].filter(Boolean).join(" · ")
+                  : "",
+                "checkpoint-cell",
+              ],
+              [evidence.label, evidence.detail, `checkpoint-evidence ${evidence.tone}`],
+              ...(showingCheckpointTools ? [[item.purpose || "—"]] : []),
+              [Number(item.step).toLocaleString()],
+              ...checkpointMetricColumns.map((column) => [
+                formatMetricValue(column.metric, item.metrics?.[column.metric]),
+                "",
+                "checkpoint-metric-cell",
+                null,
+                {
+                  isBest: checkpointMetricIsBest(item, column.metric),
+                  label: column.label || metricLabel(column.metric),
+                  column,
+                },
+              ]),
+              ...(showingCheckpointTools
+                ? [[formatBytes(item.size_bytes)], [formatDate(item.created_at)]]
+                : []),
+            ];
+          })();
       values.forEach(([
         primary,
         secondary = "",
@@ -2769,6 +2925,9 @@ export class SourceBrowser {
         }
         const main = document.createElement("span");
         main.textContent = String(primary);
+        if (className.includes("checkpoint-cell")) {
+          main.title = String(item.checkpoint_id || "");
+        }
         if (className.includes("run-cell")) {
           const presentation = runStatePresentation(item);
           const identity = document.createElement("button");

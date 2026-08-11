@@ -8,12 +8,15 @@ import {
   bestRunEfficiency,
   catalogItemMatchesSearch,
   checkpointCanEvaluate,
+  checkpointEvidencePresentation,
   checkpointMetricBestBadge,
   checkpointMetricDescription,
   checkpointMetricIsBest,
   checkpointMetricRoleLabel,
   checkpointNavigationPresentation,
   checkpointPlaybackSeed,
+  checkpointRecommendation,
+  environmentEvidenceRank,
   formatGoalDiffValue,
   formatMetricValue,
   goalConfigurationPresentation,
@@ -80,6 +83,12 @@ test("catalog search filters the displayed authoritative page synchronously", ()
   assert.equal(catalogItemMatchesSearch(mario, "level 1"), true);
   assert.equal(catalogItemMatchesSearch(doom, "level 1"), false);
   assert.equal(catalogItemMatchesSearch(doom, ""), true);
+});
+
+test("environment discovery prioritizes accepted and successful evidence", () => {
+  assert.equal(environmentEvidenceRank({ success_badges: ["eval/success"] }), 0);
+  assert.equal(environmentEvidenceRank({ success_badges: ["train/success"] }), 1);
+  assert.equal(environmentEvidenceRank({}), 2);
 });
 
 test("goal variant selection uses the exact live activity diff", () => {
@@ -447,10 +456,10 @@ test("active checkpoint breadcrumbs retain the full source hierarchy", () => {
     [
       { label: "Environments", current: false },
       { label: "ViZDoom", current: false },
-      { label: "DefendTheLine-v1", current: false },
-      { label: "goal-variant-a27a8239", current: false },
-      { label: "gradlab-c22f7c7a", current: false },
-      { label: "checkpoint-10002432-b285ff3b", current: true },
+      { label: "Defend The Line", current: false },
+      { label: "Goal configuration", current: false },
+      { label: "Run", current: false },
+      { label: "Checkpoint · 10,002,432 steps", current: true },
     ],
   );
   assert.deepEqual(items.at(-2).route, {
@@ -479,7 +488,8 @@ test("environment breadcrumb remains clickable for a partial active checkpoint r
     },
   });
   assert.deepEqual(items[1], {
-    label: "checkpoint-10002432-b285ff3b",
+    label: "Checkpoint · 10,002,432 steps",
+    title: "checkpoint-10002432-b285ff3b",
     current: true,
     route: null,
   });
@@ -513,10 +523,31 @@ test("all active checkpoint ancestors remain clickable with stale route levels",
       items.map(({ label, current }) => ({ label, current })),
       [
         ...items.slice(0, -1).map(({ label }) => ({ label, current: false })),
-        { label: route.checkpoint_id, current: true },
+        { label: "Checkpoint", current: true },
       ],
     );
   }
+});
+
+test("checkpoint recommendations prefer authoritative evidence over later diagnostic checkpoints", () => {
+  const items = [
+    {
+      checkpoint_id: "checkpoint-300-training",
+      step: 300,
+      best_metrics: ["train/outcome/success/starts/all/rolling/rate/mean"],
+    },
+    {
+      checkpoint_id: "checkpoint-200-accepted",
+      step: 200,
+      evaluation: { status: "accepted", pass: true },
+    },
+    { checkpoint_id: "checkpoint-400-final", step: 400, purpose: "final" },
+  ];
+
+  const result = checkpointRecommendation(items);
+  assert.equal(result.item.checkpoint_id, "checkpoint-200-accepted");
+  assert.equal(result.evidence.label, "Accepted");
+  assert.match(checkpointEvidencePresentation(items[0]).detail, /evaluation remains authoritative/);
 });
 
 test("active breadcrumb rendering hides routes without a selected checkpoint", () => {
@@ -620,6 +651,30 @@ test("active checkpoint breadcrumb navigation exits playback at the selected anc
   assert.deepEqual(browser.route, expected);
   assert.deepEqual(historyModes, ["push"]);
   assert.deepEqual(openedRoutes, [expected]);
+});
+
+test("browsing from an active player keeps the current runner available", () => {
+  const browser = Object.create(SourceBrowser.prototype);
+  browser.app = { has_active_runner: true };
+  browser.route = {
+    level: "runs",
+    environment_id: "ViZDoom",
+    goal_id: "DefendTheLine-v1",
+    goal_variant_id: "goal-variant-a27a8239",
+    run_id: "gradlab-c22f7c7a",
+    checkpoint_id: "checkpoint-a",
+  };
+  const commands = [];
+  browser.command = (...args) => commands.push(args);
+  browser.applyRoute = (route) => {
+    browser.route = { ...browser.route, ...route };
+  };
+  browser.syncUrl = () => {};
+  browser.openSourceRoute = () => {};
+
+  assert.equal(browser.navigate({ level: "runs", checkpoint_id: "" }), true);
+  assert.deepEqual(commands, []);
+  assert.equal(browser.route.checkpoint_id, "");
 });
 
 test("rejected active breadcrumb navigation leaves playback and history unchanged", () => {

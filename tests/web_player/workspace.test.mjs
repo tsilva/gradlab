@@ -3,6 +3,7 @@ import test from "node:test";
 
 import {
   WORKSPACE_VERSION,
+  applyWorkspacePreset,
   bumpWorkspaceRevision,
   compareWorkspaceRevisions,
   createDefaultWorkspace,
@@ -16,10 +17,11 @@ import {
 
 const CUSTOM_ID = "panel-00000000-0000-4000-8000-000000000000";
 
-test("default workspace is a v6 collection without a standalone action panel", () => {
+test("default workspace is a v7 Watch view without a standalone action panel", () => {
   const workspace = createDefaultWorkspace({ writer: "main" });
-  assert.equal(workspace.version, 6);
+  assert.equal(workspace.version, 7);
   assert.equal(workspace.version, WORKSPACE_VERSION);
+  assert.equal(workspace.preset, "watch");
   assert.equal(Object.hasOwn(workspace.panels, "reward"), false);
   assert.equal(Object.hasOwn(workspace.panels, "actions"), false);
   assert.deepEqual(
@@ -37,7 +39,7 @@ test("default workspace is a v6 collection without a standalone action panel", (
   assert.deepEqual(workspace.panels.game.placement, {
     x: 0,
     y: 0,
-    w: 7,
+    w: 9,
     h: 15,
     visible: true,
     window: "main",
@@ -47,7 +49,7 @@ test("default workspace is a v6 collection without a standalone action panel", (
     y: 15,
     w: 4,
     h: 7,
-    visible: true,
+    visible: false,
     window: "main",
   });
   assert.deepEqual(workspace.panels["reward-analysis"].config.blocks, [
@@ -58,7 +60,7 @@ test("default workspace is a v6 collection without a standalone action panel", (
     y: 37,
     w: 12,
     h: 15,
-    visible: true,
+    visible: false,
     window: "main",
   });
   assert.equal(workspace.panels.cnn.type, "cnn");
@@ -72,6 +74,22 @@ test("default workspace is a v6 collection without a standalone action panel", (
       .filter(([id]) => !["attribution", "cnn"].includes(id))
       .every(([, panel]) => panel.enabled === true),
   );
+});
+
+test("task presets switch panel emphasis without deleting custom panels", () => {
+  const workspace = createDefaultWorkspace();
+  workspace.panels[CUSTOM_ID] = createTelemetryInstance({ id: CUSTOM_ID, title: "Mine" });
+
+  applyWorkspacePreset(workspace, "explain");
+  assert.equal(workspace.preset, "explain");
+  assert.equal(workspace.panels.policy.placement.visible, true);
+  assert.equal(workspace.panels.observation.placement.visible, false);
+  assert.equal(workspace.panels[CUSTOM_ID].placement.visible, false);
+
+  applyWorkspacePreset(workspace, "debug");
+  assert.equal(workspace.preset, "debug");
+  assert.equal(workspace.panels.observation.placement.visible, true);
+  assert.equal(workspace.panels.raw.placement.visible, true);
 });
 
 test("panel processing demand excludes disabled panels and follows telemetry metrics", () => {
@@ -109,7 +127,7 @@ test("workspace normalization preserves explicit disabled processing state", () 
   assert.equal(normalizeWorkspace(workspace).panels.value.enabled, true);
 });
 
-test("existing v6 workspaces receive reward analysis hidden on the shelf", () => {
+test("existing v7 workspaces receive reward analysis hidden on the shelf", () => {
   const workspace = createDefaultWorkspace();
   delete workspace.panels["reward-analysis"];
 

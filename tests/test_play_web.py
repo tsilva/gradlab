@@ -707,7 +707,7 @@ def test_dataset_playback_uses_web_runner_and_preserves_recorded_telemetry() -> 
     assert snapshot["transition"]["reward"]["raw"] is None
 
 
-def test_run_web_playback_requests_paired_browser_windows() -> None:
+def test_run_web_playback_requests_one_browser_window_by_default() -> None:
     args = human_args()
     runner = object()
     server = AsyncMock()
@@ -718,7 +718,7 @@ def test_run_web_playback_requests_paired_browser_windows() -> None:
     ):
         assert run_web_playback(object(), args, config_text="config") == 0
 
-    server_type.assert_called_once_with(runner, args, paired_windows=True)
+    server_type.assert_called_once_with(runner, args, paired_windows=False)
 
 
 def test_source_browser_paths_are_hierarchical_and_url_encoded() -> None:
@@ -2517,7 +2517,7 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert 'data-command="set-fps"' not in controls
     assert 'fps.addEventListener("input"' in controls
     assert 'services.command("set_fps", { fps: Number(fps.value) })' in controls
-    assert "WORKSPACE_VERSION = 6" in workspace
+    assert "WORKSPACE_VERSION = 7" in workspace
     assert "createTelemetryInstance" in workspace
     assert "value.version !== WORKSPACE_VERSION" in workspace
     assert "compareWorkspaceRevisions" in workspace
@@ -2537,11 +2537,14 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert "function hideGoExploreValuePanel(snapshot)" in script
     assert 'search_algorithm_id !== "go-explore"' in script
     assert "hideGoExploreValuePanel(snapshot)" in script
+    assert 'features.add("rewards")' in script
+    assert "state.backgroundPlaybackSnapshot = message" in script
+    assert 'sourceBrowser.activeBreadcrumbRoute = ""' in script
     assert 'type: "inspection_frames"' in script
     assert "sequence < (state.receivedFrameSequence" not in script
 
-    assert '"gradlab.player.workspace.v6.paired"' in script
-    assert '"gradlab.player.workspace.v6.single"' in script
+    assert '"gradlab.player.workspace.v7.paired"' in script
+    assert '"gradlab.player.workspace.v7.single"' in script
     assert "createTelemetryPanel" in script
     assert "updateTelemetryPanel" in script
     assert "snapshot.history_point" in script

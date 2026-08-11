@@ -9,43 +9,52 @@ export function mount({ definition, services }) {
     headerClass: "control-panel-header",
     body: `
       <div class="control-components">
-        <div class="playback-field playback-fps">
-          <label for="playback-fps">Play FPS</label>
-          <input id="playback-fps" data-fps type="number" min="0" step="1" value="0" inputmode="decimal">
+        <div class="playback-glance" aria-live="polite">
+          <strong data-playback-glance-contract>Training contract</strong>
+          <span data-playback-glance-detail>Stochastic · seed —</span>
         </div>
-        <div class="playback-field next-episode-seed">
-          <label for="next-episode-seed">Seed</label>
-          <input id="next-episode-seed" data-seed inputmode="numeric">
-        </div>
-        <div class="playback-field playback-sampling">
-          <label for="playback-sampling">Action selection</label>
-          <select id="playback-sampling" data-sampling aria-describedby="playback-sampling-hint">
-            <option value="stochastic">Stochastic</option>
-            <option value="deterministic">Deterministic</option>
-          </select>
-        </div>
-        <p id="playback-sampling-hint" class="control-hint" hidden></p>
-        <div class="playback-field playback-contract" data-playback-contract>
-          <label for="playback-contract-mode">Environment contract</label>
-          <select id="playback-contract-mode" data-contract-mode aria-describedby="playback-contract-hint">
-            <option value="training">Training contract</option>
-            <option value="evaluation">Published evaluation</option>
-            <option value="counterfactual">Counterfactual overrides</option>
-          </select>
-          <button data-command="set-contract-mode" class="quiet icon-only" aria-label="Apply environment contract" title="Apply environment contract and start a new shared session"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-check"></use></svg></button>
-        </div>
-        <p id="playback-contract-hint" class="control-hint" data-contract-hint>Training-time policy semantics are the default.</p>
-        <fieldset class="termination-settings" data-termination-settings>
-          <legend>Episode termination</legend>
-          <p class="control-hint" data-termination-source></p>
-          <div class="termination-options" data-termination-options></div>
-          <p class="control-hint">Selections apply with Reset episode or Play next episode.</p>
-        </fieldset>
         <div class="next-episode-settings-body" data-next-episode-settings>
           <button data-command="reset-episode" data-reset-episode class="quiet button-with-icon control-wide" aria-label="Reset episode" title="Reset to the configured seed and pause"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-refresh"></use></svg><span>Reset episode</span></button>
           <button data-command="next-episode" data-next-episode class="primary button-with-icon control-wide" aria-label="Play next episode" title="Available after the current episode ends"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-player-play"></use></svg><span>Play next episode</span></button>
           <p data-next-episode-hint class="control-hint">Available after the current episode ends</p>
         </div>
+        <details class="advanced-playback-settings" data-advanced-playback>
+          <summary>Advanced playback</summary>
+          <div class="advanced-playback-body">
+            <div class="playback-field playback-fps">
+              <label for="playback-fps">Play FPS</label>
+              <input id="playback-fps" data-fps type="number" min="0" step="1" value="0" inputmode="decimal">
+            </div>
+            <div class="playback-field next-episode-seed">
+              <label for="next-episode-seed">Seed</label>
+              <input id="next-episode-seed" data-seed inputmode="numeric">
+            </div>
+            <div class="playback-field playback-sampling">
+              <label for="playback-sampling">Action selection</label>
+              <select id="playback-sampling" data-sampling aria-describedby="playback-sampling-hint">
+                <option value="stochastic">Stochastic</option>
+                <option value="deterministic">Deterministic</option>
+              </select>
+            </div>
+            <p id="playback-sampling-hint" class="control-hint" hidden></p>
+            <div class="playback-field playback-contract" data-playback-contract>
+              <label for="playback-contract-mode">Environment contract</label>
+              <select id="playback-contract-mode" data-contract-mode aria-describedby="playback-contract-hint">
+                <option value="training">Training contract</option>
+                <option value="evaluation">Published evaluation</option>
+                <option value="counterfactual">Counterfactual overrides</option>
+              </select>
+              <button data-command="set-contract-mode" class="quiet icon-only" aria-label="Apply environment contract" title="Apply environment contract and start a new shared session"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-check"></use></svg></button>
+            </div>
+            <p id="playback-contract-hint" class="control-hint" data-contract-hint>Training-time policy semantics are the default.</p>
+            <fieldset class="termination-settings" data-termination-settings>
+              <legend>Episode termination</legend>
+              <p class="control-hint" data-termination-source></p>
+              <div class="termination-options" data-termination-options></div>
+              <p class="control-hint">Selections apply with Reset episode or Play next episode.</p>
+            </fieldset>
+          </div>
+        </details>
       </div>
     `,
   });
@@ -65,6 +74,8 @@ export function mount({ definition, services }) {
   const terminationSettings = element.querySelector("[data-termination-settings]");
   const terminationOptions = element.querySelector("[data-termination-options]");
   const terminationSource = element.querySelector("[data-termination-source]");
+  const glanceContract = element.querySelector("[data-playback-glance-contract]");
+  const glanceDetail = element.querySelector("[data-playback-glance-detail]");
   let wasAwaitingNextEpisode = false;
   const enabledTerminationConditions = () => {
     const inputs = [...terminationOptions.querySelectorAll("input")];
@@ -187,6 +198,17 @@ export function mount({ definition, services }) {
       if (document.activeElement !== contractMode) {
         contractMode.value = playbackContract.mode || "training";
       }
+      const contractLabel = {
+        training: "Training contract",
+        evaluation: "Published evaluation",
+        counterfactual: "Counterfactual — not evidence",
+      }[playbackContract.mode || "training"] || selectionLabel(playbackContract.mode);
+      glanceContract.textContent = contractLabel;
+      glanceDetail.textContent = (
+        `${selectionLabel(sampling.value || session.sampling_mode)} · seed ${
+          text(snapshot.transition?.seed, text(session.seed, defaultSeed))
+        }`
+      );
       [...contractMode.options].forEach((option) => {
         option.disabled = !availableContractModes.includes(option.value);
       });
