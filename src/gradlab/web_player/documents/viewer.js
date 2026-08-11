@@ -52,6 +52,7 @@ export class ContractViewer {
     this.diffResolvedScroll = dialog.querySelector("#contract-diff-resolved-scroll");
     this.diffBaseLines = dialog.querySelector("#contract-diff-base-lines");
     this.diffResolvedLines = dialog.querySelector("#contract-diff-resolved-lines");
+    this.searchDisclosure = dialog.querySelector("#contract-search-disclosure");
     this.search = dialog.querySelector("#contract-search-input");
     this.searchCount = dialog.querySelector("#contract-search-count");
     this.copy = dialog.querySelector("#contract-copy");
@@ -145,6 +146,7 @@ export class ContractViewer {
     this.payload = null;
     this.recipeEndpoint = recipeEndpoint;
     this.recipeDocuments.clear();
+    this.searchDisclosure.open = false;
     this.search.value = "";
     this.recipePicker.replaceChildren();
     this.recipePickerLabel.hidden = true;

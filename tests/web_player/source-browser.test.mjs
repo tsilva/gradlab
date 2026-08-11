@@ -110,7 +110,7 @@ test("goal variant selection uses the exact live activity diff", () => {
 
 const METRIC = "eval/full/episode/return/shaped/mean";
 
-test("checkpoint selection boxes are centered within their rows", async () => {
+test("checkpoint selection boxes are centered and distinguish enabled from disabled", async () => {
   const styles = await readFile(
     new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
     "utf8",
@@ -122,8 +122,10 @@ test("checkpoint selection boxes are centered within their rows", async () => {
   );
   assert.match(
     styles,
-    /\.source-selection-cell input \{[^}]*display: block;[^}]*margin: 0 auto;/,
+    /\.source-selection-cell input \{[^}]*appearance: none;[^}]*display: grid;[^}]*margin: 0 auto;[^}]*border: 1px solid var\(--color-interaction\);/,
   );
+  assert.match(styles, /\.source-selection-cell input:checked \{[^}]*background: var\(--color-interaction\);/);
+  assert.match(styles, /\.source-selection-cell input:disabled \{[^}]*border-color: var\(--color-border\);[^}]*opacity: \.42;/);
 });
 
 test("checkpoint table uses compact API metric labels without a verdict column", async () => {
@@ -409,7 +411,7 @@ test("run result evidence is visually promoted above supporting metadata", async
   );
   assert.match(
     styles,
-    /\.source-table \.finish-evidence-value \{[^}]*font-size: \.96rem;/,
+    /\.source-table \.finish-evidence-value \{[^}]*font-size: var\(--font-size-lg\);/,
   );
 });
 
@@ -584,11 +586,20 @@ test("source discovery progressively discloses secondary controls", async () => 
     new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
     "utf8",
   );
+  const html = await readFile(
+    new URL("../../src/gradlab/web_player/index.html", import.meta.url),
+    "utf8",
+  );
 
   assert.match(source, /return "Choose a goal version"/);
   assert.match(source, /source-search-disclosure/);
+  assert.match(source, /disclosure\.open = this\.searchOpen/);
+  assert.doesNotMatch(source, /resultCount > 8/);
+  assert.match(html, /id="contract-search-disclosure" class="contract-search-disclosure"/);
   assert.match(source, /Contract differences · \$\{presentation\.differenceLabel\}/);
-  assert.match(source, /Compare all checkpoints \(\$\{this\.items\.length\.toLocaleString\(\)\}\)/);
+  assert.doesNotMatch(source, /Evaluation & technical details/);
+  assert.doesNotMatch(source, /Compare all checkpoints/);
+  assert.match(source, /body\.append\(this\.renderEvaluationActions\(\), results\)/);
 });
 
 test("active breadcrumb rendering hides routes without a selected checkpoint", () => {

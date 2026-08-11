@@ -29,6 +29,10 @@ const styles = readFileSync(
   new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
   "utf8",
 );
+const icons = readFileSync(
+  new URL("../../src/gradlab/web_player/tabler-icons.svg", import.meta.url),
+  "utf8",
+);
 
 test("one contextual transport covers play, pause, replay, and next episode", () => {
   assert.deepEqual(
@@ -78,15 +82,21 @@ test("task views are fixed while Customize is explicitly editable", () => {
   );
 });
 
-test("playback transport and its secondary actions live beside the scrubber", () => {
+test("the scrubber stays left of a fixed-width playback action rail", () => {
   assert.equal((page.match(/id="timeline-playback-toggle"/g) || []).length, 1);
   const timelineStart = page.indexOf('<div class="timeline-track">');
   const timelineEnd = page.indexOf("</section>", timelineStart);
+  const scrubberPosition = page.indexOf('id="timeline-scrubber"', timelineStart);
+  const actionsPosition = page.indexOf('class="timeline-actions"', timelineStart);
+  assert.ok(scrubberPosition > timelineStart && scrubberPosition < actionsPosition);
   for (const id of ["timeline-playback-toggle", "timeline-reset", "playback-settings-toggle"]) {
     const position = page.indexOf(`id="${id}"`, timelineStart);
-    assert.ok(position > timelineStart && position < timelineEnd, id);
+    assert.ok(position > actionsPosition && position < timelineEnd, id);
   }
-  assert.ok(page.indexOf('id="timeline-scrubber"', timelineStart) < timelineEnd);
+  assert.match(styles, /\.timeline-track \{[^}]*grid-template-columns: minmax\(0, 1fr\) 20rem/);
+  assert.match(styles, /\.timeline-actions \{[^}]*width: 20rem/);
+  assert.match(page, /id="playback-settings-toggle"[^>]*>.*#ti-settings/);
+  assert.match(icons, /id="ti-settings"/);
   assert.equal(settings.includes("data-next-episode"), false);
   assert.equal(settings.includes("data-reset-episode"), false);
 });
@@ -135,7 +145,7 @@ test("seed control keeps the loaded checkpoint default across automatic resets",
 test("playback setting values share the compact field layout", () => {
   assert.match(
     styles,
-    /\.playback-field select \{[^}]*font-size: \.64rem;/,
+    /\.playback-field select \{[^}]*font-size: var\(--font-size-xs\);/,
   );
   assert.match(
     styles,
