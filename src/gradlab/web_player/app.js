@@ -104,6 +104,7 @@ const state = {
   backgroundPlaybackSnapshot: null,
   applicationSnapshot: null,
   workspaceReady: false,
+  checkpointLoad: null,
 };
 let panelRuntime = null;
 let sourceBrowser = null;
@@ -115,6 +116,9 @@ let gridCellHeight = DEFAULT_GRID_CELL_HEIGHT;
 let syncingGrid = false;
 let panelManager = null;
 let playbackSettings = null;
+const DEBUG_TIMELINE_HIDE_DELAY_MS = 1600;
+let debugTimelineHideTimer = null;
+let debugTimelineEvents = null;
 let youtubeOAuthPopup = null;
 
 const workspaceChannel = "BroadcastChannel" in window
@@ -187,6 +191,35 @@ function showToast(message, error = false) {
   showToast.timer = setTimeout(() => toast.classList.remove("visible"), 3200);
 }
 
+function beginCheckpointLoad({ commandId, checkpointId }) {
+  state.checkpointLoad = {
+    commandId: String(commandId || ""),
+    checkpointId: String(checkpointId || ""),
+  };
+  const mask = $("#checkpoint-loading-mask");
+  mask.hidden = false;
+  document.activeElement?.blur?.();
+  document.body.classList.add("checkpoint-loading");
+  document.body.setAttribute("aria-busy", "true");
+}
+
+function finishCheckpointLoad() {
+  if (!state.checkpointLoad) return;
+  state.checkpointLoad = null;
+  $("#checkpoint-loading-mask").hidden = true;
+  document.body.classList.remove("checkpoint-loading");
+  document.body.removeAttribute("aria-busy");
+}
+
+function snapshotCompletesCheckpointLoad(snapshot) {
+  return Boolean(
+    state.checkpointLoad
+    && snapshot?.app?.phase === "active"
+    && String(snapshot?.app?.route?.checkpoint_id || "")
+      === state.checkpointLoad.checkpointId
+  );
+}
+
 function updateConnection(label, kind = "") {
   const badge = $("#connection-status");
   badge.textContent = label;
@@ -219,6 +252,7 @@ async function ensureSourceBrowser() {
         getState: () => state,
         showToast,
         checkpointNavigationRoot: $("#checkpoint-navigation"),
+        beginCheckpointLoad,
         openInspection: (endpoint, options) => openContractInspection(endpoint, options),
         openSourceRoute: (route) => openSourceRoute(route),
         resumePlayback: () => resumeCurrentPlayback(),
@@ -367,10 +401,14 @@ function connect() {
     state.hasControl = false;
     state.publicationAuthority = false;
     state.publicationCapability = null;
+    finishCheckpointLoad();
     updateConnection("Disconnected", "error");
     updateControlState();
   });
-  socket.addEventListener("error", () => updateConnection("Connection error", "error"));
+  socket.addEventListener("error", () => {
+    finishCheckpointLoad();
+    updateConnection("Connection error", "error");
+  });
 }
 
 function handleMessage(message) {
@@ -439,6 +477,9 @@ function handleMessage(message) {
     }
     if (message.id === state.attributionCommand?.id) state.attributionCommand = null;
     if (message.id === state.cnnCaptureCommand?.id) state.cnnCaptureCommand = null;
+    if (message.id === state.checkpointLoad?.commandId && !message.ok) {
+      finishCheckpointLoad();
+    }
     if (!message.ok) showToast(message.error || "Command failed", true);
     return;
   }
@@ -837,12 +878,15 @@ function applySnapshot(snapshot) {
   if (state.inspectionSequence === null) {
     state.snapshot = snapshot;
     renderSnapshot();
-    void showFramesForSequence(Number(snapshot.sequence));
+    void showFramesForSequence(Number(snapshot.sequence)).then(() => {
+      if (snapshotCompletesCheckpointLoad(snapshot)) finishCheckpointLoad();
+    });
   } else {
     panelRuntime.invoke("controls", "render", snapshot);
     updateControlState();
     renderWorkspaceStatus();
     renderTimeline();
+    if (snapshotCompletesCheckpointLoad(snapshot)) finishCheckpointLoad();
   }
   if (historyChanged) renderHistory();
   syncAttributionToPanel();
@@ -1381,6 +1425,68 @@ function renderTimeline() {
   }));
 }
 
+function debugTimelineInteractionActive() {
+  const timeline = $("#timeline");
+  const stage = timeline?.closest(".game-stage");
+  const settingsMenu = $("#playback-settings-menu");
+  const settingsOpen = Boolean(settingsMenu && !settingsMenu.hidden);
+  return Boolean(
+    stage?.matches(":hover")
+    || timeline?.matches(":hover")
+    || timeline?.contains(document.activeElement)
+    || settingsOpen
+  );
+}
+
+function revealDebugTimeline() {
+  const timeline = $("#timeline");
+  if (!timeline?.classList.contains("game-timeline-overlay")) return;
+  clearTimeout(debugTimelineHideTimer);
+  debugTimelineHideTimer = null;
+  timeline.classList.add("visible");
+}
+
+function scheduleDebugTimelineHide() {
+  const timeline = $("#timeline");
+  clearTimeout(debugTimelineHideTimer);
+  debugTimelineHideTimer = null;
+  if (!timeline?.classList.contains("game-timeline-overlay")) return;
+  debugTimelineHideTimer = window.setTimeout(() => {
+    debugTimelineHideTimer = null;
+    if (!debugTimelineInteractionActive()) timeline.classList.remove("visible");
+  }, DEBUG_TIMELINE_HIDE_DELAY_MS);
+}
+
+function restoreTimelineHome() {
+  debugTimelineEvents?.abort();
+  debugTimelineEvents = null;
+  clearTimeout(debugTimelineHideTimer);
+  debugTimelineHideTimer = null;
+  const timeline = $("#timeline");
+  const home = $("#timeline-home");
+  timeline?.classList.remove("game-timeline-overlay", "visible");
+  if (timeline && home && timeline.previousElementSibling !== home) home.after(timeline);
+}
+
+function syncDebugTimelineOverlay() {
+  restoreTimelineHome();
+  if (state.layout?.preset !== "debug") return;
+  const timeline = $("#timeline");
+  const stage = $(".game-panel .game-stage");
+  if (!timeline || !stage) return;
+  stage.append(timeline);
+  timeline.classList.add("game-timeline-overlay", "visible");
+  debugTimelineEvents = new AbortController();
+  const options = { signal: debugTimelineEvents.signal };
+  ["pointerenter", "pointermove", "pointerdown", "focusin"].forEach((name) => {
+    stage.addEventListener(name, revealDebugTimeline, options);
+  });
+  stage.addEventListener("pointerleave", scheduleDebugTimelineHide, options);
+  timeline.addEventListener("focusout", scheduleDebugTimelineHide, options);
+  timeline.addEventListener("input", revealDebugTimeline, options);
+  scheduleDebugTimelineHide();
+}
+
 function maxPanelRow(targetWindow = state.windowId) {
   return Math.max(0, ...Object.values(state.layout.panels)
     .filter((panel) => (
@@ -1421,7 +1527,9 @@ function fitGridToViewport() {
   const nextCellHeight = viewportGridCellHeight({
     viewportHeight: window.innerHeight,
     dashboardTop: dashboard.getBoundingClientRect().top,
-    timelineHeight: timeline.hidden ? 0 : timeline.getBoundingClientRect().height,
+    timelineHeight: timeline.hidden || timeline.classList.contains("game-timeline-overlay")
+      ? 0
+      : timeline.getBoundingClientRect().height,
     rows: maxPanelRow(),
   });
   if (nextCellHeight !== gridCellHeight) {
@@ -1498,6 +1606,7 @@ function updateWorkspaceEditing() {
 }
 
 async function applyLayout() {
+  restoreTimelineHome();
   const visibleHere = panelsInThisWindow();
   document.body.classList.toggle("empty-workspace", visibleHere.length === 0);
   updateLayoutTitle();
@@ -1518,6 +1627,7 @@ async function applyLayout() {
     syncingGrid = false;
   }
   updateWorkspaceEditing();
+  syncDebugTimelineOverlay();
   fitGridToViewport();
   syncGridNodes();
   if (state.snapshot) {
@@ -1636,12 +1746,14 @@ function bindPanelElement(panel, name) {
       : `Enable or disable ${panelLabel(name)} data processing`;
     const input = document.createElement("input");
     input.type = "checkbox";
+    input.role = "switch";
     input.checked = definition.enabled;
     input.dataset.panelEnabled = name;
     input.setAttribute(
       "aria-label",
-      captureLabel ? `Capture ${captureLabel}` : `Process data for ${panelLabel(name)}`,
+      captureLabel ? `${captureLabel} capture` : `${panelLabel(name)} data processing`,
     );
+    input.title = toggle.title;
     input.addEventListener("change", () => {
       const instance = state.layout.panels[name];
       if (!instance) return;
@@ -1654,11 +1766,9 @@ function bindPanelElement(panel, name) {
           : `${panelLabel(name)} processing ${input.checked ? "enabled" : "disabled"}.`,
       );
     });
-    const label = document.createElement("span");
-    label.textContent = "Enabled";
-    toggle.append(input, label);
+    toggle.append(input);
     const menu = panel.querySelector("[data-panel-menu]");
-    menu?.before(toggle);
+    menu?.after(toggle);
   }
   const handle = panel.querySelector("[data-drag-handle]");
   if (handle) {
@@ -1987,6 +2097,7 @@ function bindWorkspaceMenus() {
       $("#playback-settings-menu").hidden = true;
       $("#playback-settings-toggle").setAttribute("aria-expanded", "false");
     }
+    scheduleDebugTimelineHide();
   });
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
@@ -1997,6 +2108,7 @@ function bindWorkspaceMenus() {
     $("#panels-toggle").setAttribute("aria-expanded", "false");
     $("#playback-settings-menu").hidden = true;
     $("#playback-settings-toggle").setAttribute("aria-expanded", "false");
+    scheduleDebugTimelineHide();
   });
 }
 
@@ -2157,11 +2269,17 @@ function bindTimeline() {
     const opening = menu.hidden;
     menu.hidden = true;
     event.currentTarget.setAttribute("aria-expanded", String(opening));
-    if (opening) positionMenu(menu, event.currentTarget);
+    if (opening) {
+      revealDebugTimeline();
+      positionMenu(menu, event.currentTarget);
+    } else {
+      scheduleDebugTimelineHide();
+    }
   });
   $("#playback-settings-close").addEventListener("click", () => {
     $("#playback-settings-menu").hidden = true;
     $("#playback-settings-toggle").setAttribute("aria-expanded", "false");
+    scheduleDebugTimelineHide();
   });
   const selectIndex = (index) => {
     stopInspectionReplay({ render: false });
@@ -2369,8 +2487,6 @@ panelRuntime = new PanelRuntime({
     const enabled = panel.querySelector("[data-panel-enabled]");
     if (enabled) {
       enabled.checked = definition.enabled;
-      const label = enabled.parentElement?.querySelector("span");
-      if (label) label.textContent = definition.enabled ? "Enabled" : "Disabled";
     }
   },
   onUnmount: (_panel, _name, gridItem) => {

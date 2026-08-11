@@ -11,9 +11,11 @@ import {
   checkpointEvidencePresentation,
   checkpointMetricBestBadge,
   checkpointMetricDescription,
+  checkpointMetricHeaderLabel,
   checkpointMetricIsBest,
   checkpointMetricRoleLabel,
   checkpointNavigationPresentation,
+  checkpointPrefetchSources,
   checkpointPlaybackSeed,
   checkpointRecommendation,
   checkpointRecommendationMetrics,
@@ -62,6 +64,20 @@ test("checkpoint navigation reports chronological position and neighbors", () =>
   );
 });
 
+test("checkpoint navigation renders only the compact position ratio", async () => {
+  const source = await readFile(
+    new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(source, /\? "… \/ …"/);
+  assert.match(
+    source,
+    /`\$\{presentation\.position\.toLocaleString\(\)\} \/ \$\{presentation\.count\.toLocaleString\(\)\}`/,
+  );
+  assert.doesNotMatch(source, /`Checkpoint \$\{presentation\.position/);
+});
+
 test("checkpoint navigation fails closed when the active checkpoint is absent", () => {
   assert.deepEqual(
     checkpointNavigationPresentation([
@@ -74,6 +90,115 @@ test("checkpoint navigation fails closed when the active checkpoint is absent", 
       previous: null,
       next: null,
     },
+  );
+});
+
+test("checkpoint prefetch selects only the immediate disk-cache neighbors", () => {
+  const checkpoints = [
+    {
+      checkpoint_id: "checkpoint-300-c",
+      run_id: "gradlab-run",
+      manifest_url: "https://models.example/checkpoint-300/manifest.json",
+      step: 300,
+    },
+    {
+      checkpoint_id: "checkpoint-100-a",
+      run_id: "gradlab-run",
+      manifest_url: "https://models.example/checkpoint-100/manifest.json",
+      step: 100,
+    },
+    {
+      checkpoint_id: "checkpoint-200-b",
+      run_id: "gradlab-run",
+      manifest_url: "https://models.example/checkpoint-200/manifest.json",
+      step: 200,
+    },
+    {
+      checkpoint_id: "checkpoint-400-d",
+      run_id: "gradlab-run",
+      manifest_url: "https://models.example/checkpoint-400/manifest.json",
+      step: 400,
+    },
+  ];
+
+  assert.deepEqual(
+    checkpointPrefetchSources(checkpoints, "checkpoint-200-b"),
+    [checkpoints[1], checkpoints[0]].map((item) => ({
+      kind: "public_run",
+      value: item.manifest_url,
+      run_id: item.run_id,
+      checkpoint_id: item.checkpoint_id,
+    })),
+  );
+});
+
+test("top checkpoint navigation starts one blocking load state", () => {
+  const browser = Object.create(SourceBrowser.prototype);
+  browser.route = {
+    run_id: "gradlab-run",
+    checkpoint_id: "checkpoint-200-b",
+  };
+  browser.activeCheckpointPendingId = "";
+  browser.activeCheckpointItems = () => [
+    { checkpoint_id: "checkpoint-100-a", step: 100 },
+    { checkpoint_id: "checkpoint-200-b", step: 200 },
+  ];
+  browser.selectCheckpoint = () => "load-command";
+  browser.renderActiveCheckpointNavigation = () => {};
+  const loads = [];
+  browser.beginCheckpointLoad = (load) => loads.push(load);
+
+  assert.equal(browser.selectAdjacentCheckpoint("previous"), true);
+  assert.deepEqual(loads, [{
+    commandId: "load-command",
+    checkpointId: "checkpoint-100-a",
+  }]);
+  assert.equal(browser.activeCheckpointPendingId, "checkpoint-100-a");
+  assert.equal(browser.selectAdjacentCheckpoint("previous"), false);
+  assert.equal(loads.length, 1);
+});
+
+test("adjacent checkpoint prefetch is deduplicated before reaching the worker", () => {
+  const browser = Object.create(SourceBrowser.prototype);
+  browser.route = {
+    run_id: "gradlab-run",
+    checkpoint_id: "checkpoint-200-b",
+  };
+  browser.adjacentPrefetchKey = "";
+  browser.hasControl = () => true;
+  browser.activeCheckpointItems = () => [
+    {
+      checkpoint_id: "checkpoint-100-a",
+      run_id: "gradlab-run",
+      manifest_url: "https://models.example/checkpoint-100/manifest.json",
+      step: 100,
+    },
+    {
+      checkpoint_id: "checkpoint-200-b",
+      run_id: "gradlab-run",
+      manifest_url: "https://models.example/checkpoint-200/manifest.json",
+      step: 200,
+    },
+    {
+      checkpoint_id: "checkpoint-300-c",
+      run_id: "gradlab-run",
+      manifest_url: "https://models.example/checkpoint-300/manifest.json",
+      step: 300,
+    },
+  ];
+  const commands = [];
+  browser.command = (name, payload) => {
+    commands.push({ name, payload });
+    return "prefetch-command";
+  };
+
+  assert.equal(browser.prefetchAdjacentCheckpoints(), true);
+  assert.equal(browser.prefetchAdjacentCheckpoints(), false);
+  assert.equal(commands.length, 1);
+  assert.equal(commands[0].name, "prefetch_sources");
+  assert.deepEqual(
+    commands[0].payload.sources.map((source) => source.checkpoint_id),
+    ["checkpoint-100-a", "checkpoint-300-c"],
   );
 });
 
@@ -148,14 +273,19 @@ test("checkpoint selection boxes are centered and distinguish enabled from disab
   assert.match(styles, /\.source-selection-cell input:disabled \{[^}]*border-color: var\(--color-border\);[^}]*opacity: \.42;/);
 });
 
-test("checkpoint table uses compact API metric labels without a verdict column", async () => {
+test("checkpoint table uses compact metric labels with full accessible descriptions", async () => {
   const source = await readFile(
     new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
     "utf8",
   );
 
-  assert.match(source, /label: column\.label \|\| metricLabel\(column\.metric\)/);
-  assert.match(source, /checkpointMetricRoleLabel\(column\)/);
+  assert.match(source, /fullLabel: column\.label \|\| metricLabel\(column\.metric\)/);
+  assert.match(source, /label: checkpointMetricHeaderLabel\(column\)/);
+  assert.match(source, /sortButton\.title = `\$\{fullLabel\}/);
+  assert.match(source, /`Sort by \$\{fullLabel\}, \$\{nextDirection\}`/);
+  assert.match(source, /table\.classList\.add\("checkpoint-table"\)/);
+  assert.match(source, /indicator\.hidden = showingCheckpoints && !active/);
+  assert.doesNotMatch(source, /roleLabel\.className = `checkpoint-metric-role/);
   assert.doesNotMatch(source, /\{ label: "Evaluation" \}/);
   assert.doesNotMatch(source, /\{ label: "Evidence" \}/);
   assert.doesNotMatch(source, /checkpoint-evidence/);
@@ -629,6 +759,27 @@ test("source discovery progressively discloses secondary controls", async () => 
   assert.match(source, /body\.append\(this\.renderEvaluationActions\(\), results\)/);
 });
 
+test("catalog refresh uses one non-blocking indicator across source lists", async () => {
+  const source = await readFile(
+    new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
+    "utf8",
+  );
+  const styles = await readFile(
+    new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(source, /indicator\.className = "source-list-loading-indicator"/);
+  assert.match(source, /indicator\.setAttribute\("aria-label", "Refreshing list"\)/);
+  assert.doesNotMatch(source, /loadingState\("Loading catalog…"\)/);
+  assert.doesNotMatch(source, /Some catalog evidence is unavailable/);
+  assert.match(styles, /\.source-results \{[^}]*position: relative;/);
+  assert.match(
+    styles,
+    /\.source-list-loading-indicator \{[^}]*position: absolute;[^}]*pointer-events: none;/,
+  );
+});
+
 test("active breadcrumb rendering hides routes without a selected checkpoint", () => {
   const browser = Object.create(SourceBrowser.prototype);
   browser.breadcrumbsRoot = {
@@ -864,6 +1015,29 @@ test("run metrics use compact labels and values", () => {
     "87.5%",
   );
   assert.equal(formatMetricValue(METRIC, null), "—");
+});
+
+test("checkpoint metric headers preserve semantics in one short line", () => {
+  assert.equal(checkpointMetricHeaderLabel({
+    metric: "eval/full/outcome/success/starts/rate/min",
+    evidence: "evaluation",
+  }), "Eval success");
+  assert.equal(checkpointMetricHeaderLabel({
+    metric: "train/outcome/success/starts/all/rolling/rate/min",
+    evidence: "training",
+  }), "Train success");
+  assert.equal(checkpointMetricHeaderLabel({
+    metric: "eval/full/episode/return/shaped/mean",
+    evidence: "evaluation",
+  }), "Eval return");
+  assert.equal(checkpointMetricHeaderLabel({
+    metric: "train/episode/return/shaped/origin/target/rolling/mean",
+    evidence: "training",
+  }), "Train return");
+  assert.equal(checkpointMetricHeaderLabel({
+    metric: "eval/full/progress/kills/mean",
+    evidence: "evaluation",
+  }), "Eval kills");
 });
 
 test("run finish reasons distinguish resource, training, and evaluation outcomes", () => {

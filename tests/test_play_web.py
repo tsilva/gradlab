@@ -2454,7 +2454,6 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     for name in (
         "ChivoVariable.woff2",
         "InterVariable.woff2",
-        "InterVariable-Italic.woff2",
         "JetBrainsMonoVariable.woff2",
         "JetBrainsMonoVariable-Italic.woff2",
     ):

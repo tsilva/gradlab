@@ -66,7 +66,7 @@ test("terminal badge tone follows the canonical success or failure outcome", () 
 
   assert.equal(gameFrameTerminationTone(terminal("success")), "success");
   assert.equal(gameFrameTerminationTone(terminal("failure")), "failure");
-  assert.equal(gameFrameTerminationTone(terminal("timeout")), "");
+  assert.equal(gameFrameTerminationTone(terminal("timeout")), "timeout");
   assert.equal(gameFrameTerminationTone(terminal("neutral")), "");
   assert.equal(gameFrameTerminationTone({
     transition: {

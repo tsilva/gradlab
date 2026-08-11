@@ -14,7 +14,10 @@ from gradlab.play_runtime import (
     PlaybackCandidate,
     PlaybackLoader,
 )
-from gradlab.model_sources import NoDefaultPublicRunCheckpointError
+from gradlab.model_sources import (
+    NoDefaultPublicRunCheckpointError,
+    is_public_checkpoint_manifest_ref,
+)
 from gradlab.play_web import idle_playback_snapshot
 from gradlab.play_processing import (
     PLAYER_PROCESSING_FEATURES,
@@ -33,9 +36,7 @@ def _resolved_public_run_route(
     bundle = candidate.source.bundle
     recipe_document = bundle.recipe.get("recipe")
     model_checkpoint = bundle.model.get("checkpoint")
-    if not isinstance(recipe_document, Mapping) or not isinstance(
-        model_checkpoint, Mapping
-    ):
+    if not isinstance(recipe_document, Mapping) or not isinstance(model_checkpoint, Mapping):
         return None
     goal_variant = recipe_document.get("goal_variant")
     if not isinstance(goal_variant, Mapping):
@@ -54,7 +55,7 @@ def _resolved_public_run_route(
             step=int(model_checkpoint.get("step")),
             sha256=str(model_checkpoint.get("sha256") or ""),
         )
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return None
     return {
         "level": "runs",
@@ -88,6 +89,7 @@ class PlaybackHost:
     SOURCE_COMMANDS = {
         "browse_sources",
         "cancel_source",
+        "prefetch_sources",
         "retry_source",
         "select_source",
         "set_contract_mode",
@@ -107,6 +109,9 @@ class PlaybackHost:
         self._active: ActivePlayback | None = None
         self._candidate: PlaybackCandidate | None = None
         self._worker: threading.Thread | None = None
+        self._prefetch_lock = threading.Lock()
+        self._prefetch_pending: set[tuple[str, str]] = set()
+        self._prefetched: set[tuple[str, str]] = set()
         self._generation = 0
         self._session_epoch = 0
         self._revision = 0
@@ -165,14 +170,18 @@ class PlaybackHost:
             if self._active is None or self._phase != "active":
                 return None
             capture = getattr(self._active.runner, "capture", None)
-            status = capture.status() if capture is not None else {
-                "enabled": False,
-                "recording": False,
-                "episode_in_progress": False,
-                "ready": False,
-                "error": "episode capture is unavailable",
-                "latest": None,
-            }
+            status = (
+                capture.status()
+                if capture is not None
+                else {
+                    "enabled": False,
+                    "recording": False,
+                    "episode_in_progress": False,
+                    "ready": False,
+                    "error": "episode capture is unavailable",
+                    "latest": None,
+                }
+            )
             return {
                 "spec": self._active.spec,
                 "source": self._active.source,
@@ -455,6 +464,48 @@ class PlaybackHost:
                 pass
         worker.start()
 
+    def _prefetch_worker(self, source: PlaySourceSpec, key: tuple[str, str]) -> None:
+        succeeded = False
+        try:
+            self.loader.prefetch(source)
+            succeeded = True
+        except Exception:
+            # Neighbor warming is opportunistic and must never disturb playback.
+            pass
+        finally:
+            with self._prefetch_lock:
+                self._prefetch_pending.discard(key)
+                if succeeded:
+                    self._prefetched.add(key)
+
+    def _begin_prefetch(self, payload: Mapping[str, Any]) -> None:
+        raw_sources = payload.get("sources")
+        if (
+            isinstance(raw_sources, str | bytes)
+            or not isinstance(raw_sources, Sequence)
+            or len(raw_sources) > 2
+        ):
+            raise ValueError("checkpoint prefetch requires at most two sources")
+        for raw_source in raw_sources:
+            if not isinstance(raw_source, Mapping):
+                raise ValueError("checkpoint prefetch source is invalid")
+            source = self._source_from_payload({"source": raw_source})
+            if source.kind != "public_run" or not is_public_checkpoint_manifest_ref(source.value):
+                raise ValueError(
+                    "checkpoint prefetch requires an immutable public checkpoint manifest"
+                )
+            key = (source.kind, source.value)
+            with self._prefetch_lock:
+                if key in self._prefetch_pending or key in self._prefetched:
+                    continue
+                self._prefetch_pending.add(key)
+            threading.Thread(
+                target=self._prefetch_worker,
+                args=(source, key),
+                name="gradlab-checkpoint-prefetch",
+                daemon=True,
+            ).start()
+
     @staticmethod
     def _source_from_payload(payload: Mapping[str, Any]) -> PlaySourceSpec:
         source = payload.get("source")
@@ -507,6 +558,8 @@ class PlaybackHost:
                     with self._lock:
                         self._route = dict(route)
                 self._begin_prepare(source)
+            elif command.name == "prefetch_sources":
+                self._begin_prefetch(command.payload)
             elif command.name == "set_contract_mode":
                 mode = str(command.payload.get("mode") or "")
                 if mode not in {"training", "evaluation", "counterfactual"}:

@@ -103,9 +103,7 @@ def resolve_playback_rom_binding(
             if portable_rom_asset_identity(expected) != portable_rom_asset_identity(
                 direct_manifest
             ):
-                raise ValueError(
-                    "--rom-path does not match the ROM identity recorded by the model"
-                )
+                raise ValueError("--rom-path does not match the ROM identity recorded by the model")
             binding_manifest = expected
         return bind_rom_path(binding_manifest, rom_path.expanduser())
     if not provider.requires_external_rom_asset:
@@ -151,11 +149,9 @@ def apply_vizdoom_playback_iwad_override(
         raise ValueError("ViZDoom playback environment has no mutable env_args")
     binding = vizdoom_iwad_binding(rom_path)
     recorded = env_args.get("rom_path")
-    changed = (
-        not isinstance(recorded, Mapping)
-        or portable_vizdoom_iwad_identity(recorded)
-        != portable_vizdoom_iwad_identity(binding)
-    )
+    changed = not isinstance(recorded, Mapping) or portable_vizdoom_iwad_identity(
+        recorded
+    ) != portable_vizdoom_iwad_identity(binding)
     env_args["rom_path"] = binding
     return changed
 
@@ -241,20 +237,14 @@ class PlaybackLoader:
         self.argv = list(argv)
         self.explicit_seed = bool(explicit_seed)
 
-    def prepare(
-        self,
-        spec: PlaySourceSpec,
-        progress: ProgressCallback,
-    ) -> PlaybackCandidate:
-        args = deepcopy(self.base_args)
-        progress("resolving", "Resolving model source")
+    def _resolve_source(self, spec: PlaySourceSpec) -> ResolvedModelSource:
         source = resolve_model_source(
             spec.kind,
             spec.value,
-            public_root=Path(args.public_model_root),
-            hf_root=Path(args.hf_model_root),
-            revision=getattr(args, "hf_revision", None),
-            public_base_url=str(args.public_models_base_url),
+            public_root=Path(self.base_args.public_model_root),
+            hf_root=Path(self.base_args.hf_model_root),
+            revision=getattr(self.base_args, "hf_revision", None),
+            public_base_url=str(self.base_args.public_models_base_url),
         )
         if spec.kind == "public_run":
             manifest = source.run_config.get("checkpoint_manifest")
@@ -269,6 +259,20 @@ class PlaybackLoader:
                 raise ValueError(
                     "public-run checkpoint manifest does not match the selected checkpoint"
                 )
+        return source
+
+    def prefetch(self, spec: PlaySourceSpec) -> Path:
+        """Populate the verified disk cache without constructing a policy or environment."""
+        return self._resolve_source(spec).model_path
+
+    def prepare(
+        self,
+        spec: PlaySourceSpec,
+        progress: ProgressCallback,
+    ) -> PlaybackCandidate:
+        args = deepcopy(self.base_args)
+        progress("resolving", "Resolving model source")
+        source = self._resolve_source(spec)
         artifact_ref = source.artifact_ref
         args.model = str(source.model_path)
 
@@ -433,9 +437,7 @@ class PlaybackLoader:
                 raise ValueError("--resume-cell requires a cell-graph policy")
             snapshot_record = snapshot(resume_cell)
             entry_document, _payload = snapshot_record
-            restore_semantics = str(
-                entry_document.get("restore_semantics") or "continuation"
-            )
+            restore_semantics = str(entry_document.get("restore_semantics") or "continuation")
             playback_archive_config = {
                 "semantic_id": "state-archive-v1",
                 "persistence": "ephemeral",
@@ -447,9 +449,7 @@ class PlaybackLoader:
                 "curriculum": None,
                 "export": {"snapshots": "none"},
             }
-            archive_resource = tempfile.TemporaryDirectory(
-                prefix="gradlab-play-cell-"
-            )
+            archive_resource = tempfile.TemporaryDirectory(prefix="gradlab-play-cell-")
         # Validate the executable policy contract before creating or stepping
         # an environment. Optional telemetry can degrade later, but action
         # execution and its declared selection modes cannot.
@@ -483,9 +483,7 @@ class PlaybackLoader:
                 capture_step_diagnostics=True,
                 rom_binding=candidate.rom_binding,
                 state_archive=playback_archive_config,
-                state_archive_root=(
-                    None if archive_resource is None else archive_resource.name
-                ),
+                state_archive_root=(None if archive_resource is None else archive_resource.name),
             )
 
         policy_env = make_policy_env(candidate.config, args.seed)
@@ -593,9 +591,7 @@ class PlaybackLoader:
             asset = dict(asset_value) if isinstance(asset_value, Mapping) else None
             recipe_provenance_value = candidate.source.bundle.recipe.get("provenance")
             recipe_provenance = (
-                recipe_provenance_value
-                if isinstance(recipe_provenance_value, Mapping)
-                else {}
+                recipe_provenance_value if isinstance(recipe_provenance_value, Mapping) else {}
             )
             recipe_runtime_value = recipe_provenance.get("runtime")
             recipe_runtime = (
