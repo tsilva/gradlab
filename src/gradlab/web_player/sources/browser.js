@@ -693,6 +693,21 @@ export function checkpointRecommendation(items) {
   return ranked[0] || null;
 }
 
+export function checkpointRecommendationMetrics(item, columns) {
+  return (Array.isArray(columns) ? columns : [])
+    .filter((column) => {
+      const value = item?.metrics?.[column.metric];
+      return value !== null && value !== undefined && Number.isFinite(Number(value));
+    })
+    .map((column) => ({
+      metric: String(column.metric),
+      label: column.label || metricLabel(column.metric),
+      role: checkpointMetricRoleLabel(column),
+      tone: column.evidence || "training",
+      value: formatMetricValue(column.metric, item.metrics[column.metric]),
+    }));
+}
+
 export function humanSourceLabel(value, kind) {
   const raw = String(value || "").trim();
   if (!raw) return "";
@@ -1025,6 +1040,7 @@ export class SourceBrowser {
     this.selectedCheckpoints = new Set();
     this.evaluating = false;
     this.checkpointToolsOpen = false;
+    this.checkpointComparisonOpen = false;
     this.selectedGoalVariantId = "";
     this.goalVariantDiff = null;
     this.goalVariantDiffController = null;
@@ -1118,6 +1134,7 @@ export class SourceBrowser {
       this.error = "";
       this.selectedCheckpoints.clear();
       this.checkpointToolsOpen = false;
+      this.checkpointComparisonOpen = false;
       this.resetGoalVariantDetail();
       this.autoSelectedRoute = "";
       this.syncUrl("replace");
@@ -1163,7 +1180,6 @@ export class SourceBrowser {
     if (
       route.checkpoint_id
       && signature === this.activeBreadcrumbRoute
-      && !this.breadcrumbsRoot.hidden
     ) {
       this.renderActiveCheckpointNavigation(route);
       return;
@@ -1841,7 +1857,7 @@ export class SourceBrowser {
     shell.append(head);
 
     if (this.freshness !== "fresh" || this.catalogWarnings.length) {
-      const notice = document.createElement("div");
+      const notice = document.createElement("details");
       notice.className = `source-notice catalog-${this.freshness}`;
       const label = this.freshness === "stale"
         ? "Showing stale catalog data."
@@ -1851,7 +1867,11 @@ export class SourceBrowser {
       const messages = this.catalogWarnings
         .map((warning) => String(warning?.message || "").trim())
         .filter(Boolean);
-      notice.textContent = [label, ...messages].join(" ");
+      const summary = document.createElement("summary");
+      summary.textContent = label;
+      const detail = document.createElement("p");
+      detail.textContent = messages.join(" ") || "No additional details were provided.";
+      notice.append(summary, detail);
       shell.append(notice);
     }
 
@@ -1915,7 +1935,7 @@ export class SourceBrowser {
     }
     if (this.route.level === "runs") return "Choose a run";
     if (this.route.level === "goal_variants") {
-      return "Choose the goal configuration used by the run";
+      return "Choose a goal version";
     }
     if (this.route.level === "goals") return "Choose a goal";
     return "Choose an environment";
@@ -1955,7 +1975,14 @@ export class SourceBrowser {
     input.setAttribute("aria-label", input.placeholder);
     input.addEventListener("input", (event) => this.setSearch(event.target.value));
     wrap.append(input);
-    return wrap;
+    const resultCount = this.sourceItems.length || this.items.length;
+    if (resultCount > 8 || this.query) return wrap;
+    const disclosure = document.createElement("details");
+    disclosure.className = "source-search-disclosure";
+    const summary = document.createElement("summary");
+    summary.append(icon("search"), document.createTextNode("Search"));
+    disclosure.append(summary, wrap);
+    return disclosure;
   }
 
   renderContinuePlayback() {
@@ -2021,6 +2048,23 @@ export class SourceBrowser {
     const detail = document.createElement("p");
     detail.textContent = recommendation.evidence.detail;
     copy.append(eyebrow, heading, detail);
+    const metrics = checkpointRecommendationMetrics(
+      recommendation.item,
+      this.metricColumns,
+    );
+    if (metrics.length) {
+      const evidence = document.createElement("dl");
+      evidence.className = "checkpoint-recommendation-metrics";
+      metrics.forEach((metric) => {
+        const term = document.createElement("dt");
+        term.className = metric.tone;
+        term.textContent = `${metric.label} · ${metric.role}`;
+        const value = document.createElement("dd");
+        value.textContent = metric.value;
+        evidence.append(term, value);
+      });
+      copy.append(evidence);
+    }
     const play = button("Watch checkpoint", { iconName: "player-play", primary: true });
     play.disabled = !this.hasControl();
     play.addEventListener("click", () => this.selectCheckpoint(recommendation.item));
@@ -2156,17 +2200,29 @@ export class SourceBrowser {
       body.append(empty);
       return body;
     }
-    body.append(
-      this.route.level === "environments"
-        ? this.renderEnvironments()
-        : this.route.level === "goals"
-          ? this.renderGoals()
-          : this.route.level === "goal_variants"
-            ? this.renderGoalVariants()
+    const results = this.route.level === "environments"
+      ? this.renderEnvironments()
+      : this.route.level === "goals"
+        ? this.renderGoals()
+        : this.route.level === "goal_variants"
+          ? this.renderGoalVariants()
           : this.route.level === "runs"
             ? this.renderRunResults()
-            : this.renderTable(),
-    );
+            : this.renderTable();
+    if (this.route.level === "runs" && this.route.run_id) {
+      const comparison = document.createElement("details");
+      comparison.className = "source-checkpoint-comparison";
+      comparison.open = this.checkpointComparisonOpen;
+      const summary = document.createElement("summary");
+      summary.textContent = `Compare all checkpoints (${this.items.length.toLocaleString()})`;
+      comparison.append(summary, results);
+      comparison.addEventListener("toggle", () => {
+        this.checkpointComparisonOpen = comparison.open;
+      });
+      body.append(comparison);
+    } else {
+      body.append(results);
+    }
     if (this.nextCursor) {
       const more = button(this.loading ? "Loading…" : "Load more");
       more.classList.add("source-load-more");
@@ -2236,9 +2292,7 @@ export class SourceBrowser {
       meta.textContent = `${goal.title || goal.goal_slug} · ${Number(goal.recipe_count).toLocaleString()} ${recipeLabel}`;
       identity.append(meta);
       if (goal.goal_slug && goal.goal_slug !== goal.goal_id) {
-        const slug = document.createElement("small");
-        slug.textContent = goal.goal_slug;
-        identity.append(slug);
+        navigate.title = `Goal slug: ${goal.goal_slug}`;
       }
       navigate.append(identity);
       navigate.addEventListener("click", () => this.navigate({
@@ -2359,11 +2413,9 @@ export class SourceBrowser {
     header.className = "goal-configuration-detail-header";
     const identity = document.createElement("div");
     const heading = document.createElement("h3");
-    heading.textContent = "Exact contract differences";
+    heading.textContent = "Selected goal version";
     const baseline = document.createElement("p");
-    baseline.textContent = (
-      "Baseline: current checked-in goal · Exact JSON-Pointer paths and typed values."
-    );
+    baseline.textContent = `${presentation.kindLabel} · ${presentation.runLabel}`;
     identity.append(heading, baseline);
     const actions = document.createElement("div");
     actions.className = "goal-configuration-detail-actions";
@@ -2394,50 +2446,59 @@ export class SourceBrowser {
     header.append(identity, actions);
     section.append(header, this.renderEmbeddedGoalRuns(variant));
 
+    const differences = document.createElement("details");
+    differences.className = "goal-configuration-differences";
+    const differencesSummary = document.createElement("summary");
+    differencesSummary.textContent = `Contract differences · ${presentation.differenceLabel}`;
+    const differencesIntro = document.createElement("p");
+    differencesIntro.textContent = (
+      "Baseline: current checked-in goal · Exact JSON-Pointer paths and typed values."
+    );
+    differences.append(differencesSummary, differencesIntro);
+    const finishDifferences = (content) => {
+      differences.append(content);
+      section.append(differences);
+      return section;
+    };
+
     if (presentation.kind === "current_default") {
-      section.append(this.goalVariantDiffEmpty(
+      return finishDifferences(this.goalVariantDiffEmpty(
         "This configuration exactly matches the current checked-in goal.",
       ));
-      return section;
     }
     if (!presentation.comparisonAvailable) {
-      section.append(this.goalVariantDiffEmpty(
+      return finishDifferences(this.goalVariantDiffEmpty(
         "The exact historical contract is not sufficiently proven, so no field-level comparison is shown.",
         { warning: true },
       ));
-      return section;
     }
 
     const state = this.goalVariantDiff?.variantId === variant.variant_id
       ? this.goalVariantDiff
       : null;
     if (!state || state.state === "loading") {
-      section.append(this.loadingState("Loading exact contract differences…"));
-      return section;
+      return finishDifferences(this.loadingState("Loading exact contract differences…"));
     }
     if (state.state === "error") {
-      section.append(this.goalVariantDiffEmpty(state.message, { warning: true }));
-      return section;
+      return finishDifferences(this.goalVariantDiffEmpty(state.message, { warning: true }));
     }
     if (state.availability !== "exact") {
-      section.append(this.goalVariantDiffEmpty(
+      return finishDifferences(this.goalVariantDiffEmpty(
         state.message || "An exact field-level comparison is unavailable.",
         { warning: true },
       ));
-      return section;
     }
     if (!state.entries.length) {
-      section.append(this.goalVariantDiffEmpty(
+      return finishDifferences(this.goalVariantDiffEmpty(
         "This configuration has no behavioral differences from the current checked-in goal.",
       ));
-      return section;
     }
 
     const count = document.createElement("span");
     count.className = "goal-configuration-detail-count";
     const changeCount = state.changeCount ?? state.entries.length;
     count.textContent = `${changeCount.toLocaleString()} ${changeCount === 1 ? "changed key" : "changed keys"}`;
-    identity.append(count);
+    differencesSummary.append(" · ", count);
     const scroll = document.createElement("div");
     scroll.className = "goal-configuration-diff-scroll";
     const table = document.createElement("table");
@@ -2480,8 +2541,7 @@ export class SourceBrowser {
     });
     table.append(head, body);
     scroll.append(table);
-    section.append(scroll);
-    return section;
+    return finishDifferences(scroll);
   }
 
   async loadEmbeddedGoalRuns(variant, { append = false } = {}) {

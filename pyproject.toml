@@ -4,6 +4,8 @@ version = "0.1.1"
 description = "Generic reinforcement-learning lab for training and evaluating game agents"
 readme = "README.md"
 requires-python = "==3.14.*"
+license = "MIT"
+license-files = ["LICENSE"]
 dependencies = [
     "stable-retro-turbo==1.0.1.post37; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "stable-retro-turbo==1.0.1.post37; sys_platform == 'linux' and platform_machine == 'x86_64'",
@@ -73,6 +75,7 @@ include = [
     "/experiments/goals",
     "/experiments/recipes",
     "/README.md",
+    "/LICENSE",
     "/METRICS.md",
     "/THIRD_PARTY_NOTICES.md",
 ]

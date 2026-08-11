@@ -2,10 +2,23 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
+import {
+  playbackSourceTitle,
+  transportPresentation,
+  workspaceIsEditable,
+} from "../../src/gradlab/web_player/player-presentation.js";
 import { setSvgUseHref } from "../../src/gradlab/web_player/panels/shared.js";
 
-const source = readFileSync(
+const settings = readFileSync(
+  new URL("../../src/gradlab/web_player/playback-settings.js", import.meta.url),
+  "utf8",
+);
+const controls = readFileSync(
   new URL("../../src/gradlab/web_player/panels/controls.js", import.meta.url),
+  "utf8",
+);
+const app = readFileSync(
+  new URL("../../src/gradlab/web_player/app.js", import.meta.url),
   "utf8",
 );
 const page = readFileSync(
@@ -17,108 +30,117 @@ const styles = readFileSync(
   "utf8",
 );
 
-test("common episode actions stay visible while playback tuning is disclosed on demand", () => {
-  const controlsStart = source.indexOf('<div class="control-components">');
-  const advancedStart = source.indexOf('data-advanced-playback', controlsStart);
-
-  for (const marker of ['data-reset-episode', 'data-next-episode']) {
-    const position = source.indexOf(marker);
-    assert.ok(position > controlsStart && position < advancedStart, marker);
-  }
-  for (const marker of [
-    'id="playback-fps"',
-    'id="next-episode-seed"',
-    'id="playback-sampling"',
-    'id="playback-contract-mode"',
-    'data-termination-settings',
-  ]) {
-    const position = source.indexOf(marker);
-    assert.ok(position > advancedStart, marker);
-  }
-  assert.match(source, /<details class="advanced-playback-settings"/);
-  assert.match(source, /<summary>Advanced playback<\/summary>/);
-  assert.equal(source.includes("control-section"), false);
-  assert.equal(source.includes("control-label"), false);
+test("one contextual transport covers play, pause, replay, and next episode", () => {
+  assert.deepEqual(
+    transportPresentation({ hasControl: true }),
+    {
+      action: "play",
+      label: "Play",
+      icon: "player-play",
+      disabled: false,
+      reason: "Play the current episode",
+    },
+  );
+  assert.equal(
+    transportPresentation({ running: true, hasControl: true }).action,
+    "pause",
+  );
+  assert.equal(
+    transportPresentation({ canReplay: true, hasControl: true }).action,
+    "replay",
+  );
+  assert.deepEqual(
+    transportPresentation({
+      hasControl: true,
+      session: { awaiting_next_episode: true, can_start_next_episode: true },
+    }).action,
+    "next_episode",
+  );
+  const exhausted = transportPresentation({
+    hasControl: true,
+    session: { awaiting_next_episode: true, can_start_next_episode: false },
+  });
+  assert.equal(exhausted.disabled, true);
+  assert.match(exhausted.reason, /limit/);
 });
 
-test("playback setting labels use the shared stacked field layout", () => {
+test("task views are fixed while Customize is explicitly editable", () => {
+  assert.equal(workspaceIsEditable("watch"), false);
+  assert.equal(workspaceIsEditable("explain"), false);
+  assert.equal(workspaceIsEditable("debug"), false);
+  assert.equal(workspaceIsEditable("custom"), true);
+  assert.equal(
+    playbackSourceTitle({
+      environment_id: "SuperMarioBros-Nes-v0",
+      checkpoint_id: "checkpoint-10002432-b285ff3b",
+    }),
+    "Super Mario Bros · 10,002,432 steps",
+  );
+});
+
+test("playback transport and its secondary actions live beside the scrubber", () => {
+  assert.equal((page.match(/id="timeline-playback-toggle"/g) || []).length, 1);
+  const timelineStart = page.indexOf('<div class="timeline-track">');
+  const timelineEnd = page.indexOf("</section>", timelineStart);
+  for (const id of ["timeline-playback-toggle", "timeline-reset", "playback-settings-toggle"]) {
+    const position = page.indexOf(`id="${id}"`, timelineStart);
+    assert.ok(position > timelineStart && position < timelineEnd, id);
+  }
+  assert.ok(page.indexOf('id="timeline-scrubber"', timelineStart) < timelineEnd);
+  assert.equal(settings.includes("data-next-episode"), false);
+  assert.equal(settings.includes("data-reset-episode"), false);
+});
+
+test("playback tuning is one reusable on-demand settings form", () => {
+  assert.match(page, /id="playback-settings-menu"[^>]*hidden/);
+  assert.match(controls, /mountPlaybackSettings/);
   for (const className of [
     "playback-fps",
     "next-episode-seed",
     "playback-sampling",
     "playback-contract",
   ]) {
-    assert.match(
-      source,
-      new RegExp(`class="playback-field ${className}"`),
-      className,
-    );
+    assert.match(settings, new RegExp(`class="playback-field ${className}"`));
   }
+  assert.match(settings, /data-termination-settings/);
+  assert.match(styles, /\.playback-settings-menu \{/);
 });
 
-test("playback setting values use the same compact text size", () => {
+test("episode termination selections flow through Reset and Next episode", () => {
   assert.match(
-    styles,
-    /\.playback-field select \{[^}]*font-size: \.64rem;/,
-  );
-});
-
-test("episode termination selections apply through the existing episode actions", () => {
-  assert.equal(source.includes("Apply and reset episode"), false);
-  assert.equal(source.includes('data-command="apply-termination"'), false);
-  assert.match(
-    source,
-    /"reset-episode":[\s\S]*enabled_termination_conditions: enabledTerminationConditions\(\)/,
+    settings,
+    /enabled_termination_conditions: enabledTerminationConditions\(\)/,
   );
   assert.match(
-    source,
-    /"next-episode":[\s\S]*enabled_termination_conditions: enabledTerminationConditions\(\)/,
+    app,
+    /command\("next_episode", \{[\s\S]*enabled_termination_conditions: options\.enabled_termination_conditions/,
   );
   assert.match(
-    source,
-    /Selections apply with Reset episode or Play next episode\./,
+    app,
+    /command\("reset_episode", \{[\s\S]*seed: options\.seed,[\s\S]*enabled_termination_conditions: options\.enabled_termination_conditions/,
   );
+  assert.match(settings, /Selections apply with Reset or Next episode\./);
 });
 
 test("seed control keeps the loaded checkpoint default across automatic resets", () => {
   assert.match(
-    source,
+    settings,
     /const defaultSeed = text\(session\.default_seed, session\.seed\);/,
   );
-  assert.match(source, /seed\.dataset\.defaultSeed !== defaultSeed/);
-  assert.match(source, /seed\.value = defaultSeed;/);
-  assert.match(source, /text\(snapshot\.transition\?\.seed, text\(session\.seed, defaultSeed\)\)/);
+  assert.match(settings, /seed\.dataset\.defaultSeed !== defaultSeed/);
+  assert.match(settings, /seed\.value = defaultSeed;/);
+  assert.match(settings, /text\(snapshot\.transition\?\.seed, text\(session\.seed, defaultSeed\)\)/);
 });
 
-test("advanced playback is visually separated from common episode actions", () => {
-  assert.equal(styles.includes(".playback-settings"), false);
-  assert.equal(styles.includes(".next-episode-settings {"), false);
-  assert.match(styles, /\.advanced-playback-settings \{[^}]*border-top:/);
+test("playback setting values share the compact field layout", () => {
+  assert.match(
+    styles,
+    /\.playback-field select \{[^}]*font-size: \.64rem;/,
+  );
   assert.match(
     styles,
     /\.termination-settings \{[^}]*border: 0;[^}]*\}/,
   );
-  assert.doesNotMatch(
-    styles,
-    /\.termination-settings \{[^}]*border-top:/,
-  );
-});
-
-test("playback transport lives beside the timeline scrubber", () => {
-  assert.equal(
-    (page.match(/id="timeline-playback-toggle"/g) || []).length,
-    1,
-  );
-  const timelineStart = page.indexOf('<div class="timeline-track">');
-  const timelineEnd = page.indexOf("</section>", timelineStart);
-  const play = page.indexOf('id="timeline-playback-toggle"', timelineStart);
-  const scrubber = page.indexOf('id="timeline-scrubber"', timelineStart);
-  assert.ok(play > timelineStart && play < scrubber);
-  assert.ok(scrubber < timelineEnd);
-  assert.equal(source.includes("data-playback-toggle"), false);
-  for (const command of ["step", "step-ten", "continue-event"]) {
-    assert.equal(source.includes(`data-command="${command}"`), false);
-  }
 });
 
 test("unchanged playback icons do not invalidate the SVG glyph", () => {

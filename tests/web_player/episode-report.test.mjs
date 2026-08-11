@@ -1,7 +1,17 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import { episodeReport } from "../../src/gradlab/web_player/episode-report.js";
+
+const html = readFileSync(new URL("../../src/gradlab/web_player/index.html", import.meta.url), "utf8");
+
+test("the player omits the redundant episode outcome panel", () => {
+  assert.doesNotMatch(html, /id="episode-report"/);
+  assert.doesNotMatch(html, /data-episode-outcome/);
+  assert.doesNotMatch(html, /<dt>Outcome<\/dt>/);
+  assert.match(html, /id="playback-evidence-status"[\s\S]*role="status"[\s\S]*hidden/);
+});
 
 test("episode report leads with outcome, boundary, and evidence semantics", () => {
   const report = episodeReport({

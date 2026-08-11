@@ -16,6 +16,7 @@ import {
   checkpointNavigationPresentation,
   checkpointPlaybackSeed,
   checkpointRecommendation,
+  checkpointRecommendationMetrics,
   environmentEvidenceRank,
   formatGoalDiffValue,
   formatMetricValue,
@@ -550,6 +551,46 @@ test("checkpoint recommendations prefer authoritative evidence over later diagno
   assert.match(checkpointEvidencePresentation(items[0]).detail, /evaluation remains authoritative/);
 });
 
+test("checkpoint recommendations surface exact evidence metrics and roles", () => {
+  const metrics = checkpointRecommendationMetrics(
+    {
+      metrics: {
+        "eval/full/outcome/success/starts/rate/min": 1,
+        "train/episode/return/shaped/origin/target/rolling/mean": 3119.135,
+      },
+    },
+    [
+      {
+        metric: "eval/full/outcome/success/starts/rate/min",
+        evidence: "evaluation",
+        roles: ["acceptance"],
+      },
+      {
+        metric: "train/episode/return/shaped/origin/target/rolling/mean",
+        evidence: "training",
+        roles: ["training_proxy"],
+      },
+    ],
+  );
+
+  assert.deepEqual(metrics.map(({ role, tone, value }) => ({ role, tone, value })), [
+    { role: "Acceptance", tone: "evaluation", value: "100%" },
+    { role: "Training proxy", tone: "training", value: "3,119.135" },
+  ]);
+});
+
+test("source discovery progressively discloses secondary controls", async () => {
+  const source = await readFile(
+    new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(source, /return "Choose a goal version"/);
+  assert.match(source, /source-search-disclosure/);
+  assert.match(source, /Contract differences · \$\{presentation\.differenceLabel\}/);
+  assert.match(source, /Compare all checkpoints \(\$\{this\.items\.length\.toLocaleString\(\)\}\)/);
+});
+
 test("active breadcrumb rendering hides routes without a selected checkpoint", () => {
   const browser = Object.create(SourceBrowser.prototype);
   browser.breadcrumbsRoot = {
@@ -575,7 +616,7 @@ test("active breadcrumb rendering hides routes without a selected checkpoint", (
   assert.equal(browser.breadcrumbsRoot.replaceChildrenCalled, 1);
 });
 
-test("unchanged active checkpoint routes do not rebuild breadcrumbs", () => {
+test("hidden breadcrumbs do not restart active checkpoint loading", () => {
   const browser = Object.create(SourceBrowser.prototype);
   browser.activeBreadcrumbRoute = "";
   browser.breadcrumbsRoot = {
@@ -585,6 +626,10 @@ test("unchanged active checkpoint routes do not rebuild breadcrumbs", () => {
   browser.stop = () => {};
   const historyModes = [];
   browser.syncUrl = (mode) => historyModes.push(mode);
+  let loads = 0;
+  browser.loadActiveCheckpointNavigation = () => {
+    loads += 1;
+  };
   let renders = 0;
   browser.renderBreadcrumbs = () => {
     renders += 1;
@@ -604,9 +649,11 @@ test("unchanged active checkpoint routes do not rebuild breadcrumbs", () => {
   };
 
   browser.renderActiveBreadcrumbs(snapshot);
+  browser.breadcrumbsRoot.hidden = true;
   browser.renderActiveBreadcrumbs(snapshot);
 
   assert.equal(renders, 1);
+  assert.equal(loads, 1);
   assert.deepEqual(historyModes, ["replace"]);
 });
 

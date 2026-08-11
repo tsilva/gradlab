@@ -39,11 +39,12 @@ test("default workspace is a v7 Watch view without a standalone action panel", (
   assert.deepEqual(workspace.panels.game.placement, {
     x: 0,
     y: 0,
-    w: 9,
+    w: 12,
     h: 15,
     visible: true,
     window: "main",
   });
+  assert.equal(workspace.panels.controls.placement.visible, false);
   assert.deepEqual(workspace.panels["step-reward"].placement, {
     x: 4,
     y: 15,
@@ -176,7 +177,6 @@ test("reward breakdown scope persists through workspace normalization", () => {
 test("paired workspace gives every panel in a logical row the same height", () => {
   const workspace = createDefaultWorkspace({ paired: true });
   const rows = [
-    ["game", "controls"],
     ["policy", "value"],
     ["step-reward", "episode-return"],
     ["observation", "signals", "events"],
@@ -195,6 +195,15 @@ test("paired workspace gives every panel in a logical row the same height", () =
     ["step-reward", "episode-return"].map((id) => workspace.panels[id].placement.w),
     [6, 6],
   );
+  assert.deepEqual(workspace.panels.game.placement, {
+    x: 0,
+    y: 0,
+    w: 12,
+    h: 15,
+    visible: true,
+    window: "main",
+  });
+  assert.equal(workspace.panels.controls.placement.visible, false);
 });
 
 test("non-current workspace data is replaced instead of interpreted", () => {

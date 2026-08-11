@@ -10,6 +10,12 @@ import {
   panelSubscriptions,
 } from "./panels/catalog.js";
 import { episodeReport } from "./episode-report.js";
+import { mountPlaybackSettings } from "./playback-settings.js";
+import {
+  playbackSourceTitle,
+  transportPresentation,
+  workspaceIsEditable,
+} from "./player-presentation.js";
 import { PanelManager } from "./panels/manager.js";
 import { PanelRuntime } from "./panels/runtime.js";
 import {
@@ -107,6 +113,7 @@ let gridStack = null;
 let gridCellHeight = DEFAULT_GRID_CELL_HEIGHT;
 let syncingGrid = false;
 let panelManager = null;
+let playbackSettings = null;
 let youtubeOAuthPopup = null;
 
 const workspaceChannel = "BroadcastChannel" in window
@@ -122,10 +129,14 @@ function clamp(value, minimum, maximum) {
 
 function readStoredLayout() {
   try {
-    return normalizeWorkspace(
+    const workspace = normalizeWorkspace(
       JSON.parse(localStorage.getItem(LAYOUT_KEY) || "null"),
       { paired: pairedWorkspace, writer: windowId },
     );
+    if (!workspaceIsEditable(workspace.preset)) {
+      applyWorkspacePreset(workspace, workspace.preset, { paired: pairedWorkspace });
+    }
+    return workspace;
   } catch {
     return defaultLayout();
   }
@@ -179,6 +190,7 @@ function updateConnection(label, kind = "") {
   const badge = $("#connection-status");
   badge.textContent = label;
   badge.className = `sync-status ${kind}`.trim();
+  badge.hidden = label === "Synced" && !kind;
 }
 
 function resetSession(epoch) {
@@ -277,10 +289,14 @@ function setSourceMode(active, snapshot = null) {
   );
   document.body.classList.toggle("source-selection", state.sourceMode);
   $("#source-browser").hidden = !state.sourceMode;
-  $("#episode-report").hidden = state.sourceMode || state.windowId !== "main";
   $("#workspace-preset-picker").hidden = state.sourceMode || state.windowId !== "main";
   $("#checkpoint-navigation").hidden = Boolean(state.sourceMode || !activeCheckpointRoute);
-  $("#page-title").hidden = Boolean(state.sourceMode || activeCheckpointRoute);
+  $("#page-title").hidden = state.sourceMode;
+  $("#source-back").hidden = Boolean(
+    state.sourceMode
+    || !(snapshot?.app?.has_active_runner || state.liveSnapshot?.app?.has_active_runner)
+  );
+  $("#more-toggle").hidden = state.sourceMode;
   $("#change-source").hidden = (
     state.sourceMode
     || !(snapshot?.app?.has_active_runner || state.liveSnapshot?.app?.has_active_runner)
@@ -293,10 +309,12 @@ function setSourceMode(active, snapshot = null) {
     if (activeCheckpointRoute) {
       if (sourceBrowser) {
         sourceBrowser.renderActiveBreadcrumbs(expected);
+        $("#source-breadcrumbs").hidden = true;
       } else {
         void ensureSourceBrowser().then((browser) => {
           if (!state.sourceMode && state.applicationSnapshot === expected) {
             browser.renderActiveBreadcrumbs(expected);
+            $("#source-breadcrumbs").hidden = true;
           }
         }).catch((error) => showToast(`Source breadcrumbs failed: ${error.message || error}`, true));
       }
@@ -992,27 +1010,44 @@ function playbackIsRunning() {
 function updateTimelinePlaybackControl() {
   const playbackToggle = $("#timeline-playback-toggle");
   const playbackIcon = $("#timeline-playback-icon");
-  if (!playbackToggle || !playbackIcon) return;
+  const playbackLabel = $("#timeline-playback-label");
+  if (!playbackToggle || !playbackIcon || !playbackLabel) return;
   const session = state.liveSnapshot?.session || state.snapshot?.session || {};
-  const running = playbackIsRunning();
-  const command = running ? "pause" : "play";
-  playbackToggle.disabled = !state.hasControl || (
-    Boolean(session.awaiting_next_episode)
-    && !state.replayingInspection
-    && !canReplayInspection()
-  );
-  playbackToggle.title = running
-    ? "Pause after the current transition"
-    : (canReplayInspection()
-      ? "Replay from the selected step"
-      : "Play current episode");
-  playbackToggle.classList.toggle("primary", !running);
-  playbackToggle.setAttribute("aria-label", running ? "Pause" : "Play");
-  setSvgUseHref(playbackIcon, `/assets/tabler-icons.svg#ti-player-${command}`);
+  const presentation = transportPresentation({
+    running: playbackIsRunning(),
+    replaying: state.replayingInspection,
+    hasControl: state.hasControl,
+    canReplay: canReplayInspection(),
+    session,
+    recording: (state.liveSnapshot?.mode || state.snapshot?.mode) === "recording",
+  });
+  playbackToggle.dataset.action = presentation.action;
+  playbackToggle.disabled = presentation.disabled;
+  playbackToggle.title = presentation.reason;
+  playbackToggle.classList.toggle("primary", presentation.action !== "pause");
+  playbackToggle.setAttribute("aria-label", presentation.label);
+  playbackLabel.textContent = presentation.label;
+  setSvgUseHref(playbackIcon, `/assets/tabler-icons.svg#ti-${presentation.icon}`);
+  const reset = $("#timeline-reset");
+  if (reset) {
+    const mode = state.liveSnapshot?.mode || state.snapshot?.mode;
+    const canReset = (
+      state.hasControl
+      && !["recording", "dataset"].includes(mode)
+      && (!session.awaiting_next_episode || session.can_start_next_episode)
+    );
+    reset.disabled = !canReset;
+    reset.title = !state.hasControl
+      ? "Another window has control"
+      : canReset
+        ? "Reset to the selected seed and pause"
+        : "The configured episode limit has been reached";
+  }
 }
 
 function updateControlState() {
   updateTimelinePlaybackControl();
+  playbackSettings?.updateControl();
   panelRuntime?.invoke("controls", "updateControl");
 }
 
@@ -1022,21 +1057,73 @@ function renderWorkspaceStatus() {
   );
 }
 
-function renderEpisodeReport(snapshot) {
-  const root = $("#episode-report");
-  if (!root || !snapshot || state.sourceMode || state.windowId !== "main") return;
+function renderPlaybackEvidenceStatus(snapshot) {
+  const status = $("#playback-evidence-status");
+  if (!status || !snapshot || state.sourceMode || state.windowId !== "main") {
+    if (status) status.hidden = true;
+    return;
+  }
   const report = episodeReport(snapshot);
-  const outcome = root.querySelector("[data-episode-outcome]");
-  outcome.textContent = report.outcome;
-  outcome.className = `episode-report-outcome ${report.outcomeTone}`;
-  root.querySelector("[data-episode-boundary]").textContent = report.boundary;
-  root.querySelector("[data-episode-return]").textContent = report.episodeReturn;
-  root.querySelector("[data-episode-steps]").textContent = report.steps;
-  root.querySelector("[data-episode-seed]").textContent = report.seed;
-  root.querySelector("[data-episode-semantics]").textContent = report.semantics;
-  root.querySelector("[data-episode-source]").textContent = report.source;
-  root.querySelector("[data-episode-disclaimer]").textContent = report.disclaimer;
-  root.hidden = false;
+  const evidenceWarning = /not evidence|differ|incomparable/i.test(
+    `${report.semantics} ${report.disclaimer}`,
+  );
+  status.hidden = !evidenceWarning;
+  status.textContent = evidenceWarning ? report.semantics : "";
+  status.title = evidenceWarning ? report.disclaimer : "";
+}
+
+function unavailableDiagnosticPresentation(statuses) {
+  if (statuses.includes("protocol-error") || statuses.includes("error")) {
+    return { label: "Protocol error", tone: "error" };
+  }
+  if (statuses.includes("contract-incomparable")) {
+    return { label: "Incomparable", tone: "incomparable" };
+  }
+  if (statuses.includes("unsupported") || statuses.includes("disabled")) {
+    return { label: "Unsupported", tone: "unsupported" };
+  }
+  return { label: "Waiting for data", tone: "waiting" };
+}
+
+function renderUnavailableDiagnostics() {
+  const root = $("#unavailable-diagnostics");
+  const explain = state.layout?.preset === "explain";
+  const rows = [];
+  $$("#dashboard .grid-stack-item").forEach((gridItem) => {
+    gridItem.classList.remove("explain-unavailable");
+    if (!explain || gridItem.dataset.panel === "game") return;
+    const telemetryStatuses = [...gridItem.querySelectorAll("[data-telemetry-status]")]
+      .map((element) => String(element.dataset.telemetryStatus || ""))
+      .filter(Boolean);
+    if (!telemetryStatuses.length || telemetryStatuses.includes("available")) return;
+    const presentation = unavailableDiagnosticPresentation(telemetryStatuses);
+    gridItem.classList.add("explain-unavailable");
+    rows.push({
+      panel: panelLabel(gridItem.dataset.panel),
+      ...presentation,
+    });
+  });
+  root.hidden = !explain || !rows.length;
+  if (!root.hidden) {
+    root.querySelector("[data-unavailable-diagnostics-title]").textContent = (
+      `Unavailable diagnostics (${rows.length.toLocaleString()})`
+    );
+    root.querySelector("[data-unavailable-diagnostics-list]").replaceChildren(
+      ...rows.map((row) => {
+        const item = document.createElement("li");
+        const name = document.createElement("span");
+        name.textContent = row.panel;
+        const status = document.createElement("span");
+        status.className = `unavailable-diagnostics-status ${row.tone}`;
+        status.textContent = row.panel === "Policy decision" && row.tone === "waiting"
+          ? "Waiting for first policy decision"
+          : row.label;
+        item.append(name, status);
+        return item;
+      }),
+    );
+  }
+  fitGridToViewport();
 }
 
 function renderSnapshot() {
@@ -1045,7 +1132,7 @@ function renderSnapshot() {
   configureMode(snapshot.mode || "playback");
   updateControlState();
   renderWorkspaceStatus();
-  renderEpisodeReport(snapshot);
+  renderPlaybackEvidenceStatus(snapshot);
   const actionNamesKey = JSON.stringify([
     session.action_contract || null,
     session.action_names || [],
@@ -1059,6 +1146,8 @@ function renderSnapshot() {
     showToast(snapshot.status_message, snapshot.run_state === "paused" && /error|expired|unsupported|no configured/i.test(snapshot.status_message));
   }
   panelRuntime.renderSnapshot(snapshot, panelView());
+  playbackSettings?.render(snapshot, panelView());
+  renderUnavailableDiagnostics();
   renderTimeline();
 }
 
@@ -1071,6 +1160,7 @@ function configureMode(mode) {
 
 function renderHistory() {
   panelRuntime.renderHistory(currentEpisodeHistory(), state.snapshot, panelView());
+  renderUnavailableDiagnostics();
   renderTimeline();
 }
 
@@ -1293,7 +1383,13 @@ function renderTimeline() {
 function maxPanelRow(targetWindow = state.windowId) {
   return Math.max(0, ...Object.values(state.layout.panels)
     .filter((panel) => (
-      panel.placement.visible && panel.placement.window === targetWindow
+      panel.placement.visible
+      && panel.placement.window === targetWindow
+      && !$$(`#dashboard .grid-stack-item`).some((item) => (
+        item.dataset.panel
+        && state.layout.panels[item.dataset.panel] === panel
+        && item.classList.contains("explain-unavailable")
+      ))
     ))
     .map((panel) => panel.placement.y + panel.placement.h));
 }
@@ -1327,9 +1423,11 @@ function fitGridToViewport() {
     timelineHeight: timeline.hidden ? 0 : timeline.getBoundingClientRect().height,
     rows: maxPanelRow(),
   });
-  if (nextCellHeight === gridCellHeight) return;
-  gridCellHeight = nextCellHeight;
-  gridStack.cellHeight(gridCellHeight);
+  if (nextCellHeight !== gridCellHeight) {
+    gridCellHeight = nextCellHeight;
+    gridStack.cellHeight(gridCellHeight);
+  }
+  dashboard.style.height = `${maxPanelRow() * gridCellHeight}px`;
 }
 
 function syncGridNodes(nodes = null) {
@@ -1355,8 +1453,14 @@ function persistLayout({ announce = true, customize = true } = {}) {
 }
 
 function updateLayoutTitle() {
-  const environmentId = String(state.liveSnapshot?.session?.env_id || "").trim();
-  const environmentTitle = environmentId || "Environment";
+  const route = (state.applicationSnapshot || state.liveSnapshot)?.app?.route || {};
+  const environmentId = String(
+    route.environment_id || state.liveSnapshot?.session?.env_id || "",
+  ).trim();
+  const environmentTitle = playbackSourceTitle({
+    ...route,
+    environment_id: environmentId || "Environment",
+  });
   const title = panelName
     ? `${environmentTitle} · ${panelLabel(panelName)}`
     : pairedWorkspace && state.windowId === STATS_WINDOW_ID
@@ -1368,10 +1472,35 @@ function updateLayoutTitle() {
   document.title = `${title} · gradlab`;
 }
 
+function updateWorkspaceEditing() {
+  const preset = state.layout?.preset || "watch";
+  const editable = workspaceIsEditable(preset);
+  document.body.dataset.workspaceView = preset;
+  document.body.classList.toggle("workspace-editing", editable);
+  document.body.classList.toggle("workspace-debug", preset === "debug");
+  $$('[data-customize-actions]').forEach((element) => { element.hidden = !editable; });
+  gridStack?.enableMove(editable);
+  gridStack?.enableResize(editable);
+  $$("[data-drag-handle], [data-panel-menu]").forEach((control) => {
+    control.hidden = !editable;
+    control.tabIndex = editable ? 0 : -1;
+  });
+  $$(".grid-stack-item > .ui-resizable-se").forEach((handle) => {
+    handle.hidden = !editable;
+  });
+  if (!editable) {
+    $("#layout-menu").hidden = true;
+    $("#panel-menu").hidden = true;
+    $("#panel-shelf").hidden = true;
+    $("#panels-toggle").setAttribute("aria-expanded", "false");
+  }
+}
+
 async function applyLayout() {
   const visibleHere = panelsInThisWindow();
   document.body.classList.toggle("empty-workspace", visibleHere.length === 0);
   updateLayoutTitle();
+  updateWorkspaceEditing();
   panelManager?.renderShelf();
   renderSavedLayouts();
   send({
@@ -1387,6 +1516,7 @@ async function applyLayout() {
     gridStack.batchUpdate(false);
     syncingGrid = false;
   }
+  updateWorkspaceEditing();
   fitGridToViewport();
   syncGridNodes();
   if (state.snapshot) {
@@ -1426,6 +1556,7 @@ async function applyLayout() {
         { sequence, generation },
       );
     }
+    renderUnavailableDiagnostics();
   }
   requestAnimationFrame(() => panelRuntime.resize());
   syncAttributionToPanel();
@@ -1514,7 +1645,7 @@ function bindPanelElement(panel, name) {
       const instance = state.layout.panels[name];
       if (!instance) return;
       instance.enabled = input.checked;
-      persistLayout();
+      persistLayout({ customize: false });
       void applyLayout();
       showToast(
         captureLabel
@@ -1532,6 +1663,7 @@ function bindPanelElement(panel, name) {
   if (handle) {
     handle.draggable = false;
     handle.addEventListener("keydown", (event) => {
+      if (!workspaceIsEditable(state.layout.preset)) return;
       if (!event.altKey || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return;
       event.preventDefault();
       const placement = state.layout.panels[name].placement;
@@ -1557,6 +1689,7 @@ function bindPanelElement(panel, name) {
   }
   const menu = panel.querySelector("[data-panel-menu]");
   menu?.addEventListener("click", (event) => {
+    if (!workspaceIsEditable(state.layout.preset)) return;
     event.stopPropagation();
     openPanelMenu(name, menu);
   });
@@ -1578,12 +1711,14 @@ function bindPanelLayout() {
     if (!syncingGrid) syncGridNodes(nodes);
   });
   gridStack.on("resizestop", (_event, item) => {
+    if (!workspaceIsEditable(state.layout.preset)) return;
     syncGridNodes([item.gridstackNode]);
     persistLayout();
     panelRuntime.resize();
     showToast(`${panelLabel(item.dataset.panel)} resized.`);
   });
   gridStack.on("dragstop", (_event, item) => {
+    if (!workspaceIsEditable(state.layout.preset)) return;
     syncGridNodes([item.gridstackNode]);
     persistLayout();
     panelRuntime.resize();
@@ -1600,6 +1735,7 @@ function positionMenu(menu, anchor) {
 }
 
 function openPanelMenu(name, anchor) {
+  if (!workspaceIsEditable(state.layout.preset)) return;
   state.selectedPanel = name;
   const instance = state.layout.panels[name];
   $("#panel-menu-title").textContent = panelLabel(name);
@@ -1699,12 +1835,30 @@ function removeTelemetryPanel(name) {
 }
 
 function bindWorkspaceMenus() {
+  const closePlayerMenu = () => {
+    $("#player-menu").hidden = true;
+    $("#more-toggle").setAttribute("aria-expanded", "false");
+  };
+  $("#source-back").addEventListener("click", () => {
+    void ensureSourceBrowser()
+      .then((browser) => browser.browseCurrentSource())
+      .catch((error) => showToast(`Source browser failed: ${error.message || error}`, true));
+  });
+  $("#more-toggle").addEventListener("click", (event) => {
+    const menu = $("#player-menu");
+    const opening = menu.hidden;
+    menu.hidden = true;
+    event.currentTarget.setAttribute("aria-expanded", String(opening));
+    if (opening) positionMenu(menu, event.currentTarget);
+  });
   $("#change-source").addEventListener("click", () => {
+    closePlayerMenu();
     void ensureSourceBrowser()
       .then((browser) => browser.browseCurrentSource())
       .catch((error) => showToast(`Source browser failed: ${error.message || error}`, true));
   });
   $("#layouts-toggle").addEventListener("click", (event) => {
+    if (!workspaceIsEditable(state.layout.preset)) return;
     $("#panel-shelf").hidden = true;
     $("#panels-toggle").setAttribute("aria-expanded", "false");
     positionMenu($("#layout-menu"), event.currentTarget);
@@ -1712,7 +1866,11 @@ function bindWorkspaceMenus() {
   $("#workspace-preset").addEventListener("change", (event) => {
     const preset = event.target.value;
     if (preset === "custom") {
-      $("#panels-toggle").click();
+      state.layout.preset = "custom";
+      state.layout.name = "Customize";
+      persistLayout({ customize: false });
+      void applyLayout();
+      showToast("Customize mode enabled. Panels can now be moved and resized.");
       return;
     }
     applyWorkspacePreset(state.layout, preset, { paired: pairedWorkspace });
@@ -1721,6 +1879,7 @@ function bindWorkspaceMenus() {
     showToast(`${event.target.selectedOptions[0].textContent} view applied.`);
   });
   $("#save-layout").addEventListener("click", () => {
+    if (!workspaceIsEditable(state.layout.preset)) return;
     const name = $("#layout-name-input").value.trim().slice(0, 48) || "Workspace";
     state.layout.name = name;
     const saved = readSavedLayouts();
@@ -1739,10 +1898,12 @@ function bindWorkspaceMenus() {
     showToast("Watch view restored.");
   });
   $("#panel-new-window").addEventListener("click", () => {
+    if (!workspaceIsEditable(state.layout.preset)) return;
     if (state.selectedPanel) movePanelToNewWindow(state.selectedPanel);
     $("#panel-menu").hidden = true;
   });
   $("#panel-dock-main").addEventListener("click", () => {
+    if (!workspaceIsEditable(state.layout.preset)) return;
     const name = state.selectedPanel;
     if (!name) return;
     const placement = state.layout.panels[name].placement;
@@ -1757,14 +1918,17 @@ function bindWorkspaceMenus() {
     if (state.windowId !== "main" && !panelsInThisWindow().length) setTimeout(() => window.close(), 250);
   });
   $("#panel-edit").addEventListener("click", () => {
+    if (!workspaceIsEditable(state.layout.preset)) return;
     if (state.selectedPanel) panelManager.openEditor(state.selectedPanel);
     $("#panel-menu").hidden = true;
   });
   $("#panel-duplicate").addEventListener("click", () => {
+    if (!workspaceIsEditable(state.layout.preset)) return;
     if (state.selectedPanel) panelManager.duplicate(state.selectedPanel);
     $("#panel-menu").hidden = true;
   });
   $("#panel-hide").addEventListener("click", () => {
+    if (!workspaceIsEditable(state.layout.preset)) return;
     const name = state.selectedPanel;
     if (!name) return;
     state.layout.panels[name].placement.visible = false;
@@ -1774,6 +1938,7 @@ function bindWorkspaceMenus() {
     showToast(`${panelLabel(name)} moved to the panel shelf.`);
   });
   $("#panel-reset-size").addEventListener("click", () => {
+    if (!workspaceIsEditable(state.layout.preset)) return;
     const name = state.selectedPanel;
     if (!name) return;
     const placement = state.layout.panels[name].placement;
@@ -1785,10 +1950,12 @@ function bindWorkspaceMenus() {
     $("#panel-menu").hidden = true;
   });
   $("#panel-remove").addEventListener("click", () => {
+    if (!workspaceIsEditable(state.layout.preset)) return;
     if (state.selectedPanel) panelManager.remove(state.selectedPanel);
     $("#panel-menu").hidden = true;
   });
   $("#panels-toggle").addEventListener("click", (event) => {
+    if (!workspaceIsEditable(state.layout.preset)) return;
     const shelf = $("#panel-shelf");
     const opening = shelf.hidden;
     $("#layout-menu").hidden = true;
@@ -1800,17 +1967,35 @@ function bindWorkspaceMenus() {
     }
   });
   $("#new-window").addEventListener("click", () => {
+    if (!workspaceIsEditable(state.layout.preset)) return;
     const targetWindow = `window-${crypto.randomUUID().slice(0, 8)}`;
     const popup = window.open(windowUrl(targetWindow), `gradlab-${targetWindow}`, "popup");
     if (!popup) showToast("The browser blocked the new workspace window.", true);
   });
   document.addEventListener("click", (event) => {
+    if (!$("#player-menu").contains(event.target) && !event.target.closest("#more-toggle")) {
+      closePlayerMenu();
+    }
     if (!$("#panel-menu").contains(event.target) && !event.target.closest("[data-panel-menu]")) $("#panel-menu").hidden = true;
     if (!$("#layout-menu").contains(event.target) && !event.target.closest("#layouts-toggle")) $("#layout-menu").hidden = true;
     if (!$("#panel-shelf").contains(event.target) && !event.target.closest("#panels-toggle")) {
       $("#panel-shelf").hidden = true;
       $("#panels-toggle").setAttribute("aria-expanded", "false");
     }
+    if (!$("#playback-settings-menu").contains(event.target) && !event.target.closest("#playback-settings-toggle")) {
+      $("#playback-settings-menu").hidden = true;
+      $("#playback-settings-toggle").setAttribute("aria-expanded", "false");
+    }
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape") return;
+    closePlayerMenu();
+    $("#layout-menu").hidden = true;
+    $("#panel-menu").hidden = true;
+    $("#panel-shelf").hidden = true;
+    $("#panels-toggle").setAttribute("aria-expanded", "false");
+    $("#playback-settings-menu").hidden = true;
+    $("#playback-settings-toggle").setAttribute("aria-expanded", "false");
   });
 }
 
@@ -1944,9 +2129,38 @@ function bindWorkspaceSync() {
 
 function bindTimeline() {
   const scrubber = $("#timeline-scrubber");
-  $("#timeline-playback-toggle").addEventListener("click", () => {
-    if (playbackIsRunning()) pauseCurrentPlayback();
-    else playFromCurrentPosition();
+  $("#timeline-playback-toggle").addEventListener("click", (event) => {
+    const action = event.currentTarget.dataset.action;
+    if (action === "pause") {
+      pauseCurrentPlayback();
+    } else if (action === "next_episode") {
+      const options = playbackSettings?.episodeOptions() || {};
+      command("next_episode", {
+        sampling_mode: options.sampling_mode,
+        driver: "policy",
+        enabled_termination_conditions: options.enabled_termination_conditions,
+      });
+    } else {
+      playFromCurrentPosition();
+    }
+  });
+  $("#timeline-reset").addEventListener("click", () => {
+    const options = playbackSettings?.episodeOptions() || {};
+    command("reset_episode", {
+      seed: options.seed,
+      enabled_termination_conditions: options.enabled_termination_conditions,
+    });
+  });
+  $("#playback-settings-toggle").addEventListener("click", (event) => {
+    const menu = $("#playback-settings-menu");
+    const opening = menu.hidden;
+    menu.hidden = true;
+    event.currentTarget.setAttribute("aria-expanded", String(opening));
+    if (opening) positionMenu(menu, event.currentTarget);
+  });
+  $("#playback-settings-close").addEventListener("click", () => {
+    $("#playback-settings-menu").hidden = true;
+    $("#playback-settings-toggle").setAttribute("aria-expanded", "false");
   });
   const selectIndex = (index) => {
     stopInspectionReplay({ render: false });
@@ -1973,8 +2187,7 @@ function bindTimeline() {
     }
     if (event.code !== "Space" || event.repeat) return;
     event.preventDefault();
-    if (playbackIsRunning()) pauseCurrentPlayback();
-    else playFromCurrentPosition();
+    $("#timeline-playback-toggle").click();
   });
 }
 
@@ -1999,17 +2212,29 @@ function initWorkspace() {
     onRemove: removeTelemetryPanel,
     showToast,
   });
+  playbackSettings = mountPlaybackSettings({
+    services: {
+      getState: () => state,
+      command,
+    },
+    idPrefix: "player-playback",
+  });
+  $("#playback-settings-content").append(playbackSettings.element);
   setDetachedLayout();
   bindPanelLayout();
   bindWorkspaceMenus();
   bindWorkspaceSync();
   bindTimeline();
   $("#inspect-active").addEventListener("click", () => {
+    $("#player-menu").hidden = true;
+    $("#more-toggle").setAttribute("aria-expanded", "false");
     void openContractInspection("/api/playback/inspection", {
       preferredDocument: "goal",
     }).catch((error) => showToast(`Contract viewer failed: ${error.message || error}`, true));
   });
   $("#publish-episode").addEventListener("click", () => {
+    $("#player-menu").hidden = true;
+    $("#more-toggle").setAttribute("aria-expanded", "false");
     void openPublicationDialog();
   });
   $("#publication-close").addEventListener("click", () => {

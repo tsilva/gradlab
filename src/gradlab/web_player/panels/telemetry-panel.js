@@ -265,7 +265,11 @@ function makeLineBlock(block) {
         foot.hidden = !foot.textContent;
         foot.classList.toggle("warning", presentation.warning);
       }
-      section.dataset.telemetryStatus = unavailable?.status || "available";
+      const observed = descriptors.some((descriptor) => (
+        seriesForMetric(descriptor.key, history).some(Number.isFinite)
+      ));
+      section.dataset.telemetryStatus = unavailable?.status
+        || (observed ? "available" : "not-yet-observed");
       renderChart(currentContext);
     },
   };
