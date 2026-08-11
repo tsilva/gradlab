@@ -62,7 +62,7 @@ def test_gradoom_recipe_trains_on_gpu_and_keeps_reference_vizdoom_evaluation() -
         "episode_timeout": 4200,
         "render_hud": False,
     }
-    assert train_config["env_args"]["compile_engine"] is True
+    assert train_config["env_args"]["compile_engine"] is False
     assert train_config["checkpoint_eval_environment"]["env_provider"] == "vizdoom-turbo"
     assert train_config["checkpoint_eval_environment"]["env_args"]["doom_skill"] == 3
     assert train_config["checkpoint_eval_environment"]["env_args"]["vizdoom_config"] == {
