@@ -13,8 +13,8 @@ train:
       env_args:
         # GraDOOM is single-stream GPU execution; this compatibility knob is intentionally inert.
         num_threads: 1
-        # TorchInductor is the first fused backend; handwritten Triton kernels will replace hot graphs.
-        compile_engine: true
+        # Keep the supported eager engine until the production CUDA graph passes its release gate.
+        compile_engine: false
     preprocessing:
       frame_skip: 2
       obs_crop: [0, 32, 0, 0]
