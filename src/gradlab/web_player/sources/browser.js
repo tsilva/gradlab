@@ -635,6 +635,22 @@ export function checkpointMetricRoleLabel(column) {
   return "";
 }
 
+export function checkpointMetricHeaderLabel(column) {
+  const metric = String(column?.metric || "");
+  const evidence = (
+    column?.evidence === "evaluation"
+    || /^(eval\/|leader\/)/.test(metric)
+  ) ? "Eval" : "Train";
+  if (/\/outcome\/success\//.test(metric)) return `${evidence} success`;
+  if (/\/episode\/return\//.test(metric)) return `${evidence} return`;
+  const reason = metric.match(/\/outcome\/reason\/([^/]+)\/rate$/);
+  if (reason) return `${evidence} ${humanizeMetricPart(reason[1]).toLowerCase()}`;
+  const progress = metric.match(/\/progress\/([^/]+)\//);
+  if (progress) return `${evidence} ${humanizeMetricPart(progress[1]).toLowerCase()}`;
+  if (metric === "leader/checkpoint/step") return "Checkpoint step";
+  return column?.label || metricLabel(metric);
+}
+
 export function checkpointMetricDescription(column) {
   const role = checkpointMetricRoleLabel(column);
   const evidence = column?.evidence === "evaluation"
@@ -890,6 +906,18 @@ export function checkpointNavigationPresentation(items, checkpointId) {
   };
 }
 
+export function checkpointPrefetchSources(items, checkpointId) {
+  const presentation = checkpointNavigationPresentation(items, checkpointId);
+  return [presentation.previous, presentation.next]
+    .filter((item) => item && String(item.manifest_url || ""))
+    .map((item) => ({
+      kind: "public_run",
+      value: String(item.manifest_url),
+      run_id: String(item.run_id || ""),
+      checkpoint_id: String(item.checkpoint_id || ""),
+    }));
+}
+
 export function sourceBreadcrumbItems(route) {
   const hasActiveCheckpoint = Boolean(route?.checkpoint_id);
   const items = [{
@@ -975,6 +1003,7 @@ export class SourceBrowser {
       getState,
       showToast,
       checkpointNavigationRoot = null,
+      beginCheckpointLoad = null,
       openInspection,
       openSourceRoute,
       resumePlayback = null,
@@ -997,6 +1026,7 @@ export class SourceBrowser {
     this.checkpointPosition = checkpointNavigationRoot?.querySelector(
       "[data-checkpoint-position]",
     ) || null;
+    this.beginCheckpointLoad = beginCheckpointLoad;
     this.openInspection = openInspection;
     this.openSourceRoute = openSourceRoute;
     this.resumePlayback = resumePlayback;
@@ -1053,6 +1083,7 @@ export class SourceBrowser {
     this.activeCheckpointRequestSerial = 0;
     this.activeCheckpointError = "";
     this.activeCheckpointPendingId = "";
+    this.adjacentPrefetchKey = "";
     this.initialEnvironmentCatalog = null;
     this.initialCatalogConsumed = false;
     this.historyEnabled = (
@@ -1231,10 +1262,10 @@ export class SourceBrowser {
     root.classList.toggle("warning", Boolean(this.activeCheckpointError || unavailable));
     if (this.checkpointPosition) {
       this.checkpointPosition.textContent = loading
-        ? "Checkpoint …"
+        ? "… / …"
         : presentation.position === null
-          ? `Checkpoint — of ${presentation.count.toLocaleString()}`
-          : `Checkpoint ${presentation.position.toLocaleString()} of ${presentation.count.toLocaleString()}`;
+          ? `— / ${presentation.count.toLocaleString()}`
+          : `${presentation.position.toLocaleString()} / ${presentation.count.toLocaleString()}`;
       this.checkpointPosition.title = this.activeCheckpointError
         || String(presentation.current?.checkpoint_id || route.checkpoint_id);
     }
@@ -1283,6 +1314,7 @@ export class SourceBrowser {
         Array.isArray(payload.items) ? payload.items : [],
       );
       this.activeCheckpointError = "";
+      this.prefetchAdjacentCheckpoints(requestRoute);
     } catch (error) {
       if (controller.signal.aborted || serial !== this.activeCheckpointRequestSerial) return;
       this.activeCheckpointError = String(error?.message || error);
@@ -1303,9 +1335,29 @@ export class SourceBrowser {
     );
     const item = direction === "previous" ? presentation.previous : presentation.next;
     if (!item || this.activeCheckpointPendingId) return false;
-    if (!this.selectCheckpoint(item)) return false;
+    const commandId = this.selectCheckpoint(item);
+    if (!commandId) return false;
     this.activeCheckpointPendingId = String(item.checkpoint_id || "");
+    this.beginCheckpointLoad?.({
+      commandId,
+      checkpointId: this.activeCheckpointPendingId,
+    });
     this.renderActiveCheckpointNavigation(this.route);
+    return true;
+  }
+
+  prefetchAdjacentCheckpoints(route = this.route) {
+    if (!this.hasControl()) return false;
+    const sources = checkpointPrefetchSources(
+      this.activeCheckpointItems(route),
+      route?.checkpoint_id,
+    );
+    if (!sources.length) return false;
+    const key = JSON.stringify(sources.map((source) => source.value));
+    if (key === this.adjacentPrefetchKey) return false;
+    const commandId = this.command("prefetch_sources", { sources });
+    if (commandId === null) return false;
+    this.adjacentPrefetchKey = key;
     return true;
   }
 
@@ -1780,7 +1832,7 @@ export class SourceBrowser {
     if (commandId === null) return false;
     this.route = route;
     this.syncUrl(historyMode);
-    return true;
+    return commandId;
   }
 
   back() {
@@ -1862,25 +1914,6 @@ export class SourceBrowser {
       head.append(refresh);
     }
     shell.append(head);
-
-    if (this.freshness !== "fresh" || this.catalogWarnings.length) {
-      const notice = document.createElement("details");
-      notice.className = `source-notice catalog-${this.freshness}`;
-      const label = this.freshness === "stale"
-        ? "Showing stale catalog data."
-        : this.freshness === "partial"
-          ? "Some catalog evidence is unavailable."
-          : "Catalog warning.";
-      const messages = this.catalogWarnings
-        .map((warning) => String(warning?.message || "").trim())
-        .filter(Boolean);
-      const summary = document.createElement("summary");
-      summary.textContent = label;
-      const detail = document.createElement("p");
-      detail.textContent = messages.join(" ") || "No additional details were provided.";
-      notice.append(summary, detail);
-      shell.append(notice);
-    }
 
     if (!this.hasControl()) {
       const observer = document.createElement("p");
@@ -2196,10 +2229,20 @@ export class SourceBrowser {
       body.append(error);
       return body;
     }
-    if (this.loading && !this.items.length) {
-      body.append(this.loadingState("Loading catalog…"));
-      return body;
+    if (this.loading) {
+      body.classList.add("loading");
+      if (!this.items.length) body.classList.add("loading-empty");
+      const indicator = document.createElement("div");
+      indicator.className = "source-list-loading-indicator";
+      indicator.setAttribute("role", "status");
+      indicator.setAttribute("aria-label", "Refreshing list");
+      const spinner = document.createElement("span");
+      spinner.className = "spinner";
+      spinner.setAttribute("aria-hidden", "true");
+      indicator.append(spinner);
+      body.append(indicator);
     }
+    if (this.loading && !this.items.length) return body;
     if (!this.items.length) {
       const empty = document.createElement("div");
       empty.className = "source-empty";
@@ -2762,6 +2805,7 @@ export class SourceBrowser {
     const headerRow = document.createElement("tr");
     const showingRuns = this.route.level === "runs" && !this.route.run_id;
     const showingCheckpoints = this.route.level === "runs" && Boolean(this.route.run_id);
+    if (showingCheckpoints) table.classList.add("checkpoint-table");
     const runRankingColumns = showingRuns ? this.activeRunMetricColumns() : [];
     const runMetricColumns = availableRunMetricColumns(this.items, runRankingColumns);
     const checkpointMetricColumns = showingCheckpoints ? this.metricColumns : [];
@@ -2785,7 +2829,8 @@ export class SourceBrowser {
           { label: "Step" },
           ...checkpointMetricColumns.map((column) => ({
             ...column,
-            label: column.label || metricLabel(column.metric),
+            fullLabel: column.label || metricLabel(column.metric),
+            label: checkpointMetricHeaderLabel(column),
           })),
           ...(showingCheckpoints ? [{ label: "Size" }, { label: "Created" }] : []),
         ];
@@ -2814,6 +2859,7 @@ export class SourceBrowser {
         });
         cell.append(selectAll);
       } else if (column.metric) {
+        const fullLabel = column.fullLabel || column.label;
         const active = this.sort.metric === column.metric;
         const defaultDirection = column.direction === "min" ? "ascending" : "descending";
         const nextDirection = active && this.sort.direction === "ascending"
@@ -2825,30 +2871,24 @@ export class SourceBrowser {
         const sortButton = document.createElement("button");
         sortButton.type = "button";
         sortButton.className = "source-sort";
-        sortButton.title = `${column.label} · ${
+        sortButton.title = `${fullLabel} · ${
           showingCheckpoints
             ? checkpointMetricDescription(column)
             : column.direction === "min" ? "Lower is better" : "Higher is better"
         }`;
         sortButton.setAttribute(
           "aria-label",
-          `Sort by ${column.label}, ${nextDirection}`,
+          `Sort by ${fullLabel}, ${nextDirection}`,
         );
         const labelGroup = document.createElement("span");
         labelGroup.className = "source-sort-label";
         const label = document.createElement("span");
         label.textContent = column.label;
         labelGroup.append(label);
-        const role = checkpointMetricRoleLabel(column);
-        if (showingCheckpoints && role) {
-          const roleLabel = document.createElement("small");
-          roleLabel.className = `checkpoint-metric-role ${column.evidence || "training"}`;
-          roleLabel.textContent = role;
-          labelGroup.append(roleLabel);
-        }
         const indicator = document.createElement("span");
         indicator.className = "source-sort-indicator";
         indicator.setAttribute("aria-hidden", "true");
+        indicator.hidden = showingCheckpoints && !active;
         indicator.textContent = active
           ? this.sort.direction === "ascending" ? "↑" : "↓"
           : "↕";

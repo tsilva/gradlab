@@ -9,6 +9,10 @@ import {
   workspaceIsEditable,
 } from "../../src/gradlab/web_player/player-presentation.js";
 import { setSvgUseHref } from "../../src/gradlab/web_player/panels/shared.js";
+import {
+  orderedTerminationConditions,
+  terminationOutcomeClass,
+} from "../../src/gradlab/web_player/playback-settings.js";
 
 const settings = readFileSync(
   new URL("../../src/gradlab/web_player/playback-settings.js", import.meta.url),
@@ -78,6 +82,10 @@ test("one contextual transport covers play, pause, replay, and next episode", ()
 test("episode completion uses the player controls instead of a toast", () => {
   assert.equal(statusMessageShouldToast({ status_message: "Paused" }), true);
   assert.equal(statusMessageShouldToast({
+    status_message: "playing next episode",
+    session: { awaiting_next_episode: false },
+  }), false);
+  assert.equal(statusMessageShouldToast({
     status_message: "episode complete · choose Play next episode",
     session: { awaiting_next_episode: true },
   }), false);
@@ -121,6 +129,26 @@ test("the scrubber stays left of a fixed-width playback action rail", () => {
   assert.equal(settings.includes("data-reset-episode"), false);
 });
 
+test("Debug view overlays an idle-hiding transport on the game stage", () => {
+  assert.match(page, /id="timeline-home" hidden/);
+  assert.match(app, /const DEBUG_TIMELINE_HIDE_DELAY_MS = 1600/);
+  assert.match(app, /stage\.append\(timeline\)/);
+  assert.match(app, /timeline\.classList\.add\("game-timeline-overlay", "visible"\)/);
+  assert.match(app, /\["pointerenter", "pointermove", "pointerdown", "focusin"\]/);
+  assert.match(app, /stage\.addEventListener\("pointerleave", scheduleDebugTimelineHide/);
+  assert.match(app, /timeline\.addEventListener\("focusout", scheduleDebugTimelineHide/);
+  assert.match(app, /timeline\?\.contains\(document\.activeElement\)/);
+  assert.match(app, /settingsOpen/);
+  assert.match(
+    styles,
+    /body\[data-workspace-view="debug"\] \.game-stage > \.timeline\.game-timeline-overlay \{[^}]*position: absolute;[^}]*inset: auto 0 0;[^}]*opacity: 0;[^}]*pointer-events: none;/,
+  );
+  assert.match(
+    styles,
+    /\.timeline\.game-timeline-overlay\.visible,[\s\S]*\.timeline\.game-timeline-overlay:focus-within \{[^}]*opacity: 1;[^}]*pointer-events: auto;/,
+  );
+});
+
 test("timeline controls use accessible icons and distinct action colors", () => {
   for (const [id, label] of [
     ["timeline-playback-toggle", "Play"],
@@ -146,9 +174,20 @@ test("header checkpoint, workspace, and overflow controls share one height", () 
   assert.match(styles, /\.workspace-preset-picker select \{[^}]*height: 100%/);
   assert.match(styles, /\.checkpoint-navigation-button \{[^}]*height: 100%/);
   assert.match(styles, /\.checkpoint-navigation-position \{[^}]*height: 100%/);
+  assert.match(styles, /\.checkpoint-navigation-position \{[^}]*min-width: 4\.25rem/);
+  assert.match(styles, /#more-toggle\.icon-only \{ width: var\(--header-control-height\); \}/);
+  assert.match(
+    page,
+    /id="more-toggle" class="quiet icon-only"[^>]*aria-label="More playback actions"[^>]*>[\s\S]*?#ti-dots-vertical[\s\S]*?<\/button>/,
+  );
+  assert.doesNotMatch(page, /id="more-toggle"[^>]*>[\s\S]*?<span>More<\/span>/);
 });
 
 test("checkpoint navigation uses accessible directional icons", () => {
+  assert.match(
+    page,
+    /data-checkpoint-position aria-label="Checkpoint position" aria-live="polite">— \/ —<\/span>/,
+  );
   assert.match(
     page,
     /class="quiet checkpoint-navigation-button icon-only"[^>]*aria-label="Previous checkpoint"[^>]*data-checkpoint-previous[^>]*>[\s\S]*?#ti-arrow-left/,
@@ -161,6 +200,24 @@ test("checkpoint navigation uses accessible directional icons", () => {
   assert.equal(page.includes(">Next</button>"), false);
   assert.match(icons, /id="ti-arrow-right"/);
   assert.match(styles, /\.checkpoint-navigation-button\.icon-only \{ width: calc\(var\(--header-control-height\) - 2px\); \}/);
+});
+
+test("checkpoint changes block the whole player until the new frame is renderable", () => {
+  assert.match(
+    page,
+    /id="checkpoint-loading-mask" class="checkpoint-loading-mask" role="status" aria-live="polite" hidden/,
+  );
+  assert.match(page, /<strong>Loading checkpoint…<\/strong>/);
+  assert.match(
+    styles,
+    /\.checkpoint-loading-mask \{[^}]*position: fixed;[^}]*inset: 0;[^}]*z-index: 200;/,
+  );
+  assert.match(app, /function beginCheckpointLoad\(\{ commandId, checkpointId \}\)/);
+  assert.match(
+    app,
+    /showFramesForSequence\(Number\(snapshot\.sequence\)\)\.then\(\(\) => \{\s*if \(snapshotCompletesCheckpointLoad\(snapshot\)\) finishCheckpointLoad\(\);/,
+  );
+  assert.match(app, /message\.id === state\.checkpointLoad\?\.commandId && !message\.ok/);
 });
 
 test("playback tuning is one reusable on-demand settings form", () => {
@@ -192,6 +249,35 @@ test("episode termination selections flow through Reset and Next episode", () =>
     /command\("reset_episode", \{[\s\S]*seed: options\.seed,[\s\S]*enabled_termination_conditions: options\.enabled_termination_conditions/,
   );
   assert.match(settings, /Selections apply with Reset or Next episode\./);
+});
+
+test("episode termination settings prioritize and color semantic outcomes", () => {
+  const failure = { id: "event:life_loss", outcome: "failure" };
+  const success = { id: "event:level_change", outcome: "success" };
+  const firstTimeout = { id: "event:stalled", outcome: "timeout" };
+  const secondTimeout = { id: "limit:max_episode_steps", outcome: "timeout" };
+
+  assert.deepEqual(
+    orderedTerminationConditions([failure, firstTimeout, success, secondTimeout]),
+    [success, failure, firstTimeout, secondTimeout],
+  );
+  assert.equal(terminationOutcomeClass("success"), "outcome-success");
+  assert.equal(terminationOutcomeClass("failure"), "outcome-failure");
+  assert.equal(terminationOutcomeClass("timeout"), "outcome-timeout");
+  assert.equal(terminationOutcomeClass("neutral"), "");
+  assert.match(settings, /outcome\.className = `termination-outcome/);
+  assert.match(
+    styles,
+    /\.game-frame-detail\.outcome-success,[\s\S]*\.termination-outcome\.outcome-success \{[^}]*var\(--color-evaluation-text\)/,
+  );
+  assert.match(
+    styles,
+    /\.game-frame-detail\.outcome-failure,[\s\S]*\.termination-outcome\.outcome-failure \{[^}]*var\(--color-error-text\)/,
+  );
+  assert.match(
+    styles,
+    /\.game-frame-detail\.outcome-timeout,[\s\S]*\.termination-outcome\.outcome-timeout \{[^}]*var\(--color-series-amber\)/,
+  );
 });
 
 test("seed control keeps the loaded checkpoint default across automatic resets", () => {

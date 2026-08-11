@@ -60,6 +60,68 @@ final result: passed
 
 ---
 
+# Compact checkpoint metric headers design QA
+
+## Evidence
+
+- Source visual truth: `/var/folders/wz/x29jb7_x5rdc_5dcjr4qnhg00000gn/T/codex-clipboard-617d5914-e112-4fc3-9e1a-90c777c50229.png`
+- Browser-rendered implementation: `/tmp/gradlab-checkpoint-headers-populated.png`
+- Source pixels: 3014 × 750. The source is a focused before-state crop rather than a fixed target viewport.
+- Implementation pixels and CSS viewport: 1280 × 720 at browser device pixel ratio 2; the browser capture is normalized to CSS-pixel dimensions.
+- State: dark desktop ViZDoom Basic run checkpoint table with the final checkpoint and diagnostic training metrics visible.
+- Combined comparison evidence: the source and implementation were opened together in one QA comparison input. The narrower implementation viewport intentionally exercises the responsive header layout more severely than the source crop.
+
+## Full-view comparison evidence
+
+- The run recommendation, evaluation controls, checkpoint row, metric values, Best badges, table borders, and existing dark theme remain structurally unchanged.
+- The only intentional information-hierarchy change is in the four metric headers: long metric and role stacks become `Eval success`, `Train success`, `Eval return`, and `Train return`.
+- The table fits its 1201 CSS-pixel scroll viewport without horizontal overflow at the tested 1280 CSS-pixel browser width.
+
+## Focused comparison evidence
+
+- The before-state uses three to five uppercase lines per metric column plus repeated role labels and an inactive sort glyph in every column.
+- The implementation uses at most two short lines at 1280 CSS pixels, no repeated role sub-row, and no inactive sort glyphs. Browser measurements confirm all four labels fit without horizontal or vertical clipping.
+- Native hover titles retain the full metric label, evidence role, evidence authority, and better-direction explanation. Screen-reader sort labels retain the full metric name and next sort direction.
+
+## Required fidelity surfaces
+
+- Fonts and typography: existing Inter table typography, uppercase treatment, weight, size, and theme tracking remain unchanged. Only copy length, wrapping, and redundant role lines changed.
+- Spacing and layout rhythm: checkpoint header inline padding is reduced from 0.7rem to 0.45rem. The header height is compact and consistent while the body geometry remains unchanged.
+- Colors and visual tokens: all existing surface, border, text, interaction, evaluation, training, and Best-badge tokens remain unchanged.
+- Image quality and asset fidelity: this table contains no image assets. Existing packaged control icons are unchanged.
+- Copy and content: visible labels use the shortest clear evidence/metric pairs. Full scientific definitions remain available through titles and accessible names.
+- Accessibility and interaction states: all metric headers remain buttons; native tooltips and screen-reader names use the full labels. Sorting was exercised in the browser, `aria-sort` changed to `descending`, and only the active column displayed a down-arrow.
+
+## Findings
+
+- No actionable P0, P1, or P2 differences remain for the requested compact-header treatment.
+
+## Comparison history
+
+- Pass 1 P2: compact labels still truncated at the narrower 1280 CSS-pixel viewport because every inactive column reserved space for a sort glyph and labels could not wrap cleanly.
+- Fix: hide inactive sort glyphs, tighten checkpoint-header padding, and allow compact two-word labels to wrap without ellipsis.
+- Post-fix evidence: all four labels report equal client and scroll bounds with no clipping; the table has no horizontal overflow, and the active sort indicator still appears after interaction.
+
+## Primary interactions tested
+
+- Loaded Environment → Goal → current goal configuration → Run → Checkpoints in the packaged player.
+- Verified all four compact labels, full title text, and full accessible sort names.
+- Sorted by evaluation success and verified `aria-sort="descending"`, the next action became ascending, and the active down-arrow appeared without restoring inactive glyph noise.
+- Browser console warnings and errors: none.
+- Automated verification: all 167 web-player tests, JavaScript syntax, and diff checks passed.
+
+## Implementation checklist
+
+- [x] Shorten the four visible checkpoint metric labels.
+- [x] Preserve evaluation-versus-training meaning in the visible text.
+- [x] Move role, evidence-authority, aggregation, and direction detail into tooltips and accessible labels.
+- [x] Keep labels unclipped at the narrower tested viewport.
+- [x] Show a sort arrow only for the active column.
+
+final result: passed
+
+---
+
 # Collapsed playback toggle design QA
 
 ## Evidence

@@ -22,7 +22,7 @@
       <div class="header-status">
         <nav id="checkpoint-navigation" class="checkpoint-navigation" aria-label="Checkpoint navigation" hidden>
           <button class="quiet checkpoint-navigation-button icon-only" type="button" aria-label="Previous checkpoint" data-checkpoint-previous><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-arrow-left"></use></svg></button>
-          <span class="checkpoint-navigation-position" data-checkpoint-position aria-live="polite">Checkpoint — of —</span>
+          <span class="checkpoint-navigation-position" data-checkpoint-position aria-label="Checkpoint position" aria-live="polite">— / —</span>
           <button class="quiet checkpoint-navigation-button icon-only" type="button" aria-label="Next checkpoint" data-checkpoint-next><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-arrow-right"></use></svg></button>
         </nav>
         <label id="workspace-preset-picker" class="workspace-preset-picker" title="Choose a task-focused workspace">
@@ -35,9 +35,16 @@
           </select>
         </label>
         <span id="connection-status" class="sync-status warning" aria-live="polite">Connecting</span>
-        <button id="more-toggle" class="quiet button-with-icon" type="button" aria-label="More playback actions" title="More playback actions" aria-controls="player-menu" aria-expanded="false" hidden><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-dots-vertical"></use></svg><span>More</span></button>
+        <button id="more-toggle" class="quiet icon-only" type="button" aria-label="More playback actions" title="More playback actions" aria-controls="player-menu" aria-expanded="false" hidden><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-dots-vertical"></use></svg></button>
       </div>
     </header>
+
+    <div id="checkpoint-loading-mask" class="checkpoint-loading-mask" role="status" aria-live="polite" hidden>
+      <div class="checkpoint-loading-status">
+        <span class="spinner" aria-hidden="true"></span>
+        <strong>Loading checkpoint…</strong>
+      </div>
+    </div>
 
     <div id="player-menu" class="floating-menu player-menu" hidden>
       <button id="change-source" class="quiet button-with-icon" type="button" title="Choose another checkpoint" hidden><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-folder-search"></use></svg><span>Change checkpoint</span></button>
@@ -88,9 +95,10 @@
     </section>
     <main id="dashboard" class="dashboard grid-stack"></main>
 
+    <div id="timeline-home" hidden></div>
     <section id="timeline" class="timeline" aria-label="Bounded trajectory inspection">
       <div class="timeline-labels">
-        <strong id="timeline-label">STEP —</strong>
+        <strong id="timeline-label">EPISODE — · STEP —</strong>
         <span id="playback-evidence-status" class="playback-evidence-status" role="status" hidden></span>
       </div>
       <div class="timeline-track">

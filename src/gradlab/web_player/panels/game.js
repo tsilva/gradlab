@@ -54,7 +54,7 @@ export function gameFrameTerminationTone(snapshot) {
   const transition = snapshot?.transition;
   if (transition?.after?.frame_role !== "terminal_observation") return "";
   const outcome = String(transition.outcome || "").toLowerCase();
-  return ["success", "failure"].includes(outcome) ? outcome : "";
+  return ["success", "failure", "timeout"].includes(outcome) ? outcome : "";
 }
 
 export function mount({ definition, services }) {
@@ -152,6 +152,7 @@ export function mount({ definition, services }) {
       detailElement.hidden = !detail;
       detailElement.classList.toggle("outcome-success", tone === "success");
       detailElement.classList.toggle("outcome-failure", tone === "failure");
+      detailElement.classList.toggle("outcome-timeout", tone === "timeout");
       canvas.setAttribute(
         "aria-label",
         `${phase}.${detail ? ` ${detail}.` : ""} Focus for human controls: arrows move, Z is B, X is A, Enter is Start, and Shift is Select.`,

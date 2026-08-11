@@ -11,6 +11,28 @@ function selectionLabel(mode) {
   })[mode] || String(mode || "").replaceAll("_", " ");
 }
 
+const TERMINATION_OUTCOME_ORDER = new Map([
+  ["success", 0],
+  ["failure", 1],
+  ["timeout", 2],
+]);
+
+export function orderedTerminationConditions(conditions) {
+  return (Array.isArray(conditions) ? conditions : [])
+    .map((condition, index) => ({ condition, index }))
+    .sort((left, right) => (
+      (TERMINATION_OUTCOME_ORDER.get(String(left.condition?.outcome || "").toLowerCase()) ?? 3)
+      - (TERMINATION_OUTCOME_ORDER.get(String(right.condition?.outcome || "").toLowerCase()) ?? 3)
+      || left.index - right.index
+    ))
+    .map(({ condition }) => condition);
+}
+
+export function terminationOutcomeClass(outcome) {
+  const normalized = String(outcome || "").toLowerCase();
+  return TERMINATION_OUTCOME_ORDER.has(normalized) ? `outcome-${normalized}` : "";
+}
+
 export function mountPlaybackSettings({ services, idPrefix = "playback" }) {
   const element = document.createElement("div");
   element.className = "control-components playback-settings-form";
@@ -192,9 +214,9 @@ export function mountPlaybackSettings({ services, idPrefix = "playback" }) {
       }
       contractHint.textContent = contractMessages.join(" ")
         || "Training-compatible critic comparison is available after a terminal episode.";
-      const terminationConditions = Array.isArray(session.termination_conditions)
-        ? session.termination_conditions
-        : [];
+      const terminationConditions = orderedTerminationConditions(
+        session.termination_conditions,
+      );
       terminationSettings.hidden = recording || dataset || terminationConditions.length === 0;
       terminationSource.textContent = `Defaults: ${session.termination_source || "training"}`;
       const terminationKey = JSON.stringify(terminationConditions);
@@ -210,6 +232,9 @@ export function mountPlaybackSettings({ services, idPrefix = "playback" }) {
           const name = document.createElement("span");
           name.textContent = condition.label;
           const outcome = document.createElement("small");
+          outcome.className = `termination-outcome ${
+            terminationOutcomeClass(condition.outcome)
+          }`.trim();
           outcome.textContent = condition.outcome;
           label.append(input, name, outcome);
           return label;

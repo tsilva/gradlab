@@ -28,6 +28,7 @@ import {
   statsBlockFoot,
 } from "../../src/gradlab/web_player/panels/telemetry-panel.js";
 import {
+  displayedEpisode,
   displayedStep,
   lineCursorIndex,
   lineCursorX,
@@ -400,7 +401,15 @@ test("line-chart pointer positions select the nearest sample", () => {
   assert.equal(lineCursorIndex(plot, 500, 5), 4);
 });
 
-test("the timeline shows the displayed transition step across a boundary", () => {
+test("the timeline shows the displayed episode and step across a boundary", () => {
+  assert.equal(
+    displayedEpisode({ session: { episode: 3 }, transition: null }),
+    3,
+  );
+  assert.equal(
+    displayedEpisode({ session: { episode: 4 }, transition: { episode: 3 } }),
+    3,
+  );
   assert.equal(
     displayedStep({ session: { step: 0 }, transition: null }),
     0,
@@ -416,10 +425,10 @@ test("the timeline shows the displayed transition step across a boundary", () =>
   assert.equal(
     timelineLabel({
       sequence: 763,
-      session: { step: 1228 },
-      transition: { step: 763 },
+      session: { episode: 4, step: 1228 },
+      transition: { episode: 3, step: 763 },
     }),
-    "STEP 763",
+    "EPISODE 3 · STEP 763",
   );
 });
 

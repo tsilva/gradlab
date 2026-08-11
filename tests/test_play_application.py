@@ -86,6 +86,7 @@ class FakeLoader:
         self.activations = 0
         self.runners = []
         self.prepared_specs = []
+        self.prefetched_specs = []
 
     def prepare(self, spec, progress):
         progress("verifying", "Verifying fixture")
@@ -103,6 +104,9 @@ class FakeLoader:
             spec=candidate.spec,
             source=SimpleNamespace(),
         )
+
+    def prefetch(self, spec) -> None:
+        self.prefetched_specs.append(spec)
 
 
 def wait_for_phase(host: PlaybackHost, phase: str) -> dict:
@@ -250,6 +254,27 @@ def test_playback_loader_passes_bundle_algorithm_to_model_loader(monkeypatch) ->
     )
 
 
+def test_playback_loader_prefetch_resolves_to_disk_without_activation(monkeypatch) -> None:
+    model_path = SimpleNamespace()
+    resolved = SimpleNamespace(model_path=model_path, run_config={})
+    resolver = MagicMock(return_value=resolved)
+    monkeypatch.setattr("gradlab.play_runtime.resolve_model_source", resolver)
+    loader = PlaybackLoader(
+        SimpleNamespace(
+            public_model_root="/tmp/public-models",
+            hf_model_root="/tmp/hf-models",
+            hf_revision=None,
+            public_models_base_url="https://models.example",
+        ),
+        argv=[],
+        explicit_seed=False,
+    )
+    spec = PlaySourceSpec("manifest", "https://models.example/manifest.json")
+
+    assert loader.prefetch(spec) is model_path
+    resolver.assert_called_once()
+
+
 def test_browse_sources_updates_the_shared_resource_route() -> None:
     host = PlaybackHost(FakeLoader())
     route = {
@@ -264,6 +289,49 @@ def test_browse_sources_updates_the_shared_resource_route() -> None:
     snapshot = host.snapshot()
     assert snapshot["app"]["phase"] == "selecting"
     assert snapshot["app"]["route"] == route
+    host.stop()
+
+
+def test_playback_host_prefetches_two_immutable_neighbors_without_activation() -> None:
+    loader = FakeLoader()
+    host = PlaybackHost(loader)
+    run_id = "gradlab-" + "a" * 32
+
+    def manifest(step: int, digest: str) -> str:
+        return f"https://models.example/runs/{run_id}/checkpoints/{step}-{digest}/manifest.json"
+
+    host.submit(
+        source_command(
+            "prefetch_sources",
+            {
+                "sources": [
+                    {
+                        "kind": "public_run",
+                        "value": manifest(100, "b" * 64),
+                        "run_id": run_id,
+                        "checkpoint_id": "checkpoint-100-" + "b" * 16,
+                    },
+                    {
+                        "kind": "public_run",
+                        "value": manifest(300, "c" * 64),
+                        "run_id": run_id,
+                        "checkpoint_id": "checkpoint-300-" + "c" * 16,
+                    },
+                ],
+            },
+        )
+    )
+    deadline = time.monotonic() + 2.0
+    while len(loader.prefetched_specs) < 2 and time.monotonic() < deadline:
+        time.sleep(0.005)
+
+    assert sorted(spec.checkpoint_id for spec in loader.prefetched_specs) == sorted(
+        [
+            "checkpoint-100-" + "b" * 16,
+            "checkpoint-300-" + "c" * 16,
+        ]
+    )
+    assert loader.activations == 0
     host.stop()
 
 
@@ -318,11 +386,11 @@ def test_direct_public_run_resolves_active_checkpoint_breadcrumb_route() -> None
                     recipe={
                         "recipe": {
                             "goal": {"goal_id": "DefendTheLine-v1"},
-                                "goal_variant": {
-                                    "goal_id": "DefendTheLine-v1",
-                                    "goal_slug": "ViZDoom/DefendTheLine-v1",
-                                    "variant_id": "goal-variant-" + "c" * 24,
-                                },
+                            "goal_variant": {
+                                "goal_id": "DefendTheLine-v1",
+                                "goal_slug": "ViZDoom/DefendTheLine-v1",
+                                "variant_id": "goal-variant-" + "c" * 24,
+                            },
                         },
                     },
                     model={

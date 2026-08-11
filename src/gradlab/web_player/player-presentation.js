@@ -19,6 +19,7 @@ export function playbackSourceTitle(route = {}) {
 export function statusMessageShouldToast({ status_message: statusMessage = "", session = {} } = {}) {
   const message = String(statusMessage || "").trim();
   if (!message) return false;
+  if (/^playing next episode$/i.test(message)) return false;
   if (!session.awaiting_next_episode) return true;
   return /error|expired|unsupported|no configured/i.test(message);
 }

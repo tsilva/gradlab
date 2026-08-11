@@ -35,8 +35,12 @@ export function displayedStep(snapshot) {
   return snapshot?.transition?.step ?? snapshot?.session?.step;
 }
 
+export function displayedEpisode(snapshot) {
+  return snapshot?.transition?.episode ?? snapshot?.session?.episode;
+}
+
 export function timelineLabel(snapshot) {
-  return `STEP ${text(displayedStep(snapshot))}`;
+  return `EPISODE ${text(displayedEpisode(snapshot))} · STEP ${text(displayedStep(snapshot))}`;
 }
 
 export function setSvgUseHref(element, href) {

@@ -17,8 +17,20 @@ const styles = readFileSync(
 
 test("stats panels expose one standardized persisted processing switch", () => {
   assert.match(app, /input\.dataset\.panelEnabled = name/);
+  assert.match(app, /input\.role = "switch"/);
   assert.match(app, /instance\.enabled = input\.checked/);
   assert.match(app, /processing: processing\(\)/);
+  assert.match(app, /menu\?\.after\(toggle\)/);
+  assert.doesNotMatch(app, /label\.textContent = definition\.enabled \? "Enabled" : "Disabled"/);
+  assert.match(
+    styles,
+    /\.panel-processing-toggle \{[^}]*grid-column: -2 \/ -1;[^}]*justify-self: end;/,
+  );
+  assert.match(
+    styles,
+    /\.panel-processing-toggle input \{[^}]*appearance: none;[^}]*border-radius: 999px;/,
+  );
+  assert.match(styles, /\.panel-processing-toggle input:checked \{/);
   assert.match(styles, /Disabled — data processing is off/);
 });
 
