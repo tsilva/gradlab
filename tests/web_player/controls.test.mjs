@@ -17,27 +17,26 @@ const styles = readFileSync(
   "utf8",
 );
 
-test("all controls are visible in one flat panel stack", () => {
+test("common episode actions stay visible while playback tuning is disclosed on demand", () => {
   const controlsStart = source.indexOf('<div class="control-components">');
-  const controlsEnd = source.indexOf("</div>", source.indexOf(
-    'data-next-episode-hint class="control-hint"',
-    controlsStart,
-  ));
+  const advancedStart = source.indexOf('data-advanced-playback', controlsStart);
 
+  for (const marker of ['data-reset-episode', 'data-next-episode']) {
+    const position = source.indexOf(marker);
+    assert.ok(position > controlsStart && position < advancedStart, marker);
+  }
   for (const marker of [
     'id="playback-fps"',
     'id="next-episode-seed"',
     'id="playback-sampling"',
     'id="playback-contract-mode"',
     'data-termination-settings',
-    'data-reset-episode',
-    'data-next-episode',
   ]) {
     const position = source.indexOf(marker);
-    assert.ok(position > controlsStart && position < controlsEnd, marker);
+    assert.ok(position > advancedStart, marker);
   }
-  assert.equal(source.includes("<details"), false);
-  assert.equal(source.includes("<summary"), false);
+  assert.match(source, /<details class="advanced-playback-settings"/);
+  assert.match(source, /<summary>Advanced playback<\/summary>/);
   assert.equal(source.includes("control-section"), false);
   assert.equal(source.includes("control-label"), false);
 });
@@ -88,11 +87,13 @@ test("seed control keeps the loaded checkpoint default across automatic resets",
   );
   assert.match(source, /seed\.dataset\.defaultSeed !== defaultSeed/);
   assert.match(source, /seed\.value = defaultSeed;/);
+  assert.match(source, /text\(snapshot\.transition\?\.seed, text\(session\.seed, defaultSeed\)\)/);
 });
 
-test("control groups have no playback or episode separators", () => {
+test("advanced playback is visually separated from common episode actions", () => {
   assert.equal(styles.includes(".playback-settings"), false);
   assert.equal(styles.includes(".next-episode-settings {"), false);
+  assert.match(styles, /\.advanced-playback-settings \{[^}]*border-top:/);
   assert.match(
     styles,
     /\.termination-settings \{[^}]*border: 0;[^}]*\}/,

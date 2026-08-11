@@ -1,10 +1,11 @@
 import {
   BUILTIN_PANEL_PRESETS,
   PANEL_TYPES,
+  WORKSPACE_PRESETS,
   defaultPanelInstances,
 } from "./catalog.js";
 
-export const WORKSPACE_VERSION = 6;
+export const WORKSPACE_VERSION = 7;
 export const CUSTOM_PANEL_ID = /^panel-[0-9a-f]{8}-[0-9a-f-]{27}$/;
 const BLOCK_KINDS = new Set([
   "stats",
@@ -120,12 +121,21 @@ function normalizePanel(id, value, fallback) {
   };
 }
 
-export function createDefaultWorkspace({ paired = false, writer = "" } = {}) {
+function normalizedPreset(value, paired = false) {
+  if (paired) return "debug";
+  return Object.hasOwn(WORKSPACE_PRESETS, value) && value !== "custom"
+    ? value
+    : "watch";
+}
+
+export function createDefaultWorkspace({ paired = false, preset = "watch", writer = "" } = {}) {
+  const selectedPreset = normalizedPreset(preset, paired);
   return {
     version: WORKSPACE_VERSION,
     revision: { counter: 0, writer: String(writer) },
-    name: "Default layout",
-    panels: defaultPanelInstances({ paired }),
+    name: WORKSPACE_PRESETS[selectedPreset].label,
+    preset: selectedPreset,
+    panels: defaultPanelInstances({ paired, preset: selectedPreset }),
   };
 }
 
@@ -153,8 +163,23 @@ export function normalizeWorkspace(value, { paired = false, writer = "" } = {}) 
       writer: String(value.revision?.writer || writer).slice(0, 80),
     },
     name: cleanTitle(value.name, fallback.name).slice(0, 48),
+    preset: Object.hasOwn(WORKSPACE_PRESETS, value.preset)
+      ? value.preset
+      : "custom",
     panels,
   };
+}
+
+export function applyWorkspacePreset(workspace, preset, { paired = false } = {}) {
+  const selectedPreset = normalizedPreset(preset, paired);
+  const placements = defaultPanelInstances({ paired, preset: selectedPreset });
+  Object.entries(workspace.panels || {}).forEach(([id, panel]) => {
+    if (placements[id]) panel.placement = clone(placements[id].placement);
+    else if (panel?.placement) panel.placement.visible = false;
+  });
+  workspace.preset = selectedPreset;
+  workspace.name = WORKSPACE_PRESETS[selectedPreset].label;
+  return workspace;
 }
 
 export function compareWorkspaceRevisions(left, right) {

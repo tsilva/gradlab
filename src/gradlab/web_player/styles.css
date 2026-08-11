@@ -238,6 +238,35 @@ button:disabled {
 }
 
 .header-status { justify-content: flex-end; }
+
+.workspace-preset-picker {
+  display: flex;
+  align-items: center;
+  gap: .38rem;
+  color: var(--color-text-muted);
+  font-size: .68rem;
+}
+.workspace-preset-picker select { min-width: 6.7rem; padding-block: .3rem; font-size: .7rem; }
+
+.episode-report {
+  width: calc(100% - 2rem);
+  margin: .75rem 1rem .1rem;
+  padding: .8rem .9rem;
+  border: 1px solid var(--color-border);
+  border-radius: .62rem;
+  background: var(--color-surface-primary);
+}
+.episode-report-heading { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+.episode-report-heading h2 { margin: .12rem 0 0; font-size: 1rem; }
+.episode-report-outcome { padding: .28rem .5rem; border-radius: 999px; font-size: .67rem; font-weight: 750; }
+.episode-report-outcome.active { color: var(--color-interaction-active); background: var(--color-interaction-tint); }
+.episode-report-outcome.success { color: var(--color-evaluation-text); background: var(--color-evaluation-surface); }
+.episode-report-outcome.terminal { color: var(--color-error-text); background: var(--color-error-surface); }
+.episode-report-facts { display: grid; grid-template-columns: 2fr repeat(3, minmax(4rem, .75fr)) 1.5fr 1.2fr; gap: .65rem; margin: .72rem 0 0; }
+.episode-report-facts div { min-width: 0; padding-top: .5rem; border-top: 1px solid var(--color-border); }
+.episode-report-facts dt { color: var(--color-text-muted); font-size: .58rem; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
+.episode-report-facts dd { margin: .2rem 0 0; overflow: hidden; font: 650 .72rem/1.35 "JetBrains Mono", ui-monospace, monospace; text-overflow: ellipsis; }
+.episode-report-disclaimer { margin: .55rem 0 0; color: var(--color-text-muted); font-size: .62rem; }
 .header-divider { width: 1px; height: 1.3rem; background: var(--color-outline-strong); }
 
 .checkpoint-navigation {
@@ -346,6 +375,41 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
   color: var(--color-training-text);
   font-size: .78rem;
 }
+
+.checkpoint-recommendation {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0 0 .75rem;
+  padding: .8rem .9rem;
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--color-outline-strong);
+  border-radius: .55rem;
+  background: var(--color-surface-primary);
+}
+.checkpoint-recommendation.evaluation { border-left-color: var(--color-evaluation-text); }
+.checkpoint-recommendation.training { border-left-color: var(--color-training-text); }
+.checkpoint-recommendation > div { display: grid; gap: .2rem; min-width: 0; }
+.checkpoint-recommendation strong { font-size: .92rem; }
+.checkpoint-recommendation p { margin: 0; color: var(--color-text-muted); font-size: .7rem; }
+.checkpoint-recommendation button { flex: 0 0 auto; }
+.continue-playback-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: 0 0 .75rem;
+  padding: .75rem .85rem;
+  border: 1px solid var(--color-interaction);
+  border-radius: .55rem;
+  background: var(--color-interaction-tint);
+}
+.continue-playback-card > div { display: grid; gap: .18rem; }
+.continue-playback-card p { margin: 0; color: var(--color-text-muted); font-size: .7rem; }
+.checkpoint-tools { margin: 0 0 .75rem; padding: .55rem .7rem; border: 1px solid var(--color-border); border-radius: .48rem; background: var(--color-surface-primary); }
+.checkpoint-tools > summary { color: var(--color-text); font-weight: 700; }
+.checkpoint-tools .source-evaluation-actions { margin-top: .55rem; }
 
 .source-inline-error {
   border-color: var(--color-error-text);
@@ -930,6 +994,9 @@ h2 { font-size: .9rem; margin: 0; font-weight: 650; }
   text-transform: uppercase;
   white-space: nowrap;
 }
+.source-table .checkpoint-evidence span:first-child { font-weight: 750; }
+.source-table .checkpoint-evidence.evaluation span:first-child { color: var(--color-evaluation-text); }
+.source-table .checkpoint-evidence.training span:first-child { color: var(--color-training-text); }
 .source-table .checkpoint-best-badge.evaluation {
   border-color: var(--color-evaluation-text);
   background: var(--color-evaluation-surface);
@@ -1285,6 +1352,12 @@ select {
 .next-episode-settings-body { display: grid; gap: .42rem; }
 .next-episode-settings-body [data-next-episode] { width: 100%; margin-top: .12rem; }
 .control-components { display: grid; gap: .4rem; margin-top: .5rem; }
+.playback-glance { display: grid; gap: .14rem; padding: .55rem .62rem; border: 1px solid var(--color-border); border-radius: .42rem; background: var(--color-surface-primary); }
+.playback-glance strong { color: var(--color-text); font-size: .7rem; }
+.playback-glance span { color: var(--color-text-muted); font: .61rem "JetBrains Mono", ui-monospace, monospace; }
+.advanced-playback-settings { margin-top: .2rem; padding-top: .48rem; border-top: 1px solid var(--color-border); }
+.advanced-playback-settings > summary { color: var(--color-text); font-weight: 700; }
+.advanced-playback-body { display: grid; gap: .4rem; margin-top: .55rem; }
 .playback-field {
   display: grid;
   gap: .22rem;
@@ -1952,6 +2025,10 @@ body.recording #timeline { opacity: .72; }
   .header-status button { padding-inline: .42rem; font-size: .7rem; }
   .dashboard { padding-inline: .65rem; }
   .timeline { margin-inline: .65rem; }
+  .workspace-preset-picker > span { display: none; }
+  .workspace-preset-picker select { min-width: 5.6rem; }
+  .episode-report { width: calc(100% - 1.3rem); margin-inline: .65rem; }
+  .episode-report-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .panel-editor-block { grid-template-columns: 1fr; }
   .source-browser { padding: .85rem .65rem; }
   .source-head { align-items: flex-start; }
@@ -1960,6 +2037,9 @@ body.recording #timeline { opacity: .72; }
   .goal-configuration-detail-header { align-items: stretch; flex-direction: column; }
   .goal-configuration-detail-actions { flex-wrap: wrap; }
   .source-inline-error { align-items: stretch; flex-direction: column; }
+  .checkpoint-recommendation { align-items: stretch; flex-direction: column; }
+  .checkpoint-recommendation button { width: 100%; }
+  .continue-playback-card { align-items: stretch; flex-direction: column; }
   .source-evaluation-actions { flex-wrap: wrap; }
   .source-evaluation-actions > span { flex: 1 0 100%; text-align: right; }
   .contract-viewer {

@@ -9,6 +9,7 @@ import {
   panelProcessing,
   panelSubscriptions,
 } from "./panels/catalog.js";
+import { episodeReport } from "./episode-report.js";
 import { PanelManager } from "./panels/manager.js";
 import { PanelRuntime } from "./panels/runtime.js";
 import {
@@ -17,6 +18,7 @@ import {
 } from "./panels/layout-sizing.js";
 import { setSvgUseHref, text, timelineLabel } from "./panels/shared.js";
 import {
+  applyWorkspacePreset,
   bumpWorkspaceRevision,
   compareWorkspaceRevisions,
   createDefaultWorkspace,
@@ -34,11 +36,11 @@ const workspaceWindowName = location.pathname.startsWith("/workspace/")
   : null;
 const pairedWorkspace = new URLSearchParams(location.search).get("workspace") === "paired";
 const token = new URLSearchParams(location.hash.slice(1)).get("token") || "";
-const WORKSPACE_ID_KEY = "gradlab.player.workspace.v6.id";
+const WORKSPACE_ID_KEY = "gradlab.player.workspace.v7.id";
 const LAYOUT_KEY = pairedWorkspace
-  ? "gradlab.player.workspace.v6.paired"
-  : "gradlab.player.workspace.v6.single";
-const SAVED_LAYOUTS_KEY = "gradlab.player.workspace.saved.v6";
+  ? "gradlab.player.workspace.v7.paired"
+  : "gradlab.player.workspace.v7.single";
+const SAVED_LAYOUTS_KEY = "gradlab.player.workspace.saved.v7";
 const STATS_WINDOW_ID = "stats";
 const workspaceId = localStorage.getItem(WORKSPACE_ID_KEY) || crypto.randomUUID();
 localStorage.setItem(WORKSPACE_ID_KEY, workspaceId);
@@ -92,6 +94,7 @@ const state = {
   activeWindows: new Map(),
   sessionEpoch: 0,
   sourceMode: false,
+  backgroundPlaybackSnapshot: null,
   applicationSnapshot: null,
   workspaceReady: false,
 };
@@ -142,7 +145,9 @@ function subscriptions() {
 }
 
 function processing() {
-  return panelProcessing(state.layout, panelsInThisWindow());
+  const features = new Set(panelProcessing(state.layout, panelsInThisWindow()));
+  if (state.windowId === "main") features.add("rewards");
+  return [...features];
 }
 
 function enabledPanelDefinitions() {
@@ -158,6 +163,7 @@ function setDetachedLayout() {
     "stats-window",
     pairedWorkspace && state.windowId === STATS_WINDOW_ID,
   );
+  $("#workspace-preset-picker").hidden = secondary;
 }
 
 function showToast(message, error = false) {
@@ -202,6 +208,7 @@ async function ensureSourceBrowser() {
         checkpointNavigationRoot: $("#checkpoint-navigation"),
         openInspection: (endpoint, options) => openContractInspection(endpoint, options),
         openSourceRoute: (route) => openSourceRoute(route),
+        resumePlayback: () => resumeCurrentPlayback(),
       });
       return sourceBrowser;
     });
@@ -227,6 +234,9 @@ async function openContractInspection(endpoint, options = {}) {
 
 function openSourceRoute(route) {
   const current = state.applicationSnapshot || state.liveSnapshot || {};
+  if (!state.sourceMode && current?.app?.has_active_runner) {
+    state.backgroundPlaybackSnapshot = current;
+  }
   const snapshot = {
     ...current,
     app: {
@@ -235,13 +245,28 @@ function openSourceRoute(route) {
       message: "",
       error: "",
       route: { ...route },
-      has_active_runner: false,
+      has_active_runner: Boolean(
+        current?.app?.has_active_runner || state.backgroundPlaybackSnapshot,
+      ),
     },
   };
   state.applicationSnapshot = snapshot;
   state.liveSnapshot = snapshot;
   state.snapshot = snapshot;
   setSourceMode(true, snapshot);
+}
+
+function resumeCurrentPlayback() {
+  const snapshot = state.backgroundPlaybackSnapshot;
+  if (!snapshot) return false;
+  state.applicationSnapshot = snapshot;
+  state.liveSnapshot = snapshot;
+  state.snapshot = snapshot;
+  state.backgroundPlaybackSnapshot = null;
+  if (sourceBrowser) sourceBrowser.activeBreadcrumbRoute = "";
+  setSourceMode(false, snapshot);
+  renderSnapshot();
+  return true;
 }
 
 function setSourceMode(active, snapshot = null) {
@@ -252,6 +277,8 @@ function setSourceMode(active, snapshot = null) {
   );
   document.body.classList.toggle("source-selection", state.sourceMode);
   $("#source-browser").hidden = !state.sourceMode;
+  $("#episode-report").hidden = state.sourceMode || state.windowId !== "main";
+  $("#workspace-preset-picker").hidden = state.sourceMode || state.windowId !== "main";
   $("#checkpoint-navigation").hidden = Boolean(state.sourceMode || !activeCheckpointRoute);
   $("#page-title").hidden = Boolean(state.sourceMode || activeCheckpointRoute);
   $("#change-source").hidden = (
@@ -358,6 +385,16 @@ function handleMessage(message) {
   if (message.type === "snapshot") {
     const epoch = Number(message.session_epoch || 0);
     if (epoch !== state.sessionEpoch) resetSession(epoch);
+    if (
+      state.sourceMode
+      && state.backgroundPlaybackSnapshot
+      && message.app?.phase === "active"
+    ) {
+      state.backgroundPlaybackSnapshot = message;
+      state.hasControl = Boolean(message.control?.has_control);
+      state.controlEpoch = Number(message.control_epoch || 0);
+      return;
+    }
     state.applicationSnapshot = message;
     state.hasControl = Boolean(message.control?.has_control);
     state.controlEpoch = Number(message.control_epoch || 0);
@@ -985,12 +1022,30 @@ function renderWorkspaceStatus() {
   );
 }
 
+function renderEpisodeReport(snapshot) {
+  const root = $("#episode-report");
+  if (!root || !snapshot || state.sourceMode || state.windowId !== "main") return;
+  const report = episodeReport(snapshot);
+  const outcome = root.querySelector("[data-episode-outcome]");
+  outcome.textContent = report.outcome;
+  outcome.className = `episode-report-outcome ${report.outcomeTone}`;
+  root.querySelector("[data-episode-boundary]").textContent = report.boundary;
+  root.querySelector("[data-episode-return]").textContent = report.episodeReturn;
+  root.querySelector("[data-episode-steps]").textContent = report.steps;
+  root.querySelector("[data-episode-seed]").textContent = report.seed;
+  root.querySelector("[data-episode-semantics]").textContent = report.semantics;
+  root.querySelector("[data-episode-source]").textContent = report.source;
+  root.querySelector("[data-episode-disclaimer]").textContent = report.disclaimer;
+  root.hidden = false;
+}
+
 function renderSnapshot() {
   const snapshot = state.snapshot;
   const session = snapshot.session || {};
   configureMode(snapshot.mode || "playback");
   updateControlState();
   renderWorkspaceStatus();
+  renderEpisodeReport(snapshot);
   const actionNamesKey = JSON.stringify([
     session.action_contract || null,
     session.action_names || [],
@@ -1292,7 +1347,8 @@ function syncGridNodes(nodes = null) {
   });
 }
 
-function persistLayout({ announce = true } = {}) {
+function persistLayout({ announce = true, customize = true } = {}) {
+  if (customize) state.layout.preset = "custom";
   bumpWorkspaceRevision(state.layout, state.windowId);
   localStorage.setItem(LAYOUT_KEY, JSON.stringify(state.layout));
   if (announce) workspaceChannel?.postMessage({ type: "layout", layout: state.layout, source: state.windowId });
@@ -1308,6 +1364,7 @@ function updateLayoutTitle() {
       : environmentTitle;
   $("#page-title").textContent = title;
   $("#layout-name-input").value = state.layout.name;
+  $("#workspace-preset").value = state.layout.preset || "custom";
   document.title = `${title} · gradlab`;
 }
 
@@ -1652,6 +1709,17 @@ function bindWorkspaceMenus() {
     $("#panels-toggle").setAttribute("aria-expanded", "false");
     positionMenu($("#layout-menu"), event.currentTarget);
   });
+  $("#workspace-preset").addEventListener("change", (event) => {
+    const preset = event.target.value;
+    if (preset === "custom") {
+      $("#panels-toggle").click();
+      return;
+    }
+    applyWorkspacePreset(state.layout, preset, { paired: pairedWorkspace });
+    persistLayout({ customize: false });
+    void applyLayout();
+    showToast(`${event.target.selectedOptions[0].textContent} view applied.`);
+  });
   $("#save-layout").addEventListener("click", () => {
     const name = $("#layout-name-input").value.trim().slice(0, 48) || "Workspace";
     state.layout.name = name;
@@ -1665,10 +1733,10 @@ function bindWorkspaceMenus() {
   });
   $("#reset-layout").addEventListener("click", () => {
     state.layout = defaultLayout();
-    persistLayout();
+    persistLayout({ customize: false });
     applyLayout();
     $("#layout-menu").hidden = true;
-    showToast("Default research layout restored.");
+    showToast("Watch view restored.");
   });
   $("#panel-new-window").addEventListener("click", () => {
     if (state.selectedPanel) movePanelToNewWindow(state.selectedPanel);

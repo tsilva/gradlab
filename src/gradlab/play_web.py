@@ -3650,7 +3650,7 @@ def run_web_playback(
     config_text: str,
 ) -> int:
     runner = WebPlaybackRunner(session, args, config_text=config_text)
-    server = PlaybackWebServer(runner, args, paired_windows=True)
+    server = PlaybackWebServer(runner, args, paired_windows=False)
     try:
         return asyncio.run(server.run())
     except KeyboardInterrupt:
@@ -3668,9 +3668,8 @@ def run_web_player_application(
     server = PlaybackWebServer(
         host,
         args,
-        paired_windows=True,
+        paired_windows=False,
         catalog=catalog,
-        defer_secondary_window=True,
         repo_root=repo_root,
     )
     try:

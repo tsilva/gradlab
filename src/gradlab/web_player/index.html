@@ -24,6 +24,15 @@
           <span class="checkpoint-navigation-position" data-checkpoint-position aria-live="polite">Checkpoint — of —</span>
           <button class="quiet checkpoint-navigation-button" type="button" data-checkpoint-next>Next</button>
         </nav>
+        <label id="workspace-preset-picker" class="workspace-preset-picker" title="Choose a task-focused workspace">
+          <span>View</span>
+          <select id="workspace-preset" aria-label="Workspace view">
+            <option value="watch">Watch</option>
+            <option value="explain">Explain</option>
+            <option value="debug">Debug</option>
+            <option value="custom">Customize</option>
+          </select>
+        </label>
         <button id="publish-episode" class="quiet button-with-icon" type="button" title="Publish the completed episode to YouTube and Hugging Face" hidden><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-external-link"></use></svg><span>Publish episode</span></button>
         <button id="inspect-active" class="quiet icon-only" type="button" aria-label="Inspect active goal and recipe YAML" title="Inspect active goal and recipe YAML" hidden><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-code"></use></svg></button>
         <button id="change-source" class="quiet icon-only" type="button" aria-label="Choose another checkpoint" title="Choose another checkpoint" hidden><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-folder-search"></use></svg></button>
@@ -63,6 +72,24 @@
     </div>
 
     <main id="source-browser" class="source-browser" hidden></main>
+    <section id="episode-report" class="episode-report" aria-labelledby="episode-report-heading" hidden>
+      <header class="episode-report-heading">
+        <div>
+          <span class="eyebrow">CURRENT EPISODE</span>
+          <h2 id="episode-report-heading">Episode report</h2>
+        </div>
+        <span class="episode-report-outcome active" data-episode-outcome>In progress</span>
+      </header>
+      <dl class="episode-report-facts">
+        <div><dt>Boundary</dt><dd data-episode-boundary>Not reached</dd></div>
+        <div><dt>Return</dt><dd data-episode-return>—</dd></div>
+        <div><dt>Steps</dt><dd data-episode-steps>—</dd></div>
+        <div><dt>Seed</dt><dd data-episode-seed>—</dd></div>
+        <div><dt>Semantics</dt><dd data-episode-semantics>Training contract</dd></div>
+        <div><dt>Source</dt><dd data-episode-source>Local checkpoint</dd></div>
+      </dl>
+      <p class="episode-report-disclaimer" data-episode-disclaimer></p>
+    </section>
     <main id="dashboard" class="dashboard grid-stack"></main>
 
     <section id="timeline" class="timeline" aria-label="Bounded trajectory inspection">
