@@ -1028,6 +1028,7 @@ export class SourceBrowser {
     this.error = "";
     this.app = { phase: "selecting" };
     this.lastAppRoute = "";
+    this.searchOpen = false;
     this.loadedKey = "";
     this.requestSerial = 0;
     this.requestController = null;
@@ -1039,8 +1040,6 @@ export class SourceBrowser {
     this.pollTimer = null;
     this.selectedCheckpoints = new Set();
     this.evaluating = false;
-    this.checkpointToolsOpen = false;
-    this.checkpointComparisonOpen = false;
     this.selectedGoalVariantId = "";
     this.goalVariantDiff = null;
     this.goalVariantDiffController = null;
@@ -1116,6 +1115,7 @@ export class SourceBrowser {
         checkpoint_id: appRoute.checkpoint_id || "",
       };
       this.query = "";
+      this.searchOpen = false;
       this.items = [];
       this.sourceItems = [];
       this.metricColumns = [];
@@ -1133,8 +1133,6 @@ export class SourceBrowser {
       this.loadedKey = "";
       this.error = "";
       this.selectedCheckpoints.clear();
-      this.checkpointToolsOpen = false;
-      this.checkpointComparisonOpen = false;
       this.resetGoalVariantDetail();
       this.autoSelectedRoute = "";
       this.syncUrl("replace");
@@ -1676,6 +1674,7 @@ export class SourceBrowser {
   applyRoute(route, { seedItems = null } = {}) {
     this.route = { ...this.route, ...route };
     this.query = "";
+    this.searchOpen = false;
     this.items = [];
     this.sourceItems = [];
     this.metricColumns = [];
@@ -1913,7 +1912,7 @@ export class SourceBrowser {
       if (this.app.has_active_runner) shell.append(this.renderContinuePlayback());
       shell.append(this.renderSearch());
       if (this.route.level === "runs" && this.route.run_id) {
-        shell.append(this.renderCheckpointRecommendation(), this.renderCheckpointTools());
+        shell.append(this.renderCheckpointRecommendation());
       }
       shell.append(this.renderResults());
     }
@@ -1975,13 +1974,18 @@ export class SourceBrowser {
     input.setAttribute("aria-label", input.placeholder);
     input.addEventListener("input", (event) => this.setSearch(event.target.value));
     wrap.append(input);
-    const resultCount = this.sourceItems.length || this.items.length;
-    if (resultCount > 8 || this.query) return wrap;
     const disclosure = document.createElement("details");
     disclosure.className = "source-search-disclosure";
+    disclosure.open = this.searchOpen;
     const summary = document.createElement("summary");
     summary.append(icon("search"), document.createTextNode("Search"));
     disclosure.append(summary, wrap);
+    disclosure.addEventListener("toggle", () => {
+      this.searchOpen = disclosure.open;
+      if (disclosure.open) {
+        requestAnimationFrame(() => input.focus({ preventScroll: true }));
+      }
+    });
     return disclosure;
   }
 
@@ -2071,21 +2075,6 @@ export class SourceBrowser {
     card.classList.add(recommendation.evidence.tone);
     card.append(copy, play);
     return card;
-  }
-
-  renderCheckpointTools() {
-    const details = document.createElement("details");
-    details.className = "checkpoint-tools";
-    details.open = this.checkpointToolsOpen;
-    const summary = document.createElement("summary");
-    summary.textContent = "Evaluation & technical details";
-    details.append(summary, this.renderEvaluationActions());
-    details.addEventListener("toggle", () => {
-      if (this.checkpointToolsOpen === details.open) return;
-      this.checkpointToolsOpen = details.open;
-      this.renderView();
-    });
-    return details;
   }
 
   async evaluateSelected() {
@@ -2210,16 +2199,8 @@ export class SourceBrowser {
             ? this.renderRunResults()
             : this.renderTable();
     if (this.route.level === "runs" && this.route.run_id) {
-      const comparison = document.createElement("details");
-      comparison.className = "source-checkpoint-comparison";
-      comparison.open = this.checkpointComparisonOpen;
-      const summary = document.createElement("summary");
-      summary.textContent = `Compare all checkpoints (${this.items.length.toLocaleString()})`;
-      comparison.append(summary, results);
-      comparison.addEventListener("toggle", () => {
-        this.checkpointComparisonOpen = comparison.open;
-      });
-      body.append(comparison);
+      body.classList.add("source-checkpoint-results");
+      body.append(this.renderEvaluationActions(), results);
     } else {
       body.append(results);
     }
@@ -2727,7 +2708,6 @@ export class SourceBrowser {
     const headerRow = document.createElement("tr");
     const showingRuns = this.route.level === "runs" && !this.route.run_id;
     const showingCheckpoints = this.route.level === "runs" && Boolean(this.route.run_id);
-    const showingCheckpointTools = showingCheckpoints && this.checkpointToolsOpen;
     const runRankingColumns = showingRuns ? this.activeRunMetricColumns() : [];
     const runMetricColumns = availableRunMetricColumns(this.items, runRankingColumns);
     const checkpointMetricColumns = showingCheckpoints ? this.metricColumns : [];
@@ -2745,16 +2725,16 @@ export class SourceBrowser {
           { label: "Contract" },
         ]
       : [
-          ...(showingCheckpointTools ? [{ label: "", selection: true }] : []),
+          ...(showingCheckpoints ? [{ label: "", selection: true }] : []),
           { label: "Checkpoint" },
           { label: "Evidence" },
-          ...(showingCheckpointTools ? [{ label: "Purpose" }] : []),
+          ...(showingCheckpoints ? [{ label: "Purpose" }] : []),
           { label: "Step" },
           ...checkpointMetricColumns.map((column) => ({
             ...column,
             label: column.label || metricLabel(column.metric),
           })),
-          ...(showingCheckpointTools ? [{ label: "Size" }, { label: "Created" }] : []),
+          ...(showingCheckpoints ? [{ label: "Size" }, { label: "Created" }] : []),
         ];
     columns.forEach((column) => {
       const cell = document.createElement("th");
@@ -2858,7 +2838,7 @@ export class SourceBrowser {
               "",
               "recipe-cell",
             ],
-            [item.seed ?? "—"],
+            [item.seed ?? "—", "", "data-cell"],
             [
               finish.label,
               finish.detail,
@@ -2867,8 +2847,10 @@ export class SourceBrowser {
             ],
             ...runMetricColumns.map((column) => [
               formatMetricValue(column.metric, item.metrics?.[column.metric]),
+              "",
+              "data-cell",
             ]),
-            [formatDate(item.updated_at || item.created_at)],
+            [formatDate(item.updated_at || item.created_at), "", "data-cell"],
             [null, "", "inspection-cell"],
           ]
         : (() => {
@@ -2877,17 +2859,17 @@ export class SourceBrowser {
               ? "Final checkpoint"
               : `Checkpoint at ${Number(item.step).toLocaleString()} steps`;
             return [
-              ...(showingCheckpointTools ? [[null, "", "source-selection-cell"]] : []),
+              ...(showingCheckpoints ? [[null, "", "source-selection-cell"]] : []),
               [
                 checkpointName,
-                showingCheckpointTools
+                showingCheckpoints
                   ? [item.checkpoint_id, item.sha256].filter(Boolean).join(" · ")
                   : "",
                 "checkpoint-cell",
               ],
               [evidence.label, evidence.detail, `checkpoint-evidence ${evidence.tone}`],
-              ...(showingCheckpointTools ? [[item.purpose || "—"]] : []),
-              [Number(item.step).toLocaleString()],
+              ...(showingCheckpoints ? [[item.purpose || "—"]] : []),
+              [Number(item.step).toLocaleString(), "", "data-cell"],
               ...checkpointMetricColumns.map((column) => [
                 formatMetricValue(column.metric, item.metrics?.[column.metric]),
                 "",
@@ -2899,8 +2881,11 @@ export class SourceBrowser {
                   column,
                 },
               ]),
-              ...(showingCheckpointTools
-                ? [[formatBytes(item.size_bytes)], [formatDate(item.created_at)]]
+              ...(showingCheckpoints
+                ? [
+                    [formatBytes(item.size_bytes), "", "data-cell"],
+                    [formatDate(item.created_at), "", "data-cell"],
+                  ]
                 : []),
             ];
           })();

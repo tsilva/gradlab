@@ -94,14 +94,14 @@
         <span id="playback-evidence-status" class="playback-evidence-status" role="status" hidden></span>
       </div>
       <div class="timeline-track">
-        <div class="timeline-actions">
-          <button id="timeline-playback-toggle" class="primary button-with-icon" type="button" aria-label="Play" title="Play current episode"><svg class="icon" aria-hidden="true"><use id="timeline-playback-icon" href="/assets/tabler-icons.svg#ti-player-play"></use></svg><span id="timeline-playback-label">Play</span></button>
-          <button id="timeline-reset" class="quiet button-with-icon" type="button" title="Reset episode"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-refresh"></use></svg><span>Reset</span></button>
-          <button id="playback-settings-toggle" class="quiet button-with-icon" type="button" title="Playback settings" aria-controls="playback-settings-menu" aria-expanded="false"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-layout-dashboard"></use></svg><span>Settings</span></button>
-        </div>
         <div class="timeline-scrubber-track">
           <input id="timeline-scrubber" type="range" min="0" max="0" step="1" value="0" aria-label="Inspect a retained transition one step at a time" title="Left/Right: move one step · Space: play or pause">
           <div id="timeline-markers" class="timeline-markers" aria-hidden="true"></div>
+        </div>
+        <div class="timeline-actions">
+          <button id="timeline-playback-toggle" class="primary button-with-icon" type="button" aria-label="Play" title="Play current episode"><svg class="icon" aria-hidden="true"><use id="timeline-playback-icon" href="/assets/tabler-icons.svg#ti-player-play"></use></svg><span id="timeline-playback-label">Play</span></button>
+          <button id="timeline-reset" class="quiet button-with-icon" type="button" title="Reset episode"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-refresh"></use></svg><span>Reset</span></button>
+          <button id="playback-settings-toggle" class="quiet button-with-icon" type="button" title="Playback settings" aria-controls="playback-settings-menu" aria-expanded="false"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-settings"></use></svg><span>Settings</span></button>
         </div>
       </div>
     </section>
@@ -152,11 +152,14 @@
             <select id="contract-recipe-picker"></select>
           </label>
           <div id="contract-view-tabs" class="contract-tabs contract-view-tabs" role="tablist" aria-label="Contract view"></div>
-          <label class="contract-search">
-            <svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-search"></use></svg>
-            <input id="contract-search-input" type="search" autocomplete="off" placeholder="Search YAML or diff" aria-label="Search YAML or diff">
-            <span id="contract-search-count" aria-live="polite"></span>
-          </label>
+          <details id="contract-search-disclosure" class="contract-search-disclosure">
+            <summary><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-search"></use></svg><span>Search</span></summary>
+            <label class="contract-search">
+              <svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-search"></use></svg>
+              <input id="contract-search-input" type="search" autocomplete="off" placeholder="Search YAML or diff" aria-label="Search YAML or diff">
+              <span id="contract-search-count" aria-live="polite"></span>
+            </label>
+          </details>
           <button id="contract-copy" class="quiet button-with-icon" type="button"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-copy"></use></svg><span>Copy</span></button>
         </div>
         <div id="contract-viewer-message" class="contract-viewer-message" hidden></div>

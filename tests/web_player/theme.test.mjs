@@ -59,14 +59,32 @@ test("scientific editorial dark-theme tokens are the single CSS color source", a
   );
 });
 
-test("the dark theme retains all three bundled editorial font families", async () => {
+test("typography uses stable family roles and a five-step scale", async () => {
   const styles = await readFile(new URL("styles.css", ROOT), "utf8");
-  for (const family of ["Chivo", "Inter", "JetBrains Mono"]) {
-    assert.match(styles, new RegExp(`font-family: "${family}"`));
+  for (const token of ["brand", "ui", "mono"]) {
+    assert.match(styles, new RegExp(`--font-family-${token}:`));
   }
+  for (const [token, value] of [
+    ["xs", ".75rem"],
+    ["sm", ".8125rem"],
+    ["md", ".875rem"],
+    ["lg", "1rem"],
+    ["xl", "1.5rem"],
+  ]) {
+    assert.match(styles, new RegExp(`--font-size-${token}: ${value.replace(".", "\\.")}`));
+  }
+  assert.match(styles, /:root \{[\s\S]*?font-size: 100%;/);
+  assert.equal((styles.match(/font-family: var\(--font-family-brand\)/g) || []).length, 1);
+  assert.match(styles, /\.app-wordmark \{ font-family: var\(--font-family-brand\); \}/);
+  assert.match(styles, /\.eyebrow, h1, h2, h3 \{ font-family: var\(--font-family-ui\); \}/);
+  const withoutRootTokens = styles.replace(/:root \{[\s\S]*?\n\}/, "");
+  assert.doesNotMatch(withoutRootTokens, /font-size:\s*(?:clamp|[.\d])/);
+  assert.doesNotMatch(styles, /font-weight:\s*(?:650|750|800);/);
+  assert.doesNotMatch(styles, /\bfont:\s/);
   assert.match(styles, /ChivoVariable\.woff2/);
   assert.match(styles, /InterVariable\.woff2/);
   assert.match(styles, /JetBrainsMonoVariable\.woff2/);
+  assert.doesNotMatch(styles, /InterVariable-Italic\.woff2/);
 });
 
 test("scrollbars use compact cross-browser theme styling", async () => {

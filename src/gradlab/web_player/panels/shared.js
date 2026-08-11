@@ -1,4 +1,7 @@
 const ICONS = "/assets/tabler-icons.svg";
+const CANVAS_FONT_UI = '12px "Inter", system-ui, sans-serif';
+const CANVAS_FONT_UI_SEMIBOLD = '600 12px "Inter", system-ui, sans-serif';
+const CANVAS_FONT_MONO = '12px "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace';
 
 const THEME_COLOR_PROPERTIES = Object.freeze({
   chartSurface: "--color-chart-surface",
@@ -198,7 +201,7 @@ export function drawLines(canvas, series, { cursorIndex = null } = {}) {
   const values = series.flatMap((item) => item.values.filter(Number.isFinite));
   if (!values.length) {
     context.fillStyle = chartAxis;
-    context.font = '12px "Inter", system-ui, sans-serif';
+    context.font = CANVAS_FONT_UI;
     context.textAlign = "left";
     context.textBaseline = "alphabetic";
     context.fillText("No history yet", 12, 22);
@@ -206,7 +209,7 @@ export function drawLines(canvas, series, { cursorIndex = null } = {}) {
   }
   const scale = lineChartScale(values);
   const labels = scale.ticks.map((value) => formatAxisValue(value, scale.step));
-  context.font = '10px "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace';
+  context.font = CANVAS_FONT_MONO;
   const labelWidth = Math.max(...labels.map((label) => context.measureText(label).width));
   const plot = {
     left: Math.ceil(labelWidth) + 16,
@@ -292,7 +295,7 @@ export function drawHistogram(
   const max = Math.max(1, ...counts);
   const scale = lineChartScale([0, max]);
   const labels = scale.ticks.map((value) => formatAxisValue(value, scale.step));
-  context.font = '10px "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace';
+  context.font = CANVAS_FONT_MONO;
   const labelWidth = Math.max(...labels.map((label) => context.measureText(label).width));
   const plot = {
     left: Math.ceil(labelWidth) + 16,
@@ -325,7 +328,7 @@ export function drawHistogram(
     context.fillStyle = index === highlightIndex ? chartHighlight : chartBar;
     context.fillRect(x, plot.bottom - barHeight, barWidth, barHeight);
     context.fillStyle = chartAxis;
-    context.font = '600 12px "Inter", system-ui, sans-serif';
+    context.font = CANVAS_FONT_UI_SEMIBOLD;
     context.textAlign = "center";
     context.textBaseline = "middle";
     context.fillText(
