@@ -30,6 +30,7 @@ from gradlab.env_registry import (
     VIZDOOM_TURBO_PROVIDER,
     is_stable_retro_atari_env,
     resolve_env_provider,
+    validate_provider_resolved_config,
 )
 from gradlab.model_inputs import provider_frame_stack_info_keys
 from gradlab.reward_transform import PROVIDER_REWARD_TRANSFORM_KEYS
@@ -499,6 +500,19 @@ def _gradoom_native_vec_kwargs(
     del runtime_rom_path
     from gradlab.vizdoom_assets import resolve_vizdoom_iwad_path
 
+    validate_provider_resolved_config(
+        config.env_provider,
+        config,
+        label="GraDOOM environment",
+    )
+    vizdoom_config = native_kwargs.get("vizdoom_config")
+    if not isinstance(vizdoom_config, Mapping):
+        raise ValueError("GraDOOM requires an explicit vizdoom_config object")
+    native_vizdoom_config = dict(vizdoom_config)
+    render_hud = native_vizdoom_config.pop("render_hud", None)
+    if render_hud is not False:
+        raise ValueError("GraDOOM requires canonical vizdoom_config.render_hud=false")
+    native_kwargs["vizdoom_config"] = native_vizdoom_config
     native_kwargs["rom_path"] = resolve_vizdoom_iwad_path(native_kwargs.get("rom_path"))
     native_kwargs = _turbo_native_vec_kwargs(
         config,

@@ -58,9 +58,17 @@ def test_gradoom_recipe_trains_on_gpu_and_keeps_reference_vizdoom_evaluation() -
     assert train_config["env_provider"] == "gradoom"
     assert train_config["n_envs"] == 128
     assert train_config["env_args"]["doom_skill"] == 3
+    assert train_config["env_args"]["vizdoom_config"] == {
+        "episode_timeout": 4200,
+        "render_hud": False,
+    }
     assert train_config["env_args"]["compile_engine"] is True
     assert train_config["checkpoint_eval_environment"]["env_provider"] == "vizdoom-turbo"
     assert train_config["checkpoint_eval_environment"]["env_args"]["doom_skill"] == 3
+    assert train_config["checkpoint_eval_environment"]["env_args"]["vizdoom_config"] == {
+        "episode_timeout": 4200,
+        "render_hud": False,
+    }
     assert document["policy_environment_hash"] == document["evaluation_environment_hash"]
     backend = train_config["training_backend"]
     assert backend["id"] == "gradlab.ppo"
@@ -74,6 +82,26 @@ def test_gradoom_recipe_rejects_an_unsupported_doom_skill_before_runtime() -> No
             GOAL_ROOT / "_goal.yaml",
             GOAL_ROOT / "recipes/gradoom-ppo.yaml",
             recipe_overrides=("train.environment.env_config.env_args.doom_skill=1",),
+        )
+
+
+@pytest.mark.parametrize(
+    "override",
+    (
+        "train.environment.env_config.env_args.vizdoom_config.render_hud=true",
+        "train.environment.env_config.env_args.vizdoom_config.render_hud=null",
+        "train.environment.env_config.env_args.vizdoom_config.unsupported=true",
+        "train.environment.preprocessing.obs_crop=[0,0,0,0]",
+        "train.environment.preprocessing.obs_crop_mode=remove",
+        "train.environment.preprocessing.obs_crop_fill=1",
+    ),
+)
+def test_gradoom_recipe_rejects_an_unsupported_profile_before_runtime(override: str) -> None:
+    with pytest.raises(ValueError):
+        compose_train_document(
+            GOAL_ROOT / "_goal.yaml",
+            GOAL_ROOT / "recipes/gradoom-ppo.yaml",
+            recipe_overrides=(override,),
         )
 
 

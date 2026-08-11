@@ -80,6 +80,8 @@ train:
         # Preserve the scenario's native horizon independently of policy frame skip.
         vizdoom_config:
           episode_timeout: 4200
+          # The pinned training/evaluation profile excludes the diagnostic raw-frame HUD.
+          render_hud: false
         # Use the measured Beast-3 throughput optimum for native worker concurrency.
         num_threads: 32
         # Keep GraDOOM training and reference ViZDoom evaluation on the certified profile.

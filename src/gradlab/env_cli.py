@@ -42,6 +42,8 @@ def _json_safe(value: Any) -> Any:
         return str(value)
     if isinstance(value, Mapping):
         return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, set | frozenset):
+        return [_json_safe(item) for item in sorted(value, key=str)]
     if isinstance(value, Sequence) and not isinstance(value, str | bytes):
         return [_json_safe(item) for item in value]
     name = getattr(value, "name", None)
@@ -71,6 +73,9 @@ def _provider_payload(
                 "canonical_args": sorted(contract.canonical_args),
                 "explicit_env_args": sorted(contract.explicit_env_args),
                 "required_values": _json_safe(contract.required_values),
+                "required_config_values": _json_safe(contract.required_config_values),
+                "required_nested_values": _json_safe(contract.required_nested_values),
+                "allowed_nested_args": _json_safe(contract.allowed_nested_args),
             }
             if contract is not None
             else {"kind": "dynamic"}
