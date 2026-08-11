@@ -19,6 +19,11 @@
         <nav id="source-breadcrumbs" class="source-breadcrumbs header-breadcrumbs" aria-label="Playback source" hidden></nav>
       </div>
       <div class="header-status">
+        <nav id="checkpoint-navigation" class="checkpoint-navigation" aria-label="Checkpoint navigation" hidden>
+          <button class="quiet checkpoint-navigation-button" type="button" data-checkpoint-previous>Prev</button>
+          <span class="checkpoint-navigation-position" data-checkpoint-position aria-live="polite">Checkpoint — of —</span>
+          <button class="quiet checkpoint-navigation-button" type="button" data-checkpoint-next>Next</button>
+        </nav>
         <button id="publish-episode" class="quiet button-with-icon" type="button" title="Publish the completed episode to YouTube and Hugging Face" hidden><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-external-link"></use></svg><span>Publish episode</span></button>
         <button id="inspect-active" class="quiet icon-only" type="button" aria-label="Inspect active goal and recipe YAML" title="Inspect active goal and recipe YAML" hidden><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-code"></use></svg></button>
         <button id="change-source" class="quiet icon-only" type="button" aria-label="Choose another checkpoint" title="Choose another checkpoint" hidden><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-folder-search"></use></svg></button>

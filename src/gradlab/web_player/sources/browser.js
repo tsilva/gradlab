@@ -778,6 +778,37 @@ function routeSignature(route) {
   });
 }
 
+function activeCheckpointCacheKey(route) {
+  return JSON.stringify({
+    run_id: route?.run_id || "",
+    goal_variant_id: route?.goal_variant_id || "",
+  });
+}
+
+export function checkpointNavigationPresentation(items, checkpointId) {
+  const checkpoints = [...new Map(
+    (Array.isArray(items) ? items : [])
+      .filter((item) => item && String(item.checkpoint_id || ""))
+      .map((item) => [String(item.checkpoint_id), item]),
+  ).values()].sort((left, right) => (
+    (Number(left.step) || 0) - (Number(right.step) || 0)
+    || String(left.sha256 || "").localeCompare(String(right.sha256 || ""))
+    || String(left.checkpoint_id || "").localeCompare(String(right.checkpoint_id || ""))
+  ));
+  const currentIndex = checkpoints.findIndex(
+    (item) => String(item.checkpoint_id) === String(checkpointId || ""),
+  );
+  return {
+    count: checkpoints.length,
+    position: currentIndex < 0 ? null : currentIndex + 1,
+    current: currentIndex < 0 ? null : checkpoints[currentIndex],
+    previous: currentIndex > 0 ? checkpoints[currentIndex - 1] : null,
+    next: currentIndex >= 0 && currentIndex + 1 < checkpoints.length
+      ? checkpoints[currentIndex + 1]
+      : null,
+  };
+}
+
 export function sourceBreadcrumbItems(route) {
   const hasActiveCheckpoint = Boolean(route?.checkpoint_id);
   const items = [{
@@ -857,6 +888,7 @@ export class SourceBrowser {
       command,
       getState,
       showToast,
+      checkpointNavigationRoot = null,
       openInspection,
       openSourceRoute,
       catalogRequestTimeoutMs = 30_000,
@@ -868,6 +900,16 @@ export class SourceBrowser {
     this.command = command;
     this.getState = getState;
     this.showToast = showToast;
+    this.checkpointNavigationRoot = checkpointNavigationRoot;
+    this.checkpointPrevious = checkpointNavigationRoot?.querySelector(
+      "[data-checkpoint-previous]",
+    ) || null;
+    this.checkpointNext = checkpointNavigationRoot?.querySelector(
+      "[data-checkpoint-next]",
+    ) || null;
+    this.checkpointPosition = checkpointNavigationRoot?.querySelector(
+      "[data-checkpoint-position]",
+    ) || null;
     this.openInspection = openInspection;
     this.openSourceRoute = openSourceRoute;
     this.route = {
@@ -915,6 +957,11 @@ export class SourceBrowser {
     this.activityHasActiveRuns = false;
     this.autoSelectedRoute = "";
     this.activeBreadcrumbRoute = "";
+    this.activeCheckpointCache = new Map();
+    this.activeCheckpointController = null;
+    this.activeCheckpointRequestSerial = 0;
+    this.activeCheckpointError = "";
+    this.activeCheckpointPendingId = "";
     this.initialEnvironmentCatalog = null;
     this.initialCatalogConsumed = false;
     this.historyEnabled = (
@@ -929,10 +976,17 @@ export class SourceBrowser {
       if (!parsedRoute) return;
       this.navigate(parsedRoute, { historyMode: null });
     };
+    this.checkpointPrevious?.addEventListener("click", () => {
+      this.selectAdjacentCheckpoint("previous");
+    });
+    this.checkpointNext?.addEventListener("click", () => {
+      this.selectAdjacentCheckpoint("next");
+    });
     if (this.historyEnabled) window.addEventListener("popstate", this.onPopState);
   }
 
   render(snapshot) {
+    this.hideActiveCheckpointNavigation();
     this.app = snapshot?.app || { phase: "active" };
     if (
       !this.initialCatalogConsumed
@@ -995,7 +1049,7 @@ export class SourceBrowser {
     this.updatePolling();
   }
 
-  stop({ preserveBreadcrumbs = false } = {}) {
+  stop({ preserveBreadcrumbs = false, preserveCheckpointNavigation = false } = {}) {
     clearTimeout(this.searchTimer);
     clearInterval(this.pollTimer);
     this.pollTimer = null;
@@ -1010,6 +1064,12 @@ export class SourceBrowser {
     this.goalVariantDiffSerial += 1;
     this.loading = false;
     this.loadingKey = "";
+    if (!preserveCheckpointNavigation) {
+      this.activeCheckpointController?.abort();
+      this.activeCheckpointController = null;
+      this.activeCheckpointRequestSerial += 1;
+      this.hideActiveCheckpointNavigation();
+    }
     if (!preserveBreadcrumbs) {
       this.activeBreadcrumbRoute = "";
       this.breadcrumbsRoot.replaceChildren();
@@ -1026,14 +1086,16 @@ export class SourceBrowser {
       && signature === this.activeBreadcrumbRoute
       && !this.breadcrumbsRoot.hidden
     ) {
+      this.renderActiveCheckpointNavigation(route);
       return;
     }
-    this.stop({ preserveBreadcrumbs: true });
+    this.stop({ preserveBreadcrumbs: true, preserveCheckpointNavigation: true });
     this.app = app;
     if (!route.checkpoint_id) {
       this.activeBreadcrumbRoute = "";
       this.breadcrumbsRoot.replaceChildren();
       this.breadcrumbsRoot.hidden = true;
+      this.hideActiveCheckpointNavigation();
       return;
     }
     this.route = {
@@ -1044,10 +1106,115 @@ export class SourceBrowser {
       run_id: route.run_id || "",
       checkpoint_id: route.checkpoint_id || "",
     };
+    this.activeCheckpointPendingId = "";
+    this.activeCheckpointError = "";
     this.activeBreadcrumbRoute = signature;
     this.renderBreadcrumbs(this.breadcrumbsRoot);
     this.breadcrumbsRoot.hidden = false;
+    this.renderActiveCheckpointNavigation(this.route);
     this.syncUrl("replace");
+    void this.loadActiveCheckpointNavigation(this.route, signature);
+  }
+
+  hideActiveCheckpointNavigation() {
+    if (this.checkpointNavigationRoot) this.checkpointNavigationRoot.hidden = true;
+  }
+
+  activeCheckpointItems(route = this.route) {
+    return this.activeCheckpointCache.get(activeCheckpointCacheKey(route)) || null;
+  }
+
+  renderActiveCheckpointNavigation(route = this.route) {
+    const root = this.checkpointNavigationRoot;
+    if (!root || !route?.checkpoint_id || !route?.run_id) {
+      this.hideActiveCheckpointNavigation();
+      return;
+    }
+    root.hidden = false;
+    const items = this.activeCheckpointItems(route);
+    const presentation = checkpointNavigationPresentation(items, route.checkpoint_id);
+    const pending = Boolean(this.activeCheckpointPendingId);
+    const loading = items === null && !this.activeCheckpointError;
+    const unavailable = !loading && presentation.position === null;
+    root.classList.toggle("warning", Boolean(this.activeCheckpointError || unavailable));
+    if (this.checkpointPosition) {
+      this.checkpointPosition.textContent = loading
+        ? "Checkpoint …"
+        : presentation.position === null
+          ? `Checkpoint — of ${presentation.count.toLocaleString()}`
+          : `Checkpoint ${presentation.position.toLocaleString()} of ${presentation.count.toLocaleString()}`;
+      this.checkpointPosition.title = this.activeCheckpointError
+        || String(presentation.current?.checkpoint_id || route.checkpoint_id);
+    }
+    const canChange = this.hasControl() && !pending;
+    if (this.checkpointPrevious) {
+      this.checkpointPrevious.disabled = !canChange || !presentation.previous;
+      this.checkpointPrevious.title = presentation.previous
+        ? `Previous checkpoint · step ${Number(presentation.previous.step).toLocaleString()}`
+        : loading ? "Loading checkpoints" : "This is the first checkpoint";
+    }
+    if (this.checkpointNext) {
+      this.checkpointNext.disabled = !canChange || !presentation.next;
+      this.checkpointNext.title = presentation.next
+        ? `Next checkpoint · step ${Number(presentation.next.step).toLocaleString()}`
+        : loading ? "Loading checkpoints" : "This is the latest checkpoint";
+    }
+  }
+
+  async loadActiveCheckpointNavigation(route, expectedSignature) {
+    const requestRoute = { ...route };
+    const cacheKey = activeCheckpointCacheKey(requestRoute);
+    this.activeCheckpointController?.abort();
+    const controller = new AbortController();
+    this.activeCheckpointController = controller;
+    const serial = ++this.activeCheckpointRequestSerial;
+    const query = new URLSearchParams();
+    if (requestRoute.goal_variant_id) {
+      query.set("goal_variant_id", requestRoute.goal_variant_id);
+    }
+    try {
+      const response = await fetch(
+        `/api/catalog/runs/${encodeURIComponent(requestRoute.run_id)}/checkpoints?${query}`,
+        {
+          headers: { Authorization: `Bearer ${this.token}` },
+          cache: "no-store",
+          signal: controller.signal,
+        },
+      );
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload.error || `Checkpoint navigation failed (${response.status})`);
+      }
+      if (serial !== this.activeCheckpointRequestSerial) return;
+      this.activeCheckpointCache.set(
+        cacheKey,
+        Array.isArray(payload.items) ? payload.items : [],
+      );
+      this.activeCheckpointError = "";
+    } catch (error) {
+      if (controller.signal.aborted || serial !== this.activeCheckpointRequestSerial) return;
+      this.activeCheckpointError = String(error?.message || error);
+    } finally {
+      if (serial === this.activeCheckpointRequestSerial) {
+        this.activeCheckpointController = null;
+        if (expectedSignature === this.activeBreadcrumbRoute) {
+          this.renderActiveCheckpointNavigation(this.route);
+        }
+      }
+    }
+  }
+
+  selectAdjacentCheckpoint(direction) {
+    const presentation = checkpointNavigationPresentation(
+      this.activeCheckpointItems(this.route),
+      this.route.checkpoint_id,
+    );
+    const item = direction === "previous" ? presentation.previous : presentation.next;
+    if (!item || this.activeCheckpointPendingId) return false;
+    if (!this.selectCheckpoint(item)) return false;
+    this.activeCheckpointPendingId = String(item.checkpoint_id || "");
+    this.renderActiveCheckpointNavigation(this.route);
+    return true;
   }
 
   hasControl() {
@@ -1496,9 +1663,7 @@ export class SourceBrowser {
       level: "runs",
       checkpoint_id: item.checkpoint_id,
     };
-    this.route = route;
-    this.syncUrl(historyMode);
-    this.command("select_source", {
+    const commandId = this.command("select_source", {
       source: {
         kind: "public_run",
         value: item.manifest_url,
@@ -1508,6 +1673,10 @@ export class SourceBrowser {
       },
       route: { ...route },
     });
+    if (commandId === null) return false;
+    this.route = route;
+    this.syncUrl(historyMode);
+    return true;
   }
 
   back() {
