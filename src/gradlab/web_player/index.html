@@ -21,9 +21,9 @@
       </div>
       <div class="header-status">
         <nav id="checkpoint-navigation" class="checkpoint-navigation" aria-label="Checkpoint navigation" hidden>
-          <button class="quiet checkpoint-navigation-button" type="button" data-checkpoint-previous>Prev</button>
+          <button class="quiet checkpoint-navigation-button icon-only" type="button" aria-label="Previous checkpoint" data-checkpoint-previous><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-arrow-left"></use></svg></button>
           <span class="checkpoint-navigation-position" data-checkpoint-position aria-live="polite">Checkpoint — of —</span>
-          <button class="quiet checkpoint-navigation-button" type="button" data-checkpoint-next>Next</button>
+          <button class="quiet checkpoint-navigation-button icon-only" type="button" aria-label="Next checkpoint" data-checkpoint-next><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-arrow-right"></use></svg></button>
         </nav>
         <label id="workspace-preset-picker" class="workspace-preset-picker" title="Choose a task-focused workspace">
           <span class="visually-hidden">View</span>
@@ -99,9 +99,9 @@
           <div id="timeline-markers" class="timeline-markers" aria-hidden="true"></div>
         </div>
         <div class="timeline-actions">
-          <button id="timeline-playback-toggle" class="primary button-with-icon" type="button" aria-label="Play" title="Play current episode"><svg class="icon" aria-hidden="true"><use id="timeline-playback-icon" href="/assets/tabler-icons.svg#ti-player-play"></use></svg><span id="timeline-playback-label">Play</span></button>
-          <button id="timeline-reset" class="quiet button-with-icon" type="button" title="Reset episode"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-refresh"></use></svg><span>Reset</span></button>
-          <button id="playback-settings-toggle" class="quiet button-with-icon" type="button" title="Playback settings" aria-controls="playback-settings-menu" aria-expanded="false"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-settings"></use></svg><span>Settings</span></button>
+          <button id="timeline-playback-toggle" class="primary icon-only" type="button" aria-label="Play" title="Play current episode"><svg class="icon" aria-hidden="true"><use id="timeline-playback-icon" href="/assets/tabler-icons.svg#ti-player-play"></use></svg></button>
+          <button id="timeline-reset" class="quiet icon-only" type="button" aria-label="Reset episode" title="Reset episode"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-refresh"></use></svg></button>
+          <button id="playback-settings-toggle" class="quiet icon-only" type="button" aria-label="Playback settings" title="Playback settings" aria-controls="playback-settings-menu" aria-expanded="false"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-settings"></use></svg></button>
         </div>
       </div>
     </section>

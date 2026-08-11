@@ -16,6 +16,13 @@ export function playbackSourceTitle(route = {}) {
   return `${environment} · ${Number(match[1]).toLocaleString()} steps`;
 }
 
+export function statusMessageShouldToast({ status_message: statusMessage = "", session = {} } = {}) {
+  const message = String(statusMessage || "").trim();
+  if (!message) return false;
+  if (!session.awaiting_next_episode) return true;
+  return /error|expired|unsupported|no configured/i.test(message);
+}
+
 export function transportPresentation({
   running = false,
   hasControl = false,
@@ -47,7 +54,7 @@ export function transportPresentation({
     return {
       action: "next_episode",
       label: "Next episode",
-      icon: "player-play",
+      icon: "player-skip-forward",
       disabled: !hasControl || !available,
       reason: !hasControl
         ? "Another window has control"

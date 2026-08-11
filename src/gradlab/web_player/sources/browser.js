@@ -76,22 +76,22 @@ function formatGoalConfigurationDate(value, nowValue = Date.now()) {
 const GOAL_CONFIGURATION_KINDS = {
   current_default: {
     label: "Current default",
-    sourceLabel: "Current goal",
+    sourceLabel: "Current",
     behaviorLabel: "Default",
   },
   current_modified: {
     label: "Current modified",
-    sourceLabel: "Current goal",
+    sourceLabel: "Current",
     behaviorLabel: "Launch override",
   },
   previous_default: {
     label: "Previous default",
-    sourceLabel: "Older goal",
+    sourceLabel: "",
     behaviorLabel: "Default",
   },
   previous_modified: {
     label: "Previous modified",
-    sourceLabel: "Older goal",
+    sourceLabel: "",
     behaviorLabel: "Launch override",
   },
 };
@@ -125,7 +125,7 @@ export function goalConfigurationPresentation(item, nowValue = Date.now()) {
   const kind = String(item?.configuration_kind || "previous_default");
   const kindPresentation = GOAL_CONFIGURATION_KINDS[kind] || {
     label: "Previous configuration",
-    sourceLabel: "Older goal",
+    sourceLabel: "",
     behaviorLabel: "Configuration",
   };
   const runCount = Math.max(0, Number(item?.run_count) || 0);
@@ -650,12 +650,8 @@ export function checkpointMetricDescription(column) {
   return [role, evidence, direction].filter(Boolean).join(" · ");
 }
 
-export function checkpointMetricBestBadge(column) {
-  const roles = new Set(Array.isArray(column?.roles) ? column.roles : []);
-  if (roles.has("objective")) return "Best objective";
-  if (roles.has("tie_breaker")) return "Best tie-break";
-  if (roles.has("acceptance")) return "Best gate";
-  return "Best observed";
+export function checkpointMetricBestBadge() {
+  return "Best";
 }
 
 export function checkpointEvidencePresentation(item) {
@@ -1041,6 +1037,7 @@ export class SourceBrowser {
     this.selectedCheckpoints = new Set();
     this.evaluating = false;
     this.selectedGoalVariantId = "";
+    this.goalConfigurationsExpanded = false;
     this.goalVariantDiff = null;
     this.goalVariantDiffController = null;
     this.goalVariantDiffSerial = 0;
@@ -1049,6 +1046,7 @@ export class SourceBrowser {
     this.activityRevision = "";
     this.activityHasActiveRuns = false;
     this.autoSelectedRoute = "";
+    this.playbackRoute = null;
     this.activeBreadcrumbRoute = "";
     this.activeCheckpointCache = new Map();
     this.activeCheckpointController = null;
@@ -1199,6 +1197,7 @@ export class SourceBrowser {
       run_id: route.run_id || "",
       checkpoint_id: route.checkpoint_id || "",
     };
+    this.playbackRoute = { ...this.route };
     this.activeCheckpointPendingId = "";
     this.activeCheckpointError = "";
     this.activeBreadcrumbRoute = signature;
@@ -1314,11 +1313,19 @@ export class SourceBrowser {
     return Boolean(this.getState()?.hasControl);
   }
 
+  currentPlaybackRoute() {
+    const retainedRoute = this.getState()?.backgroundPlaybackSnapshot?.app?.route;
+    const route = [retainedRoute, this.playbackRoute, this.app?.route]
+      .find((candidate) => candidate?.checkpoint_id);
+    return route ? { ...route } : null;
+  }
+
   resetGoalVariantDetail() {
     this.goalVariantDiffController?.abort();
     this.goalVariantDiffController = null;
     this.goalVariantDiffSerial += 1;
     this.selectedGoalVariantId = "";
+    this.goalConfigurationsExpanded = false;
     this.goalVariantDiff = null;
     this.goalVariantRunPages.clear();
     this.goalVariantRunSort.clear();
@@ -1387,6 +1394,7 @@ export class SourceBrowser {
       this.selectedGoalVariantId = variantId;
       this.goalVariantDiff = this.goalVariantDiffFromActivity(variant);
     }
+    this.goalConfigurationsExpanded = false;
     this.renderView();
   }
 
@@ -1995,10 +2003,28 @@ export class SourceBrowser {
     const copy = document.createElement("div");
     const heading = document.createElement("strong");
     heading.textContent = "Continue current playback";
-    const detail = document.createElement("p");
-    detail.textContent = "Return without changing the loaded checkpoint or episode.";
-    copy.append(heading, detail);
-    const resume = button("Continue watching", { iconName: "arrow-left", primary: true });
+    copy.append(heading);
+    const playbackRoute = this.currentPlaybackRoute();
+    const breadcrumbItems = playbackRoute
+      ? sourceBreadcrumbItems(playbackRoute).slice(1)
+      : [];
+    if (breadcrumbItems.length) {
+      const breadcrumb = document.createElement("nav");
+      breadcrumb.className = "continue-playback-breadcrumb";
+      breadcrumb.setAttribute("aria-label", "Current playback source");
+      breadcrumbItems.forEach((item) => {
+        const crumb = document.createElement("span");
+        crumb.textContent = item.label;
+        if (item.title) crumb.title = item.title;
+        breadcrumb.append(crumb);
+      });
+      copy.append(breadcrumb);
+    } else {
+      const detail = document.createElement("p");
+      detail.textContent = "Loaded checkpoint";
+      copy.append(detail);
+    }
+    const resume = button("Continue watching", { iconName: "eye", primary: true });
     resume.disabled = !this.hasControl();
     resume.addEventListener("click", () => {
       if (!this.resumePlayback?.()) this.command("cancel_source");
@@ -2330,13 +2356,40 @@ export class SourceBrowser {
     ["Configuration", "Differences", "Runs", "First used", "Last activity"].forEach((label) => {
       const cell = document.createElement("th");
       cell.scope = "col";
-      cell.textContent = label;
+      if (label === "Configuration" && variants.length > 1) {
+        cell.className = "goal-configuration-heading";
+        const heading = document.createElement("span");
+        heading.textContent = label;
+        const otherCount = variants.length - 1;
+        const toggle = button(
+          this.goalConfigurationsExpanded
+            ? "Show selected only"
+            : `Show ${otherCount.toLocaleString()} more`,
+          { quiet: true },
+        );
+        toggle.classList.add("goal-configuration-toggle");
+        toggle.setAttribute("aria-expanded", String(this.goalConfigurationsExpanded));
+        toggle.setAttribute(
+          "aria-label",
+          this.goalConfigurationsExpanded
+            ? "Show only the selected goal configuration"
+            : `Show ${otherCount.toLocaleString()} other goal configurations`,
+        );
+        toggle.addEventListener("click", () => {
+          this.goalConfigurationsExpanded = !this.goalConfigurationsExpanded;
+          this.renderView();
+        });
+        cell.append(heading, toggle);
+      } else {
+        cell.textContent = label;
+      }
       headerRow.append(cell);
     });
     head.append(headerRow);
     const body = document.createElement("tbody");
 
-    variants.forEach(({ variant, presentation }) => {
+    const displayedVariants = this.goalConfigurationsExpanded ? variants : [selected];
+    displayedVariants.forEach(({ variant, presentation }) => {
       const row = document.createElement("tr");
       const isSelected = variant.variant_id === selected.variant.variant_id;
       row.className = `goal-configuration-row${isSelected ? " selected" : ""}`;
@@ -2351,15 +2404,16 @@ export class SourceBrowser {
       radio.addEventListener("change", () => this.selectGoalVariant(variant));
       const badges = document.createElement("span");
       badges.className = "goal-configuration-badges";
-      const sourceBadge = document.createElement("span");
-      sourceBadge.className = (
-        `goal-configuration-badge ${presentation.kind.startsWith("current_") ? "current" : "previous"}`
-      );
-      sourceBadge.textContent = presentation.sourceLabel;
+      if (presentation.sourceLabel) {
+        const sourceBadge = document.createElement("span");
+        sourceBadge.className = "goal-configuration-badge current";
+        sourceBadge.textContent = presentation.sourceLabel;
+        badges.append(sourceBadge);
+      }
       const behaviorBadge = document.createElement("span");
       behaviorBadge.className = "goal-configuration-badge behavior";
       behaviorBadge.textContent = presentation.behaviorLabel;
-      badges.append(sourceBadge, behaviorBadge);
+      badges.append(behaviorBadge);
       const success = renderSuccessBadges(variant);
       if (success) badges.append(success);
       choice.append(radio, badges);
@@ -2727,7 +2781,6 @@ export class SourceBrowser {
       : [
           ...(showingCheckpoints ? [{ label: "", selection: true }] : []),
           { label: "Checkpoint" },
-          { label: "Evidence" },
           ...(showingCheckpoints ? [{ label: "Purpose" }] : []),
           { label: "Step" },
           ...checkpointMetricColumns.map((column) => ({
@@ -2854,7 +2907,6 @@ export class SourceBrowser {
             [null, "", "inspection-cell"],
           ]
         : (() => {
-            const evidence = checkpointEvidencePresentation(item);
             const checkpointName = /final/i.test(String(item.purpose || ""))
               ? "Final checkpoint"
               : `Checkpoint at ${Number(item.step).toLocaleString()} steps`;
@@ -2867,7 +2919,6 @@ export class SourceBrowser {
                   : "",
                 "checkpoint-cell",
               ],
-              [evidence.label, evidence.detail, `checkpoint-evidence ${evidence.tone}`],
               ...(showingCheckpoints ? [[item.purpose || "—"]] : []),
               [Number(item.step).toLocaleString(), "", "data-cell"],
               ...checkpointMetricColumns.map((column) => [
@@ -3004,7 +3055,7 @@ export class SourceBrowser {
           const badge = document.createElement("span");
           const badgeLabel = checkpointMetricBestBadge(metadata.column);
           const description = `${badgeLabel}: ${String(metadata.label).toLowerCase()}`;
-          badge.className = `checkpoint-best-badge ${metadata.column?.evidence || "training"}`;
+          badge.className = "checkpoint-best-badge";
           badge.textContent = badgeLabel;
           badge.title = description;
           badge.setAttribute("aria-label", description);
