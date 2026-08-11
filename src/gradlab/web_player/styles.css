@@ -240,6 +240,41 @@ button:disabled {
 .header-status { justify-content: flex-end; }
 .header-divider { width: 1px; height: 1.3rem; background: var(--color-outline-strong); }
 
+.checkpoint-navigation {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border: 1px solid var(--color-border);
+  border-radius: .42rem;
+  background: var(--color-surface-primary);
+}
+
+.checkpoint-navigation-button {
+  min-height: 1.9rem;
+  padding: .28rem .52rem;
+  border: 0;
+  border-radius: 0;
+  font-size: .7rem;
+}
+
+.checkpoint-navigation-button:first-child { border-right: 1px solid var(--color-border); }
+.checkpoint-navigation-button:last-child { border-left: 1px solid var(--color-border); }
+.checkpoint-navigation-button:disabled { border-color: var(--color-border); }
+
+.checkpoint-navigation-position {
+  min-width: 7.7rem;
+  padding: 0 .56rem;
+  color: var(--color-text-muted);
+  font: .65rem/1 "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.checkpoint-navigation.warning .checkpoint-navigation-position {
+  color: var(--color-training-text);
+}
+
 .eyebrow {
   color: var(--color-interaction);
   font-size: .66rem;

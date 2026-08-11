@@ -12,6 +12,7 @@ import {
   checkpointMetricDescription,
   checkpointMetricIsBest,
   checkpointMetricRoleLabel,
+  checkpointNavigationPresentation,
   checkpointPlaybackSeed,
   formatGoalDiffValue,
   formatMetricValue,
@@ -27,6 +28,50 @@ import {
   sourceRouteFromPath,
   sourceRoutePath,
 } from "../../src/gradlab/web_player/sources/browser.js";
+
+test("checkpoint navigation reports chronological position and neighbors", () => {
+  const checkpoints = [
+    { checkpoint_id: "checkpoint-300-c", step: 300, sha256: "c" },
+    { checkpoint_id: "checkpoint-100-a", step: 100, sha256: "a" },
+    { checkpoint_id: "checkpoint-200-b", step: 200, sha256: "b" },
+  ];
+
+  assert.deepEqual(
+    checkpointNavigationPresentation(checkpoints, "checkpoint-200-b"),
+    {
+      count: 3,
+      position: 2,
+      current: checkpoints[2],
+      previous: checkpoints[1],
+      next: checkpoints[0],
+    },
+  );
+  assert.deepEqual(
+    checkpointNavigationPresentation(checkpoints, "checkpoint-100-a"),
+    {
+      count: 3,
+      position: 1,
+      current: checkpoints[1],
+      previous: null,
+      next: checkpoints[2],
+    },
+  );
+});
+
+test("checkpoint navigation fails closed when the active checkpoint is absent", () => {
+  assert.deepEqual(
+    checkpointNavigationPresentation([
+      { checkpoint_id: "checkpoint-100-a", step: 100, sha256: "a" },
+    ], "checkpoint-missing"),
+    {
+      count: 1,
+      position: null,
+      current: null,
+      previous: null,
+      next: null,
+    },
+  );
+});
 
 test("catalog search filters the displayed authoritative page synchronously", () => {
   const mario = { run_id: "gradlab-mario", description: "Level 1-1" };

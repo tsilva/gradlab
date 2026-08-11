@@ -199,6 +199,7 @@ async function ensureSourceBrowser() {
         command,
         getState: () => state,
         showToast,
+        checkpointNavigationRoot: $("#checkpoint-navigation"),
         openInspection: (endpoint, options) => openContractInspection(endpoint, options),
         openSourceRoute: (route) => openSourceRoute(route),
       });
@@ -251,6 +252,7 @@ function setSourceMode(active, snapshot = null) {
   );
   document.body.classList.toggle("source-selection", state.sourceMode);
   $("#source-browser").hidden = !state.sourceMode;
+  $("#checkpoint-navigation").hidden = Boolean(state.sourceMode || !activeCheckpointRoute);
   $("#page-title").hidden = Boolean(state.sourceMode || activeCheckpointRoute);
   $("#change-source").hidden = (
     state.sourceMode
