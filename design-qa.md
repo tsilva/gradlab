@@ -1,3 +1,65 @@
+# Icon-only playback controls design QA
+
+## Evidence
+
+- Source visual truth: `/var/folders/wz/x29jb7_x5rdc_5dcjr4qnhg00000gn/T/codex-clipboard-b88c8179-c7a3-4691-b1f4-2274b003885f.png`
+- Browser-rendered implementation: `/tmp/gradlab-transport-icons-desktop.jpg`
+- Focused side-by-side comparison: `/tmp/gradlab-transport-controls-comparison.png`
+- Source pixels: 1206 × 388. The source is a focused crop of the existing terminal player rather than a complete viewport.
+- Implementation pixels and CSS viewport: 1280 × 720 at browser device pixel ratio 2; the browser capture is normalized to CSS-pixel dimensions.
+- Focused comparison pixels: 2560 × 200. The 1206 × 188 source control crop and 1280 × 120 implementation control crop were padded, not scaled, to keep their rendered geometry honest.
+- State: dark desktop player after a successful ViZDoom Basic episode, with the next-episode action available.
+
+## Full-view comparison evidence
+
+- The live player retains the source's game-first composition, timeline borders, scrubber treatment, dark palette, and right-aligned transport placement.
+- The source is not a complete final-state mock: it shows the prior labeled controls, while the user's written direction defines the requested icon-only target. Fidelity was therefore judged against the source location and visual language plus the explicit control requirements, without inventing pixel-level equivalence.
+- The implementation keeps the action rail fixed at 128 CSS pixels while extending the scrubber to use the space released by the removed labels.
+
+## Focused comparison evidence
+
+- The combined comparison shows the requested density change directly: the labeled Next episode, Reset, and Settings buttons become three 36 × 36 CSS-pixel icon controls in the same right-aligned slot.
+- Next episode uses the packaged Tabler skip-forward glyph rather than the play glyph. Its teal fill is visually distinct from violet play/replay and amber pause states.
+- Reset uses coral and Settings uses aqua, so the three adjacent controls are distinguishable by icon and color without relying on text.
+
+## Required fidelity surfaces
+
+- Fonts and typography: the timeline's existing monospace step label is unchanged. The transport controls intentionally contain no visible text; accessible names and native hover titles preserve their meaning.
+- Spacing and layout rhythm: controls are equal 36 × 36 squares with a 0.35rem gap, right aligned inside a fixed 8rem rail. Browser measurements show the rail at 128 CSS pixels and the scrubber ending before it without overlap.
+- Colors and visual tokens: play/replay use interaction violet, pause uses amber, next episode uses teal, reset uses coral, and settings uses aqua. All are existing GradLab theme tokens.
+- Image quality and asset fidelity: all four action glyphs come from the existing packaged Tabler icon sprite. No emoji, text glyphs, CSS drawings, or raster substitutes were introduced.
+- Copy and content: visible button copy is removed as requested. `Next episode`, `Reset episode`, and `Playback settings` remain as programmatic accessible names; contextual hover titles remain available.
+- Accessibility and interaction states: the controls remain keyboard-focusable, retain the shared high-contrast focus outline, expose semantic labels, and preserve disabled styling independently of their action colors.
+
+## Findings
+
+- No actionable P0, P1, or P2 differences remain for the requested icon-only transport treatment.
+
+## Comparison history
+
+- Pass 1 compared the provided labeled-control source and browser-rendered icon-only terminal state in one focused composite. The visible differences are the requested changes; no unintended P0/P1/P2 mismatch was found, so no visual correction loop was needed.
+
+## Primary interactions tested
+
+- Played the checkpoint through a completed episode and verified the active transport action was `next_episode` with the skip-forward glyph and teal treatment.
+- Verified all three visible controls have empty visible text, distinct computed colors, accessible names, and hover titles.
+- Opened and closed Playback settings through the cog control and verified its expanded state and complete menu contents.
+- Activated Next episode and verified the live player accepted the command.
+- Checked browser warnings and errors after the interaction sequence: none.
+- Ran all 160 web-player tests plus JavaScript syntax and diff checks successfully.
+
+## Implementation checklist
+
+- [x] Make Play, Pause, Replay, Next episode, Reset, and Settings icon-only in the timeline.
+- [x] Give Next episode a skip-forward icon distinct from Play.
+- [x] Give transport states, Reset, and Settings distinct semantic colors.
+- [x] Preserve a fixed-width action rail so state changes never move the scrubber.
+- [x] Preserve accessible labels, tooltips, focus behavior, settings interaction, and disabled states.
+
+final result: passed
+
+---
+
 # Collapsed playback toggle design QA
 
 ## Evidence

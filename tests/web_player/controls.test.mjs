@@ -4,6 +4,7 @@ import test from "node:test";
 
 import {
   playbackSourceTitle,
+  statusMessageShouldToast,
   transportPresentation,
   workspaceIsEditable,
 } from "../../src/gradlab/web_player/player-presentation.js";
@@ -57,8 +58,14 @@ test("one contextual transport covers play, pause, replay, and next episode", ()
     transportPresentation({
       hasControl: true,
       session: { awaiting_next_episode: true, can_start_next_episode: true },
-    }).action,
-    "next_episode",
+    }),
+    {
+      action: "next_episode",
+      label: "Next episode",
+      icon: "player-skip-forward",
+      disabled: false,
+      reason: "Start the prepared next episode",
+    },
   );
   const exhausted = transportPresentation({
     hasControl: true,
@@ -66,6 +73,19 @@ test("one contextual transport covers play, pause, replay, and next episode", ()
   });
   assert.equal(exhausted.disabled, true);
   assert.match(exhausted.reason, /limit/);
+});
+
+test("episode completion uses the player controls instead of a toast", () => {
+  assert.equal(statusMessageShouldToast({ status_message: "Paused" }), true);
+  assert.equal(statusMessageShouldToast({
+    status_message: "episode complete · choose Play next episode",
+    session: { awaiting_next_episode: true },
+  }), false);
+  assert.equal(statusMessageShouldToast({
+    status_message: "Checkpoint expired before the next episode",
+    session: { awaiting_next_episode: true },
+  }), true);
+  assert.match(app, /if \(statusMessageShouldToast\(snapshot\)\) \{/);
 });
 
 test("task views are fixed while Customize is explicitly editable", () => {
@@ -93,12 +113,54 @@ test("the scrubber stays left of a fixed-width playback action rail", () => {
     const position = page.indexOf(`id="${id}"`, timelineStart);
     assert.ok(position > actionsPosition && position < timelineEnd, id);
   }
-  assert.match(styles, /\.timeline-track \{[^}]*grid-template-columns: minmax\(0, 1fr\) 20rem/);
-  assert.match(styles, /\.timeline-actions \{[^}]*width: 20rem/);
+  assert.match(styles, /\.timeline-track \{[^}]*grid-template-columns: minmax\(0, 1fr\) 8rem/);
+  assert.match(styles, /\.timeline-actions \{[^}]*width: 8rem/);
   assert.match(page, /id="playback-settings-toggle"[^>]*>.*#ti-settings/);
   assert.match(icons, /id="ti-settings"/);
   assert.equal(settings.includes("data-next-episode"), false);
   assert.equal(settings.includes("data-reset-episode"), false);
+});
+
+test("timeline controls use accessible icons and distinct action colors", () => {
+  for (const [id, label] of [
+    ["timeline-playback-toggle", "Play"],
+    ["timeline-reset", "Reset episode"],
+    ["playback-settings-toggle", "Playback settings"],
+  ]) {
+    assert.match(page, new RegExp(`id="${id}"[^>]*class="[^"]*icon-only[^"]*"[^>]*aria-label="${label}"`));
+  }
+  assert.equal(page.includes("timeline-playback-label"), false);
+  assert.match(icons, /id="ti-player-skip-forward"/);
+  assert.match(styles, /#timeline-playback-toggle\[data-action="next_episode"\][^{]*\{[^}]*var\(--color-series-teal\)/);
+  assert.match(styles, /#timeline-playback-toggle\[data-action="pause"\][^{]*\{[^}]*var\(--color-series-amber\)/);
+  assert.match(styles, /#timeline-reset:not\(:disabled\)[^{]*\{[^}]*var\(--color-series-coral\)/);
+  assert.match(styles, /#playback-settings-toggle:not\(:disabled\)[^{]*\{[^}]*var\(--color-series-aqua\)/);
+});
+
+test("header checkpoint, workspace, and overflow controls share one height", () => {
+  assert.match(styles, /--header-control-height: 2\.25rem/);
+  assert.match(
+    styles,
+    /\.header-status > \.checkpoint-navigation,[\s\S]*\.header-status > \.workspace-preset-picker,[\s\S]*\.header-status > #more-toggle \{ height: var\(--header-control-height\); \}/,
+  );
+  assert.match(styles, /\.workspace-preset-picker select \{[^}]*height: 100%/);
+  assert.match(styles, /\.checkpoint-navigation-button \{[^}]*height: 100%/);
+  assert.match(styles, /\.checkpoint-navigation-position \{[^}]*height: 100%/);
+});
+
+test("checkpoint navigation uses accessible directional icons", () => {
+  assert.match(
+    page,
+    /class="quiet checkpoint-navigation-button icon-only"[^>]*aria-label="Previous checkpoint"[^>]*data-checkpoint-previous[^>]*>[\s\S]*?#ti-arrow-left/,
+  );
+  assert.match(
+    page,
+    /class="quiet checkpoint-navigation-button icon-only"[^>]*aria-label="Next checkpoint"[^>]*data-checkpoint-next[^>]*>[\s\S]*?#ti-arrow-right/,
+  );
+  assert.equal(page.includes(">Prev</button>"), false);
+  assert.equal(page.includes(">Next</button>"), false);
+  assert.match(icons, /id="ti-arrow-right"/);
+  assert.match(styles, /\.checkpoint-navigation-button\.icon-only \{ width: calc\(var\(--header-control-height\) - 2px\); \}/);
 });
 
 test("playback tuning is one reusable on-demand settings form", () => {

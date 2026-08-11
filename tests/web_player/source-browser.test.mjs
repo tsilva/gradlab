@@ -108,6 +108,26 @@ test("goal variant selection uses the exact live activity diff", () => {
   assert.equal(state.entries[0].path, "/train/checkpoint_freq");
 });
 
+test("selecting a goal configuration collapses the expanded list", () => {
+  const browser = Object.create(SourceBrowser.prototype);
+  browser.selectedGoalVariantId = "goal-variant-current";
+  browser.goalConfigurationsExpanded = true;
+  browser.goalVariantDiffController = null;
+  browser.goalVariantDiffSerial = 0;
+  browser.goalVariantDiff = null;
+  let renders = 0;
+  browser.renderView = () => { renders += 1; };
+
+  browser.selectGoalVariant({
+    variant_id: "goal-variant-previous",
+    comparison_available: false,
+  });
+
+  assert.equal(browser.selectedGoalVariantId, "goal-variant-previous");
+  assert.equal(browser.goalConfigurationsExpanded, false);
+  assert.equal(renders, 1);
+});
+
 const METRIC = "eval/full/episode/return/shaped/mean";
 
 test("checkpoint selection boxes are centered and distinguish enabled from disabled", async () => {
@@ -137,6 +157,8 @@ test("checkpoint table uses compact API metric labels without a verdict column",
   assert.match(source, /label: column\.label \|\| metricLabel\(column\.metric\)/);
   assert.match(source, /checkpointMetricRoleLabel\(column\)/);
   assert.doesNotMatch(source, /\{ label: "Evaluation" \}/);
+  assert.doesNotMatch(source, /\{ label: "Evidence" \}/);
+  assert.doesNotMatch(source, /checkpoint-evidence/);
 });
 
 test("catalog list hover highlights the complete row", async () => {
@@ -200,7 +222,7 @@ test("goal configurations expose exact diff counts and date columns", () => {
   }, now), {
     kind: "current_default",
     kindLabel: "Current default",
-    sourceLabel: "Current goal",
+    sourceLabel: "Current",
     behaviorLabel: "Default",
     differenceCount: 0,
     differenceCountExact: true,
@@ -222,7 +244,7 @@ test("goal configurations expose exact diff counts and date columns", () => {
   }, now), {
     kind: "previous_default",
     kindLabel: "Previous default",
-    sourceLabel: "Older goal",
+    sourceLabel: "",
     behaviorLabel: "Default",
     differenceCount: 1,
     differenceCountExact: true,
@@ -265,6 +287,11 @@ test("goal configuration metadata and exact changes render as tables", async () 
     source,
     /\["Configuration", "Differences", "Runs", "First used", "Last activity"\]/,
   );
+  assert.match(source, /this\.goalConfigurationsExpanded \? variants : \[selected\]/);
+  assert.match(source, /this\.goalConfigurationsExpanded = false;\s*this\.renderView\(\);/);
+  assert.doesNotMatch(source, /Older goal/);
+  assert.match(source, /sourceLabel: "Current"/);
+  assert.match(styles, /\.goal-configuration-toggle \{[^}]*text-transform: none;/);
   assert.match(
     styles,
     /\.goal-configuration-table \{ min-width: 64rem; table-layout: fixed; \}/,
@@ -735,6 +762,55 @@ test("browsing from an active player keeps the current runner available", () => 
   assert.equal(browser.route.checkpoint_id, "");
 });
 
+test("continue playback context retains the active checkpoint while browsing", () => {
+  const activeRoute = {
+    level: "runs",
+    environment_id: "ViZDoom",
+    goal_id: "DefendTheLine-v1",
+    goal_variant_id: "goal-variant-a27a8239",
+    run_id: "gradlab-c22f7c7a",
+    checkpoint_id: "checkpoint-10002432-b285ff3b",
+  };
+  const browser = Object.create(SourceBrowser.prototype);
+  browser.getState = () => ({
+    backgroundPlaybackSnapshot: { app: { route: activeRoute } },
+  });
+  browser.playbackRoute = null;
+  browser.app = {
+    route: {
+      level: "runs",
+      environment_id: "ViZDoom",
+      goal_id: "DefendTheLine-v1",
+      goal_variant_id: "goal-variant-a27a8239",
+      run_id: "gradlab-c22f7c7a",
+      checkpoint_id: "",
+    },
+  };
+
+  assert.deepEqual(browser.currentPlaybackRoute(), activeRoute);
+});
+
+test("continue playback banner identifies the checkpoint and uses the eye icon", async () => {
+  const source = await readFile(
+    new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
+    "utf8",
+  );
+  const styles = await readFile(
+    new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
+    "utf8",
+  );
+  const sprite = await readFile(
+    new URL("../../src/gradlab/web_player/tabler-icons.svg", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(source, /sourceBreadcrumbItems\(playbackRoute\)\.slice\(1\)/);
+  assert.match(source, /className = "continue-playback-breadcrumb"/);
+  assert.match(source, /button\("Continue watching", \{ iconName: "eye", primary: true \}\)/);
+  assert.match(styles, /\.continue-playback-breadcrumb \{/);
+  assert.match(sprite, /id="ti-eye"/);
+});
+
 test("rejected active breadcrumb navigation leaves playback and history unchanged", () => {
   const browser = Object.create(SourceBrowser.prototype);
   browser.route = {
@@ -997,8 +1073,8 @@ test("checkpoint metric cells identify their own leaders", async () => {
   };
   assert.equal(checkpointMetricRoleLabel(objective), "Objective · gate");
   assert.equal(checkpointMetricRoleLabel(proxy), "Training proxy");
-  assert.equal(checkpointMetricBestBadge(objective), "Best objective");
-  assert.equal(checkpointMetricBestBadge(proxy), "Best observed");
+  assert.equal(checkpointMetricBestBadge(objective), "Best");
+  assert.equal(checkpointMetricBestBadge(proxy), "Best");
   assert.match(checkpointMetricDescription(objective), /Frozen checkpoint-evaluation evidence/);
   assert.match(checkpointMetricDescription(proxy), /Diagnostic online training proxy/);
 
@@ -1007,10 +1083,19 @@ test("checkpoint metric cells identify their own leaders", async () => {
     "utf8",
   );
   assert.match(source, /"checkpoint-metric-cell"/);
-  assert.match(source, /badge\.className = `checkpoint-best-badge \$\{/);
+  assert.match(source, /badge\.className = "checkpoint-best-badge"/);
   assert.match(source, /badge\.textContent = badgeLabel/);
-  assert.match(source, /Best objective/);
-  assert.match(source, /Best observed/);
+  assert.doesNotMatch(source, /Best objective/);
+  assert.doesNotMatch(source, /Best observed/);
+
+  const styles = await readFile(
+    new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    styles,
+    /\.source-table \.checkpoint-best-badge \{[^}]*border: 1px solid var\(--color-training-success-text\);[^}]*background: var\(--color-training-success-surface\);[^}]*color: var\(--color-training-success-text\);/,
+  );
 });
 
 test("selected checkpoints are admitted together through the evaluation API", async (context) => {

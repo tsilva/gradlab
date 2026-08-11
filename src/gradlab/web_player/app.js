@@ -13,6 +13,7 @@ import { episodeReport } from "./episode-report.js";
 import { mountPlaybackSettings } from "./playback-settings.js";
 import {
   playbackSourceTitle,
+  statusMessageShouldToast,
   transportPresentation,
   workspaceIsEditable,
 } from "./player-presentation.js";
@@ -1010,8 +1011,7 @@ function playbackIsRunning() {
 function updateTimelinePlaybackControl() {
   const playbackToggle = $("#timeline-playback-toggle");
   const playbackIcon = $("#timeline-playback-icon");
-  const playbackLabel = $("#timeline-playback-label");
-  if (!playbackToggle || !playbackIcon || !playbackLabel) return;
+  if (!playbackToggle || !playbackIcon) return;
   const session = state.liveSnapshot?.session || state.snapshot?.session || {};
   const presentation = transportPresentation({
     running: playbackIsRunning(),
@@ -1026,7 +1026,6 @@ function updateTimelinePlaybackControl() {
   playbackToggle.title = presentation.reason;
   playbackToggle.classList.toggle("primary", presentation.action !== "pause");
   playbackToggle.setAttribute("aria-label", presentation.label);
-  playbackLabel.textContent = presentation.label;
   setSvgUseHref(playbackIcon, `/assets/tabler-icons.svg#ti-${presentation.icon}`);
   const reset = $("#timeline-reset");
   if (reset) {
@@ -1143,7 +1142,9 @@ function renderSnapshot() {
   }
   if (state.inspectionSequence === null && snapshot.status_message && snapshot.status_message !== state.lastStatus) {
     state.lastStatus = snapshot.status_message;
-    showToast(snapshot.status_message, snapshot.run_state === "paused" && /error|expired|unsupported|no configured/i.test(snapshot.status_message));
+    if (statusMessageShouldToast(snapshot)) {
+      showToast(snapshot.status_message, snapshot.run_state === "paused" && /error|expired|unsupported|no configured/i.test(snapshot.status_message));
+    }
   }
   panelRuntime.renderSnapshot(snapshot, panelView());
   playbackSettings?.render(snapshot, panelView());
