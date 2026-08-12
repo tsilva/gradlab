@@ -374,7 +374,7 @@ class BreakoutTurboProviderTests(unittest.TestCase):
 
     def test_runtime_matches_turbo_api_v1_release(self) -> None:
         installed = Version(importlib.metadata.version("breakout-turbo-env"))
-        self.assertEqual(installed, Version("0.5.2"))
+        self.assertEqual(installed, Version("0.5.3"))
 
     def test_constructs_and_preserves_native_manual_vector_contract(self) -> None:
         config = self.config()
@@ -591,8 +591,8 @@ class MarioNativeProviderTests(unittest.TestCase):
 
     def test_runtime_matches_turbo_api_v1_releases(self) -> None:
         installed = Version(importlib.metadata.version("supermariobrosnes-turbo"))
-        self.assertEqual(installed, Version("0.6.2"))
-        self.assertEqual(Version(retro.__version__), Version("1.0.1.post37"))
+        self.assertEqual(installed, Version("0.6.4"))
+        self.assertEqual(Version(retro.__version__), Version("1.0.1.post41"))
         env_type = super_mario_bros_nes_turbo_vec_env_type()
         self.assertIs(env_type.supports_live_snapshots, True)
         self.assertTrue(callable(getattr(env_type, "capture_snapshots", None)))
@@ -964,7 +964,11 @@ class MarioNativeProviderTests(unittest.TestCase):
             ),
         )
 
-        self.assertEqual(kwargs["state_catalog"], ("Level1-1", "Level1-4"))
+        self.assertEqual(
+            tuple(Path(path).stem for path in kwargs["state_catalog"]),
+            ("Level1-1", "Level1-4"),
+        )
+        self.assertTrue(all(Path(path).is_file() for path in kwargs["state_catalog"]))
         self.assertNotIn("state", kwargs)
         self.assertNotIn("state_probs", kwargs)
 
@@ -1134,7 +1138,12 @@ class MarioNativeProviderTests(unittest.TestCase):
         self.assertIs(env.autoreset_mode, gym.vector.AutoresetMode.DISABLED)
         self.assertEqual(env.kwargs["info_filter"], "all")
         self.assertEqual(env.kwargs["num_threads"], 8)
-        self.assertEqual(env.kwargs["state"], "Start")
+        self.assertEqual(
+            Path(env.kwargs["state"]).name,
+            "Start.state",
+        )
+        self.assertTrue(Path(env.kwargs["state"]).is_file())
+        self.assertEqual(env.state_catalog, ("Start",))
         self.assertEqual(env.kwargs["obs_resize"], (84, 84))
         self.assertEqual(env.kwargs["obs_crop"], (17, 0, 0, 0))
         self.assertEqual(env.kwargs["obs_crop_mode"], "mask")

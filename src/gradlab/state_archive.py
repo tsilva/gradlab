@@ -364,7 +364,7 @@ class SnapshotCodec:
 
 
 class _MarioPortableCodec(SnapshotCodec):
-    codec_id = "supermariobrosnes-turbo.portable-v1"
+    codec_id = "supermariobrosnes-turbo.portable-v2"
     provider_id = "supermariobrosnes-turbo"
 
     def capture(self, provider: Any, mask: np.ndarray):

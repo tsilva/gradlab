@@ -6,6 +6,7 @@ cd "$ROOT"
 
 PACKAGES=(
     breakout-turbo-env
+    gradoom
     stable-retro-turbo
     supermariobrosnes-turbo
     vizdoom-turbo
@@ -26,7 +27,7 @@ update_cutoffs() {
     local package
     for package in "${PACKAGES[@]}"; do
         if grep -Eq "^${package} = " "$file"; then
-            perl -0pi -e "s/^${package} = \"[^\"]*\"/${package} = \"$CUTOFF\"/mg" "$file"
+            perl -0pi -e "s/^${package} = (?:\"[^\"]*\"|false)/${package} = \"$CUTOFF\"/mg" "$file"
         fi
     done
 }
@@ -37,6 +38,7 @@ update_cutoffs "${UV_CONFIG_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/uv/uv.toml}"
 
 uv lock \
     --upgrade-package breakout-turbo-env \
+    --upgrade-package gradoom \
     --upgrade-package stable-retro-turbo \
     --upgrade-package supermariobrosnes-turbo \
     --upgrade-package vizdoom-turbo
