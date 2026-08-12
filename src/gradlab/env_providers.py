@@ -52,6 +52,7 @@ MARIO_BASE_INFO_KEYS = frozenset(
         "xscrollLo",
     }
 )
+_PROVIDER_DATA_ROOT = Path(__file__).with_name("provider_data")
 
 
 def _is_disabled_autoreset_mode(value: Any) -> bool:
@@ -100,6 +101,7 @@ def _validated_turbo_start_info_adapter(
     provider_id: str,
     *,
     validate_contract: bool,
+    start_id_aliases: Mapping[str, str] | None = None,
 ):
     try:
         _require_disabled_autoreset_mode(env, provider_id)
@@ -111,7 +113,7 @@ def _validated_turbo_start_info_adapter(
         except Exception:
             pass
         raise
-    return _StartInfoAdapter(env)
+    return _StartInfoAdapter(env, start_id_aliases=start_id_aliases)
 
 
 def _native_start_catalog(env: Any) -> tuple[str, ...]:
@@ -123,18 +125,30 @@ def _native_start_catalog(env: Any) -> tuple[str, ...]:
 class _StartInfoAdapter:
     """Translate provider-generic start IDs to native catalog indices."""
 
-    def __init__(self, env: Any):
+    def __init__(self, env: Any, *, start_id_aliases: Mapping[str, str] | None = None):
         self.env = env
+        native_catalog = tuple(str(value) for value in getattr(env, "state_catalog", ()))
+        aliases = dict(start_id_aliases or {})
+        if aliases and set(aliases) != set(native_catalog):
+            raise ValueError("start ID aliases must cover the native state catalog exactly")
+        self._native_catalog = native_catalog
+        self._public_catalog = tuple(aliases.get(value, value) for value in native_catalog)
+        if len(set(self._public_catalog)) != len(self._public_catalog):
+            raise ValueError("start ID aliases must be unique")
 
     def __getattr__(self, name: str) -> Any:
         if name == "env":
             raise AttributeError(name)
         return getattr(self.env, name)
 
+    @property
+    def state_catalog(self) -> tuple[str, ...]:
+        return self._public_catalog
+
     def reset(self, *, seed=None, options=None):
         native_options = dict(options or {})
         start_ids = native_options.pop("start_ids", None)
-        catalog = tuple(str(value) for value in self.env.state_catalog)
+        catalog = self._public_catalog
         mask = np.ones(self.env.num_envs, dtype=np.bool_)
         if native_options.get("reset_mask") is not None:
             mask = np.asarray(native_options["reset_mask"], dtype=np.bool_)
@@ -253,10 +267,28 @@ def gradoom_vec_env_type():
 
 
 def _stable_retro_packaged_data_path(game: str, filename: str) -> Path:
+    overlay = _PROVIDER_DATA_ROOT / "stable_retro" / game / filename
+    path = (
+        overlay
+        if overlay.is_file()
+        else Path(retro.__file__).resolve().parent / "data" / "stable" / game / filename
+    )
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"no GradLab or stable-retro-turbo packaged data exists for {game}: {filename}"
+        )
+    return path
+
+
+def _stable_retro_authority_state_path(game: str, state: str) -> Path:
+    explicit = Path(state).expanduser()
+    if explicit.is_file():
+        return explicit.resolve()
+    filename = state if state.endswith(".state") else f"{state}.state"
     path = Path(retro.__file__).resolve().parent / "data" / "stable" / game / filename
     if not path.is_file():
         raise FileNotFoundError(
-            f"stable-retro-turbo does not provide packaged data for {game}: {filename}"
+            f"stable-retro-turbo does not provide packaged state for {game}: {filename}"
         )
     return path
 
@@ -316,6 +348,10 @@ def _retro_provider_args(
             raise ValueError(f"env_args.{key} must be one of {choices}") from exc
     if packaged_info and native_kwargs.get("info") == "data":
         native_kwargs["info"] = str(_stable_retro_packaged_data_path(config.game, "data.json"))
+    if packaged_info and native_kwargs.get("scenario", "scenario") == "scenario":
+        native_kwargs["scenario"] = str(
+            _stable_retro_packaged_data_path(config.game, "scenario.json")
+        )
     return native_kwargs
 
 
@@ -437,6 +473,18 @@ def _stable_retro_native_vec_kwargs(
         runtime_rom_path=runtime_rom_path,
         packaged_info=True,
     )
+    # Stable Retro's global integration root follows the user's imported ROM
+    # catalog and may contain saved states produced by a different core. Use
+    # the released authority-format state assets that match this exact wheel.
+    if config.states:
+        native_kwargs["state_catalog"] = tuple(
+            str(_stable_retro_authority_state_path(config.game, state))
+            for state in config.states
+        )
+    elif config.state:
+        native_kwargs["state"] = str(
+            _stable_retro_authority_state_path(config.game, config.state)
+        )
     return _turbo_native_vec_kwargs(
         config,
         native_kwargs,
@@ -1021,10 +1069,18 @@ def _stable_retro_turbo_make_vec_env(
     env_type = retro_vec_env_type
     kwargs = dict(native_kwargs)
     env = env_type(config.game, **kwargs)
+    start_id_aliases = None
+    requested_starts = (
+        tuple(config.states) if config.states else ((config.state,) if config.state else ())
+    )
+    native_catalog = tuple(str(value) for value in getattr(env, "state_catalog", ()))
+    if requested_starts and len(requested_starts) == len(native_catalog):
+        start_id_aliases = dict(zip(native_catalog, requested_starts, strict=True))
     return _validated_turbo_start_info_adapter(
         env,
         STABLE_RETRO_TURBO_PROVIDER.provider_id,
         validate_contract=retro_vec_env_type is DEFAULT_RETRO_VEC_ENV,
+        start_id_aliases=start_id_aliases,
     )
 
 
@@ -1169,7 +1225,7 @@ PROVIDER_RUNTIME_ADAPTERS = {
         _super_mario_native_vec_kwargs,
         _super_mario_bros_nes_turbo_make_vec_env,
         factory_override="super_mario_vec_env_type",
-        snapshot_codec_id="supermariobrosnes-turbo.portable-v1",
+        snapshot_codec_id="supermariobrosnes-turbo.portable-v2",
     ),
     ALE_PY_PROVIDER.provider_id: ProviderRuntimeAdapter(
         ALE_PY_PROVIDER.provider_id,

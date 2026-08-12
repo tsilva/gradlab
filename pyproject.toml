@@ -7,12 +7,12 @@ requires-python = "==3.14.*"
 license = "MIT"
 license-files = ["LICENSE"]
 dependencies = [
-    "stable-retro-turbo==1.0.1.post37; sys_platform == 'darwin' and platform_machine == 'arm64'",
-    "stable-retro-turbo==1.0.1.post37; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "supermariobrosnes-turbo==0.6.2; sys_platform == 'darwin' and platform_machine == 'arm64'",
-    "supermariobrosnes-turbo==0.6.2; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "breakout-turbo-env==0.5.2; sys_platform == 'darwin' and platform_machine == 'arm64'",
-    "breakout-turbo-env==0.5.2; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "stable-retro-turbo==1.0.1.post41; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "stable-retro-turbo==1.0.1.post41; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "supermariobrosnes-turbo==0.6.4; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "supermariobrosnes-turbo==0.6.4; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "breakout-turbo-env==0.5.3; sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "breakout-turbo-env==0.5.3; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "vizdoom-turbo==1.3.0.post24; sys_platform == 'darwin' and platform_machine == 'arm64'",
     "vizdoom-turbo==1.3.0.post24; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "gradoom==0.1.0a1; sys_platform == 'darwin' and platform_machine == 'arm64'",
@@ -92,11 +92,11 @@ constraint-dependencies = [
 ]
 
 [tool.uv.exclude-newer-package]
-breakout-turbo-env = "2026-07-29T13:20:49Z"
-gradoom = "2026-08-11T11:18:04Z"
-stable-retro-turbo = "2026-07-29T13:20:49Z"
-supermariobrosnes-turbo = "2026-07-29T13:20:49Z"
-vizdoom-turbo = "2026-08-10T16:08:36Z"
+breakout-turbo-env = "2026-08-12T13:25:25Z"
+gradoom = "2026-08-12T13:25:25Z"
+stable-retro-turbo = "2026-08-12T13:25:25Z"
+supermariobrosnes-turbo = "2026-08-12T13:25:25Z"
+vizdoom-turbo = "2026-08-12T13:25:25Z"
 
 [tool.ruff]
 line-length = 100
@@ -123,9 +123,9 @@ train-image-build = [
     "packaging>=25,<26",
 ]
 train-runtime = [
-    "stable-retro-turbo==1.0.1.post37; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "supermariobrosnes-turbo==0.6.2; sys_platform == 'linux' and platform_machine == 'x86_64'",
-    "breakout-turbo-env==0.5.2; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "stable-retro-turbo==1.0.1.post41; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "supermariobrosnes-turbo==0.6.4; sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "breakout-turbo-env==0.5.3; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "vizdoom-turbo==1.3.0.post24; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "gradoom==0.1.0a1; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "stable-baselines3>=2.3,<3",

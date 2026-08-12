@@ -797,7 +797,7 @@ def test_model_v3_records_durable_state_archive_summary(tmp_path: Path) -> None:
             "schema_version": 1,
             "persistence": "durable",
             "provider_id": "supermariobrosnes-turbo",
-            "codec_id": "supermariobrosnes-turbo.portable-v1",
+            "codec_id": "supermariobrosnes-turbo.portable-v2",
             "compatibility_id": "sha256:" + "d" * 64,
             "entry_count": 61,
             "blob_count": 17,

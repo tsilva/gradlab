@@ -25,7 +25,9 @@ def test_breakout_goal_uses_pinned_stable_retro_data() -> None:
 
     data_path = _stable_retro_packaged_data_path(GAME, f"{train_info}.json")
     assert data_path.is_file()
-    assert data_path.is_relative_to(Path(stable_retro.__file__).resolve().parent)
+    assert data_path.is_relative_to(
+        Path("src/gradlab/provider_data/stable_retro").resolve()
+    )
     assert json.loads(data_path.read_text(encoding="utf-8")) == {
         "info": {
             "ball_y": {"address": 229, "type": "|u1"},
@@ -46,3 +48,6 @@ def test_breakout_goal_uses_pinned_stable_retro_data() -> None:
         state_weight_mapping=lambda _config: {},
     )
     assert Path(kwargs["info"]) == data_path
+    assert Path(kwargs["scenario"]).is_relative_to(
+        Path(stable_retro.__file__).resolve().parent
+    )

@@ -82,6 +82,12 @@ def test_live_config_rejects_unknown_provider_and_task_action_fields():
             "simple",
             "ae2fea9e05910b0db9ba3980c162573a8ad9ad562e077babfeb5f6144d94a091",
         ),
+        (
+            "stable-retro-turbo",
+            "Breakout-Atari2600-v0",
+            "simple",
+            "ae2fea9e05910b0db9ba3980c162573a8ad9ad562e077babfeb5f6144d94a091",
+        ),
     ],
 )
 def test_provider_metadata_resolves_shared_semantic_hash(provider, game, action_set, expected_hash):

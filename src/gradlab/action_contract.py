@@ -66,6 +66,14 @@ MARIO_ACTION_TABLES = {
         ("RIGHT", "A", "B"),
     ),
 }
+BREAKOUT_ACTION_TABLES = {
+    "simple": (
+        (),
+        ("BUTTON",),
+        ("RIGHT",),
+        ("LEFT",),
+    ),
+}
 
 
 def _mode_name(value: Any) -> str:
@@ -78,6 +86,11 @@ def _packaged_action_sets(provider_id: str, game: str) -> Mapping[str, Any]:
     # sets, so GradLab supplies the same current semantic tables for that provider.
     if game == "SuperMarioBros-Nes-v0" and provider_id == "stable-retro-turbo":
         return MARIO_ACTION_TABLES
+    # Original Stable Retro does not declare Breakout's provider-neutral
+    # four-action table. GradLab owns this cross-provider contract and passes
+    # the exact same table directly to both implementations.
+    if game == "Breakout-Atari2600-v0" and provider_id == "stable-retro-turbo":
+        return BREAKOUT_ACTION_TABLES
     if provider_id == "stable-retro-turbo":
         import stable_retro
 
