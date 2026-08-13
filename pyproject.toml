@@ -107,7 +107,7 @@ testpaths = ["tests"]
 
 [dependency-groups]
 dev = [
-    "pytest>=8,<9",
+    "pytest>=8,<10",
     "ruff>=0.15,<0.16",
 ]
 release = [
