@@ -139,7 +139,7 @@ def test_resolves_gradoom_only_for_the_certified_deathmatch_profile() -> None:
         "vizdoom-turbo", resolved.provider_env_id
     )
     provider = resolve_env_provider("gradoom")
-    assert provider.turbo_api_version == 1
+    assert provider.turbo_api_version == 2
     assert provider.native_episode_horizon is not None
     assert provider.constructor_contract is not None
     assert provider.constructor_contract.required_config_values == {

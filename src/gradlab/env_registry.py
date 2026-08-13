@@ -310,6 +310,8 @@ _TURBO_CANONICAL_ARGS = frozenset(
         "state",
         "state_catalog",
         "sticky_action_prob",
+        "transport",
+        "info_frame_stack_keys",
     }
 )
 _TURBO_EXPLICIT_ENV_ARGS = frozenset(
@@ -349,7 +351,7 @@ STABLE_RETRO_TURBO_PROVIDER = EnvProvider(
         )
     },
     external_rom_asset_strategy=STABLE_RETRO_DIRECT_PATH_V1,
-    turbo_api_version=1,
+    turbo_api_version=2,
     constructor_contract=ProviderConstructorContract(
         canonical_args=_TURBO_CANONICAL_ARGS,
         explicit_env_args=_TURBO_EXPLICIT_ENV_ARGS,
@@ -365,7 +367,7 @@ SUPERMARIOBROS_NES_TURBO_PROVIDER = EnvProvider(
         "SuperMarioBros-Nes-v0": EnvRegistration("SuperMarioBros-Nes-v0"),
     },
     external_rom_asset_strategy=STABLE_RETRO_DIRECT_PATH_V1,
-    turbo_api_version=1,
+    turbo_api_version=2,
     constructor_contract=ProviderConstructorContract(
         canonical_args=_TURBO_CANONICAL_ARGS,
         explicit_env_args=_TURBO_EXPLICIT_ENV_ARGS,
@@ -400,14 +402,14 @@ VIZDOOM_TURBO_PROVIDER = EnvProvider(
         )
     },
     allows_unregistered_env_ids=True,
-    turbo_api_version=1,
+    turbo_api_version=2,
     native_episode_horizon=NativeEpisodeHorizonContract(
         env_args_path=("vizdoom_config", "episode_timeout"),
         unit="tics",
         truncation_env_arg="treat_episode_timeout_as_truncation",
     ),
     constructor_contract=ProviderConstructorContract(
-        canonical_args=_TURBO_CANONICAL_ARGS | {"info_frame_stack_keys"},
+        canonical_args=_TURBO_CANONICAL_ARGS,
         explicit_env_args=_TURBO_EXPLICIT_ENV_ARGS
         | {
             "doom_map",
@@ -432,14 +434,14 @@ GRADOOM_PROVIDER = EnvProvider(
             policy_compatibility_id="doom-deathmatch-p1-v1",
         ),
     },
-    turbo_api_version=1,
+    turbo_api_version=2,
     native_episode_horizon=NativeEpisodeHorizonContract(
         env_args_path=("vizdoom_config", "episode_timeout"),
         unit="tics",
         truncation_env_arg="treat_episode_timeout_as_truncation",
     ),
     constructor_contract=ProviderConstructorContract(
-        canonical_args=_TURBO_CANONICAL_ARGS | {"device", "transport"},
+        canonical_args=_TURBO_CANONICAL_ARGS | {"device"},
         explicit_env_args=_TURBO_EXPLICIT_ENV_ARGS
         | {
             "doom_map",
@@ -472,7 +474,7 @@ BREAKOUT_TURBO_ENV_PROVIDER = EnvProvider(
     environments={
         "Breakout-Atari2600-v0": EnvRegistration("Breakout-Atari2600-v0"),
     },
-    turbo_api_version=1,
+    turbo_api_version=2,
     constructor_contract=ProviderConstructorContract(
         canonical_args=_TURBO_CANONICAL_ARGS,
         explicit_env_args=_TURBO_EXPLICIT_ENV_ARGS,

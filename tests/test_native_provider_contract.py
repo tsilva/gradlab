@@ -315,6 +315,51 @@ class GenericNativeProviderTests(unittest.TestCase):
         )
         np.testing.assert_array_equal(infos["_start_source"], mask)
 
+    def test_start_adapter_preserves_torch_v2_reset_transport(self) -> None:
+        import torch
+
+        class TorchNative:
+            num_envs = 2
+            state_catalog = ("default",)
+            transport = "torch"
+            device = torch.device("cpu")
+
+            def reset(self, *, seed=None, options=None):
+                del seed
+                self.options = dict(options or {})
+                mask = self.options["reset_mask"]
+                state_indices = self.options["state_indices"]
+                self.assert_tensor(mask, torch.bool)
+                self.assert_tensor(state_indices, torch.int32)
+                return torch.zeros((2, 1), dtype=torch.uint8), {
+                    "state_index": state_indices.clone(),
+                    "start_source": torch.zeros(2, dtype=torch.int8),
+                    "noop_reset_count": torch.zeros(2, dtype=torch.int64),
+                    "_state_index": mask.clone(),
+                    "_start_source": mask.clone(),
+                    "_noop_reset_count": mask.clone(),
+                }
+
+            def assert_tensor(self, value, dtype):
+                if not isinstance(value, torch.Tensor) or value.dtype != dtype:
+                    raise AssertionError(f"expected {dtype} tensor")
+                if value.device != self.device:
+                    raise AssertionError("selector left env.device")
+
+        native = TorchNative()
+        adapter = _StartInfoAdapter(native, strict_v2=True)
+
+        _observations, infos = adapter.reset(
+            options={
+                "reset_mask": np.asarray([True, False], dtype=np.bool_),
+                "start_ids": np.asarray(["default", None], dtype=object),
+            }
+        )
+
+        self.assertEqual(infos["state_index"].dtype, torch.int32)
+        self.assertEqual(infos["start_source"].dtype, torch.int8)
+        self.assertEqual(infos["start_id"].tolist(), ["default", None])
+
 
 class BreakoutTurboProviderTests(unittest.TestCase):
     @staticmethod
@@ -372,9 +417,9 @@ class BreakoutTurboProviderTests(unittest.TestCase):
         values.update(updates)
         return EnvConfig(**values)
 
-    def test_runtime_matches_turbo_api_v1_release(self) -> None:
+    def test_runtime_matches_turbo_api_v2_release(self) -> None:
         installed = Version(importlib.metadata.version("breakout-turbo-env"))
-        self.assertEqual(installed, Version("0.5.4"))
+        self.assertEqual(installed, Version("0.5.5"))
 
     def test_constructs_and_preserves_native_manual_vector_contract(self) -> None:
         config = self.config()
@@ -589,10 +634,10 @@ class MarioNativeProviderTests(unittest.TestCase):
         values.update(updates)
         return EnvConfig(**values)
 
-    def test_runtime_matches_turbo_api_v1_releases(self) -> None:
+    def test_runtime_matches_turbo_api_v2_releases(self) -> None:
         installed = Version(importlib.metadata.version("supermariobrosnes-turbo"))
-        self.assertEqual(installed, Version("0.6.5"))
-        self.assertEqual(Version(retro.__version__), Version("1.0.1.post42"))
+        self.assertEqual(installed, Version("0.6.6"))
+        self.assertEqual(Version(retro.__version__), Version("1.0.1.post43"))
         env_type = super_mario_bros_nes_turbo_vec_env_type()
         self.assertIs(env_type.supports_live_snapshots, True)
         self.assertTrue(callable(getattr(env_type, "capture_snapshots", None)))
@@ -1287,7 +1332,7 @@ class VizdoomTurboProviderTests(unittest.TestCase):
             num_envs=2,
             obs_copy="safe_view",
         )
-        env.metadata = {**env.metadata, "turbo_api_version": 1}
+        env.metadata = {**env.metadata, "turbo_api_version": 2}
         turbo_contract = mock.Mock(
             observation_ownership="safe_view",
             observation_buffer_depth=2,

@@ -598,7 +598,7 @@ def test_gradoom_constructor_receives_provider_history_keys() -> None:
 
 
 class _DescriptorEnv:
-    metadata = {"turbo_api_version": 1, "render_modes": ("rgb_array",)}
+    metadata = {"turbo_api_version": 2, "render_modes": ("rgb_array",)}
     frame_stack = FRAME_STACK
     num_envs = 2
     single_observation_space = _descriptor().native_observation_space

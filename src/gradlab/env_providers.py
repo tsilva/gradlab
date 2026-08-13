@@ -113,7 +113,11 @@ def _validated_turbo_start_info_adapter(
         except Exception:
             pass
         raise
-    return _StartInfoAdapter(env, start_id_aliases=start_id_aliases)
+    return _StartInfoAdapter(
+        env,
+        start_id_aliases=start_id_aliases,
+        strict_v2=validate_contract,
+    )
 
 
 def _native_start_catalog(env: Any) -> tuple[str, ...]:
@@ -123,10 +127,17 @@ def _native_start_catalog(env: Any) -> tuple[str, ...]:
 
 
 class _StartInfoAdapter:
-    """Translate provider-generic start IDs to native catalog indices."""
+    """Translate GradLab start IDs around a native Turbo API v2 provider."""
 
-    def __init__(self, env: Any, *, start_id_aliases: Mapping[str, str] | None = None):
+    def __init__(
+        self,
+        env: Any,
+        *,
+        start_id_aliases: Mapping[str, str] | None = None,
+        strict_v2: bool = False,
+    ):
         self.env = env
+        self._strict_v2 = strict_v2
         native_catalog = tuple(str(value) for value in getattr(env, "state_catalog", ()))
         aliases = dict(start_id_aliases or {})
         if aliases and set(aliases) != set(native_catalog):
@@ -141,6 +152,41 @@ class _StartInfoAdapter:
             raise AttributeError(name)
         return getattr(self.env, name)
 
+    def _host_array(self, value: Any) -> np.ndarray:
+        if getattr(self.env, "transport", None) == "torch" and hasattr(value, "detach"):
+            value = value.detach().to("cpu").numpy()
+        return np.asarray(value)
+
+    def _native_selector(self, value: np.ndarray, dtype: str) -> Any:
+        if getattr(self.env, "transport", None) != "torch":
+            return value
+        import torch
+
+        return torch.as_tensor(
+            value,
+            dtype=getattr(torch, dtype),
+            device=getattr(self.env, "device", None),
+        )
+
+    def _validate_reset_column(
+        self,
+        infos: Mapping[str, Any],
+        name: str,
+        dtype: str,
+    ) -> None:
+        value = infos.get(name)
+        if value is None:
+            raise ValueError(f"Turbo API v2 reset infos must contain {name}")
+        if tuple(getattr(value, "shape", ())) != (self.env.num_envs,):
+            raise ValueError(f"Turbo API v2 reset info {name} must contain one value per lane")
+        if getattr(self.env, "transport", None) == "torch":
+            if str(getattr(value, "dtype", "")) != f"torch.{dtype}":
+                raise TypeError(f"Turbo API v2 reset info {name} must have dtype {dtype}")
+            if getattr(value, "device", None) != getattr(self.env, "device", None):
+                raise TypeError(f"Turbo API v2 reset info {name} must remain on env.device")
+        elif not isinstance(value, np.ndarray) or value.dtype != np.dtype(dtype):
+            raise TypeError(f"Turbo API v2 reset info {name} must have dtype {dtype}")
+
     @property
     def state_catalog(self) -> tuple[str, ...]:
         return self._public_catalog
@@ -151,7 +197,15 @@ class _StartInfoAdapter:
         catalog = self._public_catalog
         mask = np.ones(self.env.num_envs, dtype=np.bool_)
         if native_options.get("reset_mask") is not None:
-            mask = np.asarray(native_options["reset_mask"], dtype=np.bool_)
+            mask = self._host_array(native_options["reset_mask"]).astype(
+                np.bool_,
+                copy=False,
+            )
+            if mask.shape != (self.env.num_envs,):
+                raise ValueError(
+                    f"reset_mask must have shape ({self.env.num_envs},), got {mask.shape}"
+                )
+            native_options["reset_mask"] = self._native_selector(mask, "bool")
         snapshots = native_options.get("snapshots")
         if snapshots is None:
             snapshot_mask = np.zeros(self.env.num_envs, dtype=np.bool_)
@@ -186,14 +240,23 @@ class _StartInfoAdapter:
                     raise ValueError(
                         f"unknown provider start id {start_id!r}; expected one of {catalog}"
                     ) from exc
-            native_options["state_indices"] = state_indices
+            native_options["state_indices"] = self._native_selector(state_indices, "int32")
         observations, infos = self.env.reset(seed=seed, options=native_options)
         if not isinstance(infos, Mapping):
-            raise TypeError("Turbo API v1 reset infos must be a columnar mapping")
-        state_indices = infos.get("state_index")
-        if state_indices is None:
-            raise ValueError("Turbo API v1 reset infos must contain state_index")
-        state_indices = np.asarray(state_indices, dtype=np.int32)
+            raise TypeError("Turbo API v2 reset infos must be a columnar mapping")
+        if self._strict_v2:
+            for name, dtype in (
+                ("state_index", "int32"),
+                ("start_source", "int8"),
+                ("noop_reset_count", "int64"),
+                ("_state_index", "bool"),
+                ("_start_source", "bool"),
+                ("_noop_reset_count", "bool"),
+            ):
+                self._validate_reset_column(infos, name, dtype)
+        elif "state_index" not in infos:
+            raise ValueError("Turbo API reset infos must contain state_index")
+        state_indices = self._host_array(infos["state_index"]).astype(np.int32, copy=False)
         if state_indices.shape != (self.env.num_envs,):
             raise ValueError("provider state_index must contain one value per lane")
         active_starts = np.empty(self.env.num_envs, dtype=object)
@@ -205,7 +268,7 @@ class _StartInfoAdapter:
         result["start_id"] = active_starts
         result["_start_id"] = mask.copy()
         if "start_source" not in result or "_start_source" not in result:
-            raise ValueError("Turbo API v1 reset infos must contain start_source and _start_source")
+            raise ValueError("Turbo API reset infos must contain start_source and _start_source")
         return observations, result
 
     def step(self, actions):
@@ -725,7 +788,7 @@ def provider_descriptor(
     missing_source_names = configured_source_names - set(signal_schema) - RUNTIME_BOUNDARY_SIGNALS
     if missing_source_names and turbo_contract is not None:
         raise ValueError(
-            f"Turbo API v1 provider {provider.provider_id!r} does not declare "
+            f"Turbo API v2 provider {provider.provider_id!r} does not declare "
             f"task signal(s) {sorted(missing_source_names)}"
         )
     if missing_source_names:
