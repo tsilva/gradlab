@@ -69,6 +69,13 @@ def project_versions(root: Path) -> dict[str, str]:
     if match is None:
         fail("src/gradlab/__init__.py has no literal __version__")
 
+    readme_text = (root / "README.md").read_text()
+    readme_match = re.search(
+        r"^uvx gradlab@([^ ]+) train gradlab__bandit/ppo$", readme_text, re.MULTILINE
+    )
+    if readme_match is None:
+        fail("README.md has no pinned one-command GradLab demo version")
+
     lock_packages = load_toml(root / "uv.lock").get("package", [])
     lock_matches = [package for package in lock_packages if package.get("name") == PACKAGE_NAME]
     if len(lock_matches) != 1:
@@ -78,6 +85,7 @@ def project_versions(root: Path) -> dict[str, str]:
         "pyproject": str(project["version"]),
         "import": match.group(1),
         "lock": str(lock_matches[0]["version"]),
+        "readme": readme_match.group(1),
     }
 
 
@@ -104,16 +112,122 @@ def pypi_payload() -> dict | None:
         raise
 
 
+def pypi_release_files(payload: dict | None, version: str) -> list[dict]:
+    if payload is None:
+        return []
+    return list(payload.get("releases", {}).get(version, []))
+
+
 def check_pypi(version: str) -> None:
     require_version(version)
     payload = pypi_payload()
-    files = [] if payload is None else payload.get("releases", {}).get(version, [])
-    live_files = [item for item in files if not item.get("yanked", False)]
-    if live_files:
-        names = sorted(str(item.get("filename")) for item in live_files)
+    files = pypi_release_files(payload, version)
+    if files:
+        names = sorted(str(item.get("filename")) for item in files)
         fail(f"PyPI {PACKAGE_NAME} {version} already has files: {names}")
     state = "project-not-yet-public" if payload is None else "version-unused"
     print(json.dumps({"package": PACKAGE_NAME, "version": version, "state": state}))
+
+
+def next_unused_patch(version: str, payload: dict | None) -> str:
+    require_version(version)
+    major, minor, patch = (int(part) for part in version.split("."))
+    candidate = version
+    while pypi_release_files(payload, candidate):
+        patch += 1
+        candidate = f"{major}.{minor}.{patch}"
+    return candidate
+
+
+def bump_version_sources(root: Path, current: str, target: str) -> None:
+    require_version(current)
+    require_version(target)
+    if current == target:
+        return
+
+    pyproject_path = root / "pyproject.toml"
+    import_path = root / "src" / IMPORT_NAME / "__init__.py"
+    lock_path = root / "uv.lock"
+    readme_path = root / "README.md"
+    paths = (pyproject_path, import_path, lock_path, readme_path)
+    snapshots = {path: path.read_bytes() for path in paths}
+    import_text = snapshots[import_path].decode()
+    updated_import, replacements = re.subn(
+        rf'^__version__\s*=\s*"{re.escape(current)}"$',
+        f'__version__ = "{target}"',
+        import_text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    if replacements != 1:
+        fail(f"could not replace import version {current!r}")
+
+    readme_text = snapshots[readme_path].decode()
+    updated_readme, readme_replacements = re.subn(
+        rf"^uvx gradlab@{re.escape(current)} train gradlab__bandit/ppo$",
+        f"uvx gradlab@{target} train gradlab__bandit/ppo",
+        readme_text,
+        count=1,
+        flags=re.MULTILINE,
+    )
+    if readme_replacements != 1:
+        fail(f"could not replace README version {current!r}")
+
+    try:
+        run(["uv", "version", target, "--no-sync"], cwd=root)
+        import_path.write_text(updated_import, encoding="utf-8")
+        readme_path.write_text(updated_readme, encoding="utf-8")
+        check_version(root, target)
+    except Exception:
+        for path, contents in snapshots.items():
+            path.write_bytes(contents)
+        raise
+
+
+def auto_bump_version(root: Path) -> str:
+    versions = project_versions(root)
+    unique_versions = set(versions.values())
+    if len(unique_versions) != 1:
+        fail(f"cannot auto-bump inconsistent version sources: {versions}")
+    current = unique_versions.pop()
+    require_version(current)
+    target = next_unused_patch(current, pypi_payload())
+    bump_version_sources(root, current, target)
+    print(
+        json.dumps(
+            {
+                "auto_bump": "applied" if target != current else "not-needed",
+                "previous_version": current,
+                "version": target,
+            },
+            sort_keys=True,
+        )
+    )
+    return target
+
+
+def prepare_version(root: Path, requested: str | None) -> str:
+    versions = project_versions(root)
+    unique_versions = set(versions.values())
+    if len(unique_versions) != 1:
+        fail(f"cannot prepare inconsistent version sources: {versions}")
+    current = unique_versions.pop()
+    require_version(current)
+    target = requested or next_unused_patch(current, pypi_payload())
+    require_version(target)
+    bump_version_sources(root, current, target)
+    check_pypi(target)
+    print(
+        json.dumps(
+            {
+                "prepared": "bumped" if target != current else "unchanged",
+                "previous_version": current,
+                "version": target,
+            },
+            sort_keys=True,
+        )
+    )
+    return target
 
 
 def expected_names(version: str) -> tuple[str, str]:
@@ -285,9 +399,13 @@ def parser() -> argparse.ArgumentParser:
     audit_parser.add_argument("dist_dir", type=Path)
     smoke_parser = subparsers.add_parser("smoke-wheel")
     smoke_parser.add_argument("wheel", type=Path)
+    prepare_parser = subparsers.add_parser("prepare-version")
+    prepare_parser.add_argument("--version")
     build_parser = subparsers.add_parser("build")
-    build_parser.add_argument("--version", required=True)
-    build_parser.add_argument("--out-dir", required=True, type=Path)
+    version_source = build_parser.add_mutually_exclusive_group(required=True)
+    version_source.add_argument("--version")
+    version_source.add_argument("--auto-bump", action="store_true")
+    build_parser.add_argument("--out-dir", type=Path)
     return result
 
 
@@ -303,9 +421,20 @@ def main() -> int:
             audit(args.dist_dir.resolve(), args.version)
         elif args.command == "smoke-wheel":
             smoke_wheel(args.wheel.resolve())
+        elif args.command == "prepare-version":
+            prepare_version(root, args.version)
         elif args.command == "build":
-            out_dir = args.out_dir if args.out_dir.is_absolute() else root / args.out_dir
-            build(root, args.version, out_dir.resolve())
+            if args.auto_bump:
+                if args.out_dir is not None:
+                    fail("--out-dir cannot be combined with --auto-bump")
+                version = auto_bump_version(root)
+                out_dir = root / "dist" / f"release-v{version}"
+            else:
+                if args.out_dir is None:
+                    fail("--out-dir is required with --version")
+                version = args.version
+                out_dir = args.out_dir if args.out_dir.is_absolute() else root / args.out_dir
+            build(root, version, out_dir.resolve())
         else:
             fail(f"unsupported command: {args.command}")
     except (ReleaseError, subprocess.CalledProcessError) as error:

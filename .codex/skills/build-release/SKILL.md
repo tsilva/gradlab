@@ -1,77 +1,116 @@
 ---
 name: build-release
-description: Build, audit, smoke-test, publish, or inspect GradLab Python releases. Use for local release candidates, PyPI release preparation, version/tag checks, trusted publishing, GitHub releases, or release-workflow diagnosis.
+description: Cut, publish, monitor, verify, build, or inspect GradLab Python releases. A bare $build-release invocation launches the full trusted-publishing workflow and follows it until the version is live on PyPI.
 ---
 
 # Build Release
 
-Build GradLab distributions locally or drive the tag-triggered trusted-publishing
-workflow. Keep building and publishing separate: a local candidate is reversible;
-pushing a release tag publishes externally.
+Use this skill to run the repo-owned GradLab release flow and monitor it until
+the package is visible on PyPI. A bare `$build-release` invocation means
+**publish the next release**, not merely build local artifacts. Use the
+local-candidate path only when the user explicitly asks for a local build,
+artifacts, validation, or a dry run. For status or diagnosis, inspect existing
+state without mutating it.
 
-## Choose the path
+The release launcher lives in `scripts/release.py`. It follows the same pattern
+as the SuperMarioBros-Nes-turbo release flow: require a clean synchronized tree
+and intended GitHub remote, select an unused version, update every version
+surface, run the complete local source gates, build and audit a local candidate,
+create an annotated tag, and atomically push the branch and tag. The tag triggers
+`.github/workflows/release.yml`, which rebuilds and audits the distributions,
+publishes with PyPI trusted publishing, and creates the GitHub Release.
 
-- For “build a release”, “make artifacts”, or release-candidate validation, use
-  **Build a local candidate**. Do not commit, tag, push, or publish.
-- For “release”, “publish”, “ship”, or “cut version”, use **Publish from a tag**.
-- For status or diagnosis, inspect the existing workflow run and artifacts without
-  rerunning or mutating it unless the user asks.
+Do not manually upload with Twine, use a local PyPI token, republish an existing
+version, move a release tag, bypass a failed gate, or create/switch branches.
 
-## Build a local candidate
+## Publish the next release
 
-1. Read the repository `AGENTS.md` and use `$specs-author` as required there.
-2. Resolve the version from `pyproject.toml`; never infer a version bump.
-3. Install the locked release tooling:
+1. Read `AGENTS.md`, use `$specs-author`, and confirm that publishing is within
+   the user's request. A bare `$build-release` invocation is explicit release
+   authorization under this skill.
 
-   ```bash
-   uv sync --frozen --group release
-   ```
-
-4. Build into a version-scoped directory:
-
-   ```bash
-   uv run python .codex/skills/build-release/scripts/release_build.py build \
-     --version X.Y.Z \
-     --out-dir dist/release-vX.Y.Z
-   ```
-
-5. Report the wheel and sdist paths, SHA-256 digests, and every completed gate.
-   Preserve failed artifacts and exact error output for diagnosis.
-
-The helper requires matching project/import/lock versions, an unused PyPI version,
-clean artifact names and metadata, `twine check`, and a dependency-free wheel
-smoke test.
-
-## Publish from a tag
-
-Only publish source that has already passed a local candidate build.
-
-1. Require a clean worktree and a branch synchronized with its upstream.
-2. Confirm the GitHub repository is the intended GradLab repository.
-3. Confirm `pyproject.toml`, `src/gradlab/__init__.py`, and the root package entry
-   in `uv.lock` all equal `X.Y.Z`.
-4. Confirm `https://pypi.org/pypi/gradlab/json` has no files for `X.Y.Z`.
-5. Run the full source gates from `.github/workflows/release.yml`.
-6. Create annotated tag `vX.Y.Z` only after explicitly confirming that pushing it
-   will publish to PyPI.
-7. Push the branch and tag atomically:
+2. Install the locked release environment:
 
    ```bash
-   git push --atomic origin HEAD vX.Y.Z
+   uv sync --frozen --group dev --group release
    ```
 
-8. Monitor the `Release` GitHub Actions workflow through completion. Verify the
-   PyPI release, its files, and the GitHub release before reporting success.
+3. Launch the repo-owned release command:
 
-Do not upload with `twine`, use a local PyPI token, republish an existing version,
-move a release tag, or bypass failed validation. Trusted publishing in
-`.github/workflows/release.yml` is the only normal publication path.
+   ```bash
+   uv run python scripts/release.py
+   ```
 
-## Workflow contract
+   With no version preference, an untagged unused project version is released;
+   otherwise the helper advances to the first unused patch version. For an
+   explicitly requested version or bump, use exactly one of:
 
-- A `workflow_dispatch` run builds and audits artifacts but never publishes.
-- A pushed `v*` tag builds, audits, publishes to the protected `pypi`
-  environment, then creates a GitHub release.
-- Distribution artifacts are `gradlab-X.Y.Z-py3-none-any.whl` and
-  `gradlab-X.Y.Z.tar.gz`.
-- The PyPI project URL is `https://pypi.org/project/gradlab/`.
+   ```bash
+   uv run python scripts/release.py --to X.Y.Z
+   uv run python scripts/release.py --part minor
+   uv run python scripts/release.py --part major
+   ```
+
+   The launcher updates `pyproject.toml`, `src/gradlab/__init__.py`, `uv.lock`,
+   and the README's pinned one-command demo. It runs the workflow's Ruff, pytest,
+   configuration-validation, and simulated lifecycle-certification gates, then
+   builds, audits, checks, and dependency-free smoke-tests a local wheel and
+   sdist before creating the release commit and annotated tag. Failed
+   preparation restores changed release files and preserves candidate evidence.
+
+4. Capture the pushed tag and release commit, then monitor the tag-triggered
+   workflow:
+
+   ```bash
+   release_sha="$(git rev-list -n 1 vX.Y.Z)"
+   gh run list --workflow release.yml --commit "$release_sha" --limit 5 \
+     --json databaseId,status,conclusion,event,headBranch,headSha,displayTitle,url
+   gh run watch <run-id> --exit-status
+   ```
+
+   If the commit-filtered query is initially empty, list the recent Release runs
+   and select the tag-push run for `vX.Y.Z`. A `workflow_dispatch` run validates
+   but never publishes.
+
+5. After workflow success, poll
+   `https://pypi.org/pypi/gradlab/X.Y.Z/json` until both expected files appear:
+
+   - `gradlab-X.Y.Z-py3-none-any.whl`
+   - `gradlab-X.Y.Z.tar.gz`
+
+   Also verify the GitHub Release and its attached artifacts. If trusted
+   publishing fails, report the run and failing step; do not attempt manual
+   recovery unless the user explicitly requests it.
+
+6. Report the PyPI version URL first, followed by the tag, release commit,
+   workflow URL and conclusion, GitHub Release URL, published filenames, and
+   digests when available.
+
+## Build a local candidate only
+
+Use this path only when the user explicitly asks for a local candidate or
+validation without publication:
+
+```bash
+uv sync --frozen --group release
+uv run python .codex/skills/build-release/scripts/release_build.py build --auto-bump
+```
+
+This path may advance a used patch version and update the four release surfaces,
+but it never commits, tags, pushes, or publishes. Report the selected version,
+changed sources, artifacts, SHA-256 digests, and every completed gate.
+
+## Useful inspection commands
+
+```bash
+gh run view <run-id> --log-failed
+gh release view vX.Y.Z --json tagName,url,publishedAt,assets
+git describe --tags --exact-match HEAD
+```
+
+The final package URLs are:
+
+```text
+https://pypi.org/project/gradlab/X.Y.Z/
+https://pypi.org/project/gradlab/
+```
