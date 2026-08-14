@@ -38,22 +38,30 @@ gradlab play --recipe gradlab__bandit/ppo
 
 `gradlab play` starts the local web player and prints its loopback URL.
 
-## Gymnasium classic control
+## Gymnasium discrete environments
 
-GradLab includes strict Turbo-vector goals for Gymnasium's current discrete
-classic-control environments:
+GradLab includes strict Turbo-vector goals for ten Gymnasium discrete-action
+environments:
 
 ```bash
 gradlab train CartPole-v1/ppo
 gradlab train MountainCar-v0/ppo
 gradlab train Acrobot-v1/ppo
+gradlab train LunarLander-v3/ppo
+gradlab train FrozenLake-v1/ppo
+gradlab train FrozenLake8x8-v1/ppo
+gradlab train CliffWalking-v1/ppo
+gradlab train CliffWalkingSlippery-v1/ppo
+gradlab train Taxi-v3/ppo
+gradlab train Blackjack-v1/ppo
 ```
 
-Their qualified environment IDs are `gymnasium:CartPole-v1`,
-`gymnasium:MountainCar-v0`, and `gymnasium:Acrobot-v1`. They use isolated
-spawned lanes, explicit masked resets, native rewards, and RGB rendering through
-the same training, evaluation, publication, and playback workflows as other
-GradLab providers.
+Use `gymnasium:<environment-id>` for the qualified environment ID. These goals
+use isolated spawned lanes, explicit masked resets, native rewards, and RGB
+rendering through the same training, evaluation, publication, and playback
+workflows as other GradLab providers. Native categorical observations remain
+categorical; Blackjack uses the fixed `MultiDiscrete([32, 11, 2])` encoding
+`(player sum, dealer card, usable ace)`.
 
 ## Commands
 

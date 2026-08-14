@@ -255,10 +255,21 @@ def test_rejects_unregistered_env_id() -> None:
         resolve_env_id("stable-retro-turbo:UnknownGame-v0")
 
 
-def test_gymnasium_provider_registers_only_certified_classic_controls() -> None:
+def test_gymnasium_provider_registers_only_certified_discrete_environments() -> None:
     provider = resolve_env_provider("gymnasium")
 
-    assert provider.env_ids == ("CartPole-v1", "MountainCar-v0", "Acrobot-v1")
+    assert provider.env_ids == (
+        "CartPole-v1",
+        "MountainCar-v0",
+        "Acrobot-v1",
+        "LunarLander-v3",
+        "FrozenLake-v1",
+        "FrozenLake8x8-v1",
+        "CliffWalking-v1",
+        "CliffWalkingSlippery-v1",
+        "Taxi-v3",
+        "Blackjack-v1",
+    )
     assert provider.turbo_api_version == 2
     assert not provider.allows_unregistered_env_ids
     for game in provider.env_ids:

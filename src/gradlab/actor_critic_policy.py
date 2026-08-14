@@ -25,12 +25,14 @@ def _activation(name: str) -> type[nn.Module]:
 
 
 def _base_features_dim(
-    observation_space: gym.spaces.Box,
+    observation_space: gym.Space,
     encoder: Mapping[str, Any],
 ) -> int:
     if encoder["kind"] == "nature_cnn":
+        if not isinstance(observation_space, gym.spaces.Box):
+            raise ValueError("nature_cnn requires a Box base observation")
         return int(encoder["features_dim"])
-    return int(np.prod(observation_space.shape, dtype=np.int64))
+    return _context_features_dim(observation_space, label="base observation")
 
 
 def _context_features_dim(observation_space: gym.Space, *, label: str) -> int:
@@ -69,8 +71,14 @@ class SharedActorCriticFeatureExtractor(BaseFeaturesExtractor):
         if isinstance(observation_space, gym.spaces.Dict):
             spaces = observation_space.spaces
             base_space = spaces.get("observation")
-            if not isinstance(base_space, gym.spaces.Box):
-                raise ValueError("shared actor-critic policy requires Box 'observation'")
+            if not isinstance(
+                base_space,
+                gym.spaces.Box | gym.spaces.Discrete | gym.spaces.MultiDiscrete,
+            ):
+                raise ValueError(
+                    "shared actor-critic policy requires Box, Discrete, or MultiDiscrete "
+                    "'observation'"
+                )
             unexpected = sorted(
                 key
                 for key in spaces
@@ -88,14 +96,17 @@ class SharedActorCriticFeatureExtractor(BaseFeaturesExtractor):
             context_names = tuple(
                 sorted(key.removeprefix("context/") for key in spaces if key != "observation")
             )
-        elif isinstance(observation_space, gym.spaces.Box):
+        elif isinstance(
+            observation_space,
+            gym.spaces.Box | gym.spaces.Discrete | gym.spaces.MultiDiscrete,
+        ):
             spaces = {}
             base_space = observation_space
             context_names = ()
         else:
             raise ValueError(
-                "shared actor-critic policy requires a Box observation or a Dict with "
-                "Box 'observation'"
+                "shared actor-critic policy requires a Box, Discrete, or MultiDiscrete "
+                "observation, directly or under Dict key 'observation'"
             )
 
         encoder_dim = _base_features_dim(base_space, normalized["encoder"])

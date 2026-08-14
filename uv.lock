@@ -209,6 +209,12 @@ wheels = [
 ]
 
 [[package]]
+name = "box2d-py"
+version = "2.3.5"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/dd/5a/ad8d3ef9c13d5afcc1e44a77f11792ee717f6727b3320bddbc607e935e2a/box2d-py-2.3.5.tar.gz", hash = "sha256:b37dc38844bcd7def48a97111d2b082e4f81cca3cece7460feb3eacda0da2207", size = 374446, upload-time = "2018-10-02T01:03:23.527Z" }
+
+[[package]]
 name = "breakout-turbo-env"
 version = "0.5.5"
 source = { registry = "https://pypi.org/simple" }
@@ -678,6 +684,7 @@ dependencies = [
     { name = "aiohttp" },
     { name = "ale-py" },
     { name = "boto3" },
+    { name = "box2d-py" },
     { name = "breakout-turbo-env", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
     { name = "captum" },
     { name = "certifi" },
@@ -737,6 +744,7 @@ train-image-build = [
 train-runtime = [
     { name = "ale-py" },
     { name = "boto3" },
+    { name = "box2d-py" },
     { name = "breakout-turbo-env", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "captum" },
     { name = "certifi" },
@@ -766,6 +774,7 @@ requires-dist = [
     { name = "aiohttp", specifier = ">=3.14,<4" },
     { name = "ale-py", specifier = ">=0.12,<0.13" },
     { name = "boto3", specifier = ">=1.34,<2" },
+    { name = "box2d-py", specifier = "==2.3.5" },
     { name = "breakout-turbo-env", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = "==0.5.5" },
     { name = "breakout-turbo-env", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==0.5.5" },
     { name = "captum", specifier = ">=0.9,<1" },
@@ -822,6 +831,7 @@ train-image-build = [{ name = "packaging", specifier = ">=25,<26" }]
 train-runtime = [
     { name = "ale-py", specifier = ">=0.12,<0.13" },
     { name = "boto3", specifier = ">=1.34,<2" },
+    { name = "box2d-py", specifier = "==2.3.5" },
     { name = "breakout-turbo-env", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==0.5.5" },
     { name = "captum", specifier = ">=0.9,<1" },
     { name = "certifi", specifier = ">=2026.5.20" },

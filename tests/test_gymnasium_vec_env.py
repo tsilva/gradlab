@@ -52,13 +52,17 @@ def test_registered_envs_expose_strict_turbo_v2_contract(game: str) -> None:
         assert env.capabilities["supports_async_step"]
         assert env.capabilities["supports_per_lane_rgb"]
         assert env.state_catalog == ()
-        assert env.signal_schema == {}
+        assert env.signal_schema == contract.signal_schema
         assert env.active_state_indices().tolist() == [-1, -1]
         assert not env.active_state_indices().flags.writeable
         assert infos["state_index"].dtype == np.int32
         assert infos["start_source"].dtype == np.int8
         assert infos["noop_reset_count"].dtype == np.int64
         np.testing.assert_array_equal(infos["_state_index"], [True, True])
+        for signal in contract.signals:
+            assert infos[signal.name].shape == (2, *signal.shape)
+            assert infos[signal.name].dtype == np.dtype(signal.dtype)
+            np.testing.assert_array_equal(infos[f"_{signal.name}"], [True, True])
     finally:
         env.close()
 
@@ -143,15 +147,16 @@ def test_async_step_terminal_lockout_and_lane_by_lane_reset() -> None:
         env.close()
 
 
-def test_render_outputs_are_per_lane_owned_rgb_copies() -> None:
-    env = _env("Acrobot-v1")
+@pytest.mark.parametrize("game", tuple(GYMNASIUM_ENV_CONTRACTS))
+def test_render_outputs_are_per_lane_owned_rgb_copies(game: str) -> None:
+    env = _env(game, num_envs=1)
     try:
         env.reset(
-            seed=[4, 5],
-            options={"reset_mask": np.ones(2, dtype=np.bool_)},
+            seed=[4],
+            options={"reset_mask": np.ones(1, dtype=np.bool_)},
         )
         frames = env.get_images()
-        assert len(frames) == 2
+        assert len(frames) == 1
         assert frames[0].dtype == np.uint8
         assert frames[0].ndim == 3 and frames[0].shape[-1] == 3
         original = frames[0].copy()
@@ -161,17 +166,9 @@ def test_render_outputs_are_per_lane_owned_rgb_copies() -> None:
         env.close()
 
 
-@pytest.mark.parametrize(
-    ("game", "expected"),
-    (
-        ("CartPole-v1", {("left",): 0, ("right",): 1}),
-        ("MountainCar-v0", {("left",): 0, (): 1, ("right",): 2}),
-        ("Acrobot-v1", {("left",): 0, (): 1, ("right",): 2}),
-    ),
-)
+@pytest.mark.parametrize("game", tuple(GYMNASIUM_ENV_CONTRACTS))
 def test_action_metadata_compiles_to_browser_controls(
     game: str,
-    expected: dict[tuple[str, ...], int],
 ) -> None:
     env = _env(game, num_envs=1)
     try:
@@ -195,10 +192,103 @@ def test_action_metadata_compiles_to_browser_controls(
             descriptor.native_action_space,
         )
 
+        entries = contract["policy"]["semantics"]["entries"]
         assert {
-            controls: action_index_for_controls(contract, controls)
-            for controls in expected
-        } == expected
+            tuple(entry["controls"][0]["inputs"]): action_index_for_controls(
+                contract,
+                entry["controls"][0]["inputs"],
+            )
+            for entry in entries
+        } == {
+            tuple(entry["controls"][0]["inputs"]): index
+            for index, entry in enumerate(entries)
+        }
+    finally:
+        env.close()
+
+
+@pytest.mark.parametrize(
+    ("game", "expected_inputs"),
+    (
+        ("LunarLander-v3", ((), ("left",), ("a",), ("right",))),
+        (
+            "Taxi-v3",
+            (("down",), ("up",), ("right",), ("left",), ("a",), ("b",)),
+        ),
+        ("Blackjack-v1", (("left",), ("right",))),
+    ),
+)
+def test_non_cardinal_actions_map_to_available_player_keys(
+    game: str,
+    expected_inputs: tuple[tuple[str, ...], ...],
+) -> None:
+    env = _env(game, num_envs=1)
+    try:
+        config = SimpleNamespace(
+            env_provider="gymnasium",
+            game=game,
+            env_args={},
+            state=None,
+            states=(),
+            state_probs=(),
+            task={"action": {"set": "native"}},
+        )
+        descriptor = provider_descriptor(config, env, state_weight_mapping=lambda _config: {})
+        contract = compile_runtime_action_contract(
+            config,
+            descriptor,
+            descriptor.native_action_space,
+        )
+
+        entries = contract["policy"]["semantics"]["entries"]
+        assert tuple(
+            tuple(entry["controls"][0]["inputs"])
+            for entry in entries
+        ) == expected_inputs
+    finally:
+        env.close()
+
+
+def test_taxi_preserves_declared_prob_and_action_mask_info() -> None:
+    env = _env("Taxi-v3")
+    try:
+        _observations, reset_infos = env.reset(
+            seed=[11, 22],
+            options={"reset_mask": np.ones(2, dtype=np.bool_)},
+        )
+        assert reset_infos["prob"].dtype == np.float64
+        assert reset_infos["action_mask"].dtype == np.int8
+        assert reset_infos["action_mask"].shape == (2, 6)
+
+        _observations, _rewards, _terminated, _truncated, step_infos = env.step(
+            np.asarray([0, 1], dtype=np.int64)
+        )
+        np.testing.assert_array_equal(step_infos["_prob"], [True, True])
+        np.testing.assert_array_equal(step_infos["_action_mask"], [True, True])
+
+        _observations, partial_infos = env.reset(
+            seed=[33, None],
+            options={"reset_mask": np.asarray([True, False], dtype=np.bool_)},
+        )
+        np.testing.assert_array_equal(partial_infos["_prob"], [True, False])
+        np.testing.assert_array_equal(partial_infos["_action_mask"], [True, False])
+    finally:
+        env.close()
+
+
+def test_blackjack_uses_fixed_multidiscrete_tuple_encoding() -> None:
+    env = _env("Blackjack-v1")
+    try:
+        observations, _infos = env.reset(
+            seed=[101, 202],
+            options={"reset_mask": np.ones(2, dtype=np.bool_)},
+        )
+
+        assert isinstance(env.single_observation_space, gym.spaces.MultiDiscrete)
+        np.testing.assert_array_equal(env.single_observation_space.nvec, [32, 11, 2])
+        assert observations.shape == (2, 3)
+        assert observations.dtype == np.int64
+        assert all(env.single_observation_space.contains(value) for value in observations)
     finally:
         env.close()
 

@@ -31,6 +31,7 @@ EXPECTED = {
         "gae_lambda": 0.8,
         "checkpoint_freq": 10_000,
         "plateau": 25_000,
+        "ent_coef": 0.0,
     },
     "MountainCar-v0": {
         "threshold": -110.0,
@@ -43,6 +44,7 @@ EXPECTED = {
         "gae_lambda": 0.98,
         "checkpoint_freq": 100_000,
         "plateau": 250_000,
+        "ent_coef": 0.0,
     },
     "Acrobot-v1": {
         "threshold": -100.0,
@@ -55,6 +57,103 @@ EXPECTED = {
         "gae_lambda": 0.94,
         "checkpoint_freq": 100_000,
         "plateau": 250_000,
+        "ent_coef": 0.0,
+    },
+    "LunarLander-v3": {
+        "threshold": 200.0,
+        "timesteps": 1_000_000,
+        "n_envs": 16,
+        "n_steps": 1024,
+        "batch_size": 256,
+        "n_epochs": 4,
+        "gamma": 0.999,
+        "gae_lambda": 0.98,
+        "checkpoint_freq": 100_000,
+        "plateau": 250_000,
+        "ent_coef": 0.01,
+    },
+    "FrozenLake-v1": {
+        "threshold": 0.7,
+        "timesteps": 500_000,
+        "n_envs": 32,
+        "n_steps": 128,
+        "batch_size": 256,
+        "n_epochs": 10,
+        "gamma": 0.99,
+        "gae_lambda": 0.95,
+        "checkpoint_freq": 50_000,
+        "plateau": 125_000,
+        "ent_coef": 0.01,
+        "min_delta": 0.01,
+    },
+    "FrozenLake8x8-v1": {
+        "threshold": 0.85,
+        "timesteps": 2_000_000,
+        "n_envs": 32,
+        "n_steps": 256,
+        "batch_size": 512,
+        "n_epochs": 10,
+        "gamma": 0.99,
+        "gae_lambda": 0.95,
+        "checkpoint_freq": 200_000,
+        "plateau": 500_000,
+        "ent_coef": 0.02,
+        "min_delta": 0.01,
+    },
+    "CliffWalking-v1": {
+        "threshold": -13.0,
+        "timesteps": 500_000,
+        "n_envs": 32,
+        "n_steps": 128,
+        "batch_size": 256,
+        "n_epochs": 10,
+        "gamma": 0.99,
+        "gae_lambda": 0.95,
+        "checkpoint_freq": 50_000,
+        "plateau": 125_000,
+        "ent_coef": 0.01,
+    },
+    "CliffWalkingSlippery-v1": {
+        "threshold": -75.0,
+        "timesteps": 1_000_000,
+        "n_envs": 32,
+        "n_steps": 256,
+        "batch_size": 512,
+        "n_epochs": 10,
+        "gamma": 0.999,
+        "gae_lambda": 0.95,
+        "checkpoint_freq": 100_000,
+        "plateau": 250_000,
+        "ent_coef": 0.02,
+    },
+    "Taxi-v3": {
+        "threshold": 8.0,
+        "timesteps": 2_000_000,
+        "n_envs": 32,
+        "n_steps": 128,
+        "batch_size": 512,
+        "n_epochs": 10,
+        "gamma": 0.99,
+        "gae_lambda": 0.95,
+        "checkpoint_freq": 200_000,
+        "plateau": 500_000,
+        "ent_coef": 0.01,
+    },
+    "Blackjack-v1": {
+        "threshold": -0.05,
+        "timesteps": 1_000_000,
+        "n_envs": 32,
+        "n_steps": 64,
+        "batch_size": 512,
+        "n_epochs": 10,
+        "gamma": 1.0,
+        "gae_lambda": 1.0,
+        "checkpoint_freq": 100_000,
+        "plateau": 250_000,
+        "ent_coef": 0.01,
+        "eval_episodes": 1000,
+        "eval_n_envs": 20,
+        "min_delta": 0.01,
     },
 }
 
@@ -64,7 +163,7 @@ def _document(game: str) -> dict:
     return compose_train_document(root / "_goal.yaml", root / "recipes/ppo.yaml")
 
 
-def test_classic_control_goals_are_registered_in_player_catalog() -> None:
+def test_gymnasium_goals_are_registered_in_player_catalog() -> None:
     catalog = PlayCatalog(repo_root=Path.cwd())
     environment_names = {item["name"] for item in catalog.environments().items}
 
@@ -72,7 +171,7 @@ def test_classic_control_goals_are_registered_in_player_catalog() -> None:
 
 
 @pytest.mark.parametrize("game", tuple(EXPECTED))
-def test_classic_control_goal_and_recipe_materialize_exact_contract(game: str) -> None:
+def test_gymnasium_goal_and_recipe_materialize_exact_contract(game: str) -> None:
     expected = EXPECTED[game]
     contract = GYMNASIUM_ENV_CONTRACTS[game]
     document = _document(game)
@@ -86,7 +185,7 @@ def test_classic_control_goal_and_recipe_materialize_exact_contract(game: str) -
         "max(eval/full/episode/return/shaped/mean)",
         "min(leader/checkpoint/step)",
     ]
-    assert goal["eval"]["episodes"] == 100
+    assert goal["eval"]["episodes"] == expected.get("eval_episodes", 100)
     assert goal["eval"]["policy"] == {"stochastic": True}
     assert goal["eval"]["acceptance"] == [
         {
@@ -99,8 +198,8 @@ def test_classic_control_goal_and_recipe_materialize_exact_contract(game: str) -
     assert config["env_provider"] == "gymnasium"
     assert config["game"] == game
     assert config["n_envs"] == expected["n_envs"]
-    assert config["checkpoint_eval_n_envs"] == 10
-    assert config["post_train_eval_episodes"] == 100
+    assert config["checkpoint_eval_n_envs"] == expected.get("eval_n_envs", 10)
+    assert config["post_train_eval_episodes"] == expected.get("eval_episodes", 100)
     assert config["checkpoint_eval_backend"] == "modal"
     assert config["checkpoint_freq"] == expected["checkpoint_freq"]
     assert config["timesteps"] == expected["timesteps"]
@@ -117,7 +216,7 @@ def test_classic_control_goal_and_recipe_materialize_exact_contract(game: str) -
     for name in ("n_steps", "batch_size", "n_epochs", "gamma", "gae_lambda"):
         assert backend[name] == expected[name]
     assert backend["device"] == "cpu"
-    assert backend["ent_coef"] == 0.0
+    assert backend["ent_coef"] == expected["ent_coef"]
     assert backend["clip_range"] == 0.2
     plateau = config["early_stop"]["conditions"]["return_plateau"]
     assert plateau == {
@@ -128,7 +227,7 @@ def test_classic_control_goal_and_recipe_materialize_exact_contract(game: str) -
         "patience_steps": expected["plateau"],
         "start_after_steps": expected["plateau"],
         "direction": "maximize",
-        "min_delta": 1.0,
+        "min_delta": expected.get("min_delta", 1.0),
         "delta_mode": "absolute",
     }
 
@@ -197,7 +296,7 @@ def test_control_goal_success_wins_over_simultaneous_timeout(game: str) -> None:
 
 
 @pytest.mark.parametrize("game", tuple(EXPECTED))
-def test_classic_control_recipe_environment_runs_short_ppo_rollout(game: str) -> None:
+def test_gymnasium_recipe_environment_runs_short_ppo_rollout(game: str) -> None:
     config = resolve_env_config(env_config_from_mapping(_document(game)["train_config"]))
     env = make_vec_envs(config, n_envs=2, seed=31)
     try:
