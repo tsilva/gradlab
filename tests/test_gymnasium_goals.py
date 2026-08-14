@@ -10,7 +10,7 @@ from stable_baselines3 import PPO
 from gradlab.batch_runtime import ProviderDescriptor
 from gradlab.env import make_vec_envs, resolve_env_config
 from gradlab.env_config import env_config_from_mapping
-from gradlab.env_registry import environment_spec, evaluation_watchdog_steps
+from gradlab.env_registry import environment_spec
 from gradlab.gymnasium_vec_env import GYMNASIUM_ENV_CONTRACTS
 from gradlab.play_catalog import PlayCatalog
 from gradlab.recipe_documents import compose_train_document
@@ -151,8 +151,6 @@ EXPECTED = {
         "checkpoint_freq": 100_000,
         "plateau": 250_000,
         "ent_coef": 0.01,
-        "eval_episodes": 1000,
-        "eval_n_envs": 20,
         "min_delta": 0.01,
     },
 }
@@ -180,32 +178,26 @@ def test_gymnasium_goal_and_recipe_materialize_exact_contract(game: str) -> None
     goal = document["goal"]
     backend = config["training_backend"]["config"]
 
-    assert goal["evaluation_mode"] == "evaluated"
+    assert goal["evaluation_mode"] == "training_only"
     assert goal["objective"]["rank"] == [
-        "max(eval/full/episode/return/shaped/mean)",
-        "min(leader/checkpoint/step)",
+        "max(train/episode/return/shaped/origin/target/rolling/mean)",
+        "min(train/global_step)",
     ]
-    assert goal["eval"]["episodes"] == expected.get("eval_episodes", 100)
-    assert goal["eval"]["policy"] == {"stochastic": True}
-    assert goal["eval"]["acceptance"] == [
-        {
-            "metric": "eval/full/episode/return/shaped/mean",
-            "operator": ">=",
-            "threshold": expected["threshold"],
-        }
-    ]
-    assert goal["release"] == {"huggingface": {}}
+    assert "eval" not in goal
+    assert "release" not in goal
     assert config["env_provider"] == "gymnasium"
     assert config["game"] == game
     assert config["n_envs"] == expected["n_envs"]
-    assert config["checkpoint_eval_n_envs"] == expected.get("eval_n_envs", 10)
-    assert config["post_train_eval_episodes"] == expected.get("eval_episodes", 100)
-    assert config["checkpoint_eval_backend"] == "modal"
+    assert config["checkpoint_eval_backend"] == "none"
+    assert "checkpoint_eval_n_envs" not in config
+    assert "post_train_eval_episodes" not in config
+    assert "checkpoint_eval_acceptance" not in config
+    assert "checkpoint_eval_environment" not in config
     assert config["checkpoint_freq"] == expected["checkpoint_freq"]
     assert config["timesteps"] == expected["timesteps"]
     assert config["task"]["termination"]["max_episode_steps"] == contract.max_episode_steps
-    assert evaluation_watchdog_steps(config) == contract.max_episode_steps
-    assert document["policy_environment_hash"] == document["evaluation_environment_hash"]
+    assert document["policy_environment_hash"] == document["environment_hash"]
+    assert "evaluation_environment_hash" not in document
     assert config["policy_model"] == {
         "schema_version": 2,
         "encoder": {"kind": "flatten"},
@@ -218,6 +210,17 @@ def test_gymnasium_goal_and_recipe_materialize_exact_contract(game: str) -> None
     assert backend["device"] == "cpu"
     assert backend["ent_coef"] == expected["ent_coef"]
     assert backend["clip_range"] == 0.2
+    target = config["early_stop"]["conditions"]["return_target"]
+    assert target == {
+        "metric": "train/episode/return/shaped/origin/target/rolling/mean",
+        "trigger": "threshold",
+        "outcome": "success",
+        "action": "stop",
+        "start_after_steps": expected["checkpoint_freq"],
+        "patience_steps": 0,
+        "operator": ">=",
+        "threshold": expected["threshold"],
+    }
     plateau = config["early_stop"]["conditions"]["return_plateau"]
     assert plateau == {
         "metric": "train/episode/return/shaped/origin/target/rolling/mean",

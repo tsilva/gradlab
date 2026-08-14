@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -183,6 +184,34 @@ class EvalByStartTableTests(unittest.TestCase):
 
 
 class EvalMetricTests(unittest.TestCase):
+    def test_episode_result_normalizes_numpy_terminal_info_for_strict_json(self) -> None:
+        record = EpisodeRecord(
+            lane=0,
+            episode_index=0,
+            start_id="default",
+            episode_return=-1.0,
+            episode_length=10,
+            terminated=False,
+            truncated=True,
+            outcome=Outcome.TIMEOUT,
+            events=(),
+            metrics={"nested_count": np.int64(3)},
+        )
+
+        result = episode_result_from_record(
+            record,
+            semantics=environment_spec("gymnasium", "Taxi-v3").eval_semantics,
+            terminal_info={
+                "action_mask": np.asarray([1, 0, 1, 0, 0, 1], dtype=np.int8),
+                "terminal_observation": np.asarray(42, dtype=np.int64),
+            },
+        )
+
+        self.assertEqual(result["final_info"]["action_mask"], [1, 0, 1, 0, 0, 1])
+        self.assertEqual(result["final_info"]["nested_count"], 3)
+        self.assertNotIn("terminal_observation", result["final_info"])
+        json.dumps(result, allow_nan=False)
+
     def test_training_and_eval_share_terminal_reason_suffixes(self) -> None:
         record = EpisodeRecord(
             lane=0,

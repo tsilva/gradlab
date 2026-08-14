@@ -7,6 +7,15 @@ train:
   timesteps: 2000000
   early_stop:
     conditions:
+      return_target:
+        metric: train/episode/return/shaped/origin/target/rolling/mean
+        trigger: threshold
+        operator: '>='
+        threshold: 0.85
+        start_after_steps: 200000
+        patience_steps: 0
+        outcome: success
+        action: stop
       return_plateau:
         metric: train/episode/return/shaped/origin/target/rolling/mean
         trigger: no_improvement

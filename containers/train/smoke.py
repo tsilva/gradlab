@@ -23,6 +23,22 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def smoke_lunar_lander() -> None:
+    import gymnasium as gym
+
+    env = gym.make("LunarLander-v3")
+    try:
+        observation, _info = env.reset(seed=0)
+        if getattr(observation, "shape", None) != (8,):
+            raise RuntimeError(
+                f"LunarLander-v3 reset returned unexpected observation shape "
+                f"{getattr(observation, 'shape', None)!r}"
+            )
+    finally:
+        env.close()
+    print("lunar_lander_reset=ok")
+
+
 def main() -> None:
     root = Path(os.environ.get("GRADLAB_PROJECT_ROOT", "/root/gradlab"))
     print("gradlab_container_smoke=ok")
@@ -50,6 +66,8 @@ def main() -> None:
             print(f"torch_cuda_device={torch.cuda.get_device_name(0)}")
     except Exception as exc:
         print(f"torch_probe_error={type(exc).__name__}: {exc}")
+
+    smoke_lunar_lander()
 
     game = os.environ.get("RETRO_GAME")
     if game:

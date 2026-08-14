@@ -5,6 +5,7 @@ from typing import Any
 
 import numpy as np
 
+from gradlab.json_utils import json_value
 from gradlab.metric_names import (
     EVAL_FULL_EPISODE_RETURN_SHAPED_MAX,
     EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
@@ -106,6 +107,7 @@ def episode_result_from_record(
     info = serializable_info(dict(terminal_info or {}))
     # Canonical task metrics are authoritative for overlapping provider fields.
     info.update(metrics)
+    info = json_value(info)
 
     start_id = getattr(record, "start_id", None)
     result: dict[str, Any] = {

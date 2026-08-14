@@ -218,6 +218,8 @@ class TrainImageTests(unittest.TestCase):
             "FROM ${PYTHON_IMAGE} AS dependency-overlay-build", maxsplit=1
         )[1].split("FROM scratch AS dependency-overlay", maxsplit=1)[0]
         self.assertIn("ENV UV_PROJECT_ENVIRONMENT=/opt/gradlab-dependencies", dependency_build)
+        self.assertIn("ENV CXX=g++", dependency_build)
+        self.assertIn('ENV LDCXXSHARED="g++ -shared"', dependency_build)
         self.assertIn("gradlab-gpu.pth", dependency_build)
         self.assertNotIn("uv venv \"/root/gradlab/.venv\"", dependency_build)
 
@@ -244,7 +246,11 @@ class TrainImageTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertIn("Smoke exact ViZDoom and TorchInductor runtime image", workflow)
+        self.assertIn(
+            "Smoke exact Gymnasium, ViZDoom, and TorchInductor runtime image",
+            workflow,
+        )
+        self.assertIn('docker run --rm "$image"', workflow)
         self.assertIn("python /usr/local/bin/gradlab-vizdoom-smoke", workflow)
         self.assertIn('"smoke_contract_version": 3', workflow)
         self.assertIn('"backend": "inductor"', workflow)

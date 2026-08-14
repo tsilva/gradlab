@@ -56,16 +56,3 @@ train:
         reward_mode: native
         reward_scale: 1.0
         reward_clip: false
-eval:
-  acceptance:
-  - metric: eval/full/episode/return/shaped/mean
-    operator: '>='
-    threshold: -110.0
-  environment:
-    env_provider: *provider
-    env_config:
-      <<: *env_config
-      n_envs: 10
-      env_args: *env_args
-    preprocessing: *preprocessing
-    task: *task
