@@ -358,14 +358,24 @@ class TrainImageTests(unittest.TestCase):
         )
         self.assertIn("workflow_call:", foundations)
         self.assertEqual(foundations.count("runs-on: ubuntu-24.04"), 1)
-        self.assertEqual(foundations.count("docker/setup-buildx-action@v3"), 1)
+        self.assertEqual(
+            foundations.count(
+                "docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f"
+            ),
+            1,
+        )
         self.assertIn("name: Build GPU foundation", foundations)
         self.assertIn("name: Build train dependencies", foundations)
         self.assertIn("uses: ./.github/workflows/gradlab-train-foundations.yml", runtime)
         self.assertIn("needs: foundations", runtime)
         self.assertNotIn("name: Build GPU foundation", runtime)
         self.assertNotIn("name: Build train dependencies", runtime)
-        self.assertEqual(runtime.count("docker/setup-buildx-action@v3"), 1)
+        self.assertEqual(
+            runtime.count(
+                "docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f"
+            ),
+            1,
+        )
         self.assertIn("runtime-${{ steps.runtime_meta.outputs.runtime_input_sha256 }}", runtime)
         self.assertIn('"schema_version": 7', runtime)
         self.assertIn("--print-train-plan-sha256", foundations)
