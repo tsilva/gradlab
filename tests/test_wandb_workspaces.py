@@ -42,7 +42,7 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
             [spec.to_json() for spec in first],
             [spec.to_json() for spec in second],
         )
-        self.assertEqual(len(first), 16)
+        self.assertEqual(len(first), 19)
         self.assertEqual({spec.profile_id for spec in first}, {"training"})
         self.assertIn("SuperMarioBros-Nes-v0", {spec.project for spec in first})
         self.assertIn("VizdoomDeathmatch-v1", {spec.project for spec in first})

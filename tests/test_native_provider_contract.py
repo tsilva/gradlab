@@ -90,11 +90,21 @@ class GenericNativeProviderTests(unittest.TestCase):
         gym.registry.pop(cls.env_id, None)
         gym.registry.pop(cls.scalar_env_id, None)
 
-    def test_uses_only_registered_native_vector_entry_points(self) -> None:
+    def test_uses_strict_gymnasium_turbo_adapter(self) -> None:
         config = EnvConfig(
             env_provider="gymnasium",
-            game=self.env_id,
+            game="CartPole-v1",
             state="",
+            env_args={
+                "autoreset_mode": "disabled",
+                "vectorization_mode": "async",
+                "multiprocessing_context": "spawn",
+                "shared_memory": True,
+                "copy": True,
+                "daemon": True,
+                "observation_mode": "same",
+                "render_mode": "rgb_array",
+            },
             task={
                 "id": "identity",
                 "action": {"set": "native"},
@@ -106,20 +116,23 @@ class GenericNativeProviderTests(unittest.TestCase):
         )
         kwargs = provider_native_vec_kwargs(
             config,
-            n_envs=3,
+            n_envs=2,
             native_obs_crop=lambda _config: None,
             state_weight_mapping=lambda _config: {},
         )
         env = make_provider_vec_env(config, native_kwargs=kwargs)
 
-        self.assertEqual(env.num_envs, 3)
+        self.assertEqual(env.num_envs, 2)
         self.assertIs(env.autoreset_mode, gym.vector.AutoresetMode.DISABLED)
-        mask = np.asarray([True, False, True], dtype=np.bool_)
-        env.reset(seed=[1, None, 3], options={"reset_mask": mask})
-        np.testing.assert_array_equal(env.reset_masks[-1], mask)
+        observations, infos = env.reset(
+            seed=[1, 2],
+            options={"reset_mask": np.ones(2, dtype=np.bool_)},
+        )
+        self.assertEqual(observations.shape, (2, 4))
+        np.testing.assert_array_equal(infos["state_index"], [-1, -1])
         env.close()
 
-    def test_rejects_synthesized_vectorization(self) -> None:
+    def test_rejects_unregistered_gymnasium_environment(self) -> None:
         config = EnvConfig(
             env_provider="gymnasium",
             game=self.scalar_env_id,
@@ -133,8 +146,21 @@ class GenericNativeProviderTests(unittest.TestCase):
                 "reward": {"reward_mode": "native"},
             },
         )
-        with self.assertRaisesRegex(RuntimeError, "no native Gymnasium vector entry point"):
-            make_provider_vec_env(config, native_kwargs={"num_envs": 2})
+        with self.assertRaisesRegex(ValueError, "unsupported Gymnasium environment"):
+            make_provider_vec_env(
+                config,
+                native_kwargs={
+                    "num_envs": 2,
+                    "autoreset_mode": "disabled",
+                    "vectorization_mode": "async",
+                    "multiprocessing_context": "spawn",
+                    "shared_memory": True,
+                    "copy": True,
+                    "daemon": True,
+                    "observation_mode": "same",
+                    "render_mode": "rgb_array",
+                },
+            )
 
     def test_bound_identity_task_applies_common_scale_then_clip(self) -> None:
         env = RegisteredNativeVectorEnv(3, gym.vector.AutoresetMode.DISABLED)

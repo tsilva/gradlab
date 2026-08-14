@@ -1,0 +1,21 @@
+defaults:
+- _self_
+train:
+  checkpoint_eval_backend: modal
+  policy_model:
+    schema_version: 2
+    encoder: {kind: flatten}
+    fusion: {hidden_sizes: [64, 64], activation: tanh}
+    normalize_images: false
+    orthogonal_init: true
+  backend:
+    id: sb3.ppo
+    config:
+      device: cpu
+      ent_coef: 0.0
+      clip_range: 0.2
+      vf_coef: 0.5
+      adam_eps: 1.0e-05
+      normalize_advantage: true
+logging:
+  wandb_mode: online

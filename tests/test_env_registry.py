@@ -255,11 +255,20 @@ def test_rejects_unregistered_env_id() -> None:
         resolve_env_id("stable-retro-turbo:UnknownGame-v0")
 
 
-def test_dynamic_native_provider_ids_are_explicit_but_not_hardcoded() -> None:
-    gym_id = resolve_env_id("gymnasium:CustomNativeVector-v0")
+def test_gymnasium_provider_registers_only_certified_classic_controls() -> None:
+    provider = resolve_env_provider("gymnasium")
 
-    assert gym_id.provider_id == "gymnasium"
-    assert gym_id.provider_env_id == "CustomNativeVector-v0"
+    assert provider.env_ids == ("CartPole-v1", "MountainCar-v0", "Acrobot-v1")
+    assert provider.turbo_api_version == 2
+    assert not provider.allows_unregistered_env_ids
+    for game in provider.env_ids:
+        resolved = resolve_env_id(f"gymnasium:{game}")
+        assert resolved.provider_id == "gymnasium"
+        assert resolved.provider_env_id == game
+        assert not env_supports_states("gymnasium", game)
+
+    with pytest.raises(ValueError, match="does not register environment"):
+        resolve_env_id("gymnasium:CustomNativeVector-v0")
 
 
 def test_environment_identity_requires_explicit_provider() -> None:

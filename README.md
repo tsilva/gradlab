@@ -38,6 +38,23 @@ gradlab play --recipe gradlab__bandit/ppo
 
 `gradlab play` starts the local web player and prints its loopback URL.
 
+## Gymnasium classic control
+
+GradLab includes strict Turbo-vector goals for Gymnasium's current discrete
+classic-control environments:
+
+```bash
+gradlab train CartPole-v1/ppo
+gradlab train MountainCar-v0/ppo
+gradlab train Acrobot-v1/ppo
+```
+
+Their qualified environment IDs are `gymnasium:CartPole-v1`,
+`gymnasium:MountainCar-v0`, and `gymnasium:Acrobot-v1`. They use isolated
+spawned lanes, explicit masked resets, native rewards, and RGB rendering through
+the same training, evaluation, publication, and playback workflows as other
+GradLab providers.
+
 ## Commands
 
 ```bash

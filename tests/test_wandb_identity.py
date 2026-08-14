@@ -66,17 +66,15 @@ def test_canonical_wandb_environment_mapping(provider, game, project, family) ->
     assert canonical_wandb_environment(provider, game) == (project, family)
 
 
-def test_explicit_project_wins_and_unknown_environment_falls_back() -> None:
+def test_explicit_project_wins_and_registered_providers_reject_unknown_environments() -> None:
     assert (
         resolve_wandb_project("custom-project", "breakout", env_provider="ale-py")
         == "custom-project"
     )
-    assert resolve_wandb_project(None, "CustomNativeVector-v0", env_provider="gymnasium") == (
-        "CustomNativeVector-v0"
-    )
-    assert game_family_for_environment("gymnasium", "CustomNativeVector-v0") == (
-        "custom-native-vector-v0"
-    )
+    with pytest.raises(ValueError, match="not registered"):
+        resolve_wandb_project(None, "CustomNativeVector-v0", env_provider="gymnasium")
+    with pytest.raises(ValueError, match="not registered"):
+        game_family_for_environment("gymnasium", "CustomNativeVector-v0")
 
 
 def test_environment_identity_requires_a_current_registered_provider() -> None:

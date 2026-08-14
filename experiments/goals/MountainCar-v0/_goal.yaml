@@ -1,0 +1,71 @@
+defaults:
+- ../_gymnasium-classic-control-common@_global_
+- _self_
+title: Gymnasium MountainCar summit benchmark
+train:
+  checkpoint_freq: 100000
+  environment:
+    env_provider: &provider gymnasium
+    env_config:
+      <<: &env_config
+        game: MountainCar-v0
+        n_envs: 16
+        env_args: &env_args
+          autoreset_mode: disabled
+          vectorization_mode: async
+          multiprocessing_context: spawn
+          shared_memory: true
+          copy: true
+          daemon: true
+          observation_mode: same
+          render_mode: rgb_array
+    preprocessing: &preprocessing
+      frame_skip: 1
+      max_pool_frames: false
+      sticky_action_prob: 0.0
+      obs_resize: [0, 0]
+      obs_crop: [0, 0, 0, 0]
+      obs_crop_mode: remove
+      obs_crop_fill: 0
+      obs_resize_algorithm: area
+    task: &task
+      id: identity
+      action:
+        set: native
+      signals:
+        native_termination: provider_terminated
+        native_truncation: provider_truncated
+      events:
+        goal_reached:
+          signal: native_termination
+          operation: equals_for
+          value: 1
+          steps: 1
+        time_limit_reached:
+          signal: native_truncation
+          operation: equals_for
+          value: 1
+          steps: 1
+      termination:
+        success: [goal_reached]
+        failure: []
+        timeout: [time_limit_reached]
+        outcome_precedence: [success, failure, timeout]
+        max_episode_steps: 200
+      reward:
+        reward_mode: native
+        reward_scale: 1.0
+        reward_clip: false
+eval:
+  acceptance:
+  - metric: eval/full/episode/return/shaped/mean
+    operator: '>='
+    threshold: -110.0
+  environment:
+    env_provider: *provider
+    env_config:
+      <<: *env_config
+      n_envs: 10
+      env_args: *env_args
+    preprocessing: *preprocessing
+    task: *task

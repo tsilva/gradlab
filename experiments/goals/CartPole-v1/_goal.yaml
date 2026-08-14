@@ -1,0 +1,72 @@
+defaults:
+- ../_gymnasium-classic-control-common@_global_
+- _self_
+title: Gymnasium CartPole balance benchmark
+train:
+  checkpoint_freq: 10000
+  environment:
+    env_provider: &provider gymnasium
+    env_config:
+      <<: &env_config
+        game: CartPole-v1
+        n_envs: 8
+        env_args: &env_args
+          autoreset_mode: disabled
+          vectorization_mode: async
+          multiprocessing_context: spawn
+          shared_memory: true
+          copy: true
+          daemon: true
+          observation_mode: same
+          render_mode: rgb_array
+    preprocessing: &preprocessing
+      frame_skip: 1
+      max_pool_frames: false
+      sticky_action_prob: 0.0
+      obs_resize: [0, 0]
+      obs_crop: [0, 0, 0, 0]
+      obs_crop_mode: remove
+      obs_crop_fill: 0
+      obs_resize_algorithm: area
+    task: &task
+      id: identity
+      action:
+        set: native
+      signals:
+        native_termination: provider_terminated
+        native_truncation: provider_truncated
+      events:
+        balance_failed:
+          signal: native_termination
+          operation: equals_for
+          value: 1
+          steps: 1
+        time_limit_reached:
+          signal: native_truncation
+          operation: equals_for
+          value: 1
+          steps: 1
+      termination:
+        success: [time_limit_reached]
+        failure: [balance_failed]
+        timeout: []
+        bootstrap: [time_limit_reached]
+        outcome_precedence: [failure, success, timeout]
+        max_episode_steps: 500
+      reward:
+        reward_mode: native
+        reward_scale: 1.0
+        reward_clip: false
+eval:
+  acceptance:
+  - metric: eval/full/episode/return/shaped/mean
+    operator: '>='
+    threshold: 475.0
+  environment:
+    env_provider: *provider
+    env_config:
+      <<: *env_config
+      n_envs: 10
+      env_args: *env_args
+    preprocessing: *preprocessing
+    task: *task
