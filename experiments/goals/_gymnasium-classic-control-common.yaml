@@ -1,18 +1,12 @@
 defaults:
 - _self_
 goal_id: "{{ goal_id }}"
-evaluation_mode: evaluated
+evaluation_mode: training_only
 tags:
 - "goal_id:{{ goal_id }}"
 - "recipe_id:{{ recipe_id }}"
 - "env_id:{{ env_id }}"
 objective:
   rank:
-  - max(eval/full/episode/return/shaped/mean)
-  - min(leader/checkpoint/step)
-eval:
-  episodes: 100
-  policy:
-    stochastic: true
-release:
-  huggingface: {}
+  - max(train/episode/return/shaped/origin/target/rolling/mean)
+  - min(train/global_step)

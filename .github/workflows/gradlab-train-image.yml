@@ -147,7 +147,7 @@ jobs:
           test -n "$source_sha"
           echo "runtime_build_source_sha=$source_sha" >> "$GITHUB_OUTPUT"
 
-      - name: Smoke exact ViZDoom and TorchInductor runtime image
+      - name: Smoke exact Gymnasium, ViZDoom, and TorchInductor runtime image
         id: vizdoom_smoke
         if: github.event_name != 'pull_request'
         env:
@@ -156,6 +156,7 @@ jobs:
           set -o pipefail
           image="${REGISTRY}/${IMAGE_NAME}@${DIGEST}"
           docker pull "$image"
+          docker run --rm "$image"
           docker run --rm "$image" python /usr/local/bin/gradlab-vizdoom-smoke \
             | tail -n 1 > vizdoom-smoke.json
           python - <<'PY'

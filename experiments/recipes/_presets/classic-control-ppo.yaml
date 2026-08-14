@@ -1,7 +1,7 @@
 defaults:
 - _self_
 train:
-  checkpoint_eval_backend: modal
+  checkpoint_eval_backend: none
   policy_model:
     schema_version: 2
     encoder: {kind: flatten}

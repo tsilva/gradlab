@@ -63,6 +63,8 @@ FROM ${PYTHON_IMAGE} AS dependency-overlay-build
 
 ENV UV_PROJECT_ENVIRONMENT=/opt/gradlab-dependencies
 ENV UV_LINK_MODE=copy
+ENV CXX=g++
+ENV LDCXXSHARED="g++ -shared"
 
 COPY --from=uv /uv /uvx /usr/local/bin/
 

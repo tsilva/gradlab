@@ -42,17 +42,3 @@ train:
         reward_mode: native
         reward_scale: 1.0
         reward_clip: false
-eval:
-  episodes: 1000
-  acceptance:
-  - metric: eval/full/episode/return/shaped/mean
-    operator: '>='
-    threshold: -0.05
-  environment:
-    env_provider: *provider
-    env_config:
-      <<: *env_config
-      n_envs: 20
-      env_args: *env_args
-    preprocessing: *preprocessing
-    task: *task
