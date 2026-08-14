@@ -1,6 +1,6 @@
 [project]
 name = "gradlab"
-version = "0.1.1"
+version = "0.1.2"
 description = "Generic reinforcement-learning lab for training and evaluating game agents"
 readme = "README.md"
 requires-python = "==3.14.*"
