@@ -66,6 +66,12 @@ ENV UV_LINK_MODE=copy
 
 COPY --from=uv /uv /uvx /usr/local/bin/
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        g++ \
+        swig \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /root/gradlab
 
 COPY containers/train/train-dependencies-linux-amd64.lock /tmp/train-dependencies-linux-amd64.lock

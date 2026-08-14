@@ -161,6 +161,27 @@ ENVIRONMENT_SPECS: Mapping[str, EnvironmentSpec] = MappingProxyType(
         "Acrobot-v1": EnvironmentSpec(
             "Acrobot-v1", "Gymnasium-Acrobot", "Acrobot-v1"
         ),
+        "LunarLander-v3": EnvironmentSpec(
+            "LunarLander-v3", "Gymnasium-LunarLander", "LunarLander-v3"
+        ),
+        "FrozenLake-v1": EnvironmentSpec(
+            "FrozenLake-v1", "Gymnasium-FrozenLake", "FrozenLake-v1"
+        ),
+        "FrozenLake8x8-v1": EnvironmentSpec(
+            "FrozenLake8x8-v1", "Gymnasium-FrozenLake8x8", "FrozenLake8x8-v1"
+        ),
+        "CliffWalking-v1": EnvironmentSpec(
+            "CliffWalking-v1", "Gymnasium-CliffWalking", "CliffWalking-v1"
+        ),
+        "CliffWalkingSlippery-v1": EnvironmentSpec(
+            "CliffWalkingSlippery-v1",
+            "Gymnasium-CliffWalkingSlippery",
+            "CliffWalkingSlippery-v1",
+        ),
+        "Taxi-v3": EnvironmentSpec("Taxi-v3", "Gymnasium-Taxi", "Taxi-v3"),
+        "Blackjack-v1": EnvironmentSpec(
+            "Blackjack-v1", "Gymnasium-Blackjack", "Blackjack-v1"
+        ),
         "SuperMarioBros-Nes-v0": EnvironmentSpec(
             "SuperMarioBros-Nes-v0",
             "NES-SuperMarioBros",

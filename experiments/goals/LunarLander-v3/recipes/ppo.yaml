@@ -1,0 +1,27 @@
+defaults:
+- ../../../recipes/_presets/gymnasium-discrete-ppo@_global_
+- _self_
+recipe_id: ppo
+description: Gymnasium LunarLander-v3 PPO baseline with native rewards and observations.
+train:
+  timesteps: 1000000
+  early_stop:
+    conditions:
+      return_plateau:
+        metric: train/episode/return/shaped/origin/target/rolling/mean
+        trigger: no_improvement
+        direction: maximize
+        min_delta: 1.0
+        delta_mode: absolute
+        start_after_steps: 250000
+        patience_steps: 250000
+        outcome: neutral
+        action: stop
+  backend:
+    config:
+      n_steps: 1024
+      batch_size: 256
+      n_epochs: 4
+      learning_rate: 3.0e-4
+      gamma: 0.999
+      gae_lambda: 0.98

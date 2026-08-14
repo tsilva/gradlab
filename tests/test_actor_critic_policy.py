@@ -125,6 +125,45 @@ def test_plain_box_observations_use_one_shared_fusion_stack() -> None:
     assert policy.value_net.in_features == 4
 
 
+@pytest.mark.parametrize(
+    ("observation_space", "observations", "expected_features"),
+    (
+        (
+            gym.spaces.Discrete(16),
+            torch.tensor([0, 15], dtype=torch.int64),
+            16,
+        ),
+        (
+            gym.spaces.MultiDiscrete([32, 11, 2]),
+            torch.tensor([[20, 10, 0], [13, 1, 1]], dtype=torch.int64),
+            45,
+        ),
+    ),
+)
+def test_plain_categorical_observations_use_sb3_one_hot_features(
+    observation_space: gym.Space,
+    observations: torch.Tensor,
+    expected_features: int,
+) -> None:
+    policy = SharedActorCriticPolicy(
+        observation_space,
+        gym.spaces.Discrete(4),
+        lambda _: 1e-3,
+        policy_model=_policy_model(hidden_sizes=[]),
+    )
+
+    actions, values, log_prob = policy(observations)
+
+    assert actions.shape == (2,)
+    assert values.shape == (2, 1)
+    assert log_prob.shape == (2,)
+    extractor = policy.features_extractor
+    assert isinstance(extractor, SharedActorCriticFeatureExtractor)
+    assert extractor.features_dim == expected_features
+    assert policy.action_net.in_features == expected_features
+    assert policy.value_net.in_features == expected_features
+
+
 def test_policy_can_use_independent_actor_and_critic_feature_extractors() -> None:
     policy = SharedActorCriticPolicy(
         gym.spaces.Box(-1.0, 1.0, shape=(4,), dtype=np.float32),

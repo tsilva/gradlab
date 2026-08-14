@@ -18,28 +18,71 @@ from gradlab.turbo_api import CAPABILITY_KEYS, TURBO_API_VERSION
 
 
 @dataclass(frozen=True)
+class GymnasiumSignalContract:
+    name: str
+    dtype: str
+    shape: tuple[int, ...] = ()
+    available_on_reset: bool = True
+    available_on_step: bool = True
+
+    @property
+    def schema(self) -> Mapping[str, Any]:
+        return MappingProxyType(
+            {
+                "dtype": self.dtype,
+                "shape": self.shape,
+                "available_on_reset": self.available_on_reset,
+                "available_on_step": self.available_on_step,
+            }
+        )
+
+
+@dataclass(frozen=True)
 class GymnasiumEnvContract:
     env_id: str
     entry_point: str
+    registered_kwargs: tuple[tuple[str, Any], ...]
+    observation_kind: str
     observation_shape: tuple[int, ...]
     observation_dtype: str
+    observation_categories: tuple[int, ...]
+    buttons: tuple[str, ...]
     action_meanings: tuple[str, ...]
     action_controls: tuple[tuple[str, ...], ...]
-    max_episode_steps: int
-    reward_threshold: float
+    registered_max_episode_steps: int | None
+    goal_max_episode_steps: int
+    reward_threshold: float | None
     render_fps: int
+    signals: tuple[GymnasiumSignalContract, ...] = ()
 
     def __post_init__(self) -> None:
         if len(self.action_meanings) != len(self.action_controls):
             raise ValueError(f"{self.env_id} action meanings and controls must align")
+        if self.observation_kind not in {"box", "discrete", "multi_discrete"}:
+            raise ValueError(f"{self.env_id} has unsupported observation kind")
+        if len(set(self.buttons)) != len(self.buttons):
+            raise ValueError(f"{self.env_id} button labels must be unique")
+        unknown_controls = {
+            control for controls in self.action_controls for control in controls
+        } - set(self.buttons)
+        if unknown_controls:
+            raise ValueError(f"{self.env_id} has unknown controls: {sorted(unknown_controls)}")
+        if len({signal.name for signal in self.signals}) != len(self.signals):
+            raise ValueError(f"{self.env_id} signal names must be unique")
 
     @property
     def action_count(self) -> int:
         return len(self.action_meanings)
 
     @property
+    def max_episode_steps(self) -> int:
+        """Return the finite GradLab task horizon for this environment."""
+
+        return self.goal_max_episode_steps
+
+    @property
     def action_table_hash(self) -> str:
-        button_indices = {"left": 0, "right": 1}
+        button_indices = {label: index for index, label in enumerate(self.buttons)}
         masks = [
             sum(1 << button_indices[label] for label in controls)
             for controls in self.action_controls
@@ -47,41 +90,199 @@ class GymnasiumEnvContract:
         payload = json.dumps(masks, ensure_ascii=True, separators=(",", ":"))
         return hashlib.sha256(payload.encode("ascii")).hexdigest()
 
+    @property
+    def signal_schema(self) -> Mapping[str, Any]:
+        return MappingProxyType({signal.name: signal.schema for signal in self.signals})
+
 
 GYMNASIUM_ENV_CONTRACTS: Mapping[str, GymnasiumEnvContract] = MappingProxyType(
     {
         "CartPole-v1": GymnasiumEnvContract(
             env_id="CartPole-v1",
             entry_point="gymnasium.envs.classic_control.cartpole:CartPoleEnv",
+            registered_kwargs=(),
+            observation_kind="box",
             observation_shape=(4,),
             observation_dtype="float32",
+            observation_categories=(),
+            buttons=("left", "right"),
             action_meanings=("push_left", "push_right"),
             action_controls=(("left",), ("right",)),
-            max_episode_steps=500,
+            registered_max_episode_steps=500,
+            goal_max_episode_steps=500,
             reward_threshold=475.0,
             render_fps=50,
         ),
         "MountainCar-v0": GymnasiumEnvContract(
             env_id="MountainCar-v0",
             entry_point="gymnasium.envs.classic_control.mountain_car:MountainCarEnv",
+            registered_kwargs=(),
+            observation_kind="box",
             observation_shape=(2,),
             observation_dtype="float32",
+            observation_categories=(),
+            buttons=("left", "right"),
             action_meanings=("accelerate_left", "coast", "accelerate_right"),
             action_controls=(("left",), (), ("right",)),
-            max_episode_steps=200,
+            registered_max_episode_steps=200,
+            goal_max_episode_steps=200,
             reward_threshold=-110.0,
             render_fps=30,
         ),
         "Acrobot-v1": GymnasiumEnvContract(
             env_id="Acrobot-v1",
             entry_point="gymnasium.envs.classic_control.acrobot:AcrobotEnv",
+            registered_kwargs=(),
+            observation_kind="box",
             observation_shape=(6,),
             observation_dtype="float32",
+            observation_categories=(),
+            buttons=("left", "right"),
             action_meanings=("torque_negative", "torque_zero", "torque_positive"),
             action_controls=(("left",), (), ("right",)),
-            max_episode_steps=500,
+            registered_max_episode_steps=500,
+            goal_max_episode_steps=500,
             reward_threshold=-100.0,
             render_fps=15,
+        ),
+        "LunarLander-v3": GymnasiumEnvContract(
+            env_id="LunarLander-v3",
+            entry_point="gymnasium.envs.box2d.lunar_lander:LunarLander",
+            registered_kwargs=(),
+            observation_kind="box",
+            observation_shape=(8,),
+            observation_dtype="float32",
+            observation_categories=(),
+            buttons=("left_engine", "main_engine", "right_engine"),
+            action_meanings=(
+                "noop",
+                "fire_left_orientation_engine",
+                "fire_main_engine",
+                "fire_right_orientation_engine",
+            ),
+            action_controls=((), ("left_engine",), ("main_engine",), ("right_engine",)),
+            registered_max_episode_steps=1000,
+            goal_max_episode_steps=1000,
+            reward_threshold=200.0,
+            render_fps=50,
+        ),
+        "FrozenLake-v1": GymnasiumEnvContract(
+            env_id="FrozenLake-v1",
+            entry_point="gymnasium.envs.toy_text.frozen_lake:FrozenLakeEnv",
+            registered_kwargs=(("map_name", "4x4"),),
+            observation_kind="discrete",
+            observation_shape=(),
+            observation_dtype="int64",
+            observation_categories=(16,),
+            buttons=("left", "down", "right", "up"),
+            action_meanings=("move_left", "move_down", "move_right", "move_up"),
+            action_controls=(("left",), ("down",), ("right",), ("up",)),
+            registered_max_episode_steps=100,
+            goal_max_episode_steps=100,
+            reward_threshold=0.7,
+            render_fps=4,
+            signals=(GymnasiumSignalContract("prob", "float64"),),
+        ),
+        "FrozenLake8x8-v1": GymnasiumEnvContract(
+            env_id="FrozenLake8x8-v1",
+            entry_point="gymnasium.envs.toy_text.frozen_lake:FrozenLakeEnv",
+            registered_kwargs=(("map_name", "8x8"),),
+            observation_kind="discrete",
+            observation_shape=(),
+            observation_dtype="int64",
+            observation_categories=(64,),
+            buttons=("left", "down", "right", "up"),
+            action_meanings=("move_left", "move_down", "move_right", "move_up"),
+            action_controls=(("left",), ("down",), ("right",), ("up",)),
+            registered_max_episode_steps=200,
+            goal_max_episode_steps=200,
+            reward_threshold=0.85,
+            render_fps=4,
+            signals=(GymnasiumSignalContract("prob", "float64"),),
+        ),
+        "CliffWalking-v1": GymnasiumEnvContract(
+            env_id="CliffWalking-v1",
+            entry_point="gymnasium.envs.toy_text.cliffwalking:CliffWalkingEnv",
+            registered_kwargs=(),
+            observation_kind="discrete",
+            observation_shape=(),
+            observation_dtype="int64",
+            observation_categories=(48,),
+            buttons=("up", "right", "down", "left"),
+            action_meanings=("move_up", "move_right", "move_down", "move_left"),
+            action_controls=(("up",), ("right",), ("down",), ("left",)),
+            registered_max_episode_steps=None,
+            goal_max_episode_steps=200,
+            reward_threshold=None,
+            render_fps=4,
+            signals=(GymnasiumSignalContract("prob", "float64"),),
+        ),
+        "CliffWalkingSlippery-v1": GymnasiumEnvContract(
+            env_id="CliffWalkingSlippery-v1",
+            entry_point="gymnasium.envs.toy_text.cliffwalking:CliffWalkingEnv",
+            registered_kwargs=(("is_slippery", True),),
+            observation_kind="discrete",
+            observation_shape=(),
+            observation_dtype="int64",
+            observation_categories=(48,),
+            buttons=("up", "right", "down", "left"),
+            action_meanings=("move_up", "move_right", "move_down", "move_left"),
+            action_controls=(("up",), ("right",), ("down",), ("left",)),
+            registered_max_episode_steps=None,
+            goal_max_episode_steps=200,
+            reward_threshold=None,
+            render_fps=4,
+            signals=(GymnasiumSignalContract("prob", "float64"),),
+        ),
+        "Taxi-v3": GymnasiumEnvContract(
+            env_id="Taxi-v3",
+            entry_point="gymnasium.envs.toy_text.taxi:TaxiEnv",
+            registered_kwargs=(),
+            observation_kind="discrete",
+            observation_shape=(),
+            observation_dtype="int64",
+            observation_categories=(500,),
+            buttons=("south", "north", "east", "west", "pickup", "dropoff"),
+            action_meanings=(
+                "move_south",
+                "move_north",
+                "move_east",
+                "move_west",
+                "pickup",
+                "dropoff",
+            ),
+            action_controls=(
+                ("south",),
+                ("north",),
+                ("east",),
+                ("west",),
+                ("pickup",),
+                ("dropoff",),
+            ),
+            registered_max_episode_steps=200,
+            goal_max_episode_steps=200,
+            reward_threshold=8.0,
+            render_fps=4,
+            signals=(
+                GymnasiumSignalContract("prob", "float64"),
+                GymnasiumSignalContract("action_mask", "int8", (6,)),
+            ),
+        ),
+        "Blackjack-v1": GymnasiumEnvContract(
+            env_id="Blackjack-v1",
+            entry_point="gymnasium.envs.toy_text.blackjack:BlackjackEnv",
+            registered_kwargs=(("sab", True), ("natural", False)),
+            observation_kind="multi_discrete",
+            observation_shape=(3,),
+            observation_dtype="int64",
+            observation_categories=(32, 11, 2),
+            buttons=("stick", "hit"),
+            action_meanings=("stick", "hit"),
+            action_controls=(("stick",), ("hit",)),
+            registered_max_episode_steps=None,
+            goal_max_episode_steps=100,
+            reward_threshold=None,
+            render_fps=4,
         ),
     }
 )
@@ -89,10 +290,40 @@ GYMNASIUM_ENV_CONTRACTS: Mapping[str, GymnasiumEnvContract] = MappingProxyType(
 GYMNASIUM_ENV_IDS = tuple(GYMNASIUM_ENV_CONTRACTS)
 
 
-def _make_scalar_env(env_id: str):
+class _TupleObservationAdapter(gym.ObservationWrapper):
+    """Apply the fixed Blackjack tuple-to-MultiDiscrete observation contract."""
+
+    def __init__(self, env: gym.Env, categories: tuple[int, ...]):
+        super().__init__(env)
+        native = env.observation_space
+        if not isinstance(native, gym.spaces.Tuple) or len(native.spaces) != len(categories):
+            raise TypeError("structured Gymnasium observation must be the declared tuple")
+        for index, (space, count) in enumerate(zip(native.spaces, categories, strict=True)):
+            if not isinstance(space, gym.spaces.Discrete) or space.start != 0 or space.n != count:
+                raise TypeError(
+                    f"structured Gymnasium observation element {index} must be Discrete({count})"
+                )
+        self.observation_space = gym.spaces.MultiDiscrete(
+            np.asarray(categories, dtype=np.int64),
+            dtype=np.int64,
+        )
+
+    def observation(self, observation: object) -> np.ndarray:
+        encoded = np.asarray(observation, dtype=np.int64)
+        if encoded.shape != self.observation_space.shape or not self.observation_space.contains(
+            encoded
+        ):
+            raise ValueError("structured Gymnasium observation violates its declared encoding")
+        return encoded.copy()
+
+
+def _make_scalar_env(env_id: str, observation_kind: str, categories: tuple[int, ...]):
     """Create one scalar lane from a spawn-pickleable module-level callable."""
 
-    return gym.make(env_id, render_mode="rgb_array")
+    env = gym.make(env_id, render_mode="rgb_array")
+    if observation_kind == "multi_discrete":
+        return _TupleObservationAdapter(env, categories)
+    return env
 
 
 def _disabled_autoreset(value: object) -> bool:
@@ -107,12 +338,16 @@ def _validate_registered_contract(contract: GymnasiumEnvContract) -> None:
             f"{contract.env_id} entry point drifted: {spec.entry_point!r}; "
             f"expected {contract.entry_point!r}"
         )
-    if dict(spec.kwargs) != {}:
-        raise RuntimeError(f"{contract.env_id} must retain empty registered kwargs")
-    if spec.max_episode_steps != contract.max_episode_steps:
+    expected_kwargs = dict(contract.registered_kwargs)
+    if dict(spec.kwargs) != expected_kwargs:
+        raise RuntimeError(
+            f"{contract.env_id} registered kwargs drifted: {dict(spec.kwargs)!r}; "
+            f"expected {expected_kwargs!r}"
+        )
+    if spec.max_episode_steps != contract.registered_max_episode_steps:
         raise RuntimeError(
             f"{contract.env_id} horizon drifted: {spec.max_episode_steps!r}; "
-            f"expected {contract.max_episode_steps}"
+            f"expected {contract.registered_max_episode_steps!r}"
         )
     if spec.reward_threshold != contract.reward_threshold:
         raise RuntimeError(
@@ -202,7 +437,7 @@ class GymnasiumTurboVecEnv:
         self.render_mode = "rgb_array"
         self.transport = "numpy"
         self.closed = False
-        self.buttons = ("left", "right")
+        self.buttons = contract.buttons
         self.action_mode = "discrete"
         self.action_preset = None
         self.action_table = contract.action_controls
@@ -212,7 +447,7 @@ class GymnasiumTurboVecEnv:
         self.observation_ownership = "owned"
         self.observation_buffer_depth = None
         self.state_catalog: tuple[str, ...] = ()
-        self.signal_schema: Mapping[str, Any] = MappingProxyType({})
+        self.signal_schema = contract.signal_schema
         self.supports_live_snapshots = False
         self.live_snapshots_deterministic = False
         self.metadata = {
@@ -234,7 +469,15 @@ class GymnasiumTurboVecEnv:
 
         try:
             self._env = AsyncVectorEnv(
-                tuple(partial(_make_scalar_env, contract.env_id) for _ in range(num_envs)),
+                tuple(
+                    partial(
+                        _make_scalar_env,
+                        contract.env_id,
+                        contract.observation_kind,
+                        contract.observation_categories,
+                    )
+                    for _ in range(num_envs)
+                ),
                 shared_memory=True,
                 copy=True,
                 context="spawn",
@@ -255,17 +498,36 @@ class GymnasiumTurboVecEnv:
 
     def _validate_spaces(self) -> None:
         observation_space = self.single_observation_space
-        if not isinstance(observation_space, gym.spaces.Box):
-            raise TypeError(f"{self.contract.env_id} must expose a Box observation space")
-        if observation_space.shape != self.contract.observation_shape:
-            raise TypeError(
-                f"{self.contract.env_id} observation shape {observation_space.shape} does not "
-                f"match {self.contract.observation_shape}"
+        contract = self.contract
+        if contract.observation_kind == "box":
+            valid_kind = isinstance(observation_space, gym.spaces.Box)
+        elif contract.observation_kind == "discrete":
+            valid_kind = (
+                isinstance(observation_space, gym.spaces.Discrete)
+                and int(observation_space.start) == 0
+                and int(observation_space.n) == contract.observation_categories[0]
             )
-        if observation_space.dtype != np.dtype(self.contract.observation_dtype):
+        else:
+            valid_kind = (
+                isinstance(observation_space, gym.spaces.MultiDiscrete)
+                and bool(np.all(observation_space.start == 0))
+                and tuple(int(value) for value in observation_space.nvec)
+                == contract.observation_categories
+            )
+        if not valid_kind:
             raise TypeError(
-                f"{self.contract.env_id} observation dtype {observation_space.dtype} does not "
-                f"match {self.contract.observation_dtype}"
+                f"{contract.env_id} observation space {observation_space} does not match "
+                f"the declared {contract.observation_kind} contract"
+            )
+        if observation_space.shape != contract.observation_shape:
+            raise TypeError(
+                f"{contract.env_id} observation shape {observation_space.shape} does not "
+                f"match {contract.observation_shape}"
+            )
+        if observation_space.dtype != np.dtype(contract.observation_dtype):
+            raise TypeError(
+                f"{contract.env_id} observation dtype {observation_space.dtype} does not "
+                f"match {contract.observation_dtype}"
             )
         action_space = self.single_action_space
         if not isinstance(action_space, gym.spaces.Discrete):
@@ -333,21 +595,79 @@ class GymnasiumTurboVecEnv:
             normalized.append(int(value))
         return normalized
 
-    @staticmethod
-    def _require_empty_infos(infos: object, *, operation: str) -> None:
+    def _normalize_infos(
+        self,
+        infos: object,
+        *,
+        operation: str,
+        expected_mask: np.ndarray,
+    ) -> dict[str, np.ndarray]:
         if not isinstance(infos, Mapping):
             raise TypeError(f"Gymnasium {operation} infos must be a columnar mapping")
-        if infos:
+        expected_keys = {
+            key
+            for signal in self.contract.signals
+            for key in (signal.name, f"_{signal.name}")
+        }
+        if set(infos) != expected_keys:
             raise RuntimeError(
-                f"Gymnasium {operation} emitted undeclared info keys: {sorted(infos)}"
+                f"Gymnasium {operation} info contract drifted: expected "
+                f"{sorted(expected_keys)}, got {sorted(infos)}"
             )
+        normalized: dict[str, np.ndarray] = {}
+        for signal in self.contract.signals:
+            available = (
+                signal.available_on_reset if operation == "reset" else signal.available_on_step
+            )
+            signal_mask = np.asarray(infos[f"_{signal.name}"])
+            if signal_mask.dtype != np.dtype(np.bool_) or signal_mask.shape != (
+                self.num_envs,
+            ):
+                raise TypeError(
+                    f"Gymnasium {operation} info mask _{signal.name} must be boolean "
+                    f"shape ({self.num_envs},)"
+                )
+            required_mask = expected_mask if available else np.zeros_like(expected_mask)
+            if not np.array_equal(signal_mask, required_mask):
+                raise RuntimeError(
+                    f"Gymnasium {operation} info mask _{signal.name} disagrees with "
+                    "the declared availability"
+                )
+            raw_values = np.asarray(infos[signal.name])
+            expected_shape = (self.num_envs, *signal.shape)
+            if raw_values.shape != expected_shape:
+                raise TypeError(
+                    f"Gymnasium {operation} info {signal.name} must have shape "
+                    f"{expected_shape}, got {raw_values.shape}"
+                )
+            dtype = np.dtype(signal.dtype)
+            if signal.name == "prob":
+                if not np.issubdtype(raw_values.dtype, np.number):
+                    raise TypeError("Gymnasium prob info must be numeric")
+                values = raw_values.astype(dtype, copy=True)
+                if not np.all(np.isfinite(values[signal_mask])):
+                    raise ValueError("Gymnasium prob info must be finite")
+            else:
+                if raw_values.dtype != dtype:
+                    raise TypeError(
+                        f"Gymnasium {operation} info {signal.name} dtype "
+                        f"{raw_values.dtype} does not match {dtype}"
+                    )
+                values = raw_values.copy()
+            normalized[signal.name] = values
+            normalized[f"_{signal.name}"] = signal_mask.copy()
+        return normalized
 
     def reset(self, *, seed=None, options=None):
         env = self._require_idle()
         mask = self._reset_mask(options)
         seeds = self._reset_seeds(seed, mask)
         observations, infos = env.reset(seed=seeds, options={"reset_mask": mask})
-        self._require_empty_infos(infos, operation="reset")
+        normalized_infos = self._normalize_infos(
+            infos,
+            operation="reset",
+            expected_mask=mask,
+        )
         owned = np.asarray(observations).copy()
         if owned.shape[:1] != (self.num_envs,):
             raise ValueError("Gymnasium reset observations must contain every lane")
@@ -355,14 +675,15 @@ class GymnasiumTurboVecEnv:
             owned[~mask] = self._observations[~mask]
         self._observations = owned.copy()
         self._pending_reset[mask] = False
-        return owned, {
+        normalized_infos.update({
             "state_index": np.full(self.num_envs, -1, dtype=np.int32),
             "_state_index": mask.copy(),
             "start_source": np.zeros(self.num_envs, dtype=np.int8),
             "_start_source": mask.copy(),
             "noop_reset_count": np.zeros(self.num_envs, dtype=np.int64),
             "_noop_reset_count": mask.copy(),
-        }
+        })
+        return owned, normalized_infos
 
     def _actions(self, actions: object) -> np.ndarray:
         values = np.asarray(actions)
@@ -391,7 +712,11 @@ class GymnasiumTurboVecEnv:
             observations, rewards, terminated, truncated, infos = env.step_wait(timeout=timeout)
         finally:
             self._async_pending = False
-        self._require_empty_infos(infos, operation="step")
+        normalized_infos = self._normalize_infos(
+            infos,
+            operation="step",
+            expected_mask=np.ones(self.num_envs, dtype=np.bool_),
+        )
         owned_observations = np.asarray(observations).copy()
         owned_rewards = np.asarray(rewards).copy()
         owned_terminated = np.asarray(terminated, dtype=np.bool_).copy()
@@ -413,7 +738,7 @@ class GymnasiumTurboVecEnv:
             owned_rewards,
             owned_terminated,
             owned_truncated,
-            {},
+            normalized_infos,
         )
 
     def step(self, actions: object):
@@ -458,5 +783,6 @@ __all__ = [
     "GYMNASIUM_ENV_CONTRACTS",
     "GYMNASIUM_ENV_IDS",
     "GymnasiumEnvContract",
+    "GymnasiumSignalContract",
     "GymnasiumTurboVecEnv",
 ]

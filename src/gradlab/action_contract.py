@@ -471,6 +471,20 @@ def _display_label(semantic_id: str) -> str:
 
 def _input_atom(provider_id: str, atom: str) -> str:
     semantic = _semantic_id(atom)
+    if provider_id == "gymnasium":
+        return {
+            "left_engine": "left",
+            "main_engine": "a",
+            "right_engine": "right",
+            "south": "down",
+            "north": "up",
+            "east": "right",
+            "west": "left",
+            "pickup": "a",
+            "dropoff": "b",
+            "stick": "left",
+            "hit": "right",
+        }.get(semantic, semantic)
     if provider_id in {"gradoom", "vizdoom-turbo"}:
         return {
             "move_left": "left",
