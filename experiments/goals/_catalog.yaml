@@ -1,7 +1,13 @@
 schema_version: 2
 namespaces:
+  Acrobot-v1:
+    environment_id: Acrobot-v1
   Breakout-Atari2600-v0:
     environment_id: Breakout-Atari2600-v0
+  CartPole-v1:
+    environment_id: CartPole-v1
+  MountainCar-v0:
+    environment_id: MountainCar-v0
   SuperMarioBros-Nes-v0:
     environment_id: SuperMarioBros-Nes-v0
     title_template: Sample-efficient SuperMarioBros-NES {goal_id} completion

@@ -12,6 +12,7 @@ from gradlab.env import make_vec_envs, resolve_env_config
 from gradlab.env_config import env_config_from_mapping
 from gradlab.env_registry import environment_spec, evaluation_watchdog_steps
 from gradlab.gymnasium_vec_env import GYMNASIUM_ENV_CONTRACTS
+from gradlab.play_catalog import PlayCatalog
 from gradlab.recipe_documents import compose_train_document
 from gradlab.recipe_schema import validate_materialized_train_recipe
 from gradlab.task_kernels import IdentityTaskDefinition, Outcome
@@ -61,6 +62,13 @@ EXPECTED = {
 def _document(game: str) -> dict:
     root = GOALS / game
     return compose_train_document(root / "_goal.yaml", root / "recipes/ppo.yaml")
+
+
+def test_classic_control_goals_are_registered_in_player_catalog() -> None:
+    catalog = PlayCatalog(repo_root=Path.cwd())
+    environment_names = {item["name"] for item in catalog.environments().items}
+
+    assert set(EXPECTED) <= environment_names
 
 
 @pytest.mark.parametrize("game", tuple(EXPECTED))
