@@ -267,15 +267,16 @@ def test_env_check_requires_goal_file() -> None:
         env_main(["preflight", "--recipe-file", str(MARIO_RECIPE)])
 
 
-def test_inspect_reports_dynamic_gymnasium_contract() -> None:
+def test_inspect_reports_fixed_registered_gymnasium_contract() -> None:
     stdout = io.StringIO()
     with patch("sys.stdout", stdout):
-        exit_code = env_main(["inspect", "gymnasium:CustomNativeVector-v0", "--json"])
+        exit_code = env_main(["inspect", "gymnasium:CartPole-v1", "--json"])
 
     payload = json.loads(stdout.getvalue())
     assert exit_code == 0
-    assert payload["environment"]["qualified_env_id"] == ("gymnasium:CustomNativeVector-v0")
-    assert payload["environment"]["constructor_contract"] == {"kind": "dynamic"}
+    assert payload["environment"]["qualified_env_id"] == "gymnasium:CartPole-v1"
+    assert payload["environment"]["allows_unregistered_env_ids"] is False
+    assert payload["environment"]["constructor_contract"]["kind"] == "fixed"
 
 
 def test_check_keeps_json_clean_and_closes_provider(tmp_path: Path) -> None:

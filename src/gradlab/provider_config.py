@@ -12,11 +12,17 @@ NON_SEMANTIC_ENV_ARG_KEYS = frozenset(
     {
         "batch_size",
         "compile_engine",
+        "copy",
+        "daemon",
         "game",
+        "multiprocessing_context",
         "num_envs",
         "num_threads",
+        "observation_mode",
         "rom_path",
+        "shared_memory",
         "thread_affinity_offset",
+        "vectorization_mode",
     }
 )
 

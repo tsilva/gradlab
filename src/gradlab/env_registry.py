@@ -8,6 +8,7 @@ from types import MappingProxyType
 from typing import Any
 
 from gradlab.reward_transform import PROVIDER_REWARD_TRANSFORM_KEYS
+from gradlab.gymnasium_vec_env import GYMNASIUM_ENV_IDS
 
 
 EXTERNAL_ROM_ASSET_NONE = "none"
@@ -151,6 +152,15 @@ VIZDOOM_DEATHMATCH_EVAL_SEMANTICS = EvalSemantics(
 ENVIRONMENT_SPECS: Mapping[str, EnvironmentSpec] = MappingProxyType(
     {
         "Bandit-v0": EnvironmentSpec("Bandit-v0", "Bandit", "Bandit-v0"),
+        "CartPole-v1": EnvironmentSpec(
+            "CartPole-v1", "Gymnasium-CartPole", "CartPole-v1"
+        ),
+        "MountainCar-v0": EnvironmentSpec(
+            "MountainCar-v0", "Gymnasium-MountainCar", "MountainCar-v0"
+        ),
+        "Acrobot-v1": EnvironmentSpec(
+            "Acrobot-v1", "Gymnasium-Acrobot", "Acrobot-v1"
+        ),
         "SuperMarioBros-Nes-v0": EnvironmentSpec(
             "SuperMarioBros-Nes-v0",
             "NES-SuperMarioBros",
@@ -530,9 +540,34 @@ GYMNASIUM_PROVIDER = EnvProvider(
     provider_id="gymnasium",
     import_name="gymnasium",
     distribution_name="gymnasium",
-    environments={},
+    environments={env_id: EnvRegistration(env_id) for env_id in GYMNASIUM_ENV_IDS},
     supports_states=False,
-    allows_unregistered_env_ids=True,
+    turbo_api_version=2,
+    constructor_contract=ProviderConstructorContract(
+        canonical_args=frozenset({"game", "num_envs"}),
+        explicit_env_args=frozenset(
+            {
+                "autoreset_mode",
+                "copy",
+                "daemon",
+                "multiprocessing_context",
+                "observation_mode",
+                "render_mode",
+                "shared_memory",
+                "vectorization_mode",
+            }
+        ),
+        required_values={
+            "autoreset_mode": "disabled",
+            "copy": True,
+            "daemon": True,
+            "multiprocessing_context": "spawn",
+            "observation_mode": "same",
+            "render_mode": "rgb_array",
+            "shared_memory": True,
+            "vectorization_mode": "async",
+        },
+    ),
 )
 
 GRADLAB_PROVIDER = EnvProvider(

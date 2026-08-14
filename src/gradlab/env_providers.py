@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import gymnasium as gym
 import stable_retro as retro
 
 from gymnasium.vector import AutoresetMode
@@ -32,6 +31,7 @@ from gradlab.env_registry import (
     resolve_env_provider,
     validate_provider_resolved_config,
 )
+from gradlab.gymnasium_vec_env import GymnasiumTurboVecEnv
 from gradlab.model_inputs import provider_frame_stack_info_keys
 from gradlab.reward_transform import PROVIDER_REWARD_TRANSFORM_KEYS
 from gradlab.task_kernels import RUNTIME_BOUNDARY_SIGNALS
@@ -1013,24 +1013,19 @@ def provider_descriptor(
     )
 
 
-def _registered_native_gymnasium_vec_env(config: Any, native_kwargs: Mapping[str, Any]):
-    provider = resolve_env_provider(config.env_provider)
-    kwargs = dict(native_kwargs)
-    num_envs = int(kwargs.pop("num_envs"))
-    spec = gym.spec(config.game)
-    if spec.vector_entry_point is None:
-        raise RuntimeError(
-            f"{provider.provider_id}:{config.game} has no native Gymnasium vector entry point; "
-            "sync and async synthesized vectorization are unsupported"
-        )
-    kwargs["autoreset_mode"] = AutoresetMode.DISABLED
-    env = gym.make_vec(
-        config.game,
-        num_envs=num_envs,
-        vectorization_mode="vector_entry_point",
-        **kwargs,
+def _gymnasium_turbo_make_vec_env(
+    config: Any,
+    *,
+    native_kwargs: Mapping[str, Any],
+    gymnasium_env_type=GymnasiumTurboVecEnv,
+):
+    provider = _require_provider(config, GYMNASIUM_PROVIDER.provider_id)
+    env = gymnasium_env_type(config.game, **dict(native_kwargs))
+    return _validated_turbo_start_info_adapter(
+        env,
+        provider.provider_id,
+        validate_contract=gymnasium_env_type is GymnasiumTurboVecEnv,
     )
-    return _require_disabled_autoreset_mode(env, provider.provider_id)
 
 
 def _gradlab_make_vec_env(
@@ -1318,7 +1313,8 @@ PROVIDER_RUNTIME_ADAPTERS = {
     GYMNASIUM_PROVIDER.provider_id: ProviderRuntimeAdapter(
         GYMNASIUM_PROVIDER.provider_id,
         _passthrough_native_vec_kwargs,
-        _registered_native_gymnasium_vec_env,
+        _gymnasium_turbo_make_vec_env,
+        factory_override="gymnasium_env_type",
     ),
 }
 
@@ -1341,6 +1337,7 @@ def make_provider_vec_env(
     breakout_vec_env_type=breakout_turbo_vec_env_type,
     vizdoom_vec_env_type=vizdoom_turbo_vec_env_type,
     gradoom_env_type=gradoom_vec_env_type,
+    gymnasium_env_type=GymnasiumTurboVecEnv,
 ):
     adapter = provider_runtime_adapter(config.env_provider)
     overrides = {
@@ -1350,6 +1347,7 @@ def make_provider_vec_env(
         "breakout_vec_env_type": breakout_vec_env_type,
         "vizdoom_vec_env_type": vizdoom_vec_env_type,
         "gradoom_env_type": gradoom_env_type,
+        "gymnasium_env_type": gymnasium_env_type,
     }
     override = overrides.get(adapter.factory_override) if adapter.factory_override else None
     return adapter.make_vec_env(

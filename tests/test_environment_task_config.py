@@ -168,7 +168,7 @@ class EnvironmentTaskConfigTests(unittest.TestCase):
         identity = environment_identity_from_train_config(
             {
                 "env_provider": "gymnasium",
-                "game": "CustomNativeVector-v0",
+                "game": "CartPole-v1",
                 "task": task,
             }
         )

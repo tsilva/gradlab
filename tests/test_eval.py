@@ -199,7 +199,7 @@ class EvalMetricTests(unittest.TestCase):
         training = EpisodeMetricsReducer(track_success=False).consume((record,))
         result = episode_result_from_record(
             record,
-            semantics=environment_spec("gymnasium", "breakout").eval_semantics,
+            semantics=environment_spec("gymnasium", "CartPole-v1").eval_semantics,
         )
 
         self.assertEqual(
@@ -434,7 +434,7 @@ class EvalMetricTests(unittest.TestCase):
                 },
             ],
             deterministic=False,
-            semantics=environment_spec("gymnasium", "breakout").eval_semantics,
+            semantics=environment_spec("gymnasium", "CartPole-v1").eval_semantics,
         )
 
         self.assertEqual(summary["return_mean"], 7.0)
@@ -463,7 +463,7 @@ class EvalMetricTests(unittest.TestCase):
             deterministic=False,
             event_names=("goal_reached",),
             track_success=True,
-            semantics=environment_spec("gymnasium", "breakout").eval_semantics,
+            semantics=environment_spec("gymnasium", "CartPole-v1").eval_semantics,
         )
 
         self.assertNotIn("eval/full/outcome/success/from/Start/rate", summary)
@@ -486,7 +486,7 @@ class EvalMetricTests(unittest.TestCase):
             deterministic=False,
             event_names=("goal_reached",),
             track_success=True,
-            semantics=environment_spec("gymnasium", "breakout").eval_semantics,
+            semantics=environment_spec("gymnasium", "CartPole-v1").eval_semantics,
         )
 
         self.assertNotIn("eval/full/outcome/success/from/Start/rate", summary)
@@ -513,7 +513,7 @@ class EvalMetricTests(unittest.TestCase):
                 },
             ],
             deterministic=False,
-            semantics=environment_spec("gymnasium", "breakout").eval_semantics,
+            semantics=environment_spec("gymnasium", "CartPole-v1").eval_semantics,
         )
 
         rank = [
@@ -547,7 +547,7 @@ class EvalMetricTests(unittest.TestCase):
                 },
             ],
             deterministic=False,
-            semantics=environment_spec("gymnasium", "breakout").eval_semantics,
+            semantics=environment_spec("gymnasium", "CartPole-v1").eval_semantics,
         )
 
         self.assertNotIn("eval/full/outcome/reason/serve_stall/count", summary)

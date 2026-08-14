@@ -1,0 +1,31 @@
+defaults:
+- ../../../recipes/_presets/classic-control-ppo@_global_
+- _self_
+recipe_id: ppo
+description: >-
+  Gymnasium CartPole PPO adapted from RL Baselines3 Zoo revision
+  f94cef4e59fb2f03b77177db432c3f771d0ee72c with a constant 0.2 clip range.
+train:
+  timesteps: 100000
+  early_stop:
+    conditions:
+      return_plateau:
+        metric: train/episode/return/shaped/origin/target/rolling/mean
+        trigger: no_improvement
+        direction: maximize
+        min_delta: 1.0
+        delta_mode: absolute
+        start_after_steps: 25000
+        patience_steps: 25000
+        outcome: neutral
+        action: stop
+  backend:
+    config:
+      n_steps: 32
+      batch_size: 256
+      n_epochs: 20
+      learning_rate: 0.001
+      learning_rate_final: 0.0
+      learning_rate_schedule_timesteps: 100000
+      gamma: 0.98
+      gae_lambda: 0.8
