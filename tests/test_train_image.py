@@ -330,13 +330,13 @@ class TrainImageTests(unittest.TestCase):
         self.assertIn("gradoom==0.1.0a3", dependencies)
         self.assertIn("box2d-py==2.3.5", dependencies)
         self.assertNotIn("wandb-workspaces==", gpu + dependencies)
-        self.assertIn("torch==2.12.0", gpu)
+        self.assertIn("torch==2.13.0", gpu)
         gpu_lines = set(gpu.splitlines())
         dependency_lines = set(dependencies.splitlines())
         self.assertFalse(gpu_lines & dependency_lines)
         self.assertEqual(
             train_plan_sha256(root),
-            "0fa5077902d0a8c94693e55338daacf7510f6f5cd933722d05f313b525d53a08",
+            "a820e033df4fcb7468e5933c348187fdf8287ab00795c0d602e74743d2dcb760",
         )
         for line in gpu.splitlines():
             name = line.split("==", maxsplit=1)[0]
