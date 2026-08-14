@@ -58,13 +58,14 @@ jobs:
       runtime_build_source_sha: ${{ steps.runtime_identity.outputs.runtime_build_source_sha }}
       deploy_required: ${{ steps.runtime_identity.outputs.deploy_required }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
+          persist-credentials: false
           ref: ${{ env.SOURCE_SHA }}
       - run: test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
@@ -89,7 +90,7 @@ jobs:
 
       - name: Docker metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: type=raw,value=runtime-${{ steps.runtime_meta.outputs.runtime_input_sha256 }}
@@ -97,7 +98,7 @@ jobs:
       - name: Build image
         id: build
         if: github.event_name == 'pull_request' || steps.existing_image.outputs.digest == ''
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: containers/train/Dockerfile
@@ -280,7 +281,7 @@ jobs:
 
       - name: Upload image receipt
         if: github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: gradlab-train-image
           path: gradlab-train-image.json
