@@ -57,11 +57,13 @@ if uv tool list | grep -q "^gradlab "; then
     uv tool install --project . "$PACKAGE_TARGET" \
         -e \
         --force \
+        --config-file "$ROOT/uv-tool.toml" \
         --constraints "$CONSTRAINTS"
 else
     echo "Installing gradlab as an editable uv tool from the frozen lock."
     uv tool install --project . "$PACKAGE_TARGET" \
         -e \
+        --config-file "$ROOT/uv-tool.toml" \
         --constraints "$CONSTRAINTS"
 fi
 

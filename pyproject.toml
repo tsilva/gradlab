@@ -97,8 +97,10 @@ constraint-dependencies = [
     "h2>=4.4.1",
     "setuptools>=83",
 ]
-override-dependencies = [
-    "torch==2.13.0",
+# GraDOOM 0.1.0a3 predates Torch 2.13 metadata. GradLab certifies this provider
+# with its exact Torch runtime, so publish that resolution metadata to every uv path.
+dependency-metadata = [
+    { name = "gradoom", version = "0.1.0a3", requires-python = ">=3.11", requires-dist = ["gymnasium>=1.2,<2", "numpy>=1.26,<3", "torch==2.13.0", "wandb>=0.18,<0.23"] },
 ]
 
 [tool.uv.exclude-newer-package]
