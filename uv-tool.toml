@@ -3,6 +3,11 @@ constraint-dependencies = [
     "mistralai!=2.4.6",
     "guardrails-ai!=0.10.1",
 ]
+# Tool resolution cannot consume project overrides. Supply the certified GraDOOM
+# metadata here until its published Torch ceiling includes GradLab's runtime.
+dependency-metadata = [
+    { name = "gradoom", version = "0.1.0a3", requires-python = ">=3.11", requires-dist = ["gymnasium>=1.2,<2", "numpy>=1.26,<3", "torch==2.13.0", "wandb>=0.18,<0.23"] },
+]
 
 [exclude-newer-package]
 breakout-turbo-env = "2026-08-14T22:32:00Z"

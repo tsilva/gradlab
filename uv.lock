@@ -35,7 +35,12 @@ constraints = [
     { name = "mistralai", specifier = "!=2.4.6" },
     { name = "setuptools", specifier = ">=83" },
 ]
-overrides = [{ name = "torch", specifier = "==2.13.0" }]
+
+[[manifest.dependency-metadata]]
+name = "gradoom"
+version = "0.1.0a3"
+requires-dist = ["gymnasium>=1.2,<2", "numpy>=1.26,<3", "torch==2.13.0", "wandb>=0.18,<0.23"]
+requires-python = ">=3.11"
 
 [[package]]
 name = "absl-py"
@@ -714,7 +719,7 @@ dependencies = [
     { name = "supermariobrosnes-turbo", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
     { name = "tensorboard" },
     { name = "textual" },
-    { name = "torch" },
+    { name = "torch", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
     { name = "tqdm" },
     { name = "vizdoom-turbo", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
     { name = "wandb" },
@@ -771,7 +776,7 @@ train-runtime = [
     { name = "stable-retro-turbo", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "supermariobrosnes-turbo", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "tensorboard" },
-    { name = "torch" },
+    { name = "torch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "tqdm" },
     { name = "vizdoom-turbo", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'" },
     { name = "wandb" },
