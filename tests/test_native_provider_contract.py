@@ -11,7 +11,7 @@ import numpy as np
 import stable_retro as retro
 
 from gradlab.action_contract import MARIO_ACTION_TABLES
-from gradlab.env import EnvConfig, _bound_task_kernel
+from gradlab.env import EnvConfig, _bound_task_kernel, make_vec_envs
 from gradlab.env_providers import (
     _AleManualResetAdapter,
     _StartInfoAdapter,
@@ -20,6 +20,7 @@ from gradlab.env_providers import (
     provider_native_vec_kwargs,
     super_mario_bros_nes_turbo_vec_env_type,
 )
+from gradlab.play_session import vector_env_frame
 from gradlab.task_kernels import MarioTaskConfig, MarioTaskDefinition
 from packaging.version import Version
 
@@ -403,6 +404,13 @@ class BreakoutTurboProviderTests(unittest.TestCase):
             "obs_crop_fill": 0,
             "obs_resize_algorithm": "area",
             "env_args": {
+                "scenario": "scenario",
+                "info": "data",
+                "use_restricted_actions": "simple",
+                "record": False,
+                "players": 1,
+                "inttype": "stable",
+                "obs_type": "image",
                 "num_threads": 1,
                 "frame_stack": 4,
                 "obs_layout": "chw",
@@ -410,6 +418,9 @@ class BreakoutTurboProviderTests(unittest.TestCase):
                 "obs_copy": "safe_view",
                 "info_filter": "all",
                 "render_mode": "rgb_array",
+                "rom_path": None,
+                "noop_reset_max": 0,
+                "use_fire_reset": False,
             },
             "task": {
                 "id": "identity",
@@ -445,7 +456,33 @@ class BreakoutTurboProviderTests(unittest.TestCase):
 
     def test_runtime_matches_turbo_api_v2_release(self) -> None:
         installed = Version(importlib.metadata.version("breakout-turbo-env"))
-        self.assertEqual(installed, Version("0.5.5"))
+        self.assertEqual(installed, Version("0.5.6"))
+
+    def test_player_boundary_renders_canonical_stella_rgb(self) -> None:
+        env = make_vec_envs(self.config(), 1, 17)
+        try:
+            env.reset()
+            frame = vector_env_frame(env)
+        finally:
+            env.close()
+
+        self.assertEqual(frame.shape, (210, 160, 3))
+        self.assertEqual(frame.dtype, np.uint8)
+        colors = {tuple(color) for color in np.unique(frame.reshape(-1, 3), axis=0)}
+        self.assertEqual(
+            colors,
+            {
+                (0, 0, 0),
+                (136, 136, 136),
+                (200, 72, 72),
+                (192, 104, 56),
+                (176, 120, 48),
+                (160, 160, 40),
+                (72, 160, 72),
+                (64, 72, 200),
+                (64, 152, 128),
+            },
+        )
 
     def test_constructs_and_preserves_native_manual_vector_contract(self) -> None:
         config = self.config()

@@ -39,6 +39,43 @@ def smoke_lunar_lander() -> None:
     print("lunar_lander_reset=ok")
 
 
+def smoke_breakout_render() -> None:
+    import numpy as np
+
+    from breakout_turbo_env import BreakoutVecEnv
+
+    env = BreakoutVecEnv(
+        "Breakout-Atari2600-v0",
+        num_envs=1,
+        render_mode="rgb_array",
+    )
+    try:
+        observation, _infos = env.reset(seed=0)
+        frame = env.render()
+    finally:
+        env.close()
+
+    if observation.shape != (1, 4, 84, 84) or observation.dtype != np.uint8:
+        raise RuntimeError("Breakout policy observation contract mismatch")
+    if frame.shape != (210, 160, 3) or frame.dtype != np.uint8:
+        raise RuntimeError("Breakout RGB render contract mismatch")
+    colors = {tuple(color) for color in np.unique(frame.reshape(-1, 3), axis=0)}
+    expected = {
+        (0, 0, 0),
+        (136, 136, 136),
+        (200, 72, 72),
+        (192, 104, 56),
+        (176, 120, 48),
+        (160, 160, 40),
+        (72, 160, 72),
+        (64, 72, 200),
+        (64, 152, 128),
+    }
+    if colors != expected:
+        raise RuntimeError(f"Breakout canonical Stella palette mismatch: {sorted(colors)!r}")
+    print("breakout_render=canonical-stella-rgb")
+
+
 def main() -> None:
     root = Path(os.environ.get("GRADLAB_PROJECT_ROOT", "/root/gradlab"))
     print("gradlab_container_smoke=ok")
@@ -46,6 +83,7 @@ def main() -> None:
     print(f"platform={platform.platform()}")
     for package in (
         "gradlab",
+        "breakout-turbo-env",
         "stable-retro-turbo",
         "vizdoom-turbo",
         "stable-baselines3",
@@ -68,6 +106,7 @@ def main() -> None:
         print(f"torch_probe_error={type(exc).__name__}: {exc}")
 
     smoke_lunar_lander()
+    smoke_breakout_render()
 
     game = os.environ.get("RETRO_GAME")
     if game:
