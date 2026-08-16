@@ -6,6 +6,7 @@ description: GPU-resident GraDOOM Deathmatch PPO trained on one RTX 4090 and eva
 reward_shape: native-v1
 train:
   timesteps: 50000000
+  checkpoint_eval_backend: none
   environment:
     # Training uses GraDOOM; the goal-owned checkpoint evaluator remains vizdoom-turbo.
     env_provider: gradoom
