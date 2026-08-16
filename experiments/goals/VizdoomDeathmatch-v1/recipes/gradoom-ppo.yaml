@@ -11,6 +11,9 @@ train:
     # Training uses GraDOOM; the goal-owned checkpoint evaluator remains vizdoom-turbo.
     env_provider: gradoom
     env_config:
+      # GPU-resident GraDOOM scales to thousands of lanes; 2048 won the 128..4096
+      # time-to-rolling-kills sweep on beast-3 (~9.5k steps/s, best kills curve).
+      n_envs: 2048
       env_args:
         # GraDOOM is single-stream GPU execution; the API expects None for device-backed execution.
         num_threads: null
