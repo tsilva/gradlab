@@ -37,6 +37,8 @@ train:
   backend:
     id: gradlab.ppo
     config:
+      # Keep learner and simulator on the same CUDA lane.
+      device: cuda:0
       execution_profile: max-throughput
       precision: amp-fp16
       n_steps: 32
