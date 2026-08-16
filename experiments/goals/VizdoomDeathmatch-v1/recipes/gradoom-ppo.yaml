@@ -11,8 +11,8 @@ train:
     env_provider: gradoom
     env_config:
       env_args:
-        # GraDOOM is single-stream GPU execution; this compatibility knob is intentionally inert.
-        num_threads: 1
+        # GraDOOM is single-stream GPU execution; the API expects None for device-backed execution.
+        num_threads: null
         # Keep the supported eager engine until the production CUDA graph passes its release gate.
         compile_engine: false
     preprocessing:
