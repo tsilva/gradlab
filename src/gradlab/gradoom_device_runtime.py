@@ -136,6 +136,45 @@ class _DeviceContextEncoder:
         return result
 
 
+class _GraDoomTorchContractAdapter:
+    """Ensure strict Turbo API requirements for `active_state_indices`."""
+
+    def __init__(self, env: Any) -> None:
+        self._env = env
+        try:
+            active = env.active_state_indices
+        except AttributeError as exc:
+            raise TypeError("GraDOOM provider must declare active_state_indices") from exc
+        self._active_state_indices = (
+            active if callable(active) else (lambda: active)
+        )
+
+    @property
+    def device(self) -> Any:
+        device = getattr(self._env, "device", None)
+        if isinstance(device, str):
+            return torch.device(device)
+        return device
+
+    def __getattr__(self, name: str) -> Any:
+        if name == "_env":
+            raise AttributeError(name)
+        return getattr(self._env, name)
+
+    def active_state_indices(self) -> Any:
+        active = self._active_state_indices()
+        if getattr(self._env, "transport", None) != "torch":
+            return active
+        if not hasattr(active, "to"):
+            return active
+        device = self.device
+        if device is not None:
+            active = active.to(device=device)
+        if str(getattr(active, "dtype", "")) != "torch.int32":
+            active = active.to(dtype=torch.int32)
+        return active
+
+
 class GraDoomDeviceRuntime:
     """Minimal all-device rollout lifecycle for the certified Deathmatch profile."""
 
@@ -388,6 +427,8 @@ def make_gradoom_device_vec_env(
     )
     env_type = gradoom_vec_env_type()
     env = env_type(config.game, **kwargs)
+    if getattr(env, "transport", None) == "torch":
+        env = _GraDoomTorchContractAdapter(env)
     try:
         descriptor = provider_descriptor(
             config,
