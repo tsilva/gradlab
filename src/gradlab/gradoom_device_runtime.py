@@ -141,6 +141,7 @@ class _GraDoomTorchContractAdapter:
 
     def __init__(self, env: Any) -> None:
         self._env = env
+        self._contract_device = self._normalize_device(getattr(env, "device", None))
         try:
             active = env.active_state_indices
         except AttributeError as exc:
@@ -151,10 +152,36 @@ class _GraDoomTorchContractAdapter:
 
     @property
     def device(self) -> Any:
-        device = getattr(self._env, "device", None)
-        if isinstance(device, str):
-            return torch.device(device)
-        return device
+        return self._contract_device
+
+    def _normalize_device(self, value: Any) -> torch.device | None:
+        if isinstance(value, str):
+            return torch.device(value)
+        if isinstance(value, torch.device):
+            return value
+        return None
+
+    def _align_device(self, active: torch.Tensor) -> torch.Tensor:
+        if getattr(active, "dtype", None) != torch.int32:
+            active = active.to(dtype=torch.int32)
+        transport_device = self._normalize_device(getattr(self._env, "transport_device", None))
+        if transport_device is None:
+            transport_device = self._normalize_device(self._contract_device)
+        if transport_device is None:
+            return active.to(dtype=torch.int32)
+        if getattr(active, "device", None) == transport_device:
+            return active
+        if (
+            transport_device.type == "cuda"
+            and transport_device.index is None
+            and active.device.type == "cuda"
+            and active.device.index is not None
+        ):
+            # GraDOOM reports device as `torch.device("cuda")` but tensors can be
+            # created as `cuda:0`; align contract checks to the concrete tensor device.
+            self._contract_device = active.device
+            return active
+        return active.to(device=transport_device, dtype=torch.int32)
 
     def __getattr__(self, name: str) -> Any:
         if name == "_env":
@@ -165,13 +192,13 @@ class _GraDoomTorchContractAdapter:
         active = self._active_state_indices()
         if getattr(self._env, "transport", None) != "torch":
             return active
-        if not hasattr(active, "to"):
+        if not isinstance(active, torch.Tensor):
+            active = torch.as_tensor(active, dtype=torch.int32, device=self.device)
+            self._contract_device = self._normalize_device(active.device) or self._contract_device
             return active
-        device = self.device
-        if device is not None:
-            active = active.to(device=device)
-        if str(getattr(active, "dtype", "")) != "torch.int32":
-            active = active.to(dtype=torch.int32)
+        if self._contract_device is None:
+            self._contract_device = self._normalize_device(active.device)
+        active = self._align_device(active)
         return active
 
 
