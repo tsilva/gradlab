@@ -74,6 +74,28 @@ BREAKOUT_ACTION_TABLES = {
         ("LEFT",),
     ),
 }
+GRADOOM_DEATHMATCH_BUTTONS = (
+    "ATTACK",
+    "SPEED",
+    "STRAFE",
+    "MOVE_RIGHT",
+    "MOVE_LEFT",
+    "MOVE_BACKWARD",
+    "MOVE_FORWARD",
+    "TURN_RIGHT",
+    "TURN_LEFT",
+    "SELECT_WEAPON1",
+    "SELECT_WEAPON2",
+    "SELECT_WEAPON3",
+    "SELECT_WEAPON4",
+    "SELECT_WEAPON5",
+    "SELECT_WEAPON6",
+    "SELECT_NEXT_WEAPON",
+    "SELECT_PREV_WEAPON",
+    "LOOK_UP_DOWN_DELTA",
+    "TURN_LEFT_RIGHT_DELTA",
+    "MOVE_LEFT_RIGHT_DELTA",
+)
 
 
 def _mode_name(value: Any) -> str:
@@ -115,6 +137,30 @@ def _packaged_action_sets(provider_id: str, game: str) -> Mapping[str, Any]:
     return action_sets if isinstance(action_sets, Mapping) else {}
 
 
+def _gradoom_scenario_buttons(
+    game: str | Path | None,
+    *,
+    scenario: str | Path | None,
+) -> tuple[str, ...]:
+    """Resolve the pinned GraDOOM profile without importing its CUDA runtime."""
+
+    requested = scenario if scenario not in (None, "scenario") else game
+    if requested is None:
+        return GRADOOM_DEATHMATCH_BUTTONS
+    candidate = Path(str(requested)).expanduser()
+    if candidate.is_file():
+        if candidate.suffix.casefold() not in {".cfg", ".wad"}:
+            raise ValueError("GraDOOM scenarios must be a ViZDoom .cfg or Doom .wad file")
+        return GRADOOM_DEATHMATCH_BUTTONS
+    alias = str(requested).strip().casefold().removesuffix(".cfg")
+    if alias not in {"deathmatch", "vizdoomdeathmatch-v1"}:
+        raise ValueError(
+            f"unsupported GraDOOM game/scenario {requested!r}; "
+            "only VizdoomDeathmatch-v1 is supported"
+        )
+    return GRADOOM_DEATHMATCH_BUTTONS
+
+
 def provider_buttons(
     provider_id: str,
     game: str,
@@ -122,11 +168,6 @@ def provider_buttons(
     env_args: Mapping[str, Any] | None = None,
 ) -> tuple[str | None, ...]:
     if provider_id in {"gradoom", "vizdoom-turbo"}:
-        if provider_id == "gradoom":
-            from gradoom import scenario_buttons
-        else:
-            from vizdoom_turbo import scenario_buttons
-
         args = env_args if isinstance(env_args, Mapping) else {}
         vizdoom_config = args.get("vizdoom_config")
         if isinstance(vizdoom_config, Mapping) and "available_buttons" in vizdoom_config:
@@ -144,6 +185,10 @@ def provider_buttons(
             if len(set(buttons)) != len(buttons):
                 raise ValueError("env_args.vizdoom_config.available_buttons cannot repeat a button")
             return buttons
+        if provider_id == "gradoom":
+            return _gradoom_scenario_buttons(game, scenario=args.get("scenario"))
+        from vizdoom_turbo import scenario_buttons
+
         return scenario_buttons(game, scenario=args.get("scenario"))
     if provider_id == "supermariobrosnes-turbo":
         from supermariobrosnes_turbo import NES_BUTTONS

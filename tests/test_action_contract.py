@@ -1,3 +1,4 @@
+import builtins
 from types import MappingProxyType, SimpleNamespace
 
 import gymnasium as gym
@@ -14,6 +15,7 @@ from gradlab.action_contract import (
     configured_action_meanings,
     configured_action_name,
     declared_action_contract,
+    provider_buttons,
     runtime_action_contract,
 )
 from gradlab.batch_runtime import ProviderDescriptor
@@ -23,6 +25,44 @@ from gradlab.env_identity import validate_task_config
 
 BREAKOUT_NO_NOOP_ACTIONS = [["BUTTON"], ["RIGHT"], ["LEFT"]]
 BREAKOUT_NO_NOOP_HASH = "a1f69721fbf7ef8a00084b9426767b0bce61f39ee0880b932a954c7d5789ee15"
+
+
+def test_gradoom_button_metadata_does_not_import_the_cuda_runtime(monkeypatch):
+    original_import = builtins.__import__
+
+    def guarded_import(name, *args, **kwargs):
+        if name == "gradoom" or name.startswith("gradoom."):
+            raise AssertionError("GraDOOM metadata resolution imported the CUDA runtime")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", guarded_import)
+
+    assert provider_buttons(
+        "gradoom",
+        "VizdoomDeathmatch-v1",
+        env_args={"scenario": "scenario"},
+    ) == (
+        "ATTACK",
+        "SPEED",
+        "STRAFE",
+        "MOVE_RIGHT",
+        "MOVE_LEFT",
+        "MOVE_BACKWARD",
+        "MOVE_FORWARD",
+        "TURN_RIGHT",
+        "TURN_LEFT",
+        "SELECT_WEAPON1",
+        "SELECT_WEAPON2",
+        "SELECT_WEAPON3",
+        "SELECT_WEAPON4",
+        "SELECT_WEAPON5",
+        "SELECT_WEAPON6",
+        "SELECT_NEXT_WEAPON",
+        "SELECT_PREV_WEAPON",
+        "LOOK_UP_DOWN_DELTA",
+        "TURN_LEFT_RIGHT_DELTA",
+        "MOVE_LEFT_RIGHT_DELTA",
+    )
 
 
 def test_runtime_action_contract_traverses_common_environment_wrappers():
