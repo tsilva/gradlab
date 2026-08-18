@@ -26,12 +26,17 @@ EXPECTED = {
         "n_envs": 8,
         "n_steps": 32,
         "batch_size": 256,
-        "n_epochs": 20,
+        "n_epochs": 5,
         "gamma": 0.98,
         "gae_lambda": 0.8,
         "checkpoint_freq": 10_000,
-        "plateau": 25_000,
+        "plateau": 100_000,
+        "plateau_start": 25_000,
         "ent_coef": 0.0,
+        "device": "cuda",
+        "clip_range": 0.1,
+        "learning_rate": 0.0003,
+        "learning_rate_final": 0.0003,
     },
     "MountainCar-v0": {
         "threshold": -110.0,
@@ -207,9 +212,12 @@ def test_gymnasium_goal_and_recipe_materialize_exact_contract(game: str) -> None
     }
     for name in ("n_steps", "batch_size", "n_epochs", "gamma", "gae_lambda"):
         assert backend[name] == expected[name]
-    assert backend["device"] == "cpu"
+    assert backend["device"] == expected.get("device", "cpu")
     assert backend["ent_coef"] == expected["ent_coef"]
-    assert backend["clip_range"] == 0.2
+    assert backend["clip_range"] == expected.get("clip_range", 0.2)
+    if "learning_rate" in expected:
+        assert backend["learning_rate"] == expected["learning_rate"]
+        assert backend["learning_rate_final"] == expected["learning_rate_final"]
     target = config["early_stop"]["conditions"]["return_target"]
     assert target == {
         "metric": "train/episode/return/shaped/origin/target/rolling/mean",
@@ -228,7 +236,7 @@ def test_gymnasium_goal_and_recipe_materialize_exact_contract(game: str) -> None
         "outcome": "neutral",
         "action": "stop",
         "patience_steps": expected["plateau"],
-        "start_after_steps": expected["plateau"],
+        "start_after_steps": expected.get("plateau_start", expected["plateau"]),
         "direction": "maximize",
         "min_delta": expected.get("min_delta", 1.0),
         "delta_mode": "absolute",

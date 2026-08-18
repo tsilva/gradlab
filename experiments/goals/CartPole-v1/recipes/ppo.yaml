@@ -4,7 +4,8 @@ defaults:
 recipe_id: ppo
 description: >-
   Gymnasium CartPole PPO adapted from RL Baselines3 Zoo revision
-  f94cef4e59fb2f03b77177db432c3f771d0ee72c with a constant 0.2 clip range.
+  f94cef4e59fb2f03b77177db432c3f771d0ee72c with a constant 0.1 clip range
+  and learning rate.
 train:
   timesteps: 1000000
   early_stop:
@@ -25,16 +26,18 @@ train:
         min_delta: 1.0
         delta_mode: absolute
         start_after_steps: 25000
-        patience_steps: 25000
+        patience_steps: 100000
         outcome: neutral
         action: stop
   backend:
     config:
+      device: cuda
       n_steps: 32
       batch_size: 256
-      n_epochs: 20
-      learning_rate: 0.001
-      learning_rate_final: 0.0
+      n_epochs: 5
+      learning_rate: 0.0003
+      learning_rate_final: 0.0003
       learning_rate_schedule_timesteps: 1000000
+      clip_range: 0.1
       gamma: 0.98
       gae_lambda: 0.8
