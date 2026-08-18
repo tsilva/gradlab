@@ -21,8 +21,8 @@ from gradlab.task_kernels import IdentityTaskDefinition, Outcome
 GOALS = Path("experiments/goals")
 EXPECTED = {
     "CartPole-v1": {
-        "threshold": 475.0,
-        "timesteps": 100_000,
+        "threshold": 500.0,
+        "timesteps": 1_000_000,
         "n_envs": 8,
         "n_steps": 32,
         "batch_size": 256,

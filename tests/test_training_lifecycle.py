@@ -220,6 +220,7 @@ def test_neutral_plateau_has_a_typed_learner_terminal_reason(tmp_path: Path) -> 
 
 def test_execution_modes_resolve_to_fixed_lifecycle_policies() -> None:
     local = TrainingExecutionPolicy.for_mode(TrainingExecutionMode.LOCAL_DEMO)
+    native = TrainingExecutionPolicy.for_mode(TrainingExecutionMode.LOCAL_NATIVE)
     supervised = TrainingExecutionPolicy.for_mode(TrainingExecutionMode.SUPERVISED)
 
     assert local.to_document() == {
@@ -227,6 +228,13 @@ def test_execution_modes_resolve_to_fixed_lifecycle_policies() -> None:
         "console_mode": "auto",
         "persist_intermediate_checkpoints": False,
         "stop_on_first_completion": True,
+        "handle_sigint": True,
+    }
+    assert native.to_document() == {
+        "mode": "local-native",
+        "console_mode": "auto",
+        "persist_intermediate_checkpoints": False,
+        "stop_on_first_completion": False,
         "handle_sigint": True,
     }
     assert supervised.to_document() == {

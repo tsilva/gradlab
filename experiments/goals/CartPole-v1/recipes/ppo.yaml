@@ -6,14 +6,14 @@ description: >-
   Gymnasium CartPole PPO adapted from RL Baselines3 Zoo revision
   f94cef4e59fb2f03b77177db432c3f771d0ee72c with a constant 0.2 clip range.
 train:
-  timesteps: 100000
+  timesteps: 1000000
   early_stop:
     conditions:
       return_target:
         metric: train/episode/return/shaped/origin/target/rolling/mean
         trigger: threshold
         operator: '>='
-        threshold: 475.0
+        threshold: 500.0
         start_after_steps: 10000
         patience_steps: 0
         outcome: success
@@ -35,6 +35,6 @@ train:
       n_epochs: 20
       learning_rate: 0.001
       learning_rate_final: 0.0
-      learning_rate_schedule_timesteps: 100000
+      learning_rate_schedule_timesteps: 1000000
       gamma: 0.98
       gae_lambda: 0.8

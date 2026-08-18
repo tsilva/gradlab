@@ -56,6 +56,15 @@ gradlab train Taxi-v3/ppo
 gradlab train Blackjack-v1/ppo
 ```
 
+On an Apple Silicon Mac with PyTorch MPS available, use the native M1 learner
+profile. It runs the same checked-in recipe without stopping on the first
+successful episode; the recipe's metric early-stop conditions or timestep
+budget remain authoritative:
+
+```bash
+gradlab train CartPole-v1/ppo --profile m1-mps --seed 0 --no-tui
+```
+
 Use `gymnasium:<environment-id>` for the qualified environment ID. These goals
 use isolated spawned lanes, explicit masked resets, native rewards, and RGB
 rendering through the same training, evaluation, publication, and playback

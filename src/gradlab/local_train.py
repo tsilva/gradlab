@@ -15,12 +15,16 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 from gradlab.cli_parser import ExactArgumentParser
-from gradlab.local_paths import default_runs_dir
 from gradlab.clock import utc_now as _utc_now
 from gradlab.config_loader import RECIPE_TEMPLATE_VALUES, render_template_vars
 from gradlab.env import task_termination
 from gradlab.env_config import env_config_from_mapping
 from gradlab.env_registry import resolve_env_provider
+from gradlab.learner_profiles import (
+    local_learner_profile_names,
+    resolve_local_learner_profile,
+)
+from gradlab.local_paths import default_runs_dir
 from gradlab.policy_bundle import (
     build_recipe_document,
     canonical_json_sha256,
@@ -66,6 +70,11 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--seed", type=int, default=DEFAULT_TRAIN_SEED)
+    parser.add_argument(
+        "--profile",
+        choices=local_learner_profile_names(),
+        help="Named native local learner profile; profiled runs use their configured lifecycle.",
+    )
     parser.add_argument(
         "--set",
         dest="recipe_overrides",
@@ -257,11 +266,19 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
     if threading.current_thread() is not threading.main_thread():
         raise RuntimeError("gradlab train must run on the Python main thread")
+    profile = resolve_local_learner_profile(args.profile)
+    if profile is not None:
+        profile.validate_host()
     use_training_tui = _should_use_training_tui(disabled=bool(args.no_tui))
     source = resolve_recipe_source(args.recipe)
     overrides = list(args.recipe_overrides)
+    if profile is not None:
+        overrides.extend(profile.recipe_overrides)
     if not args.wandb:
         overrides.append("logging.wandb_mode=disabled")
+    execution_mode = (
+        profile.execution_mode if profile is not None else TrainingExecutionMode.LOCAL_DEMO
+    )
 
     source_commit = repo_git_commit(source.repository_root) or _installed_source_commit()
 
@@ -365,19 +382,25 @@ def main(argv: list[str] | None = None) -> int:
         "format_version": 1,
         "status": "running",
         "training_execution": TrainingExecutionPolicy.for_mode(
-            TrainingExecutionMode.LOCAL_DEMO
+            execution_mode
         ).to_document(),
         "recipe_ref": source.reference,
         "goal_id": goal_id,
         "recipe_id": recipe_id,
         "recipe_sha256": canonical_json_sha256(recipe_document),
         "seed": int(args.seed),
+        "learner_profile": profile.profile_id if profile is not None else None,
         "started_at": started_at,
         "model": None,
     }
     _write_receipt(run_dir, receipt)
     local_notices = (
         f"local training-only run: recipe={source.reference} seed={args.seed} output={run_dir}",
+        *(
+            (f"learner profile: {profile.profile_id} device={profile.device}",)
+            if profile is not None
+            else ()
+        ),
         "checkpoint evaluation is disabled; this run cannot establish promotion or acceptance",
     )
     if not use_training_tui:
@@ -397,7 +420,7 @@ def main(argv: list[str] | None = None) -> int:
                 "--train-config-json",
                 str(config_path),
                 "--execution-mode",
-                TrainingExecutionMode.LOCAL_DEMO.value,
+                execution_mode.value,
             ]
 
             def invoke_learner(runtime_control=None) -> int:
@@ -495,7 +518,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         _write_receipt(run_dir, receipt)
         raise RuntimeError("local learner produced an invalid terminal result") from exc
-    if terminal_execution_mode != TrainingExecutionMode.LOCAL_DEMO.value:
+    if terminal_execution_mode != execution_mode.value:
         receipt.update(
             {
                 "status": "failed",
