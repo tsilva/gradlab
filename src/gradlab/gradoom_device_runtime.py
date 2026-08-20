@@ -136,6 +136,72 @@ class _DeviceContextEncoder:
         return result
 
 
+class _GraDoomTorchContractAdapter:
+    """Ensure strict Turbo API requirements for `active_state_indices`."""
+
+    def __init__(self, env: Any) -> None:
+        self._env = env
+        self._contract_device = self._normalize_device(getattr(env, "device", None))
+        try:
+            active = env.active_state_indices
+        except AttributeError as exc:
+            raise TypeError("GraDOOM provider must declare active_state_indices") from exc
+        self._active_state_indices = (
+            active if callable(active) else (lambda: active)
+        )
+
+    @property
+    def device(self) -> Any:
+        return self._contract_device
+
+    def _normalize_device(self, value: Any) -> torch.device | None:
+        if isinstance(value, str):
+            return torch.device(value)
+        if isinstance(value, torch.device):
+            return value
+        return None
+
+    def _align_device(self, active: torch.Tensor) -> torch.Tensor:
+        if getattr(active, "dtype", None) != torch.int32:
+            active = active.to(dtype=torch.int32)
+        transport_device = self._normalize_device(getattr(self._env, "transport_device", None))
+        if transport_device is None:
+            transport_device = self._normalize_device(self._contract_device)
+        if transport_device is None:
+            return active.to(dtype=torch.int32)
+        if getattr(active, "device", None) == transport_device:
+            return active
+        if (
+            transport_device.type == "cuda"
+            and transport_device.index is None
+            and active.device.type == "cuda"
+            and active.device.index is not None
+        ):
+            # GraDOOM reports device as `torch.device("cuda")` but tensors can be
+            # created as `cuda:0`; align contract checks to the concrete tensor device.
+            self._contract_device = active.device
+            return active
+        return active.to(device=transport_device, dtype=torch.int32)
+
+    def __getattr__(self, name: str) -> Any:
+        if name == "_env":
+            raise AttributeError(name)
+        return getattr(self._env, name)
+
+    def active_state_indices(self) -> Any:
+        active = self._active_state_indices()
+        if getattr(self._env, "transport", None) != "torch":
+            return active
+        if not isinstance(active, torch.Tensor):
+            active = torch.as_tensor(active, dtype=torch.int32, device=self.device)
+            self._contract_device = self._normalize_device(active.device) or self._contract_device
+            return active
+        if self._contract_device is None:
+            self._contract_device = self._normalize_device(active.device)
+        active = self._align_device(active)
+        return active
+
+
 class GraDoomDeviceRuntime:
     """Minimal all-device rollout lifecycle for the certified Deathmatch profile."""
 
@@ -388,6 +454,8 @@ def make_gradoom_device_vec_env(
     )
     env_type = gradoom_vec_env_type()
     env = env_type(config.game, **kwargs)
+    if getattr(env, "transport", None) == "torch":
+        env = _GraDoomTorchContractAdapter(env)
     try:
         descriptor = provider_descriptor(
             config,

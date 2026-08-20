@@ -13,7 +13,7 @@ from gradlab import runtime_refs
 
 SOURCE_SHA = "1" * 40
 RUNTIME_IMAGE_REF = "docker:ghcr.io/tsilva/gradlab/gradlab-train@sha256:" + "a" * 64
-VIZDOOM_PROVIDER_VERSION = importlib.metadata.version("vizdoom-turbo")
+VIZDOOM_PROVIDER_VERSION = importlib.metadata.version("env-vizdoom-turbo")
 
 
 def image_payload() -> dict:
@@ -45,7 +45,7 @@ def image_payload() -> dict:
         "vizdoom_smoke": {
             "contract_version": 3,
             "image_digest": "sha256:" + "a" * 64,
-            "provider_distribution": "vizdoom-turbo",
+            "provider_distribution": "env-vizdoom-turbo",
             "provider_version": VIZDOOM_PROVIDER_VERSION,
             "evidence_sha256": "6" * 64,
         },

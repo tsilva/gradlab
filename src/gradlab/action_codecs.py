@@ -297,15 +297,15 @@ def _validate_deathmatch_layout(
     descriptor: Any,
     policy_action_space: gym.Space | None = None,
 ) -> dict[str, int]:
-    if str(descriptor.provider_id) != "vizdoom-turbo":
+    if str(descriptor.provider_id) != "env-vizdoom-turbo":
         raise ValueError(
-            f"{VIZDOOM_DEATHMATCH_MULTIDISCRETE_CODEC} requires provider 'vizdoom-turbo'"
+            f"{VIZDOOM_DEATHMATCH_MULTIDISCRETE_CODEC} requires provider 'env-vizdoom-turbo'"
         )
     native_space = descriptor.native_action_space
     if not isinstance(native_space, gym.spaces.Box):
         raise ValueError(
             f"{VIZDOOM_DEATHMATCH_MULTIDISCRETE_CODEC} requires a native Box action space; "
-            "configure vizdoom-turbo with use_restricted_actions='filtered'"
+            "configure env-vizdoom-turbo with use_restricted_actions='filtered'"
         )
     if native_space.shape != (len(VIZDOOM_DEATHMATCH_MULTIDISCRETE_BUTTONS),):
         raise ValueError(
@@ -508,9 +508,9 @@ def _validate_shared_layout(
     descriptor: Any,
     policy_action_space: gym.Space | None = None,
 ) -> dict[str, int]:
-    if str(descriptor.provider_id) != "vizdoom-turbo":
+    if str(descriptor.provider_id) != "env-vizdoom-turbo":
         raise ValueError(
-            f"{VIZDOOM_SHARED_MULTIDISCRETE_CODEC} requires provider 'vizdoom-turbo'"
+            f"{VIZDOOM_SHARED_MULTIDISCRETE_CODEC} requires provider 'env-vizdoom-turbo'"
         )
     native_space = descriptor.native_action_space
     if not isinstance(native_space, gym.spaces.Box):

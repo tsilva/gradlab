@@ -2,7 +2,7 @@ schema_version: 1
 name: mario-env-throughput-l11
 kind: env_throughput
 description: Paired native-provider and gradlab runtime throughput benchmark for the current Mario Level1-1 provider.
-env_provider: supermariobrosnes-turbo
+env_provider: env-supermariobrosnes-turbo-emu
 game: SuperMarioBros-Nes-v0
 state: Level1-1
 modes:

@@ -83,9 +83,9 @@ def main() -> None:
     print(f"platform={platform.platform()}")
     for package in (
         "gradlab",
-        "breakout-turbo-env",
-        "stable-retro-turbo",
-        "vizdoom-turbo",
+        "env-breakoutatari2600-turbo-native",
+        "env-stableretro-turbo",
+        "env-vizdoom-turbo",
         "stable-baselines3",
         "torch",
         "wandb",

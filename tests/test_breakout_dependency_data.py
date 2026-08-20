@@ -38,7 +38,7 @@ def test_breakout_goal_uses_pinned_stable_retro_data() -> None:
 
     kwargs = provider_native_vec_kwargs(
         EnvConfig(
-            env_provider="stable-retro-turbo",
+            env_provider="env-stableretro-turbo",
             game=GAME,
             state="Start",
             env_args={"info": train_info},

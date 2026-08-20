@@ -18,8 +18,8 @@ When changing dstack host behavior, preserve the root-owned runtime-image cleanu
 
 ## Stable Retro
 
-- Use PyPI `stable-retro-turbo`; import path remains `stable_retro`.
-- Current required Turbo API v2 runtimes are `stable-retro-turbo==1.0.1.post43`, `supermariobrosnes-turbo==0.6.6`, `breakout-turbo-env==0.5.5`, `vizdoom-turbo==1.3.0.post26`, and `gradoom==0.1.0a3`.
+- Use PyPI `env-stableretro-turbo`; import path remains `stable_retro`.
+- Current required Turbo API v2 runtimes are `env-stableretro-turbo==1.0.1.post44`, `env-supermariobrosnes-turbo-emu==0.7.0`, `env-breakoutatari2600-turbo-native==0.5.7`, `env-vizdoom-turbo==1.3.0.post27`, and `env-doom-turbo-torch==0.1.0a4`.
 - Native-vector code should use `stable_retro.RetroVecEnv`, whose constructor follows the original `RetroEnv` positional signature plus vector-only keyword arguments.
 - Runtime version source of truth: the exact pins in `pyproject.toml` and the resolved versions in `uv.lock`. Use `uv sync --frozen`; make overrides explicit in recipes, compute policy, run descriptions, and W&B tags.
 - Every Turbo provider must declare and pass the strict Turbo Vector API v2 contract before gradlab consumes it. Do not add provider probing or legacy fallbacks.
@@ -62,4 +62,4 @@ When asked to build, cut, tag, publish, or verify a GradLab PyPI release, use th
 ## Dependencies
 
 Use `uv` for dependency resolution and keep `uv.lock` committed. Preserve Python supply-chain hardening in `pyproject.toml`.
-The intentional exceptions to the seven-day `exclude-newer` window are `breakout-turbo-env`, `gradoom`, `stable-retro-turbo`, `supermariobrosnes-turbo`, and `vizdoom-turbo`, because this project tracks current forward native Breakout, GraDOOM, Stable Retro, Mario, and ViZDoom runtimes while keeping the rest of the dependency graph age-gated. Keep the per-package cutoffs in `[tool.uv.exclude-newer-package]`, `uv-tool.toml`, and the user-level uv config in sync so `uv tool install . --editable` remains installable without extra flags.
+The intentional exceptions to the seven-day `exclude-newer` window are `env-breakoutatari2600-turbo-native`, `env-doom-turbo-torch`, `env-stableretro-turbo`, `env-supermariobrosnes-turbo-emu`, and `env-vizdoom-turbo`, because this project tracks current forward native Breakout, Torch-native Doom, Stable Retro, Mario, and ViZDoom runtimes while keeping the rest of the dependency graph age-gated. Keep the per-package cutoffs in `[tool.uv.exclude-newer-package]`, `uv-tool.toml`, and the user-level uv config in sync so `uv tool install . --editable` remains installable without extra flags.

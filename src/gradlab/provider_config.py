@@ -50,7 +50,7 @@ def provider_env_id(config: Any) -> str | None:
     game = provider_game(config)
     if not game:
         return None
-    provider = str(_get(config, "env_provider", "stable-retro-turbo") or "stable-retro-turbo")
+    provider = str(_get(config, "env_provider", "env-stableretro-turbo") or "env-stableretro-turbo")
     return qualify_env_id(provider, game)
 
 

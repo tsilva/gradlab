@@ -202,7 +202,7 @@ def test_cell_graph_retained_snapshot_is_opt_in_and_integrity_checked(
         "semantic_id": "state-archive-v1",
         "schema_version": 1,
         "provider_snapshot": {
-            "provider_id": "breakout-turbo-env",
+            "provider_id": "env-breakoutatari2600-turbo-native",
             "compatibility_id": "test-environment-v1",
             "ref": {
                 "codec_id": "breakout-turbo-env.state-v1",

@@ -25,7 +25,7 @@ class BenchmarkProfileTests(unittest.TestCase):
     def test_mario_env_throughput_benchmark_always_requests_all_info(self) -> None:
         config = benchmark_config(
             argparse.Namespace(
-                env_provider="supermariobrosnes-turbo",
+                env_provider="env-supermariobrosnes-turbo-emu",
                 game="SuperMarioBros-Nes-v0",
                 state="Level1-1",
                 envs=16,
@@ -75,7 +75,7 @@ class BenchmarkProfileTests(unittest.TestCase):
 schema_version: 1
 name: bad
 kind: env_throughput
-env_provider: supermariobrosnes-turbo
+env_provider: env-supermariobrosnes-turbo-emu
 game: SuperMarioBros-Nes-v0
 state: State.NONE
 modes: [fast]
@@ -97,7 +97,7 @@ warmup: 1
 schema_version: 1
 name: bad
 kind: env_throughput
-env_provider: supermariobrosnes-turbo
+env_provider: env-supermariobrosnes-turbo-emu
 game: SuperMarioBros-Nes-v0
 state: Level1-1
 envs: [1]
@@ -120,7 +120,7 @@ gates: {}
 schema_version: 1
 name: bad
 kind: env_throughput
-env_provider: supermariobrosnes-turbo
+env_provider: env-supermariobrosnes-turbo-emu
 game: SuperMarioBros-Nes-v0
 state: Level1-1
 modes: [compare]
@@ -176,7 +176,7 @@ timstepz: 10
         )
         for command in commands:
             self.assertIn("experiments/scripts/benchmarks/benchmark_env_sps.py", command.argv)
-            self.assertIn("supermariobrosnes-turbo", command.argv)
+            self.assertIn("env-supermariobrosnes-turbo-emu", command.argv)
             self.assertIn("Level1-1", command.argv)
             self.assertEqual(command.env, {"STABLE_RETRO_DISABLE_AUDIO": "1"})
             self.assertEqual(command.argv[command.argv.index("--max-overhead") + 1], "0.05")

@@ -200,7 +200,7 @@ class GoExploreSearchTests(unittest.TestCase):
         )
         GoExploreBackend().validate(
             {
-                "env_provider": "breakout-turbo-env",
+                "env_provider": "env-breakoutatari2600-turbo-native",
                 "task": {"id": "identity", "signals": {"score": "score"}},
                 "state_archive": {
                     "persistence": "ephemeral",

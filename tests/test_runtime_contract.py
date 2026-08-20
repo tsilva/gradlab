@@ -20,7 +20,7 @@ from gradlab.runtime_contract import (
 RUNTIME_IMAGE_REF = "docker:ghcr.io/tsilva/gradlab/gradlab-train@sha256:" + "a" * 64
 SOURCE_SHA = "1" * 40
 BUILD_SOURCE_SHA = "2" * 40
-VIZDOOM_PROVIDER_VERSION = importlib.metadata.version("vizdoom-turbo")
+VIZDOOM_PROVIDER_VERSION = importlib.metadata.version("env-vizdoom-turbo")
 POLICY_MODEL = {
     "schema_version": 2,
     "encoder": {"kind": "flatten"},
@@ -54,7 +54,7 @@ def release_payload(*, source_sha: str = SOURCE_SHA) -> dict:
         "vizdoom_smoke": {
             "contract_version": 3,
             "image_digest": "sha256:" + "a" * 64,
-            "provider_distribution": "vizdoom-turbo",
+            "provider_distribution": "env-vizdoom-turbo",
             "provider_version": VIZDOOM_PROVIDER_VERSION,
             "evidence_sha256": "6" * 64,
         },

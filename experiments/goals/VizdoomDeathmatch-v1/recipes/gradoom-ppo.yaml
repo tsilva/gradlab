@@ -5,13 +5,17 @@ recipe_id: gradoom-ppo
 description: GPU-resident GraDOOM Deathmatch PPO trained on one RTX 4090 and evaluated zero-shot in reference ViZDoom.
 reward_shape: native-v1
 train:
-  timesteps: 500000000
+  timesteps: 50000000
+  checkpoint_eval_backend: none
   environment:
-    # Training uses GraDOOM; the goal-owned checkpoint evaluator remains vizdoom-turbo.
-    env_provider: gradoom
+    # Training uses GraDOOM; the goal-owned checkpoint evaluator remains env-vizdoom-turbo.
+    env_provider: env-doom-turbo-torch
     env_config:
+      # GPU-resident GraDOOM scales to thousands of lanes; 2048 won the 128..4096
+      # time-to-rolling-kills sweep on beast-3 (~9.5k steps/s, best kills curve).
+      n_envs: 2048
       env_args:
-        # GraDOOM device mode requires num_threads=None on the provider.
+        # GraDOOM is single-stream GPU execution; the API expects None for device-backed execution.
         num_threads: null
         # Keep the supported eager engine until the production CUDA graph passes its release gate.
         compile_engine: false

@@ -484,7 +484,7 @@ def generated_metadata(
             backend_id,
             trainer,
             *(["stable-baselines3"] if trainer == "Stable-Baselines3" else []),
-            *(["Stable Retro"] if provider == "stable-retro-turbo" else []),
+            *(["Stable Retro"] if provider == "env-stableretro-turbo" else []),
             algorithm,
             raw_game,
             game_title,

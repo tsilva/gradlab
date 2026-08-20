@@ -19,8 +19,8 @@ from gradlab.env_registry import (
 
 
 def test_environment_spec_owns_identity_defaults_task_and_eval_semantics() -> None:
-    stable = environment_spec("stable-retro-turbo", "SuperMarioBros-Nes-v0")
-    dedicated = environment_spec("supermariobrosnes-turbo", "SuperMarioBros-Nes-v0")
+    stable = environment_spec("env-stableretro-turbo", "SuperMarioBros-Nes-v0")
+    dedicated = environment_spec("env-supermariobrosnes-turbo-emu", "SuperMarioBros-Nes-v0")
 
     assert stable is dedicated
     assert stable.game_family == "NES-SuperMarioBros"
@@ -32,66 +32,66 @@ def test_environment_spec_owns_identity_defaults_task_and_eval_semantics() -> No
 
 
 def test_resolves_registered_stable_retro_turbo_env_id() -> None:
-    env_id = "stable-retro-turbo:SuperMarioBros-Nes-v0"
+    env_id = "env-stableretro-turbo:SuperMarioBros-Nes-v0"
 
     resolved = resolve_env_id(env_id)
 
     assert env_id in registered_env_ids()
     assert resolved.qualified_id == env_id
-    assert resolved.provider_id == "stable-retro-turbo"
+    assert resolved.provider_id == "env-stableretro-turbo"
     assert resolved.provider_env_id == "SuperMarioBros-Nes-v0"
     assert resolved.import_name == "stable_retro"
 
 
 def test_resolves_registered_stable_retro_turbo_smb3_env_id() -> None:
-    env_id = "stable-retro-turbo:SuperMarioBros3-Nes-v0"
+    env_id = "env-stableretro-turbo:SuperMarioBros3-Nes-v0"
 
     resolved = resolve_env_id(env_id)
 
     assert env_id in registered_env_ids()
     assert resolved.qualified_id == env_id
-    assert resolved.provider_id == "stable-retro-turbo"
+    assert resolved.provider_id == "env-stableretro-turbo"
     assert resolved.provider_env_id == "SuperMarioBros3-Nes-v0"
     assert resolved.import_name == "stable_retro"
 
 
 def test_resolves_registered_stable_retro_turbo_atari_env_ids() -> None:
     for game in ("Breakout-Atari2600-v0", "MsPacman-Atari2600-v0"):
-        env_id = f"stable-retro-turbo:{game}"
+        env_id = f"env-stableretro-turbo:{game}"
 
         resolved = resolve_env_id(env_id)
 
         assert env_id in registered_env_ids()
-        assert resolved.provider_id == "stable-retro-turbo"
+        assert resolved.provider_id == "env-stableretro-turbo"
         assert resolved.provider_env_id == game
         assert resolved.import_name == "stable_retro"
-        assert env_supports_states("stable-retro-turbo", game)
+        assert env_supports_states("env-stableretro-turbo", game)
 
 
 def test_resolves_registered_breakout_turbo_env_id() -> None:
-    env_id = "breakout-turbo-env:Breakout-Atari2600-v0"
+    env_id = "env-breakoutatari2600-turbo-native:Breakout-Atari2600-v0"
 
     resolved = resolve_env_id(env_id)
 
     assert env_id in registered_env_ids()
     assert resolved.qualified_id == env_id
-    assert resolved.provider_id == "breakout-turbo-env"
+    assert resolved.provider_id == "env-breakoutatari2600-turbo-native"
     assert resolved.provider_env_id == "Breakout-Atari2600-v0"
     assert resolved.import_name == "breakout_turbo_env"
-    assert env_supports_states("breakout-turbo-env", "Breakout-Atari2600-v0")
+    assert env_supports_states("env-breakoutatari2600-turbo-native", "Breakout-Atari2600-v0")
 
     with pytest.raises(ValueError, match="does not register environment"):
-        resolve_env_id("breakout-turbo-env:BreakoutTurbo-v0")
+        resolve_env_id("env-breakoutatari2600-turbo-native:BreakoutTurbo-v0")
 
 
 def test_resolves_registered_supermariobrosnes_turbo_env_id() -> None:
-    env_id = "supermariobrosnes-turbo:SuperMarioBros-Nes-v0"
+    env_id = "env-supermariobrosnes-turbo-emu:SuperMarioBros-Nes-v0"
 
     resolved = resolve_env_id(env_id)
 
     assert env_id in registered_env_ids()
     assert resolved.qualified_id == env_id
-    assert resolved.provider_id == "supermariobrosnes-turbo"
+    assert resolved.provider_id == "env-supermariobrosnes-turbo-emu"
     assert resolved.provider_env_id == "SuperMarioBros-Nes-v0"
     assert resolved.import_name == "supermariobrosnes_turbo"
     provider = resolve_env_provider(resolved.provider_id)
@@ -103,42 +103,42 @@ def test_resolves_registered_supermariobrosnes_turbo_env_id() -> None:
 
 def test_resolves_vizdoom_turbo_builtin_and_custom_scenarios() -> None:
     for game in ("VizdoomBasic-v1", "VizdoomDeathmatch-v1"):
-        env_id = f"vizdoom-turbo:{game}"
+        env_id = f"env-vizdoom-turbo:{game}"
         resolved = resolve_env_id(env_id)
 
         assert env_id in registered_env_ids()
-        assert resolved.provider_id == "vizdoom-turbo"
+        assert resolved.provider_id == "env-vizdoom-turbo"
         assert resolved.provider_env_id == game
         assert resolved.import_name == "vizdoom_turbo"
-        assert env_supports_states("vizdoom-turbo", game)
+        assert env_supports_states("env-vizdoom-turbo", game)
     provider = resolve_env_provider(resolved.provider_id)
     assert provider.constructor_contract is not None
     assert "state_dir" not in provider.constructor_contract.explicit_env_args
 
-    deathmatch = environment_spec("vizdoom-turbo", "VizdoomDeathmatch-v1")
+    deathmatch = environment_spec("env-vizdoom-turbo", "VizdoomDeathmatch-v1")
     assert deathmatch.game_family == "Doom-ViZDoom-Deathmatch"
     assert deathmatch.wandb_project == "VizdoomDeathmatch-v1"
     assert deathmatch.eval_semantics.progress_fields == (
         EvalProgressField("killcount", "kills", rank=True),
     )
 
-    custom = resolve_env_id("vizdoom-turbo:/tmp/custom-scenario.cfg")
+    custom = resolve_env_id("env-vizdoom-turbo:/tmp/custom-scenario.cfg")
     assert custom.provider_env_id == "/tmp/custom-scenario.cfg"
 
 
 def test_resolves_gradoom_only_for_the_certified_deathmatch_profile() -> None:
-    env_id = "gradoom:VizdoomDeathmatch-v1"
+    env_id = "env-doom-turbo-torch:VizdoomDeathmatch-v1"
 
     resolved = resolve_env_id(env_id)
 
     assert env_id in registered_env_ids()
-    assert resolved.provider_id == "gradoom"
+    assert resolved.provider_id == "env-doom-turbo-torch"
     assert resolved.provider_env_id == "VizdoomDeathmatch-v1"
     assert resolved.import_name == "gradoom"
-    assert environment_spec("gradoom", resolved.provider_env_id) is environment_spec(
-        "vizdoom-turbo", resolved.provider_env_id
+    assert environment_spec("env-doom-turbo-torch", resolved.provider_env_id) is environment_spec(
+        "env-vizdoom-turbo", resolved.provider_env_id
     )
-    provider = resolve_env_provider("gradoom")
+    provider = resolve_env_provider("env-doom-turbo-torch")
     assert provider.turbo_api_version == 2
     assert provider.native_episode_horizon is not None
     assert provider.constructor_contract is not None
@@ -151,11 +151,14 @@ def test_resolves_gradoom_only_for_the_certified_deathmatch_profile() -> None:
         "vizdoom_config": {"render_hud": False}
     }
     assert policy_environment_compatibility_id(
-        "gradoom", "VizdoomDeathmatch-v1"
-    ) == policy_environment_compatibility_id("vizdoom-turbo", "VizdoomDeathmatch-v1")
-    assert policy_environment_compatibility_id("vizdoom-turbo", "VizdoomBasic-v1") is None
+        "env-doom-turbo-torch", "VizdoomDeathmatch-v1"
+    ) == policy_environment_compatibility_id("env-vizdoom-turbo", "VizdoomDeathmatch-v1")
+    assert policy_environment_compatibility_id("env-vizdoom-turbo", "VizdoomBasic-v1") is None
     with pytest.raises(ValueError, match="does not register environment"):
-        resolve_env_id("gradoom:VizdoomBasic-v1")
+        resolve_env_id("env-doom-turbo-torch:VizdoomBasic-v1")
+
+    with pytest.raises(ValueError, match="unknown environment provider"):
+        resolve_env_provider("gradoom")
 
 
 def test_resolves_vizdoom_turbo_augmented_environment() -> None:
@@ -164,11 +167,11 @@ def test_resolves_vizdoom_turbo_augmented_environment() -> None:
         "VizdoomDefendLine-Plus-v1": "Doom-ViZDoom-DefendLine-Plus",
     }
     for game, game_family in expected.items():
-        env_id = f"vizdoom-turbo:{game}"
+        env_id = f"env-vizdoom-turbo:{game}"
         resolved = resolve_env_id(env_id)
 
         assert env_id in registered_env_ids()
-        assert resolved.provider_id == "vizdoom-turbo"
+        assert resolved.provider_id == "env-vizdoom-turbo"
         assert resolved.provider_env_id == game
         spec = environment_spec(resolved.provider_id, resolved.provider_env_id)
         assert spec.game_family == game_family
@@ -181,7 +184,7 @@ def test_resolves_vizdoom_turbo_augmented_environment() -> None:
 
 def test_resolves_vizdoom_native_horizon_in_tics_and_derives_watchdog() -> None:
     environment = {
-        "env_provider": "vizdoom-turbo",
+        "env_provider": "env-vizdoom-turbo",
         "frame_skip": 8,
         "env_args": {
             "treat_episode_timeout_as_truncation": True,
@@ -200,7 +203,7 @@ def test_resolves_vizdoom_native_horizon_in_tics_and_derives_watchdog() -> None:
 
 def test_native_horizon_requires_provider_timeout_to_be_a_truncation() -> None:
     environment = {
-        "env_provider": "vizdoom-turbo",
+        "env_provider": "env-vizdoom-turbo",
         "frame_skip": 2,
         "env_args": {
             "treat_episode_timeout_as_truncation": False,
@@ -214,7 +217,7 @@ def test_native_horizon_requires_provider_timeout_to_be_a_truncation() -> None:
 
 def test_evaluation_watchdog_uses_the_earliest_scientific_boundary() -> None:
     environment = {
-        "env_provider": "vizdoom-turbo",
+        "env_provider": "env-vizdoom-turbo",
         "frame_skip": 2,
         "env_args": {
             "treat_episode_timeout_as_truncation": True,
@@ -252,7 +255,7 @@ def test_resolves_registered_ale_py_ms_pacman_env_id() -> None:
 
 def test_rejects_unregistered_env_id() -> None:
     with unittest.TestCase().assertRaisesRegex(ValueError, "does not register environment"):
-        resolve_env_id("stable-retro-turbo:UnknownGame-v0")
+        resolve_env_id("env-stableretro-turbo:UnknownGame-v0")
 
 
 def test_gymnasium_provider_registers_only_certified_discrete_environments() -> None:

@@ -26,8 +26,8 @@ class EnvironmentTaskConfigTests(unittest.TestCase):
             "obs_crop_fill": 0,
             "obs_resize_algorithm": "area",
         }
-        vizdoom = {**base, "env_provider": "vizdoom-turbo"}
-        gradoom = {**base, "env_provider": "gradoom"}
+        vizdoom = {**base, "env_provider": "env-vizdoom-turbo"}
+        gradoom = {**base, "env_provider": "env-doom-turbo-torch"}
 
         vizdoom_identity = environment_identity_from_train_config(vizdoom)
         gradoom_identity = environment_identity_from_train_config(gradoom)
@@ -51,7 +51,7 @@ class EnvironmentTaskConfigTests(unittest.TestCase):
     def test_environment_identity_uses_v5_canonical_task(self) -> None:
         identity = environment_identity_from_train_config(
             {
-                "env_provider": "supermariobrosnes-turbo",
+                "env_provider": "env-supermariobrosnes-turbo-emu",
                 "game": "SuperMarioBros-Nes-v0",
                 "task": {
                     "id": "mario",
@@ -94,7 +94,7 @@ class EnvironmentTaskConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unexpected keys"):
             sanitize_env_config_metadata(
                 {
-                    "env_provider": "supermariobrosnes-turbo",
+                    "env_provider": "env-supermariobrosnes-turbo-emu",
                     "game": "SuperMarioBros-Nes-v0",
                     "unknown_runtime_key": True,
                 }
@@ -140,7 +140,7 @@ class EnvironmentTaskConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "use 'env_provider'"):
             environment_identity_from_train_config(
                 {
-                    "provider": "supermariobrosnes-turbo",
+                    "provider": "env-supermariobrosnes-turbo-emu",
                     "game": "SuperMarioBros-Nes-v0",
                 }
             )

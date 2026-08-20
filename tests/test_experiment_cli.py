@@ -80,7 +80,7 @@ def test_wandb_identity_uses_project_relative_goal_display_names(
     run_id = "gradlab-0123456789abcdef0123456789abcdef"
     document = {
         "train_config": {
-            "env_provider": "supermariobrosnes-turbo",
+            "env_provider": "env-supermariobrosnes-turbo-emu",
             "game": "SuperMarioBros-Nes-v0",
         }
     }
@@ -106,7 +106,7 @@ def test_wandb_identity_prefers_declared_campaign_group() -> None:
     document = {
         "campaign_id": "mario-local-confirmation",
         "train_config": {
-            "env_provider": "supermariobrosnes-turbo",
+            "env_provider": "env-supermariobrosnes-turbo-emu",
             "game": "SuperMarioBros-Nes-v0",
         },
     }
@@ -168,7 +168,7 @@ def test_catalog_rebuild_rejects_conflicting_current_descriptors_before_clear() 
 def test_wandb_identity_cohort_group_includes_override_variant() -> None:
     document = {
         "train_config": {
-            "env_provider": "supermariobrosnes-turbo",
+            "env_provider": "env-supermariobrosnes-turbo-emu",
             "game": "SuperMarioBros-Nes-v0",
         }
     }
@@ -1398,13 +1398,13 @@ def test_local_vizdoom_iwad_contract_is_hash_bound_and_mounts_cache(
         hashlib.sha256(iwad.read_bytes()).hexdigest(),
     )
     binding = _bind_vizdoom_iwad_for_launch(
-        env_provider="vizdoom-turbo",
+        env_provider="env-vizdoom-turbo",
         rom_path=iwad,
     )
     assert binding is not None
     assert (
         _bind_vizdoom_iwad_for_launch(
-            env_provider="gradoom",
+            env_provider="env-doom-turbo-torch",
             rom_path=iwad,
         )
         == binding

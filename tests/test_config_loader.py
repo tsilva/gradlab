@@ -133,7 +133,7 @@ items:
             goal.parent.mkdir()
             fragment.write_text(
                 """
-env_provider: stable-retro-turbo
+env_provider: env-stableretro-turbo
 game: SuperMarioBros-Nes-v0
 frame_skip: 4
 """,
@@ -157,7 +157,7 @@ train:
         self.assertEqual(
             composed.document["train"]["environment"]["env_config"],
             {
-                "env_provider": "stable-retro-turbo",
+                "env_provider": "env-stableretro-turbo",
                 "game": "SuperMarioBros-Nes-v0",
                 "frame_skip": 4,
                 "state": "Level1-1",

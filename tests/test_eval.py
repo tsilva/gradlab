@@ -239,7 +239,7 @@ class EvalMetricTests(unittest.TestCase):
 
     def test_deathmatch_projects_and_summarizes_raw_killcount(self) -> None:
         semantics = environment_spec(
-            "vizdoom-turbo",
+            "env-vizdoom-turbo",
             "VizdoomDeathmatch-v1",
         ).eval_semantics
         record = EpisodeRecord(
@@ -776,7 +776,7 @@ class EvalMetricTests(unittest.TestCase):
         starts = ("post400-000", "post400-001")
         contract = build_checkpoint_eval_contract(
             environment={
-                "env_provider": "breakout-turbo-env",
+                "env_provider": "env-breakoutatari2600-turbo-native",
                 "env_config": {"states": list(starts), "state_probs": [1, 1]},
             },
             episodes=4,

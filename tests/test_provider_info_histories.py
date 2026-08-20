@@ -533,7 +533,7 @@ def test_terminal_history_survives_masked_reset_and_matches_terminal_observation
 def _vizdoom_config() -> EnvConfig:
     task = _task()
     return EnvConfig(
-        env_provider="vizdoom-turbo",
+        env_provider="env-vizdoom-turbo",
         game="VizdoomDeathmatch-v1",
         state="",
         env_args={
@@ -567,7 +567,7 @@ def test_gradoom_constructor_receives_provider_history_keys() -> None:
     config = _vizdoom_config()
     config = replace(
         config,
-        env_provider="gradoom",
+        env_provider="env-doom-turbo-torch",
         obs_crop=(0, 32, 0, 0),
         obs_crop_mode="mask",
         obs_crop_fill=0,
