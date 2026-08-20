@@ -653,7 +653,7 @@ def test_playback_direct_rom_matches_model_without_registry_lookup(tmp_path: Pat
         ),
     ):
         resolved = resolve_playback_rom_binding(
-            env_provider="supermariobrosnes-turbo",
+            env_provider="env-supermariobrosnes-turbo-emu",
             game="SuperMarioBros-Nes-v0",
             asset=portable,
             rom_path=rom,
@@ -687,7 +687,7 @@ def test_playback_direct_rom_rejects_model_mismatch_and_rom_free_provider(
         pytest.raises(ValueError, match="recorded by the model"),
     ):
         resolve_playback_rom_binding(
-            env_provider="supermariobrosnes-turbo",
+            env_provider="env-supermariobrosnes-turbo-emu",
             game="SuperMarioBros-Nes-v0",
             asset={**manifest, "sha256": "c" * 64},
             rom_path=rom,
@@ -711,7 +711,7 @@ def test_shared_player_ignores_rom_option_for_rom_free_checkpoint(tmp_path: Path
         side_effect=AssertionError("ROM-free playback inspected the shared ROM"),
     ):
         resolved = resolve_shared_playback_rom_binding(
-            env_provider="vizdoom-turbo",
+            env_provider="env-vizdoom-turbo",
             game="VizdoomDeadlyCorridor-v1",
             asset=None,
             rom_path=rom,
@@ -733,7 +733,7 @@ def test_playback_without_direct_rom_preserves_registered_asset_fallback() -> No
         ) as ensure,
     ):
         resolved = resolve_playback_rom_binding(
-            env_provider="supermariobrosnes-turbo",
+            env_provider="env-supermariobrosnes-turbo-emu",
             game="SuperMarioBros-Nes-v0",
             asset=None,
             rom_path=None,

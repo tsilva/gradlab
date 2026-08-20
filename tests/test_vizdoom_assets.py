@@ -49,7 +49,7 @@ def _pin_test_iwad(monkeypatch: pytest.MonkeyPatch, path: Path) -> None:
 def _vizdoom_document() -> dict:
     return {
         "train_config": {
-            "env_provider": "vizdoom-turbo",
+            "env_provider": "env-vizdoom-turbo",
             "game": "VizdoomBasic-v1",
             "env_args": {"rom_path": None},
         }
@@ -58,7 +58,7 @@ def _vizdoom_document() -> dict:
 
 def _gradoom_document() -> dict:
     document = _vizdoom_document()
-    document["train_config"]["env_provider"] = "gradoom"
+    document["train_config"]["env_provider"] = "env-doom-turbo-torch"
     document["train_config"]["game"] = "VizdoomDeathmatch-v1"
     return document
 
@@ -111,7 +111,7 @@ def test_vizdoom_iwad_identity_records_bytes_but_not_local_path(tmp_path: Path) 
     binding = vizdoom_iwad_binding(path)
     moved = {**binding, "path": "/different/local/path/doom2.wad"}
     base = {
-        "env_provider": "vizdoom-turbo",
+        "env_provider": "env-vizdoom-turbo",
         "game": "VizdoomBasic-v1",
         "task": {},
         "env_args": {"rom_path": binding},
@@ -131,7 +131,7 @@ def test_vizdoom_native_kwargs_resolve_and_verify_iwad_binding(tmp_path: Path) -
     path = _iwad(tmp_path / "doom2.wad")
     binding = vizdoom_iwad_binding(path)
     config = EnvConfig(
-        env_provider="vizdoom-turbo",
+        env_provider="env-vizdoom-turbo",
         game="VizdoomBasic-v1",
         state="",
         env_args={"rom_path": binding},
@@ -187,7 +187,7 @@ def test_gradoom_uses_the_same_private_iwad_binding_as_reference_evaluation(
     binding = vizdoom_iwad_binding(_iwad(tmp_path / "doom2.wad"))
     document = _gradoom_document()
     document["train_config"]["checkpoint_eval_environment"] = {
-        "env_provider": "vizdoom-turbo",
+        "env_provider": "env-vizdoom-turbo",
         "env_args": {"rom_path": None},
     }
 

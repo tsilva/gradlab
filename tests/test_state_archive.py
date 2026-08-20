@@ -274,7 +274,7 @@ class StateArchiveTests(unittest.TestCase):
     def test_runtime_portable_round_trip_restores_all_lanes_of_state(self) -> None:
         provider = PortableBreakoutProvider()
         descriptor = ProviderDescriptor(
-            provider_id="breakout-turbo-env",
+            provider_id="env-breakoutatari2600-turbo-native",
             native_observation_space=provider.single_observation_space,
             native_action_space=provider.single_action_space,
             signal_schema={"score": SignalSpec("score", np.int64)},
@@ -311,7 +311,7 @@ class StateArchiveTests(unittest.TestCase):
             with tempfile.TemporaryDirectory() as imported_root:
                 imported = StateArchive(
                     imported_root,
-                    provider_id="breakout-turbo-env",
+                    provider_id="env-breakoutatari2600-turbo-native",
                     codec_id="breakout-turbo-env.state-v1",
                     compatibility_id="test-environment-v1",
                     persistence="ephemeral",
@@ -331,7 +331,7 @@ class StateArchiveTests(unittest.TestCase):
             runtime.close()
             reopened = StateArchive(
                 Path(root),
-                provider_id="breakout-turbo-env",
+                provider_id="env-breakoutatari2600-turbo-native",
                 codec_id="breakout-turbo-env.state-v1",
                 compatibility_id="test-environment-v1",
                 persistence="durable",
@@ -347,7 +347,7 @@ class StateArchiveTests(unittest.TestCase):
     def test_ephemeral_archive_compacts_and_is_not_an_artifact(self) -> None:
         provider = PortableBreakoutProvider()
         descriptor = ProviderDescriptor(
-            provider_id="breakout-turbo-env",
+            provider_id="env-breakoutatari2600-turbo-native",
             native_observation_space=provider.single_observation_space,
             native_action_space=provider.single_action_space,
             signal_schema={"score": SignalSpec("score", np.int64)},

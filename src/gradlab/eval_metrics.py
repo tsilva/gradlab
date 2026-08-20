@@ -18,7 +18,7 @@ from gradlab.env_registry import EvalSemantics, environment_spec
 from gradlab.task_kernels import Outcome
 
 DEFAULT_EVAL_SEMANTICS = environment_spec(
-    "stable-retro-turbo",
+    "env-stableretro-turbo",
     "SuperMarioBros-Nes-v0",
 ).eval_semantics
 

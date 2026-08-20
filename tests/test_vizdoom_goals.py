@@ -210,7 +210,7 @@ def test_vizdoom_goal_has_complete_evaluated_ppo_contract(
     assert train_config["checkpoint_eval_backend"] == "none"
     assert "stop_on_acceptance" not in train_config
     assert train_config["checkpoint_eval_acceptance"] == acceptance
-    assert train_config["env_provider"] == "vizdoom-turbo"
+    assert train_config["env_provider"] == "env-vizdoom-turbo"
     assert train_config["game"] == expected.get("game", goal_id)
     assert train_config["state"] == "default"
     assert train_config["frame_skip"] == 2

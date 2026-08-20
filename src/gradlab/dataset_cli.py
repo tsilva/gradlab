@@ -115,7 +115,7 @@ def build_parser() -> argparse.ArgumentParser:
     record = subparsers.add_parser("record", help="Record gameplay into a local collection.")
     record.add_argument("reference", help="Stable local collection reference.")
     record.add_argument("--env-id", required=True, help="Provider-native environment identifier.")
-    record.add_argument("--provider", default="stable-retro-turbo")
+    record.add_argument("--provider", default="env-stableretro-turbo")
     record.add_argument("--env-config", type=_json_object, default={})
     record.add_argument("--agent", choices=("human", "random", "ppo"), default="human")
     record.add_argument("--model", default=None, help="Approved PPO checkpoint source.")

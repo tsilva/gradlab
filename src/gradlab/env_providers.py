@@ -286,7 +286,7 @@ def super_mario_bros_nes_turbo_vec_env_type():
         from supermariobrosnes_turbo import SuperMarioBrosNesTurboVecEnv
     except ImportError as exc:
         raise ImportError(
-            "supermariobrosnes-turbo provider requires supermariobrosnes-turbo",
+            "env-supermariobrosnes-turbo-emu provider requires env-supermariobrosnes-turbo-emu",
         ) from exc
     return SuperMarioBrosNesTurboVecEnv
 
@@ -306,7 +306,7 @@ def breakout_turbo_vec_env_type():
         from breakout_turbo_env import BreakoutVecEnv
     except ImportError as exc:
         raise ImportError(
-            "breakout-turbo-env provider requires breakout-turbo-env",
+            "env-breakoutatari2600-turbo-native provider requires env-breakoutatari2600-turbo-native",
         ) from exc
     return BreakoutVecEnv
 
@@ -316,7 +316,7 @@ def vizdoom_turbo_vec_env_type():
         from vizdoom_turbo import VizdoomTurboVecEnv
     except ImportError as exc:
         raise ImportError(
-            "vizdoom-turbo provider requires vizdoom-turbo",
+            "env-vizdoom-turbo provider requires env-vizdoom-turbo",
         ) from exc
     return VizdoomTurboVecEnv
 
@@ -338,7 +338,7 @@ def _stable_retro_packaged_data_path(game: str, filename: str) -> Path:
     )
     if not path.is_file():
         raise FileNotFoundError(
-            f"no GradLab or stable-retro-turbo packaged data exists for {game}: {filename}"
+            f"no GradLab or env-stableretro-turbo packaged data exists for {game}: {filename}"
         )
     return path
 
@@ -351,7 +351,7 @@ def _stable_retro_authority_state_path(game: str, state: str) -> Path:
     path = Path(retro.__file__).resolve().parent / "data" / "stable" / game / filename
     if not path.is_file():
         raise FileNotFoundError(
-            f"stable-retro-turbo does not provide packaged state for {game}: {filename}"
+            f"env-stableretro-turbo does not provide packaged state for {game}: {filename}"
         )
     return path
 
@@ -646,9 +646,9 @@ def _breakout_native_vec_kwargs(
 ) -> dict[str, Any]:
     del runtime_rom_path
     if config.max_pool_frames:
-        raise ValueError("breakout-turbo-env does not support max_pool_frames=true")
+        raise ValueError("env-breakoutatari2600-turbo-native does not support max_pool_frames=true")
     if config.sticky_action_prob != 0.0:
-        raise ValueError("breakout-turbo-env requires sticky_action_prob=0.0")
+        raise ValueError("env-breakoutatari2600-turbo-native requires sticky_action_prob=0.0")
     defaults = {
         "num_envs": n_envs,
         "render_mode": "rgb_array",
@@ -1221,11 +1221,90 @@ def _gradoom_make_vec_env(
     _require_provider(config, GRADOOM_PROVIDER.provider_id)
     env_type = gradoom_env_type()
     env = env_type(config.game, **dict(native_kwargs))
-    return _validated_turbo_start_info_adapter(
+    if getattr(env, "transport", None) != "torch":
+        return _validated_turbo_start_info_adapter(
+            env,
+            GRADOOM_PROVIDER.provider_id,
+            validate_contract=gradoom_env_type is gradoom_vec_env_type,
+        )
+    # GraDOOM reports env.device as torch.device("cuda") while its tensors live
+    # on the concrete cuda:N device; align the contract surface before strict
+    # Turbo API v2 validation, mirroring the device-training path.
+    from gradlab.gradoom_device_runtime import _GraDoomTorchContractAdapter
+
+    env = _GraDoomTorchContractAdapter(env)
+    adapted = _validated_turbo_start_info_adapter(
         env,
         GRADOOM_PROVIDER.provider_id,
         validate_contract=gradoom_env_type is gradoom_vec_env_type,
     )
+    # The generic eval/playback rollout consumes NumPy columns; present the
+    # CUDA-resident env through a host-copy boundary.
+    return _GraDoomHostVecEnvBridge(adapted)
+
+
+class _GraDoomHostVecEnvBridge:
+    """Present a CUDA-resident GraDOOM env as a host-side NumPy provider.
+
+    The generic eval/playback rollout reads provider outputs with NumPy; GraDOOM
+    returns CUDA tensors. This bridge copies the small per-lane payloads to host
+    memory and moves inbound actions back to the env device.
+    """
+
+    def __init__(self, env: Any) -> None:
+        self._env = env
+
+    def __getattr__(self, name: str) -> Any:
+        if name == "_env":
+            raise AttributeError(name)
+        return getattr(self._env, name)
+
+    @property
+    def transport(self) -> str:
+        return "numpy"
+
+    @staticmethod
+    def _to_host(value: Any) -> Any:
+        import torch
+
+        if isinstance(value, torch.Tensor):
+            return value.detach().to("cpu").numpy()
+        return value
+
+    def _infos_to_host(self, infos: Mapping[str, Any]) -> dict[str, Any]:
+        return {str(name): self._to_host(value) for name, value in dict(infos).items()}
+
+    def reset(self, *, seed=None, options=None):
+        observations, infos = self._env.reset(seed=seed, options=options)
+        return self._to_host(observations), self._infos_to_host(infos)
+
+    def step(self, actions):
+        import torch
+
+        device_actions = torch.as_tensor(np.asarray(actions), device=self._env.device)
+        observations, rewards, terminated, truncated, infos = self._env.step(device_actions)
+        return (
+            self._to_host(observations),
+            self._to_host(rewards),
+            self._to_host(terminated),
+            self._to_host(truncated),
+            self._infos_to_host(infos),
+        )
+
+    def active_state_indices(self):
+        return self._to_host(self._env.active_state_indices())
+
+    def get_images(self):
+        return [
+            self._to_host(image) if image is not None else None
+            for image in self._env.get_images()
+        ]
+
+    def render_lane(self, lane: int):
+        return self._to_host(self._env.render_lane(lane))
+
+    def render(self):
+        return self._to_host(self._env.render())
 
 
 @dataclass(frozen=True)

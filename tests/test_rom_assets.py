@@ -264,7 +264,7 @@ def test_rom_identity_changes_environment_hash_but_runtime_path_does_not(tmp_pat
     first = _manifest(_rom(tmp_path / "one.nes", b"one"))
     second = _manifest(_rom(tmp_path / "two.nes", b"two"))
     base = {
-        "env_provider": "stable-retro-turbo",
+        "env_provider": "env-stableretro-turbo",
         "game": GAME,
         "state": "Level1-1",
         "task": {},

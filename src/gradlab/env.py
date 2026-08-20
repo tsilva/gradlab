@@ -312,6 +312,7 @@ def make_native_provider(
     n_envs: int,
     *,
     rom_binding: RomRuntimeBinding | None = None,
+    native_kwargs_overrides: Mapping[str, Any] | None = None,
 ) -> tuple[Any, ProviderDescriptor]:
     """Construct and describe one provider, closing it if description fails."""
 
@@ -326,6 +327,8 @@ def make_native_provider(
         state_weight_mapping=state_weight_mapping,
         runtime_rom_path=rom_binding.rom_path if rom_binding is not None else None,
     )
+    if native_kwargs_overrides is not None:
+        native_kwargs.update(native_kwargs_overrides)
     native_env = make_provider_vec_env(config, native_kwargs=native_kwargs)
     try:
         descriptor = _provider_descriptor(config, native_env)
@@ -483,6 +486,7 @@ def make_vec_envs(
     rom_binding: RomRuntimeBinding | None = None,
     state_archive: Mapping[str, Any] | None = None,
     state_archive_root: str | os.PathLike[str] | None = None,
+    native_kwargs_overrides: Mapping[str, Any] | None = None,
 ) -> Any:
     from gradlab.training.sb3_vec_env import GradLabVecEnv
 
@@ -495,6 +499,7 @@ def make_vec_envs(
         rom_binding=rom_binding,
         state_archive=state_archive,
         state_archive_root=state_archive_root,
+        native_kwargs_overrides=native_kwargs_overrides,
     )
     vec_env = GradLabVecEnv(runtime)
     vec_env.seed(seed)
@@ -512,6 +517,7 @@ def make_training_batch_runtime(
     rom_binding: RomRuntimeBinding | None = None,
     state_archive: Mapping[str, Any] | None = None,
     state_archive_root: str | os.PathLike[str] | None = None,
+    native_kwargs_overrides: Mapping[str, Any] | None = None,
 ) -> BatchRuntime:
     os.environ.setdefault("STABLE_RETRO_DISABLE_AUDIO", "1")
     if state_archive is not None:
@@ -562,7 +568,12 @@ def make_training_batch_runtime(
             }
             config = replace(config, env_args=env_args)
     config = resolve_mixed_state_config(config, n_envs=n_envs)
-    native_env, descriptor = make_native_provider(config, n_envs, rom_binding=rom_binding)
+    native_env, descriptor = make_native_provider(
+        config,
+        n_envs,
+        rom_binding=rom_binding,
+        native_kwargs_overrides=native_kwargs_overrides,
+    )
     return bind_native_provider(
         config,
         n_envs=n_envs,
@@ -705,6 +716,7 @@ def make_training_vec_env(
     rom_binding: RomRuntimeBinding | None = None,
     state_archive: Mapping[str, Any] | None = None,
     state_archive_root: str | os.PathLike[str] | None = None,
+    native_kwargs_overrides: Mapping[str, Any] | None = None,
 ) -> Any:
     return make_vec_envs(
         config=config,
@@ -714,6 +726,7 @@ def make_training_vec_env(
         rom_binding=rom_binding,
         state_archive=state_archive,
         state_archive_root=state_archive_root,
+        native_kwargs_overrides=native_kwargs_overrides,
     )
 
 
@@ -726,6 +739,7 @@ def make_eval_vec_env(
     rom_binding: RomRuntimeBinding | None = None,
     state_archive: Mapping[str, Any] | None = None,
     state_archive_root: str | os.PathLike[str] | None = None,
+    native_kwargs_overrides: Mapping[str, Any] | None = None,
 ) -> Any:
     return make_vec_envs(
         config=resolve_env_config(config),
@@ -735,6 +749,7 @@ def make_eval_vec_env(
         rom_binding=rom_binding,
         state_archive=state_archive,
         state_archive_root=state_archive_root,
+        native_kwargs_overrides=native_kwargs_overrides,
     )
 
 

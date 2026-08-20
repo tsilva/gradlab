@@ -369,9 +369,9 @@ _TURBO_EXPLICIT_ENV_ARGS = frozenset(
 
 
 STABLE_RETRO_TURBO_PROVIDER = EnvProvider(
-    provider_id="stable-retro-turbo",
+    provider_id="env-stableretro-turbo",
     import_name="stable_retro",
-    distribution_name="stable-retro-turbo",
+    distribution_name="env-stableretro-turbo",
     environments={
         spec_id: EnvRegistration(spec_id)
         for spec_id in (
@@ -391,9 +391,9 @@ STABLE_RETRO_TURBO_PROVIDER = EnvProvider(
 )
 
 SUPERMARIOBROS_NES_TURBO_PROVIDER = EnvProvider(
-    provider_id="supermariobrosnes-turbo",
+    provider_id="env-supermariobrosnes-turbo-emu",
     import_name="supermariobrosnes_turbo",
-    distribution_name="supermariobrosnes-turbo",
+    distribution_name="env-supermariobrosnes-turbo-emu",
     environments={
         "SuperMarioBros-Nes-v0": EnvRegistration("SuperMarioBros-Nes-v0"),
     },
@@ -407,9 +407,9 @@ SUPERMARIOBROS_NES_TURBO_PROVIDER = EnvProvider(
 )
 
 VIZDOOM_TURBO_PROVIDER = EnvProvider(
-    provider_id="vizdoom-turbo",
+    provider_id="env-vizdoom-turbo",
     import_name="vizdoom_turbo",
-    distribution_name="vizdoom-turbo",
+    distribution_name="env-vizdoom-turbo",
     environments={
         spec_id: EnvRegistration(
             spec_id,
@@ -456,9 +456,9 @@ VIZDOOM_TURBO_PROVIDER = EnvProvider(
 )
 
 GRADOOM_PROVIDER = EnvProvider(
-    provider_id="gradoom",
+    provider_id="env-doom-turbo-torch",
     import_name="gradoom",
-    distribution_name="gradoom",
+    distribution_name="env-doom-turbo-torch",
     environments={
         "VizdoomDeathmatch-v1": EnvRegistration(
             "VizdoomDeathmatch-v1",
@@ -499,9 +499,9 @@ GRADOOM_PROVIDER = EnvProvider(
 )
 
 BREAKOUT_TURBO_ENV_PROVIDER = EnvProvider(
-    provider_id="breakout-turbo-env",
+    provider_id="env-breakoutatari2600-turbo-native",
     import_name="breakout_turbo_env",
-    distribution_name="breakout-turbo-env",
+    distribution_name="env-breakoutatari2600-turbo-native",
     environments={
         "Breakout-Atari2600-v0": EnvRegistration("Breakout-Atari2600-v0"),
     },

@@ -23,39 +23,39 @@ from gradlab.wandb_utils import (
     [
         ("gradlab", "Bandit-v0", "Bandit-v0", "Bandit"),
         (
-            "supermariobrosnes-turbo",
+            "env-supermariobrosnes-turbo-emu",
             "SuperMarioBros-Nes-v0",
             "SuperMarioBros-Nes-v0",
             "NES-SuperMarioBros",
         ),
         (
-            "stable-retro-turbo",
+            "env-stableretro-turbo",
             "SuperMarioBros-Nes-v0",
             "SuperMarioBros-Nes-v0",
             "NES-SuperMarioBros",
         ),
         ("ale-py", "breakout", "Breakout-Atari2600-v0", "Atari2600-Breakout"),
         (
-            "breakout-turbo-env",
+            "env-breakoutatari2600-turbo-native",
             "Breakout-Atari2600-v0",
             "Breakout-Atari2600-v0",
             "Atari2600-Breakout",
         ),
         (
-            "stable-retro-turbo",
+            "env-stableretro-turbo",
             "Breakout-Atari2600-v0",
             "Breakout-Atari2600-v0",
             "Atari2600-Breakout",
         ),
         ("ale-py", "ms_pacman", "MsPacman-Atari2600-v0", "Atari2600-MsPacman"),
         (
-            "stable-retro-turbo",
+            "env-stableretro-turbo",
             "MsPacman-Atari2600-v0",
             "MsPacman-Atari2600-v0",
             "Atari2600-MsPacman",
         ),
         (
-            "stable-retro-turbo",
+            "env-stableretro-turbo",
             "SuperMarioBros3-Nes-v0",
             "SuperMarioBros3-Nes-v0",
             "NES-SuperMarioBros3",
@@ -202,7 +202,7 @@ def test_resume_wandb_requires_or_uses_display_name(
         "wandb_group": "cohort::SuperMarioBros-Nes-v0/Level1-1::ppo::base",
         "wandb_mode": "offline",
         "run_name": "gradlab-0123456789abcdef0123456789abcdef",
-        "env_provider": "supermariobrosnes-turbo",
+        "env_provider": "env-supermariobrosnes-turbo-emu",
         "game": "SuperMarioBros-Nes-v0",
         "metrics_schema_version": METRICS_SCHEMA_VERSION,
     }
@@ -240,7 +240,7 @@ def test_resume_wandb_requires_current_metrics_schema() -> None:
         "wandb_display_name": "Level1-1__ppo__s7__01234567",
         "wandb_group": "cohort::SuperMarioBros-Nes-v0/Level1-1::ppo::base",
         "wandb_mode": "offline",
-        "env_provider": "supermariobrosnes-turbo",
+        "env_provider": "env-supermariobrosnes-turbo-emu",
         "game": "SuperMarioBros-Nes-v0",
     }
     with (

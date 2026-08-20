@@ -32,7 +32,7 @@ train:
         action: stop
   environment:
     # SuperMarioBros-NES Turbo supplies SuperMarioBrosNesTurboVecEnv.
-    env_provider: &mario_env_provider supermariobrosnes-turbo
+    env_provider: &mario_env_provider env-supermariobrosnes-turbo-emu
     env_config:
       <<: &mario_env_config
         # Stable Retro-compatible game id passed to SuperMarioBrosNesTurboVecEnv.

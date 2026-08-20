@@ -113,7 +113,7 @@ def test_modal_eval_installs_the_contract_bound_vizdoom_iwad(tmp_path: Path) -> 
     binding = vizdoom_iwad_binding(source)
     contract = {
         "environment": {
-            "env_provider": "vizdoom-turbo",
+            "env_provider": "env-vizdoom-turbo",
             "game": "VizdoomBasic-v1",
             "env_args": {"rom_path": binding},
         }
