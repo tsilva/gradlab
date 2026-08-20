@@ -83,6 +83,25 @@ def _copy_observation_slot(destination: Any, observations: Any, step: int) -> No
     destination[step].copy_(torch.as_tensor(observations))
 
 
+def _is_compatible_cuda_device(
+    device_a: torch.device | Any,
+    device_b: torch.device | Any,
+) -> bool:
+    if not isinstance(device_a, torch.device) or not isinstance(device_b, torch.device):
+        return device_a == device_b
+    if device_a == device_b:
+        return True
+    if device_a.type != "cuda" or device_b.type != "cuda":
+        return False
+    if device_a.index is None and device_b.index is None:
+        return True
+    if device_a.index is None:
+        return device_b.index == 0
+    if device_b.index is None:
+        return device_a.index == 0
+    return device_a.index == device_b.index
+
+
 def _observation_slot(observations: Any, step: int) -> Any:
     if isinstance(observations, Mapping):
         return {key: _observation_slot(value, step) for key, value in observations.items()}
@@ -1039,7 +1058,7 @@ def run_gradlab_ppo(
         device = torch.device(device_name)
         if device_resident and device.type != "cuda":
             raise ValueError("GraDOOM device training requires backend device='cuda'")
-        if device_resident and runtime.device != device:
+        if device_resident and not _is_compatible_cuda_device(runtime.device, device):
             raise ValueError(
                 f"GraDOOM simulator device {runtime.device} differs from learner device {device}"
             )

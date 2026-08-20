@@ -43,7 +43,7 @@ def benchmark_config(args: argparse.Namespace) -> EnvConfig:
             "info_filter": "all",
             "use_fire_reset": False,
         }
-        if args.env_provider in {"stable-retro-turbo", "supermariobrosnes-turbo"}
+        if args.env_provider in {"env-stableretro-turbo", "env-supermariobrosnes-turbo-emu"}
         else {}
     )
     return resolve_env_config(
@@ -198,7 +198,7 @@ def main() -> int:
     parser = ExactArgumentParser(
         description="Benchmark native provider and consolidated batch-runtime steps/sec."
     )
-    parser.add_argument("--env-provider", default="supermariobrosnes-turbo")
+    parser.add_argument("--env-provider", default="env-supermariobrosnes-turbo-emu")
     parser.add_argument("--game", default="SuperMarioBros-Nes-v0")
     parser.add_argument("--state", default="Level1-1")
     parser.add_argument("--mode", choices=("provider", "runtime", "compare"), default="compare")

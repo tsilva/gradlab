@@ -117,11 +117,11 @@ class ConfigValidationTests(unittest.TestCase):
 
         constructors = {
             "ale-py": AtariVectorEnv,
-            "breakout-turbo-env": BreakoutVecEnv,
+            "env-breakoutatari2600-turbo-native": BreakoutVecEnv,
             "gradlab": BanditVectorEnv,
-            "stable-retro-turbo": RetroVecEnv,
-            "supermariobrosnes-turbo": SuperMarioBrosNesTurboVecEnv,
-            "vizdoom-turbo": VizdoomTurboVecEnv,
+            "env-stableretro-turbo": RetroVecEnv,
+            "env-supermariobrosnes-turbo-emu": SuperMarioBrosNesTurboVecEnv,
+            "env-vizdoom-turbo": VizdoomTurboVecEnv,
         }
         for provider_id, constructor in constructors.items():
             with self.subTest(provider_id=provider_id):
@@ -169,7 +169,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(backend_config["clip_range"], 0.1)
         self.assertEqual(backend_config["vf_coef"], 0.5)
         self.assertIsNone(backend_config.get("target_kl"))
-        self.assertEqual(train_config["env_provider"], "breakout-turbo-env")
+        self.assertEqual(train_config["env_provider"], "env-breakoutatari2600-turbo-native")
         self.assertEqual(train_config["game"], "Breakout-Atari2600-v0")
         self.assertEqual(train_config["state"], "Start")
         self.assertEqual(train_config["task"]["action"]["set"], "native")
@@ -223,10 +223,10 @@ class ConfigValidationTests(unittest.TestCase):
         stable_retro = compose_train_document(
             self.BREAKOUT_GOAL,
             self.BREAKOUT_RECIPE,
-            env_provider="stable-retro-turbo",
+            env_provider="env-stableretro-turbo",
         )
         stable_train = stable_retro["train_config"]
-        self.assertEqual(stable_train["env_provider"], "stable-retro-turbo")
+        self.assertEqual(stable_train["env_provider"], "env-stableretro-turbo")
         self.assertNotIn("checkpoint_eval_environment", stable_train)
         for key in ("game", "state", "env_args", "task", "selection_rank"):
             self.assertEqual(train_config[key], stable_train[key])
@@ -246,7 +246,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(train_config["checkpoint_eval_backend"], "none")
         self.assertNotIn("stop_on_acceptance", train_config)
         self.assertEqual(train_config["training_backend"]["id"], "sb3.ppo")
-        self.assertEqual(train_config["env_provider"], "vizdoom-turbo")
+        self.assertEqual(train_config["env_provider"], "env-vizdoom-turbo")
         self.assertEqual(train_config["game"], "VizdoomBasic-v1")
         self.assertEqual(train_config["state"], "default")
         self.assertEqual(train_config["n_envs"], 32)
@@ -309,7 +309,7 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_goal_environment_rejects_implicit_provider_defaults(self) -> None:
         environment = {
-            "env_provider": "supermariobrosnes-turbo",
+            "env_provider": "env-supermariobrosnes-turbo-emu",
             "env_config": {
                 "game": "SuperMarioBros-Nes-v0",
                 "state": "Level1-1",
@@ -573,7 +573,7 @@ class ConfigValidationTests(unittest.TestCase):
                 self.assertEqual(document["train_config"]["checkpoint_freq"], 1_000_000)
 
     def test_removed_provider_lifecycle_args_are_rejected(self) -> None:
-        for provider_id in ("stable-retro-turbo", "supermariobrosnes-turbo"):
+        for provider_id in ("env-stableretro-turbo", "env-supermariobrosnes-turbo-emu"):
             contract = resolve_env_provider(provider_id).constructor_contract
             self.assertIsNotNone(contract)
             self.assertNotIn("done_on", contract.explicit_env_args)
@@ -610,11 +610,11 @@ class ConfigValidationTests(unittest.TestCase):
         document = compose_train_document(
             self.BREAKOUT_GOAL,
             self.BREAKOUT_RECIPE,
-            env_provider="stable-retro-turbo",
+            env_provider="env-stableretro-turbo",
         )
 
         train_config = document["train_config"]
-        self.assertEqual(train_config["env_provider"], "stable-retro-turbo")
+        self.assertEqual(train_config["env_provider"], "env-stableretro-turbo")
         self.assertEqual(train_config["game"], "Breakout-Atari2600-v0")
         self.assertEqual(train_config["checkpoint_eval_backend"], "none")
         self.assertNotIn("stop_on_acceptance", train_config)
@@ -717,7 +717,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(train_config["obs_resize_algorithm"], "area")
         self.assertEqual(
             document["environment"]["env_id"],
-            "stable-retro-turbo:Breakout-Atari2600-v0",
+            "env-stableretro-turbo:Breakout-Atari2600-v0",
         )
         self.assertEqual(document["environment"]["preprocessing"]["frame_skip"], 4)
 
@@ -782,7 +782,7 @@ class ConfigValidationTests(unittest.TestCase):
         document = compose_train_document(self.BREAKOUT_GOAL, recipe)
         train_config = document["train_config"]
 
-        self.assertEqual(train_config["env_provider"], "breakout-turbo-env")
+        self.assertEqual(train_config["env_provider"], "env-breakoutatari2600-turbo-native")
         self.assertEqual(train_config["training_backend"]["id"], "gradlab.go-explore")
         self.assertEqual(
             train_config["training_backend"]["config"]["progress_guided_restore_probability"],
@@ -825,7 +825,7 @@ class ConfigValidationTests(unittest.TestCase):
         document = compose_train_document(
             self.BREAKOUT_GOAL,
             self.BREAKOUT_GOAL.parent / "recipes/ppo-stable-updates.yaml",
-            env_provider="stable-retro-turbo",
+            env_provider="env-stableretro-turbo",
         )
 
         train_config = document["train_config"]
@@ -849,7 +849,7 @@ class ConfigValidationTests(unittest.TestCase):
         )
 
         train_config = document["train_config"]
-        self.assertEqual(train_config["env_provider"], "stable-retro-turbo")
+        self.assertEqual(train_config["env_provider"], "env-stableretro-turbo")
         self.assertEqual(train_config["game"], "MsPacman-Atari2600-v0")
         self.assertEqual(train_config["n_envs"], 16)
         self.assertEqual(train_config["env_args"]["num_threads"], 4)
@@ -884,7 +884,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(train_config["obs_resize_algorithm"], "area")
         self.assertEqual(
             document["environment"]["env_id"],
-            "stable-retro-turbo:MsPacman-Atari2600-v0",
+            "env-stableretro-turbo:MsPacman-Atari2600-v0",
         )
         self.assertEqual(document["environment"]["preprocessing"]["frame_skip"], 4)
 
@@ -1087,7 +1087,7 @@ class ConfigValidationTests(unittest.TestCase):
             config = environment["env_config"]
             task = environment["task"]
             with self.subTest(phase=phase):
-                self.assertEqual(environment["env_provider"], "supermariobrosnes-turbo")
+                self.assertEqual(environment["env_provider"], "env-supermariobrosnes-turbo-emu")
                 self.assertEqual(config["game"], "SuperMarioBros-Nes-v0")
                 self.assertEqual(config["n_envs"], 16)
                 self.assertEqual(config["obs_crop"], [32, 0, 0, 0])

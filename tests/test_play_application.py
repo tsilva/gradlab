@@ -200,7 +200,7 @@ def test_vizdoom_playback_iwad_override_is_counterfactual_only_when_bytes_change
     iwad = tmp_path / "doom2.wad"
     iwad.write_bytes(b"IWADdoom")
     environment = {
-        "env_provider": "vizdoom-turbo",
+        "env_provider": "env-vizdoom-turbo",
         "env_args": {"rom_path": None},
     }
 

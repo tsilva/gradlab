@@ -29,7 +29,7 @@ def bundle(*, seed: int = 7, step: int = 4_000_000) -> PolicyBundle:
         "schema_version": 1,
         "requested": {"mode": "custom_discrete", "meanings": ["noop", "attack"]},
         "provider": {
-            "provider_id": "vizdoom-turbo",
+            "provider_id": "env-vizdoom-turbo",
             "mode": "custom_discrete",
             "semantics": {
                 "status": "available",
@@ -76,7 +76,7 @@ def bundle(*, seed: int = 7, step: int = 4_000_000) -> PolicyBundle:
         "format_version": 4,
         "recipe": {
             "environment": {
-                "env_id": "vizdoom-turbo:VizdoomDeathmatch-v1",
+                "env_id": "env-vizdoom-turbo:VizdoomDeathmatch-v1",
                 "state": "default",
                 "preprocessing": {
                     "obs_resize": [84, 84],
@@ -240,7 +240,7 @@ def evaluation_evidence() -> dict:
         "contracts": {
             "materialized_goal": bundle().recipe["recipe"]["goal"],
             "evaluation": {"episodes": 2},
-            "environment": {"env_id": "vizdoom-turbo:VizdoomDeathmatch-v1"},
+            "environment": {"env_id": "env-vizdoom-turbo:VizdoomDeathmatch-v1"},
         },
         "authoritative_hashes": {
             "intent_sha256": "1" * 64,
@@ -304,8 +304,8 @@ def replay() -> dict:
         "contract": {"mode": "training"},
         "execution": {
             "source": {"kind": "checkout"},
-            "qualified_environment_id": "vizdoom-turbo:VizdoomDeathmatch-v1",
-            "provider_id": "vizdoom-turbo",
+            "qualified_environment_id": "env-vizdoom-turbo:VizdoomDeathmatch-v1",
+            "provider_id": "env-vizdoom-turbo",
             "provider_version": "1.3.0.post23",
             "environment_hash": "sha256:environment",
             "runtime_versions": {"vizdoom_turbo": "1.3.0.post23"},
@@ -513,7 +513,7 @@ def test_historical_import_is_explicitly_not_accepted_or_featured() -> None:
             "trainer": "Stable-Baselines3",
             "algorithm_id": "ppo",
             "model_class": "stable_baselines3.ppo.ppo.PPO",
-            "qualified_env_id": "supermariobrosnes-turbo:SuperMarioBros-Nes-v0",
+            "qualified_env_id": "env-supermariobrosnes-turbo-emu:SuperMarioBros-Nes-v0",
         },
         source={
             "run_id": "vnj2jxi5",

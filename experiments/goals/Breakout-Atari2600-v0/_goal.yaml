@@ -16,7 +16,7 @@ train:
   environment:
     # Breakout Turbo is the default ROM-free implementation. The complete contract is
     # intentionally accepted by Stable Retro Turbo so only env_provider needs to change.
-    env_provider: &breakout_provider breakout-turbo-env
+    env_provider: &breakout_provider env-breakoutatari2600-turbo-native
     env_config:
       <<: &breakout_env_config
         game: Breakout-Atari2600-v0

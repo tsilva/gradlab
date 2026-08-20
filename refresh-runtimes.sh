@@ -5,11 +5,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT"
 
 PACKAGES=(
-    breakout-turbo-env
-    gradoom
-    stable-retro-turbo
-    supermariobrosnes-turbo
-    vizdoom-turbo
+    env-breakoutatari2600-turbo-native
+    env-doom-turbo-torch
+    env-stableretro-turbo
+    env-supermariobrosnes-turbo-emu
+    env-vizdoom-turbo
 )
 
 CUTOFF="$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
@@ -37,10 +37,10 @@ update_cutoffs "$ROOT/uv-tool.toml"
 update_cutoffs "${UV_CONFIG_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/uv/uv.toml}"
 
 uv lock \
-    --upgrade-package breakout-turbo-env \
-    --upgrade-package gradoom \
-    --upgrade-package stable-retro-turbo \
-    --upgrade-package supermariobrosnes-turbo \
-    --upgrade-package vizdoom-turbo
+    --upgrade-package env-breakoutatari2600-turbo-native \
+    --upgrade-package env-doom-turbo-torch \
+    --upgrade-package env-stableretro-turbo \
+    --upgrade-package env-supermariobrosnes-turbo-emu \
+    --upgrade-package env-vizdoom-turbo
 
 "$ROOT/install.sh" "$@"

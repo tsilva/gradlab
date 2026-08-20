@@ -26,7 +26,7 @@ from gradlab.action_codecs import (
 )
 
 
-MARIO_PROVIDERS = frozenset({"stable-retro-turbo", "supermariobrosnes-turbo"})
+MARIO_PROVIDERS = frozenset({"env-stableretro-turbo", "env-supermariobrosnes-turbo-emu"})
 BUILTIN_ACTION_MODES = frozenset({"all", "filtered", "discrete", "multi_discrete"})
 ACTION_CONTRACT_SCHEMA_VERSION = 1
 MARIO_ACTION_TABLES = {
@@ -106,14 +106,14 @@ def _mode_name(value: Any) -> str:
 def _packaged_action_sets(provider_id: str, game: str) -> Mapping[str, Any]:
     # Stable Retro does not package the dedicated Mario runtime's named action
     # sets, so GradLab supplies the same current semantic tables for that provider.
-    if game == "SuperMarioBros-Nes-v0" and provider_id == "stable-retro-turbo":
+    if game == "SuperMarioBros-Nes-v0" and provider_id == "env-stableretro-turbo":
         return MARIO_ACTION_TABLES
     # Original Stable Retro does not declare Breakout's provider-neutral
     # four-action table. GradLab owns this cross-provider contract and passes
     # the exact same table directly to both implementations.
-    if game == "Breakout-Atari2600-v0" and provider_id == "stable-retro-turbo":
+    if game == "Breakout-Atari2600-v0" and provider_id == "env-stableretro-turbo":
         return BREAKOUT_ACTION_TABLES
-    if provider_id == "stable-retro-turbo":
+    if provider_id == "env-stableretro-turbo":
         import stable_retro
 
         path = (
@@ -126,8 +126,8 @@ def _packaged_action_sets(provider_id: str, game: str) -> Mapping[str, Any]:
         metadata = json.loads(path.read_text(encoding="utf-8"))
     else:
         package = {
-            "supermariobrosnes-turbo": "supermariobrosnes_turbo",
-            "breakout-turbo-env": "breakout_turbo_env",
+            "env-supermariobrosnes-turbo-emu": "supermariobrosnes_turbo",
+            "env-breakoutatari2600-turbo-native": "breakout_turbo_env",
         }.get(provider_id)
         if package is None:
             return {}
@@ -167,7 +167,7 @@ def provider_buttons(
     *,
     env_args: Mapping[str, Any] | None = None,
 ) -> tuple[str | None, ...]:
-    if provider_id in {"gradoom", "vizdoom-turbo"}:
+    if provider_id in {"env-doom-turbo-torch", "env-vizdoom-turbo"}:
         args = env_args if isinstance(env_args, Mapping) else {}
         vizdoom_config = args.get("vizdoom_config")
         if isinstance(vizdoom_config, Mapping) and "available_buttons" in vizdoom_config:
@@ -185,20 +185,20 @@ def provider_buttons(
             if len(set(buttons)) != len(buttons):
                 raise ValueError("env_args.vizdoom_config.available_buttons cannot repeat a button")
             return buttons
-        if provider_id == "gradoom":
+        if provider_id == "env-doom-turbo-torch":
             return _gradoom_scenario_buttons(game, scenario=args.get("scenario"))
         from vizdoom_turbo import scenario_buttons
 
         return scenario_buttons(game, scenario=args.get("scenario"))
-    if provider_id == "supermariobrosnes-turbo":
+    if provider_id == "env-supermariobrosnes-turbo-emu":
         from supermariobrosnes_turbo import NES_BUTTONS
 
         return tuple(NES_BUTTONS)
-    if provider_id == "breakout-turbo-env":
+    if provider_id == "env-breakoutatari2600-turbo-native":
         from breakout_turbo_env import BUTTONS
 
         return tuple(BUTTONS)
-    if provider_id == "stable-retro-turbo":
+    if provider_id == "env-stableretro-turbo":
         import stable_retro
 
         parts = game.rsplit("-", 2)
@@ -211,9 +211,9 @@ def provider_buttons(
 def declared_action_contract(config: Any) -> dict[str, Any] | None:
     """Resolve a config's provider-owned exact action table for provenance checks."""
     provider_id = str(
-        config.get("env_provider", "stable-retro-turbo")
+        config.get("env_provider", "env-stableretro-turbo")
         if isinstance(config, Mapping)
-        else getattr(config, "env_provider", "stable-retro-turbo")
+        else getattr(config, "env_provider", "env-stableretro-turbo")
     )
     game = str(
         config.get("game", "") if isinstance(config, Mapping) else getattr(config, "game", "")
@@ -229,7 +229,7 @@ def declared_action_contract(config: Any) -> dict[str, Any] | None:
     if request is None:
         return None
     request_name = _mode_name(request)
-    if provider_id == "vizdoom-turbo" and request_name not in {
+    if provider_id == "env-vizdoom-turbo" and request_name not in {
         "all",
         "filtered",
         "multi_discrete",
@@ -373,9 +373,9 @@ def configured_action_values(config: Any) -> tuple[tuple[int, ...], ...] | None:
     if contract is None or contract.get("table") is None:
         return None
     provider_id = str(
-        config.get("env_provider", "stable-retro-turbo")
+        config.get("env_provider", "env-stableretro-turbo")
         if isinstance(config, Mapping)
-        else getattr(config, "env_provider", "stable-retro-turbo")
+        else getattr(config, "env_provider", "env-stableretro-turbo")
     )
     game = str(
         config.get("game", "") if isinstance(config, Mapping) else getattr(config, "game", "")
@@ -530,7 +530,7 @@ def _input_atom(provider_id: str, atom: str) -> str:
             "stick": "left",
             "hit": "right",
         }.get(semantic, semantic)
-    if provider_id in {"gradoom", "vizdoom-turbo"}:
+    if provider_id in {"env-doom-turbo-torch", "env-vizdoom-turbo"}:
         return {
             "move_left": "left",
             "move_right": "right",
@@ -1061,7 +1061,7 @@ def _vizdoom_shared_policy_semantics(
                 "value": _json_action_value(tuple_value),
                 "semantic_id": semantic_id,
                 "label": _display_label(semantic_id),
-                "controls": _entry_controls("vizdoom-turbo", native_labels),
+                "controls": _entry_controls("env-vizdoom-turbo", native_labels),
                 "native_buttons": _json_action_value(native_labels),
             }
         )

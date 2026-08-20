@@ -709,9 +709,14 @@ def compose_train_document(
             goal_composition.sources[-1] if goal_composition.sources else goal_path,
             Path(".").resolve(),
         )
+    source_policy_overrides = [
+        item
+        for item in effective_environment_overrides
+        if item.startswith("train.environment.")
+    ]
     source_document = apply_dotlist_overrides(
         recipe_composition.document,
-        source_overrides,
+        [*source_overrides, *source_policy_overrides],
         label=f"recipe overrides for {recipe_path}",
     )
     action_selector_value = source_document.pop("action_profile", None)
@@ -819,6 +824,11 @@ def compose_train_document(
             ),
             None,
         )
+        if raw_action_override is not None:
+            raise ValueError(
+                "action_profile cannot be combined with raw action overrides: "
+                f"{raw_action_override}"
+            )
         source_train = source_document.get("train")
         source_environment = (
             source_train.get("environment") if isinstance(source_train, Mapping) else None
@@ -855,11 +865,6 @@ def compose_train_document(
             raise ValueError(
                 "action_profile cannot be combined with recipe-authored "
                 "vizdoom_config.available_buttons"
-            )
-        if raw_action_override is not None:
-            raise ValueError(
-                "action_profile cannot be combined with raw action overrides: "
-                f"{raw_action_override}"
             )
         selected_action = select_goal_action_profile(
             goal_composition.document,

@@ -75,7 +75,7 @@ train:
   # Define the provider, environment, preprocessing, and task contract used for training.
   environment:
     # Select the environment provider and anchor it for evaluation reuse.
-    env_provider: &vizdoom_provider vizdoom-turbo
+    env_provider: &vizdoom_provider env-vizdoom-turbo
     # Define provider-independent and provider-specific environment settings.
     env_config:
       # Anchor the complete base environment mapping for evaluation reuse.

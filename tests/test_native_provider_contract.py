@@ -392,7 +392,7 @@ class BreakoutTurboProviderTests(unittest.TestCase):
     @staticmethod
     def config(**updates):
         values = {
-            "env_provider": "breakout-turbo-env",
+            "env_provider": "env-breakoutatari2600-turbo-native",
             "game": "Breakout-Atari2600-v0",
             "state": "Start",
             "frame_skip": 4,
@@ -455,8 +455,8 @@ class BreakoutTurboProviderTests(unittest.TestCase):
         return EnvConfig(**values)
 
     def test_runtime_matches_turbo_api_v2_release(self) -> None:
-        installed = Version(importlib.metadata.version("breakout-turbo-env"))
-        self.assertEqual(installed, Version("0.5.6"))
+        installed = Version(importlib.metadata.version("env-breakoutatari2600-turbo-native"))
+        self.assertEqual(installed, Version("0.5.7"))
 
     def test_player_boundary_renders_canonical_stella_rgb(self) -> None:
         env = make_vec_envs(self.config(), 1, 17)
@@ -674,7 +674,7 @@ class MarioNativeProviderTests(unittest.TestCase):
     @staticmethod
     def config(**updates):
         values = {
-            "env_provider": "supermariobrosnes-turbo",
+            "env_provider": "env-supermariobrosnes-turbo-emu",
             "game": "SuperMarioBros-Nes-v0",
             "state": "Level1-1",
             "task": {
@@ -698,9 +698,9 @@ class MarioNativeProviderTests(unittest.TestCase):
         return EnvConfig(**values)
 
     def test_runtime_matches_turbo_api_v2_releases(self) -> None:
-        installed = Version(importlib.metadata.version("supermariobrosnes-turbo"))
-        self.assertEqual(installed, Version("0.6.6"))
-        self.assertEqual(Version(retro.__version__), Version("1.0.1.post43"))
+        installed = Version(importlib.metadata.version("env-supermariobrosnes-turbo-emu"))
+        self.assertEqual(installed, Version("0.7.0"))
+        self.assertEqual(Version(retro.__version__), Version("1.0.1.post44"))
         env_type = super_mario_bros_nes_turbo_vec_env_type()
         self.assertIs(env_type.supports_live_snapshots, True)
         self.assertTrue(callable(getattr(env_type, "capture_snapshots", None)))
@@ -754,7 +754,7 @@ class MarioNativeProviderTests(unittest.TestCase):
 
     def test_stable_retro_named_action_preset_is_owned_by_the_provider(self) -> None:
         config = self.config(
-            env_provider="stable-retro-turbo",
+            env_provider="env-stableretro-turbo",
             env_args={
                 "use_restricted_actions": "basic",
                 "inttype": "stable",
@@ -789,7 +789,7 @@ class MarioNativeProviderTests(unittest.TestCase):
         ):
             with self.subTest(action_request=action_request):
                 config = EnvConfig(
-                    env_provider="stable-retro-turbo",
+                    env_provider="env-stableretro-turbo",
                     game="Breakout-Atari2600-v0",
                     state="Start",
                     max_pool_frames=False,
@@ -1015,7 +1015,7 @@ class MarioNativeProviderTests(unittest.TestCase):
             def __init__(self, game, **kwargs):
                 del game, kwargs
 
-        config = self.config(env_provider="stable-retro-turbo")
+        config = self.config(env_provider="env-stableretro-turbo")
         with self.assertRaisesRegex(RuntimeError, "does not advertise disabled autoreset"):
             make_provider_vec_env(
                 config,
@@ -1036,7 +1036,7 @@ class MarioNativeProviderTests(unittest.TestCase):
                 self.autoreset_mode = gym.vector.AutoresetMode.DISABLED
                 self.kwargs = kwargs
 
-        config = self.config(env_provider="stable-retro-turbo")
+        config = self.config(env_provider="env-stableretro-turbo")
         kwargs = provider_native_vec_kwargs(
             config,
             n_envs=2,
@@ -1057,7 +1057,7 @@ class MarioNativeProviderTests(unittest.TestCase):
 
     def test_stable_retro_receives_catalog_without_sampling_weights(self) -> None:
         config = self.config(
-            env_provider="stable-retro-turbo",
+            env_provider="env-stableretro-turbo",
             state="",
             states=("Level1-1", "Level1-4"),
             state_probs=(0.25, 0.75),
@@ -1129,7 +1129,7 @@ class MarioNativeProviderTests(unittest.TestCase):
             def active_state_indices(self):
                 return self.indices
 
-        config = self.config(env_provider="stable-retro-turbo")
+        config = self.config(env_provider="env-stableretro-turbo")
         env = make_provider_vec_env(
             config,
             native_kwargs={"num_envs": 2},
@@ -1210,7 +1210,7 @@ class MarioNativeProviderTests(unittest.TestCase):
                 return None
 
         config = EnvConfig(
-            env_provider="stable-retro-turbo",
+            env_provider="env-stableretro-turbo",
             game="Breakout-Atari2600-v0",
             state="Start",
             obs_crop=(17, 0, 0, 0),
@@ -1324,7 +1324,7 @@ class VizdoomTurboProviderTests(unittest.TestCase):
 
     def test_compiles_and_constructs_native_vector_provider(self) -> None:
         config = EnvConfig(
-            env_provider="vizdoom-turbo",
+            env_provider="env-vizdoom-turbo",
             game="VizdoomBasic-v1",
             state="",
             sticky_action_prob=0.25,
@@ -1378,7 +1378,7 @@ class VizdoomTurboProviderTests(unittest.TestCase):
         self,
     ) -> None:
         config = EnvConfig(
-            env_provider="vizdoom-turbo",
+            env_provider="env-vizdoom-turbo",
             game="VizdoomHealthGathering-v1",
             state="",
             task={
@@ -1456,7 +1456,7 @@ class VizdoomTurboProviderTests(unittest.TestCase):
                 self.closed = True
 
         config = EnvConfig(
-            env_provider="vizdoom-turbo",
+            env_provider="env-vizdoom-turbo",
             game="VizdoomBasic-v1",
             state="",
             task={
@@ -1539,6 +1539,75 @@ class AleManualLifecycleTests(unittest.TestCase):
 
         self.assertEqual([frame.shape for frame in frames], [(3, 5, 3), (3, 5, 3)])
         np.testing.assert_array_equal(frames[0][..., 0], frames[0][..., 1])
+
+
+class GraDoomProviderTests(unittest.TestCase):
+    def test_torch_transport_env_is_bridged_to_host_numpy_surface(self) -> None:
+        import torch
+
+        class FakeGraDoomEnv:
+            transport = "torch"
+            device = torch.device("cpu")
+            state_catalog = ("default",)
+            metadata = {"autoreset_mode": gym.vector.AutoresetMode.DISABLED}
+
+            def __init__(self, game, **kwargs):
+                self.game = game
+                self.num_envs = int(kwargs.get("num_envs", 2))
+                self.step_action_devices: list[torch.device] = []
+
+            def active_state_indices(self):
+                return torch.zeros(self.num_envs, dtype=torch.int32)
+
+            def reset(self, *, seed=None, options=None):
+                mask = torch.ones(self.num_envs, dtype=torch.bool)
+                return torch.zeros((self.num_envs, 4, 84, 84), dtype=torch.uint8), {
+                    "state_index": torch.zeros(self.num_envs, dtype=torch.int32),
+                    "start_source": torch.zeros(self.num_envs, dtype=torch.int8),
+                    "noop_reset_count": torch.zeros(self.num_envs, dtype=torch.int64),
+                    "_state_index": mask.clone(),
+                    "_start_source": mask.clone(),
+                    "_noop_reset_count": mask.clone(),
+                }
+
+            def step(self, actions):
+                if not isinstance(actions, torch.Tensor):
+                    raise AssertionError("actions must be a torch tensor")
+                self.step_action_devices.append(actions.device)
+                mask = torch.zeros(self.num_envs, dtype=torch.bool)
+                return (
+                    torch.zeros((self.num_envs, 4, 84, 84), dtype=torch.uint8),
+                    torch.zeros(self.num_envs, dtype=torch.float32),
+                    mask.clone(),
+                    mask.clone(),
+                    {"killcount": torch.zeros(self.num_envs, dtype=torch.int64)},
+                )
+
+        config = EnvConfig(
+            env_provider="env-doom-turbo-torch",
+            game="VizdoomDeathmatch-v1",
+            env_args={},
+        )
+        env = make_provider_vec_env(
+            config,
+            native_kwargs={"num_envs": 2},
+            gradoom_env_type=lambda: FakeGraDoomEnv,
+        )
+
+        self.assertEqual(env.transport, "numpy")
+        observations, infos = env.reset()
+        self.assertIsInstance(observations, np.ndarray)
+        self.assertEqual(observations.shape, (2, 4, 84, 84))
+        self.assertIsInstance(infos["state_index"], np.ndarray)
+        self.assertEqual(infos["start_id"].tolist(), ["default", "default"])
+        observations, rewards, terminated, truncated, step_infos = env.step(
+            np.zeros(2, dtype=np.int64)
+        )
+        self.assertIsInstance(observations, np.ndarray)
+        self.assertIsInstance(rewards, np.ndarray)
+        self.assertIsInstance(step_infos["killcount"], np.ndarray)
+        self.assertIsInstance(env.active_state_indices(), np.ndarray)
+        self.assertEqual(env.num_envs, 2)
 
 
 if __name__ == "__main__":

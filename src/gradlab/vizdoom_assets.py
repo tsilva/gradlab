@@ -216,8 +216,11 @@ def bind_vizdoom_iwad_to_document(
     if not isinstance(train_config, MutableMapping):
         raise ValueError("ViZDoom IWAD binding requires a materialized train_config")
     provider_id = str(train_config.get("env_provider") or "")
-    if provider_id not in {"gradoom", "vizdoom-turbo"}:
-        raise ValueError("Doom IWAD binding requires env_provider='gradoom' or 'vizdoom-turbo'")
+    if provider_id not in {"env-doom-turbo-torch", "env-vizdoom-turbo"}:
+        raise ValueError(
+            "Doom IWAD binding requires env_provider='env-doom-turbo-torch' "
+            "or 'env-vizdoom-turbo'"
+        )
     env_args = train_config.get("env_args")
     if not isinstance(env_args, Mapping):
         raise ValueError("ViZDoom IWAD binding requires train_config.env_args")
@@ -239,7 +242,10 @@ def bind_required_local_vizdoom_iwad(
     train_config = document.get("train_config")
     if not isinstance(train_config, MutableMapping):
         return False
-    if str(train_config.get("env_provider") or "") not in {"gradoom", "vizdoom-turbo"}:
+    if str(train_config.get("env_provider") or "") not in {
+        "env-doom-turbo-torch",
+        "env-vizdoom-turbo",
+    }:
         return False
     env_args = train_config.get("env_args")
     if not isinstance(env_args, Mapping):
