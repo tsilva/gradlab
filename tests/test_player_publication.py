@@ -68,7 +68,7 @@ def _capture() -> dict[str, object]:
             "evaluation_mode": "evaluated",
             "release": {"huggingface": {}},
         },
-        "execution": {"qualified_environment_id": "vizdoom-turbo:VizdoomDeathmatch-v1"},
+        "execution": {"qualified_environment_id": "env-vizdoom-turbo:VizdoomDeathmatch-v1"},
         "success": False,
         "sampling_mode": "stochastic",
         "episode": 1,

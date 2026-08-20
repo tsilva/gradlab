@@ -379,7 +379,7 @@ def _bind_vizdoom_iwad_for_launch(
     env_provider: str,
     rom_path: Path | None,
 ) -> dict[str, Any] | None:
-    if env_provider not in {"gradoom", "vizdoom-turbo"}:
+    if env_provider not in {"env-doom-turbo-torch", "env-vizdoom-turbo"}:
         return None
     return required_vizdoom_iwad_binding(rom_path)
 

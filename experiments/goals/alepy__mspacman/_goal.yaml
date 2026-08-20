@@ -15,7 +15,7 @@ objective:
 train:
   checkpoint_freq: 500000
   environment:
-    env_provider: &atari_env_provider stable-retro-turbo
+    env_provider: &atari_env_provider env-stableretro-turbo
     env_config:
       <<: &atari_mspacman_env_config
         game: MsPacman-Atari2600-v0

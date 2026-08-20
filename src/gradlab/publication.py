@@ -922,7 +922,7 @@ def render_model_card(
         "uvx --from gradlab gradlab play " + model_ref,
         "```",
     ]
-    if provider == "stable-retro-turbo":
+    if provider == "env-stableretro-turbo":
         quick_start_lines = [
             "Import a legally obtained compatible game image, then play the immutable release:",
             "",

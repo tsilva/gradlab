@@ -700,7 +700,7 @@ def test_recipe_keeps_eval_asset_identity_but_removes_private_locations() -> Non
 
 
 def test_recipe_provider_is_exact_and_never_falls_back() -> None:
-    provider = "supermariobrosnes-turbo"
+    provider = "env-supermariobrosnes-turbo-emu"
     resolved = compose_resolved_train_documents(
         GOAL,
         RECIPE,
@@ -796,7 +796,7 @@ def test_model_v3_records_durable_state_archive_summary(tmp_path: Path) -> None:
             "semantic_id": "state-archive-v1",
             "schema_version": 1,
             "persistence": "durable",
-            "provider_id": "supermariobrosnes-turbo",
+            "provider_id": "env-supermariobrosnes-turbo-emu",
             "codec_id": "supermariobrosnes-turbo.portable-v2",
             "compatibility_id": "sha256:" + "d" * 64,
             "entry_count": 61,

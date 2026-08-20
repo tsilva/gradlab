@@ -10,10 +10,16 @@ from typing import Any, Literal
 
 from gradlab.action_contract import assert_action_contract_compatible
 from gradlab.device import resolve_sb3_device
-from gradlab.env import assert_provider_runtime_available, make_eval_vec_env, resolve_env_config
+from gradlab.env import (
+    assert_provider_runtime_available,
+    make_eval_vec_env,
+    resolve_env_config,
+)
 from gradlab.env_metadata import env_config_from_config_dict, env_config_metadata
 from gradlab.env_metadata import runtime_versions_metadata
+from gradlab.env_registry import GRADOOM_PROVIDER
 from gradlab.env_registry import resolve_env_provider
+from gradlab.environment_fields import EnvConfig
 from gradlab.model_sources import (
     ModelSourceKind,
     ResolvedModelSource,
@@ -55,6 +61,16 @@ from gradlab.vizdoom_assets import portable_vizdoom_iwad_identity, vizdoom_iwad_
 
 ProgressCallback = Callable[[str, str], None]
 PlaybackContractMode = Literal["training", "evaluation", "counterfactual"]
+
+
+def _with_playback_device_override(
+    config: EnvConfig,
+    requested_device: str,
+) -> dict[str, Any]:
+    resolved_device = resolve_sb3_device(requested_device)
+    if config.env_provider != GRADOOM_PROVIDER.provider_id:
+        return {}
+    return {"device": resolved_device}
 
 
 @dataclass(frozen=True)
@@ -142,7 +158,7 @@ def apply_vizdoom_playback_iwad_override(
     rom_path: Path | None,
 ) -> bool:
     """Bind a local IWAD and report whether it changes the recorded environment."""
-    if rom_path is None or str(environment.get("env_provider") or "") != "vizdoom-turbo":
+    if rom_path is None or str(environment.get("env_provider") or "") != "env-vizdoom-turbo":
         return False
     env_args = environment.get("env_args")
     if not isinstance(env_args, MutableMapping):
@@ -419,11 +435,12 @@ class PlaybackLoader:
 
         args = candidate.args
         progress("loading", "Loading policy runtime")
+        playback_device = resolve_sb3_device(args.device)
         algorithm_id = resolve_policy_algorithm(candidate.source.bundle.model["policy"])
         with verify_staged_model(candidate.staged) as verified:
             model = load_policy_model(
                 verified,
-                device=resolve_sb3_device(args.device),
+                device=playback_device,
                 algorithm_id=algorithm_id,
             )
         resume_cell = str(getattr(args, "resume_cell", None) or "").strip()
@@ -484,6 +501,10 @@ class PlaybackLoader:
                 rom_binding=candidate.rom_binding,
                 state_archive=playback_archive_config,
                 state_archive_root=(None if archive_resource is None else archive_resource.name),
+                native_kwargs_overrides=_with_playback_device_override(
+                    config,
+                    playback_device,
+                ),
             )
 
         policy_env = make_policy_env(candidate.config, args.seed)

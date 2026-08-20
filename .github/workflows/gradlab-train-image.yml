@@ -172,10 +172,10 @@ jobs:
               for line in Path(
                   "containers/train/train-dependencies-linux-amd64.lock"
               ).read_text(encoding="utf-8").splitlines()
-              if line.startswith("vizdoom-turbo==")
+              if line.startswith("env-vizdoom-turbo==")
           ]
           if len(provider_lines) != 1:
-              raise SystemExit("Expected one locked vizdoom-turbo provider")
+              raise SystemExit("Expected one locked env-vizdoom-turbo provider")
           expected_provider_version = (
               provider_lines[0].split(" --hash=", maxsplit=1)[0].split("==", maxsplit=1)[1]
           )
@@ -187,7 +187,7 @@ jobs:
           if payload != {
               **payload,
               "smoke_contract_version": 3,
-              "provider_distribution": "vizdoom-turbo",
+              "provider_distribution": "env-vizdoom-turbo",
               "provider_version": expected_provider_version,
               "torch_compile": {
                   "backend": "inductor",
@@ -267,7 +267,7 @@ jobs:
               "vizdoom_smoke": {
                   "contract_version": int(os.environ["VIZDOOM_SMOKE_CONTRACT_VERSION"]),
                   "image_digest": os.environ["DIGEST"],
-                  "provider_distribution": "vizdoom-turbo",
+                  "provider_distribution": "env-vizdoom-turbo",
                   "provider_version": os.environ["VIZDOOM_PROVIDER_VERSION"],
                   "evidence_sha256": os.environ["VIZDOOM_SMOKE_EVIDENCE_SHA256"],
               },

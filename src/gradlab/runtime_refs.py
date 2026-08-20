@@ -53,7 +53,7 @@ class _BaseImages(BoundaryModel):
 class _VizdoomSmoke(BoundaryModel):
     contract_version: Literal[VIZDOOM_SMOKE_CONTRACT_VERSION]
     image_digest: NonEmptyText
-    provider_distribution: Literal["vizdoom-turbo"]
+    provider_distribution: Literal["env-vizdoom-turbo"]
     provider_version: NonEmptyText
     evidence_sha256: Sha256
 

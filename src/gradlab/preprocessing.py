@@ -43,7 +43,7 @@ def preprocessing_contract(
         raise ValueError("preprocessing provider identity is required")
     pipeline = (
         "stable_retro_native_vec_env"
-        if provider == "stable-retro-turbo"
+        if provider == "env-stableretro-turbo"
         else f"{provider.replace('-', '_')}_native_vec_env"
     )
     obs_resize = normalize_obs_resize(_value(source, "obs_resize", (84, 84)))

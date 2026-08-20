@@ -257,7 +257,7 @@ class TrainImageTests(unittest.TestCase):
         self.assertIn('"succeeded": True', workflow)
         self.assertIn('"VizdoomDeathmatch-v1"', workflow)
         self.assertIn('"schema_version": 7', workflow)
-        self.assertIn('"provider_distribution": "vizdoom-turbo"', workflow)
+        self.assertIn('"provider_distribution": "env-vizdoom-turbo"', workflow)
         self.assertIn("train-dependencies-linux-amd64.lock", workflow)
         self.assertIn('"provider_version": expected_provider_version', workflow)
         self.assertNotIn('"provider_version": "1.3.0.post17"', workflow)
@@ -326,8 +326,8 @@ class TrainImageTests(unittest.TestCase):
             encoding="utf-8"
         )
 
-        self.assertIn("vizdoom-turbo==1.3.0.post26", dependencies)
-        self.assertIn("gradoom==0.1.0a3", dependencies)
+        self.assertIn("env-vizdoom-turbo==1.3.0.post27", dependencies)
+        self.assertIn("env-doom-turbo-torch==0.1.0a4", dependencies)
         self.assertIn("box2d-py==2.3.5", dependencies)
         self.assertNotIn("wandb-workspaces==", gpu + dependencies)
         self.assertIn("torch==2.13.0", gpu)
@@ -336,7 +336,7 @@ class TrainImageTests(unittest.TestCase):
         self.assertFalse(gpu_lines & dependency_lines)
         self.assertEqual(
             train_plan_sha256(root),
-            "2a4387ddad52bbf4263b8087f4444a1695de7081695818a1bd7a556db9088868",
+            "48f62bbff3394b2dd5250c331b36e035e0644fa42fd196846faacc57c6fd706e",
         )
         for line in gpu.splitlines():
             name = line.split("==", maxsplit=1)[0]

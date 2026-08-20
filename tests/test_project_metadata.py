@@ -26,20 +26,8 @@ def test_uv_tool_config_matches_project_resolution_policy() -> None:
 
     assert tool_config["exclude-newer"] == project_uv["exclude-newer"]
     assert tool_config["exclude-newer-package"] == project_uv["exclude-newer-package"]
-    assert tool_config["dependency-metadata"] == project_uv["dependency-metadata"]
-    assert tool_config["dependency-metadata"] == [
-        {
-            "name": "gradoom",
-            "version": "0.1.0a3",
-            "requires-python": ">=3.11",
-            "requires-dist": [
-                "gymnasium>=1.2,<2",
-                "numpy>=1.26,<3",
-                "torch==2.13.0",
-                "wandb>=0.18,<0.23",
-            ],
-        }
-    ]
+    assert "dependency-metadata" not in tool_config
+    assert "dependency-metadata" not in project_uv
 
 
 def test_install_script_uses_repository_uv_tool_config() -> None:

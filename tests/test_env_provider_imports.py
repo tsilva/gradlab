@@ -34,9 +34,9 @@ def test_provider_runtime_import_does_not_require_stable_retro_atari_vec_env(
 @pytest.mark.parametrize(
     ("distribution_name", "module_name"),
     [
-        ("stable-retro-turbo", "stable_retro"),
-        ("supermariobrosnes-turbo", "supermariobrosnes_turbo"),
-        ("vizdoom-turbo", "vizdoom_turbo"),
+        ("env-stableretro-turbo", "stable_retro"),
+        ("env-supermariobrosnes-turbo-emu", "supermariobrosnes_turbo"),
+        ("env-vizdoom-turbo", "vizdoom_turbo"),
     ],
 )
 def test_provider_runtime_is_loaded_from_its_installed_distribution(

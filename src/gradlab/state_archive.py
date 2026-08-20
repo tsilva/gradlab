@@ -365,7 +365,7 @@ class SnapshotCodec:
 
 class _MarioPortableCodec(SnapshotCodec):
     codec_id = "supermariobrosnes-turbo.portable-v2"
-    provider_id = "supermariobrosnes-turbo"
+    provider_id = "env-supermariobrosnes-turbo-emu"
 
     def capture(self, provider: Any, mask: np.ndarray):
         handles = tuple(provider.capture_snapshots(mask))
@@ -380,7 +380,7 @@ class _MarioPortableCodec(SnapshotCodec):
 
 class _BreakoutPortableCodec(SnapshotCodec):
     codec_id = "breakout-turbo-env.state-v1"
-    provider_id = "breakout-turbo-env"
+    provider_id = "env-breakoutatari2600-turbo-native"
 
     def capture(self, provider: Any, mask: np.ndarray):
         handles = tuple(provider.capture_snapshots(mask))

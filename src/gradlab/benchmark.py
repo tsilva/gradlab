@@ -126,7 +126,7 @@ def _load_average() -> list[float] | None:
 
 def _environment_snapshot(profile: BenchmarkProfile) -> dict[str, Any]:
     versions = {"python": platform.python_version()}
-    distributions = {"gradlab", "stable-retro-turbo", "supermariobrosnes-turbo"}
+    distributions = {"gradlab", "env-stableretro-turbo", "env-supermariobrosnes-turbo-emu"}
     provider = str(profile.payload.get("env_provider") or "").strip()
     if provider:
         distributions.add(provider)

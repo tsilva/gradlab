@@ -317,7 +317,7 @@ def main(argv: list[str] | None = None) -> int:
     if (
         args.rom_path is not None
         and not uses_local_rom_cache
-        and provider.provider_id != "vizdoom-turbo"
+        and provider.provider_id != "env-vizdoom-turbo"
     ):
         raise ValueError(
             f"--rom-path is not valid for ROM-free provider {provider.provider_id!r}"

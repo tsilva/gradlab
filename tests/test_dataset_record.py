@@ -106,7 +106,7 @@ def test_recording_constructs_the_shared_native_provider_runtime():
         },
     )()
     descriptor = ProviderDescriptor(
-        provider_id="stable-retro-turbo",
+        provider_id="env-stableretro-turbo",
         native_observation_space=vector_env.single_observation_space,
         native_action_space=vector_env.single_action_space,
     )
@@ -123,13 +123,13 @@ def test_recording_constructs_the_shared_native_provider_runtime():
         patch("gradlab.dataset_providers.declared_action_contract", return_value=None),
     ):
         session = create_provider_session(
-            "stable-retro-turbo",
+            "env-stableretro-turbo",
             "SuperMarioBros-Nes-v0",
             {"frame_skip": 2, "env_args": {"players": 1}},
         )
 
     resolved, n_envs = make_provider.call_args.args
-    assert resolved.env_provider == "stable-retro-turbo"
+    assert resolved.env_provider == "env-stableretro-turbo"
     assert resolved.game == "SuperMarioBros-Nes-v0"
     assert resolved.frame_skip == 2
     assert resolved.env_args["players"] == 1
