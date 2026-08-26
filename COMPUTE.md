@@ -10,8 +10,8 @@ host-specific capacity belong in the operator-local inventory at
 Copy `ops/operator.example.toml` to
 `~/.config/gradlab/operator.toml`. Its schema-v3 `[dstack]` section names the
 default coordinator and fleet. Each coordinator records an immutable ID,
-project, private endpoint, and Keychain token reference; each fleet records its
-owning coordinator and task resources.
+project, private endpoint, Keychain token reference, and optional SSH tunnel
+metadata; each fleet records its owning coordinator and task resources.
 
 The file may contain non-sensitive metadata and Keychain references only.
 Secrets remain in the referenced credential store or an explicit process
@@ -53,8 +53,17 @@ fleet.
 
 GradLab pins dstack CLI and server `0.20.28`. A deployment must keep its API
 private, its state host-owned, and its secrets outside source control. Operators
-normally reach the endpoint through an SSH tunnel described in their private
-inventory.
+normally reach the endpoint through SSH destinations recorded under the
+coordinator's `ssh_tunnel` entry in private `operator.toml`.
+
+Every dstack-backed lifecycle command reuses a reachable loopback endpoint when
+one already exists. Otherwise, GradLab opens a process-scoped SSH tunnel,
+trying that coordinator's destinations in order, and keeps it alive through
+submission and `--follow`. Command exit or interruption closes only a tunnel
+started by that GradLab process; an existing operator-owned tunnel is left
+alone. Destination fallback is transport fallback to the same coordinator,
+never coordinator or fleet failover. GradLab does not upgrade dstack or install
+a persistent tunnel service.
 
 `gradlab experiment launch` refreshes encrypted project-scoped dstack secrets
 from the operator's private environment. Submitted tasks contain secret

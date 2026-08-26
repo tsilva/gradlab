@@ -19,6 +19,12 @@ from urllib.parse import quote
 
 from gradlab.cli_parser import ExactArgumentParser
 from gradlab.clock import parse_utc_datetime
+from gradlab.coordinator_connection import (
+    CoordinatorConnectionError,
+    CoordinatorConnectionReport,
+    close_coordinator_connections,
+    ensure_coordinator_connection,
+)
 from gradlab.dstack_backend import (
     TERMINAL_DSTACK_STATUSES,
     ComputeRequest,
@@ -39,6 +45,7 @@ from gradlab.json_utils import canonical_json_text, json_safe
 from gradlab.metric_names import METRICS_SCHEMA_VERSION
 from gradlab.modal_eval_config import load_modal_eval_config
 from gradlab.operator_credentials import (
+    DstackCoordinatorProfile,
     DstackOperatorConfig,
     OperatorConfigurationError,
     OperatorEnvironmentReport,
@@ -226,6 +233,15 @@ def _required_operator_environment(checkpoint_eval_backend: str) -> tuple[str, .
     )
 
 
+def _ensure_coordinator_connection(
+    coordinator: DstackCoordinatorProfile,
+) -> CoordinatorConnectionReport:
+    try:
+        return ensure_coordinator_connection(coordinator)
+    except CoordinatorConnectionError as exc:
+        raise OperatorConfigurationError(f"dstack connection failed: {exc}") from exc
+
+
 def _operator_preflight(
     root: Path,
     *,
@@ -274,6 +290,7 @@ def _operator_preflight(
         fleet = dstack_config.fleet()
         selected_coordinator_id = str(coordinator_id or dstack_config.default_coordinator)
     coordinator = dstack_config.coordinator(selected_coordinator_id)
+    connection = _ensure_coordinator_connection(coordinator)
     token, token_source = resolve_dstack_token(coordinator)
     dstack_backend = DstackBackend(
         project=coordinator.project,
@@ -316,6 +333,7 @@ def _operator_preflight(
             "server_url": coordinator.server_url,
             "server": "authenticated",
             "token_source": token_source,
+            "connection": connection.as_manifest(),
         },
         "compute": {
             "local_fleet": configured_local_fleet or None,
@@ -479,6 +497,7 @@ def _dstack_backend_for_attempt(
             raise OperatorConfigurationError(
                 "immutable coordinator binding disagrees with configured fleet ownership"
             )
+    _ensure_coordinator_connection(coordinator)
     token, _source = resolve_dstack_token(coordinator)
     return (
         DstackBackend(
@@ -2260,6 +2279,8 @@ def main(argv: list[str] | None = None) -> int:
     except OperatorConfigurationError as exc:
         print(f"gradlab experiment: operator configuration error: {exc}", file=sys.stderr)
         return 2
+    finally:
+        close_coordinator_connections()
 
 
 if __name__ == "__main__":

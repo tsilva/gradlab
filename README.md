@@ -113,8 +113,7 @@ install -m 600 ops/operator.example.toml ~/.config/gradlab/operator.toml
 gradlab experiment operator-preflight --json
 ```
 
-Then launch a checked-in goal and recipe with a finite duration and a specific
-description:
+Then launch a checked-in recipe using its resolved goal and bounded defaults:
 
 ```bash
 gradlab experiment launch \
@@ -130,6 +129,11 @@ run-state changes, and exits when training and its terminal drain are complete.
 Interrupting the client stops the stream without canceling the remote run. Omit
 the flag to retain asynchronous submission. Add `--json` for typed JSON Lines
 events (`launch`, `status`, and `terminal`).
+
+When the selected coordinator declares `ssh_tunnel` metadata in private
+`operator.toml`, this same command reuses an existing local endpoint or opens a
+temporary SSH tunnel automatically. The tunnel remains attached for the full
+command and is closed on exit only when GradLab created it.
 
 Local compute requires an enrolled fleet in
 `~/.config/gradlab/instances.md`. Paid cloud compute is always bounded and
