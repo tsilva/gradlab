@@ -255,7 +255,7 @@ assert 'vizdoom_turbo' not in sys.modules
         "env-breakoutatari2600-turbo-native",
         "gymnasium",
         "gradlab",
-        "env-doom-turbo-torch",
+        "env-gradoom-turbo-torch",
         "env-stableretro-turbo",
         "env-supermariobrosnes-turbo-emu",
         "env-vizdoom-turbo",

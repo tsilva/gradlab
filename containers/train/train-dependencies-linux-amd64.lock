@@ -19,7 +19,7 @@ cloudpickle==3.1.2 --hash=sha256:9acb47f6afd73f60dc1df93bb801b472f05ff42fa6c8416
 contourpy==1.3.3 --hash=sha256:f64836de09927cba6f79dcd00fdd7d5329f3fccc633468507079c829ca4db4e3
 cycler==0.12.1 --hash=sha256:85cef7cff222d8644161529808465972e51340599459b8ac3ccbac5a854e0d30
 env-breakoutatari2600-turbo-native==0.5.7 --hash=sha256:9fe9a521ef37f43d6167d795df041bbfac0b7db1c067919061e7b019dbe600aa
-env-doom-turbo-torch==0.1.0 --hash=sha256:1381b587572f7615e9363bf66a119e47c9d9542152e7392e2cdd25798f888bdc
+env-gradoom-turbo-torch==0.2.0 --hash=sha256:92327acce234ae5213df6aa9c3bc7a1af10f917dded4c291199aa1ab0305f2ff
 env-stableretro-turbo==1.0.1.post44 --hash=sha256:bbc59d33fa51b6f92005d34e3b4da4f3d3ef6e4019f9d432da8467333952e918
 env-supermariobrosnes-turbo-emu==0.7.0 --hash=sha256:d872daefc14ee9c082635c984b2e46ce277e0055bbb8df9f136c7ae7c352522c
 env-vizdoom-turbo==1.3.0.post27 --hash=sha256:7d895d44cac2c58dd10e192ebdc84e1cd6bdad62abe6ab6fba7b54562e2c649d

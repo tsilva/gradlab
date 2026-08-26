@@ -107,7 +107,7 @@ def test_validates_the_declarative_v2_surface_without_resetting_or_stepping() ->
         "env-supermariobrosnes-turbo-emu",
         "env-breakoutatari2600-turbo-native",
         "env-vizdoom-turbo",
-        "env-doom-turbo-torch",
+        "env-gradoom-turbo-torch",
     ),
 )
 def test_all_pinned_providers_share_the_exact_capability_contract(provider_id: str) -> None:
@@ -172,7 +172,7 @@ def test_validates_device_resident_torch_state_indices() -> None:
     capabilities["supported_transition_transports"] = ("torch",)
     env.capabilities = MappingProxyType(capabilities)
 
-    contract = validate_turbo_vector_env(env, "env-doom-turbo-torch")
+    contract = validate_turbo_vector_env(env, "env-gradoom-turbo-torch")
 
     assert contract.api_version == 2
 
@@ -205,10 +205,10 @@ def test_gradoom_contract_adapter_aligns_unindexed_cuda_env_device() -> None:
     env.capabilities = MappingProxyType(capabilities)
 
     with pytest.raises(TypeError, match="must remain on env.device"):
-        validate_turbo_vector_env(env, "env-doom-turbo-torch")
+        validate_turbo_vector_env(env, "env-gradoom-turbo-torch")
 
     adapted = _GraDoomTorchContractAdapter(env)
-    contract = validate_turbo_vector_env(adapted, "env-doom-turbo-torch")
+    contract = validate_turbo_vector_env(adapted, "env-gradoom-turbo-torch")
 
     assert contract.api_version == TURBO_API_VERSION
     assert adapted.device == torch.device("cuda", 0)

@@ -55,7 +55,7 @@ def test_gradoom_recipe_trains_on_gpu_and_keeps_reference_vizdoom_evaluation() -
     )
     train_config = document["train_config"]
 
-    assert train_config["env_provider"] == "env-doom-turbo-torch"
+    assert train_config["env_provider"] == "env-gradoom-turbo-torch"
     assert train_config["n_envs"] == 2048
     assert train_config["env_args"]["doom_skill"] == 3
     assert train_config["env_args"]["vizdoom_config"] == {

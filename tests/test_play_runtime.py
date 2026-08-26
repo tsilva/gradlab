@@ -7,7 +7,7 @@ from gradlab.play_runtime import _with_playback_device_override
 def test_with_playback_device_override_adds_gradoom_device(monkeypatch) -> None:
     monkeypatch.setattr("gradlab.play_runtime.resolve_sb3_device", lambda _value: "cpu")
     config = EnvConfig(
-        env_provider="env-doom-turbo-torch",
+        env_provider="env-gradoom-turbo-torch",
         game="VizdoomDeathmatch-v1",
         env_args={},
     )

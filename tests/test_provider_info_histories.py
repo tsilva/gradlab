@@ -567,7 +567,7 @@ def test_gradoom_constructor_receives_provider_history_keys() -> None:
     config = _vizdoom_config()
     config = replace(
         config,
-        env_provider="env-doom-turbo-torch",
+        env_provider="env-gradoom-turbo-torch",
         obs_crop=(0, 32, 0, 0),
         obs_crop_mode="mask",
         obs_crop_fill=0,

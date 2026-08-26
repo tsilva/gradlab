@@ -27,7 +27,7 @@ class EnvironmentTaskConfigTests(unittest.TestCase):
             "obs_resize_algorithm": "area",
         }
         vizdoom = {**base, "env_provider": "env-vizdoom-turbo"}
-        gradoom = {**base, "env_provider": "env-doom-turbo-torch"}
+        gradoom = {**base, "env_provider": "env-gradoom-turbo-torch"}
 
         vizdoom_identity = environment_identity_from_train_config(vizdoom)
         gradoom_identity = environment_identity_from_train_config(gradoom)

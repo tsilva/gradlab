@@ -1584,7 +1584,7 @@ def test_local_vizdoom_iwad_contract_is_hash_bound_and_mounts_cache(
     assert binding is not None
     assert (
         _bind_vizdoom_iwad_for_launch(
-            env_provider="env-doom-turbo-torch",
+            env_provider="env-gradoom-turbo-torch",
             rom_path=iwad,
         )
         == binding

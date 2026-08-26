@@ -188,7 +188,7 @@ def test_device_runtime_drains_episode_telemetry_once_per_rollout() -> None:
         provider,
         descriptor=SimpleNamespace(),
         kernel=kernel,
-        action_contract={"provider_id": "env-doom-turbo-torch"},
+        action_contract={"provider_id": "env-gradoom-turbo-torch"},
         run_seed=7,
     )
     runtime.reset()

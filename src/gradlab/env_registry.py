@@ -456,9 +456,9 @@ VIZDOOM_TURBO_PROVIDER = EnvProvider(
 )
 
 GRADOOM_PROVIDER = EnvProvider(
-    provider_id="env-doom-turbo-torch",
+    provider_id="env-gradoom-turbo-torch",
     import_name="gradoom",
-    distribution_name="env-doom-turbo-torch",
+    distribution_name="env-gradoom-turbo-torch",
     environments={
         "VizdoomDeathmatch-v1": EnvRegistration(
             "VizdoomDeathmatch-v1",

@@ -167,7 +167,7 @@ def provider_buttons(
     *,
     env_args: Mapping[str, Any] | None = None,
 ) -> tuple[str | None, ...]:
-    if provider_id in {"env-doom-turbo-torch", "env-vizdoom-turbo"}:
+    if provider_id in {"env-gradoom-turbo-torch", "env-vizdoom-turbo"}:
         args = env_args if isinstance(env_args, Mapping) else {}
         vizdoom_config = args.get("vizdoom_config")
         if isinstance(vizdoom_config, Mapping) and "available_buttons" in vizdoom_config:
@@ -185,7 +185,7 @@ def provider_buttons(
             if len(set(buttons)) != len(buttons):
                 raise ValueError("env_args.vizdoom_config.available_buttons cannot repeat a button")
             return buttons
-        if provider_id == "env-doom-turbo-torch":
+        if provider_id == "env-gradoom-turbo-torch":
             return _gradoom_scenario_buttons(game, scenario=args.get("scenario"))
         from vizdoom_turbo import scenario_buttons
 
@@ -530,7 +530,7 @@ def _input_atom(provider_id: str, atom: str) -> str:
             "stick": "left",
             "hit": "right",
         }.get(semantic, semantic)
-    if provider_id in {"env-doom-turbo-torch", "env-vizdoom-turbo"}:
+    if provider_id in {"env-gradoom-turbo-torch", "env-vizdoom-turbo"}:
         return {
             "move_left": "left",
             "move_right": "right",
