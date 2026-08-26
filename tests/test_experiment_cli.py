@@ -520,6 +520,7 @@ def test_bound_attempt_resolves_only_its_selected_coordinator(tmp_path: Path) ->
 
     with (
         mock.patch("gradlab.experiment_cli._load_environment", return_value=report),
+        mock.patch("gradlab.experiment_cli._ensure_coordinator_connection") as connection,
         mock.patch(
             "gradlab.experiment_cli.resolve_dstack_token",
             return_value=("b2-token", "macos-keychain"),
@@ -537,6 +538,7 @@ def test_bound_attempt_resolves_only_its_selected_coordinator(tmp_path: Path) ->
     assert backend.environment["DSTACK_TOKEN"] == "b2-token"
     config.coordinator.assert_called_once_with("b2")
     config.fleet.assert_called_once_with("b2")
+    connection.assert_called_once_with(coordinator)
     token.assert_called_once_with(coordinator)
 
 
@@ -577,6 +579,14 @@ def test_operator_preflight_reports_resolved_project_fleet_and_sources(
     )
     bucket = mock.MagicMock()
     bucket.iter_keys.return_value = iter(())
+    connection_report = SimpleNamespace(
+        as_manifest=lambda: {
+            "mode": "managed-ssh-tunnel",
+            "endpoint": "http://127.0.0.1:3000",
+            "coordinator_id": "primary",
+            "owned": True,
+        }
+    )
     with (
         mock.patch(
             "gradlab.experiment_cli._load_environment",
@@ -588,6 +598,10 @@ def test_operator_preflight_reports_resolved_project_fleet_and_sources(
         ),
         mock.patch("gradlab.experiment_cli.RunAuthority", return_value=mock.MagicMock()),
         mock.patch("gradlab.experiment_cli.R2Bucket", return_value=bucket),
+        mock.patch(
+            "gradlab.experiment_cli._ensure_coordinator_connection",
+            return_value=connection_report,
+        ) as connection,
         mock.patch("gradlab.experiment_cli.DstackBackend.preflight"),
         mock.patch(
             "gradlab.experiment_cli.resolve_dstack_token",
@@ -606,12 +620,29 @@ def test_operator_preflight_reports_resolved_project_fleet_and_sources(
     assert backend.project == "research"
     assert report["dstack"]["coordinator_id"] == "primary"
     assert report["dstack"]["project"] == "research"
+    assert report["dstack"]["connection"] == connection_report.as_manifest()
+    connection.assert_called_once_with(coordinator)
     assert report["compute"] == {
         "local_fleet": "configured-local",
         "source": "operator-config",
         "resources": {"cpu": 12, "memory": "40GB", "gpu": "1", "disk": "50GB"},
         "resources_source": "operator-config",
     }
+
+
+def test_main_always_closes_owned_coordinator_connections() -> None:
+    handler = mock.Mock(side_effect=OperatorConfigurationError("unavailable"))
+    parser = mock.Mock()
+    parser.parse_args.return_value = SimpleNamespace(func=handler)
+
+    with (
+        mock.patch("gradlab.experiment_cli.build_parser", return_value=parser),
+        mock.patch("gradlab.experiment_cli.close_coordinator_connections") as close,
+    ):
+        result = main([])
+
+    assert result == 2
+    close.assert_called_once_with()
 
 
 def test_resume_submit_parser_requires_one_existing_run() -> None:

@@ -17,6 +17,9 @@ GRADLAB_MODELS_R2_PUBLIC_BASE_URL = "https://<public-bucket-id>.r2.dev"
 
 # Coordinator metadata is explicit so each fleet has exactly one control plane.
 # The selected coordinator token is resolved lazily from its Keychain reference.
+# Optional ssh_tunnel metadata lets the CLI reach a loopback-only coordinator
+# from the operator machine. Destinations are tried in order and must all name
+# the same coordinator host (for example, LAN first and private VPN second).
 [dstack]
 default_coordinator = "primary"
 default_fleet = "primary-gpu"
@@ -25,11 +28,13 @@ default_fleet = "primary-gpu"
 project = "<dstack-project>"
 server_url = "http://127.0.0.1:3000"
 token = { service = "gradlab-dstack-admin", account = "<operator-account>" }
+ssh_tunnel = { destinations = ["<ssh-user>@<primary-host>.local", "<ssh-user>@<primary-host-vpn>"], remote_host = "127.0.0.1", remote_port = 3000 }
 
 [dstack.coordinators.secondary]
 project = "<dstack-project>"
 server_url = "http://127.0.0.1:3002"
 token = { service = "gradlab-dstack-admin-secondary", account = "<operator-account>" }
+ssh_tunnel = { destinations = ["<ssh-user>@<secondary-host>.local", "<ssh-user>@<secondary-host-vpn>"], remote_host = "127.0.0.1", remote_port = 3000 }
 
 [dstack.fleets.primary-gpu]
 coordinator = "primary"

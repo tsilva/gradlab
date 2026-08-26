@@ -45,11 +45,19 @@ class KeychainReference:
 
 
 @dataclass(frozen=True)
+class SshTunnelProfile:
+    destinations: tuple[str, ...]
+    remote_host: str
+    remote_port: int
+
+
+@dataclass(frozen=True)
 class DstackCoordinatorProfile:
     coordinator_id: str
     project: str
     server_url: str
     token: KeychainReference
+    ssh_tunnel: SshTunnelProfile | None = None
 
 
 @dataclass(frozen=True)
@@ -260,6 +268,47 @@ def _keychain_reference(value: object, *, label: str) -> KeychainReference:
     return KeychainReference(service=service, account=account)
 
 
+def _ssh_tunnel_profile(value: object, *, label: str) -> SshTunnelProfile | None:
+    if value is None:
+        return None
+    if not isinstance(value, Mapping):
+        raise OperatorConfigurationError(f"{label} must be a mapping")
+    extra = set(value) - {"destinations", "remote_host", "remote_port"}
+    if extra:
+        raise OperatorConfigurationError(
+            f"{label} has unknown keys: " + ", ".join(sorted(str(key) for key in extra))
+        )
+    raw_destinations = value.get("destinations")
+    if not isinstance(raw_destinations, list) or not raw_destinations:
+        raise OperatorConfigurationError(f"{label}.destinations must be a non-empty list")
+    destinations: list[str] = []
+    for index, raw_destination in enumerate(raw_destinations):
+        destination = _profile_name(
+            raw_destination,
+            label=f"{label}.destinations[{index}]",
+        )
+        if destination.startswith("-") or any(character.isspace() for character in destination):
+            raise OperatorConfigurationError(
+                f"{label}.destinations[{index}] must be one SSH destination without options"
+            )
+        destinations.append(destination)
+    if len(set(destinations)) != len(destinations):
+        raise OperatorConfigurationError(f"{label}.destinations must not contain duplicates")
+    remote_host = _profile_name(value.get("remote_host"), label=f"{label}.remote_host")
+    if remote_host.startswith("-") or any(character.isspace() for character in remote_host):
+        raise OperatorConfigurationError(f"{label}.remote_host must be one host name or address")
+    remote_port = value.get("remote_port")
+    if isinstance(remote_port, bool) or not isinstance(remote_port, int):
+        raise OperatorConfigurationError(f"{label}.remote_port must be an integer")
+    if not 1 <= remote_port <= 65535:
+        raise OperatorConfigurationError(f"{label}.remote_port must be between 1 and 65535")
+    return SshTunnelProfile(
+        destinations=tuple(destinations),
+        remote_host=remote_host,
+        remote_port=remote_port,
+    )
+
+
 def _dstack_operator_config(document: Mapping[str, Any]) -> DstackOperatorConfig | None:
     raw_dstack = document.get("dstack") or {}
     if not isinstance(raw_dstack, Mapping):
@@ -298,7 +347,7 @@ def _dstack_operator_config(document: Mapping[str, Any]) -> DstackOperatorConfig
             raise OperatorConfigurationError(
                 f"operator config dstack.coordinators.{coordinator_id} must be a mapping"
             )
-        extra_profile = set(raw_profile) - {"project", "server_url", "token"}
+        extra_profile = set(raw_profile) - {"project", "server_url", "token", "ssh_tunnel"}
         if extra_profile:
             raise OperatorConfigurationError(
                 f"operator config dstack.coordinators.{coordinator_id} has unknown keys: "
@@ -324,6 +373,10 @@ def _dstack_operator_config(document: Mapping[str, Any]) -> DstackOperatorConfig
             token=_keychain_reference(
                 raw_profile.get("token"),
                 label=f"operator config dstack.coordinators.{coordinator_id}.token",
+            ),
+            ssh_tunnel=_ssh_tunnel_profile(
+                raw_profile.get("ssh_tunnel"),
+                label=f"operator config dstack.coordinators.{coordinator_id}.ssh_tunnel",
             ),
         )
     if default_coordinator not in coordinators:
