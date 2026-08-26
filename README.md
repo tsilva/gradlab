@@ -118,14 +118,18 @@ description:
 
 ```bash
 gradlab experiment launch \
-  --goal-file experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml \
   --recipe-file experiments/goals/SuperMarioBros-Nes-v0/Level1-1/recipes/ppo.yaml \
-  --seed 123 \
-  --run-description "Mario Level1-1 PPO seed 123" \
-  --compute local \
-  --max-duration 48h \
-  --json
+  --follow
 ```
+
+The recipe path identifies its owning goal. The launch seed defaults to `12`,
+the description defaults to `<goal> <recipe> seed <seed>`, compute defaults to
+the configured local fleet, and maximum duration defaults to 48 hours.
+`--follow` keeps the command attached after submission, streams authoritative
+run-state changes, and exits when training and its terminal drain are complete.
+Interrupting the client stops the stream without canceling the remote run. Omit
+the flag to retain asynchronous submission. Add `--json` for typed JSON Lines
+events (`launch`, `status`, and `terminal`).
 
 Local compute requires an enrolled fleet in
 `~/.config/gradlab/instances.md`. Paid cloud compute is always bounded and

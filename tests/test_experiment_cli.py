@@ -19,7 +19,10 @@ from gradlab.experiment_cli import (
     _catalog_rebuild_contract_failures,
     _compute,
     _dstack_backend_for_attempt,
+    _finish_launch_command,
+    _follow_run,
     _follow_fingerprint,
+    _goal_path_for_recipe,
     _latest_attempt_terminal,
     _manifest_rom_asset,
     _manifest_vizdoom_iwad,
@@ -33,6 +36,7 @@ from gradlab.experiment_cli import (
     _require_retryable_attempt_terminal,
     _required_operator_environment,
     _run_completed,
+    _run_description,
     _stage_rom,
     _stage_vizdoom_iwad,
     _status,
@@ -269,8 +273,6 @@ def test_launch_parser_exposes_bounded_compute_and_hash_bound_overrides() -> Non
     args = parser.parse_args(
         [
             "launch",
-            "--goal-file",
-            "experiments/goals/goal/_goal.yaml",
             "--recipe-file",
             "experiments/goals/goal/recipes/ppo.yaml",
             "--seed",
@@ -294,6 +296,7 @@ def test_launch_parser_exposes_bounded_compute_and_hash_bound_overrides() -> Non
 
     assert args.recipe_overrides == ["train.backend.config.learning_rate=0.0002"]
     assert args.checkpoint_eval_backend is None
+    assert args.follow is False
     compute = _compute(args)
     assert compute.kind == "spot"
     assert compute.target == "aws"
@@ -313,12 +316,11 @@ def test_fault_test_is_bounded_and_not_exposed_as_a_launch_override() -> None:
     assert forwarded.target is None
     assert forwarded.checkpoint_eval_backend == "none"
     assert forwarded.recipe_overrides == []
+    assert forwarded.follow is False
     assert forwarded.supervision_fault_fixture == "failed-result-live-process"
     launch_args = parser.parse_args(
         [
             "launch",
-            "--goal-file",
-            "experiments/goals/VizdoomBasic-v1/_goal.yaml",
             "--recipe-file",
             "experiments/goals/VizdoomBasic-v1/recipes/ppo.yaml",
             "--seed",
@@ -328,6 +330,99 @@ def test_fault_test_is_bounded_and_not_exposed_as_a_launch_override() -> None:
         ]
     )
     assert not hasattr(launch_args, "supervision_fault_fixture")
+
+
+def test_launch_parser_accepts_native_follow_mode() -> None:
+    args = build_parser().parse_args(
+        [
+            "launch",
+            "--recipe-file",
+            "experiments/goals/CartPole-v1/recipes/ppo.yaml",
+            "--follow",
+            "--json",
+        ]
+    )
+
+    assert args.follow is True
+    assert args.json is True
+    assert args.seed == 12
+    assert args.run_description is None
+    assert args.goal_file is None
+
+
+def test_launch_resolves_goal_and_description_from_recipe() -> None:
+    root = Path("/repo")
+    recipe = root / "experiments/goals/CartPole-v1/recipes/ppo.yaml"
+    goal = _goal_path_for_recipe(root, recipe)
+
+    assert goal == root / "experiments/goals/CartPole-v1/_goal.yaml"
+    assert (
+        _run_description(
+            root=root,
+            goal_path=goal,
+            recipe_path=recipe,
+            seed=12,
+            requested=None,
+        )
+        == "CartPole-v1 ppo seed 12"
+    )
+
+
+def test_launch_rejects_recipe_outside_goal_owned_recipes_directory() -> None:
+    root = Path("/repo")
+
+    with pytest.raises(ValueError, match="launchable recipe must be under"):
+        _goal_path_for_recipe(root, root / "experiments/recipes/_presets/ppo.yaml")
+
+
+def test_launch_follow_emits_launch_event_and_hands_off_in_memory_run_id(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    run_id = "gradlab-" + "c" * 32
+    output = {"schema_version": 1, "run_id": run_id, "attempt_id": "attempt-1234"}
+    args = SimpleNamespace(follow=True, json=True)
+
+    with mock.patch("gradlab.experiment_cli._follow_run", return_value=0) as follow:
+        result = _finish_launch_command(
+            root=tmp_path,
+            args=args,
+            output=output,
+            human_output="unused human output",
+            follow_timeout=43_200,
+        )
+
+    assert result == 0
+    assert json.loads(capsys.readouterr().out)["event"] == "launch"
+    follow.assert_called_once_with(
+        tmp_path,
+        run_id,
+        timeout=43_200,
+        poll_seconds=2.0,
+        json_events=True,
+        terminal_exit_status=True,
+    )
+
+
+def test_launch_without_follow_remains_asynchronous(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    output = {"schema_version": 1, "run_id": "gradlab-" + "d" * 32}
+    args = SimpleNamespace(follow=False, json=True)
+
+    with mock.patch("gradlab.experiment_cli._follow_run") as follow:
+        result = _finish_launch_command(
+            root=tmp_path,
+            args=args,
+            output=output,
+            human_output="unused human output",
+            follow_timeout=43_200,
+        )
+
+    assert result == 0
+    assert json.loads(capsys.readouterr().out) == output
+    follow.assert_not_called()
 
 
 def test_auto_without_cloud_budget_uses_operator_local_fleet() -> None:
@@ -533,8 +628,10 @@ def test_launch_operator_preflight_runs_before_runtime_readiness(
     goal = tmp_path / "experiments/goals/example/_goal.yaml"
     recipe = goal.parent / "recipes/ppo.yaml"
     args = SimpleNamespace(
-        goal_file=goal,
+        goal_file=None,
         recipe_file=recipe,
+        seed=12,
+        run_description=None,
         recipe_overrides=[],
         checkpoint_eval_backend="modal",
         compute="local",
@@ -552,7 +649,7 @@ def test_launch_operator_preflight_runs_before_runtime_readiness(
         mock.patch("gradlab.experiment_cli.current_git_branch", return_value="main"),
         mock.patch(
             "gradlab.experiment_cli._tracked_committed_path",
-            side_effect=[goal, recipe],
+            side_effect=[recipe, goal],
         ),
         mock.patch(
             "gradlab.experiment_cli.compose_resolved_train_documents",
@@ -734,6 +831,91 @@ def test_follow_fingerprint_ignores_only_poll_observation_time() -> None:
         {"attempt_id": "attempt-" + "c" * 16},
     ]
     assert _follow_fingerprint(first) != _follow_fingerprint(second)
+
+
+@pytest.mark.parametrize(
+    ("terminal_state", "expected_exit_code"),
+    [
+        ("succeeded", 0),
+        ("stopped", 0),
+        ("failed", 1),
+        ("canceled", 1),
+        ("interrupted", 1),
+        ("resumable_failure", 1),
+    ],
+)
+def test_launch_follow_streams_json_events_and_reflects_terminal_state(
+    terminal_state: str,
+    expected_exit_code: int,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    run_id = "gradlab-" + "a" * 32
+    running = {
+        "schema_version": 1,
+        "run_id": run_id,
+        "attempt_terminal": None,
+        "completed": False,
+        "dstack": {"status": "running"},
+        "semantic": {},
+    }
+    terminal = {
+        **running,
+        "attempt_terminal": {"state": terminal_state},
+        "completed": True,
+        "dstack": {"status": "done"},
+    }
+
+    with mock.patch(
+        "gradlab.experiment_cli._poll_status",
+        return_value=iter([(running, False), (terminal, False)]),
+    ):
+        result = _follow_run(
+            tmp_path,
+            run_id,
+            timeout=3600,
+            poll_seconds=2.0,
+            json_events=True,
+            terminal_exit_status=True,
+        )
+
+    assert result == expected_exit_code
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [event["event"] for event in events] == ["status", "terminal"]
+    assert events[-1]["attempt_terminal"]["state"] == terminal_state
+
+
+def test_launch_follow_reports_timeout_as_a_json_event(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    run_id = "gradlab-" + "b" * 32
+    status = {
+        "schema_version": 1,
+        "run_id": run_id,
+        "attempt_terminal": None,
+        "completed": False,
+        "dstack": {"status": "unreachable"},
+        "semantic": {},
+    }
+
+    with mock.patch(
+        "gradlab.experiment_cli._poll_status",
+        return_value=iter([(status, True)]),
+    ):
+        result = _follow_run(
+            tmp_path,
+            run_id,
+            timeout=3600,
+            poll_seconds=2.0,
+            json_events=True,
+            terminal_exit_status=True,
+        )
+
+    assert result == 1
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [event["event"] for event in events] == ["status", "follow_timeout"]
+    assert events[-1]["timeout_seconds"] == 3600
 
 
 @pytest.mark.parametrize(
@@ -1179,8 +1361,6 @@ def test_launch_parser_supports_explicit_training_only_runs() -> None:
     args = build_parser().parse_args(
         [
             "launch",
-            "--goal-file",
-            "experiments/goals/goal/_goal.yaml",
             "--recipe-file",
             "experiments/goals/goal/recipes/ppo.yaml",
             "--seed",

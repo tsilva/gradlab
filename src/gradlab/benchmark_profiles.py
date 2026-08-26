@@ -325,14 +325,11 @@ def _command(
 
 
 def _local_smoke_commands(profile: Mapping[str, Any]) -> list[BenchmarkCommand]:
-    goal_file = str(profile["goal_file"])
     recipe_file = str(profile["recipe_file"])
     enqueue = [
         "gradlab",
         "experiment",
         "launch",
-        "--goal-file",
-        goal_file,
         "--recipe-file",
         recipe_file,
         "--seed",

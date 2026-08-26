@@ -73,10 +73,7 @@ on one single-GPU host.
 
 ```bash
 gradlab experiment launch \
-  --goal SuperMarioBros-Nes-v0/Level1-1 \
-  --recipe ppo.yaml \
-  --seed 123 \
-  --run-description "Mario Level1-1 dstack run" \
+  --recipe-file experiments/goals/SuperMarioBros-Nes-v0/Level1-1/recipes/ppo.yaml \
   --compute local
 
 gradlab experiment status --run <gradlab-run-id> --json
