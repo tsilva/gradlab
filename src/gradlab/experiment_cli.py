@@ -93,6 +93,9 @@ from gradlab.vizdoom_assets import (
 
 
 DEFAULT_MAX_DURATION_SECONDS = 48 * 60 * 60
+DEFAULT_FOLLOW_TIMEOUT_SECONDS = 12 * 60 * 60
+LAUNCH_FOLLOW_DRAIN_GRACE_SECONDS = 12 * 60 * 60
+DEFAULT_LAUNCH_SEED = 12
 DEFAULT_ROM_MOUNT = "/var/lib/gradlab/rom-cache:/rom-cache"
 QUIESCENCE_SECONDS = 30.0
 COMMON_SECRET_ENV = (
@@ -635,12 +638,91 @@ def _manifest_vizdoom_iwad(modal: Mapping[str, Any]) -> dict[str, Any] | None:
     return validate_vizdoom_iwad_binding(binding)
 
 
+def _goal_path_for_recipe(root: Path, recipe_path: Path) -> Path:
+    goals_root = (root / "experiments" / "goals").resolve()
+    resolved_recipe = recipe_path.resolve()
+    try:
+        relative_recipe = resolved_recipe.relative_to(goals_root)
+    except ValueError as exc:
+        raise ValueError(
+            "launchable recipe must be under experiments/goals/<goal>/recipes/"
+        ) from exc
+    if len(relative_recipe.parts) < 3 or relative_recipe.parts[-2] != "recipes":
+        raise ValueError("launchable recipe must be under experiments/goals/<goal>/recipes/")
+    return resolved_recipe.parent.parent / "_goal.yaml"
+
+
+def _run_description(
+    *,
+    root: Path,
+    goal_path: Path,
+    recipe_path: Path,
+    seed: int,
+    requested: str | None,
+) -> str:
+    explicit = str(requested or "").strip()
+    if explicit:
+        return explicit
+    goal_slug = goal_path.parent.relative_to(root / "experiments" / "goals").as_posix()
+    return f"{goal_slug} {recipe_path.stem} seed {seed}"
+
+
+def _finish_launch_command(
+    *,
+    root: Path,
+    args: argparse.Namespace,
+    output: Mapping[str, Any],
+    human_output: str,
+    follow_timeout: float,
+) -> int:
+    follow = bool(getattr(args, "follow", False))
+    printed_output = {"event": "launch", **output} if args.json and follow else output
+    print(
+        json.dumps(json_safe(printed_output), sort_keys=True) if args.json else human_output,
+        flush=follow,
+    )
+    if not follow:
+        return 0
+    return _follow_run(
+        root,
+        str(output["run_id"]),
+        timeout=follow_timeout,
+        poll_seconds=2.0,
+        json_events=bool(args.json),
+        terminal_exit_status=True,
+    )
+
+
 def cmd_launch(args: argparse.Namespace) -> int:
     root = repository_root()
     source_sha = clean_git_source_sha(root)
     branch = current_git_branch(root)
-    goal_path = _tracked_committed_path(root, args.goal_file, label="goal")
     recipe_path = _tracked_committed_path(root, args.recipe_file, label="recipe")
+    goal_path = _tracked_committed_path(
+        root,
+        _goal_path_for_recipe(root, recipe_path),
+        label="recipe-owned goal",
+    )
+    requested_goal_file = getattr(args, "goal_file", None)
+    if requested_goal_file is not None:
+        requested_goal_path = _tracked_committed_path(
+            root,
+            requested_goal_file,
+            label="goal",
+        )
+        if requested_goal_path != goal_path:
+            raise ValueError(
+                "--goal-file does not match the goal owned by --recipe-file: "
+                f"{goal_path.relative_to(root)}"
+            )
+    seed = int(args.seed)
+    run_description = _run_description(
+        root=root,
+        goal_path=goal_path,
+        recipe_path=recipe_path,
+        seed=seed,
+        requested=args.run_description,
+    )
     recipe_overrides = tuple(str(value) for value in args.recipe_overrides)
     requested_checkpoint_eval_backend = args.checkpoint_eval_backend
     resolved_documents = compose_resolved_train_documents(
@@ -711,7 +793,7 @@ def cmd_launch(args: argparse.Namespace) -> int:
         goal_slug=goal_slug,
         recipe_slug=recipe_slug,
         recipe_variant=variant_id,
-        seed=int(args.seed),
+        seed=seed,
     )
     modal_app = str(release.modal_app_name or "").strip()
     if checkpoint_eval_backend == "modal" and not modal_app:
@@ -733,8 +815,8 @@ def cmd_launch(args: argparse.Namespace) -> int:
         contract_document,
         repo_root=root,
         source_commit=source_sha,
-        run_description=str(args.run_description),
-        seed=int(args.seed),
+        run_description=run_description,
+        seed=seed,
         runtime_image_ref=release.runtime_image_ref,
         base_materialized_recipe=base_contract_document,
         canonical_goal=resolved_documents.canonical_goal,
@@ -790,8 +872,8 @@ def cmd_launch(args: argparse.Namespace) -> int:
         recipe_sha256=recipe_sha256,
         recipe_overrides=recipe_overrides,
         environment_sha256=str(document["environment_hash"]).removeprefix("sha256:"),
-        seed=int(args.seed),
-        run_description=str(args.run_description),
+        seed=seed,
+        run_description=run_description,
         compute=manifest_compute,
         wandb=wandb,
         modal={
@@ -838,23 +920,26 @@ def cmd_launch(args: argparse.Namespace) -> int:
         "goal_variant_label": goal_variant["label"],
         "recipe_sha256": manifest.recipe_sha256,
         "recipe_overrides": list(recipe_overrides),
-        "seed": int(args.seed),
-        "run_description": str(args.run_description),
+        "seed": seed,
+        "run_description": run_description,
         "submission_key": str(args.submission_key or ""),
         "checkpoint_eval_backend": checkpoint_eval_backend,
         "wandb_url": wandb["url"],
         "public_run_index_url": authority.models.public_url(f"runs/{run_id}/index.json"),
     }
-    print(
-        json.dumps(json_safe(output), sort_keys=True)
-        if args.json
-        else (
+    return _finish_launch_command(
+        root=root,
+        args=args,
+        output=output,
+        human_output=(
             f"run={run_id} task={task.name} compute={selected_compute.kind} "
             f"image={release.runtime_image_ref} wandb={wandb['url']} "
             f"index={output['public_run_index_url']}"
-        )
+        ),
+        follow_timeout=(
+            float(selected_compute.bounded_duration_seconds) + LAUNCH_FOLLOW_DRAIN_GRACE_SECONDS
+        ),
     )
-    return 0
 
 
 def cmd_operator_preflight(args: argparse.Namespace) -> int:
@@ -1239,25 +1324,66 @@ def _poll_status(
         time.sleep(poll_seconds)
 
 
-def cmd_follow(args: argparse.Namespace) -> int:
-    root = repository_root()
+def _terminal_exit_code(value: Mapping[str, Any]) -> int:
+    attempt_terminal = value.get("attempt_terminal")
+    if not isinstance(attempt_terminal, Mapping):
+        return 1
+    return 0 if str(attempt_terminal.get("state") or "") in {"succeeded", "stopped"} else 1
+
+
+def _follow_run(
+    root: Path,
+    run_id: str,
+    *,
+    timeout: float,
+    poll_seconds: float,
+    json_events: bool = False,
+    terminal_exit_status: bool = False,
+) -> int:
     previous = ""
     for value, timed_out in _poll_status(
         root,
-        args.run_id,
-        timeout=float(args.timeout),
-        poll_seconds=float(args.poll_seconds),
+        run_id,
+        timeout=timeout,
+        poll_seconds=poll_seconds,
     ):
-        encoded = canonical_json_text(json_safe(value), ensure_ascii=True)
         fingerprint = _follow_fingerprint(value)
         if fingerprint != previous:
+            event = (
+                {"event": "terminal" if value["completed"] else "status", **value}
+                if json_events
+                else value
+            )
+            encoded = canonical_json_text(json_safe(event), ensure_ascii=True)
             print(encoded, flush=True)
             previous = fingerprint
         if value["completed"]:
-            return 0
+            return _terminal_exit_code(value) if terminal_exit_status else 0
         if timed_out:
+            if json_events:
+                print(
+                    canonical_json_text(
+                        {
+                            "schema_version": 1,
+                            "event": "follow_timeout",
+                            "run_id": run_id,
+                            "timeout_seconds": timeout,
+                        },
+                        ensure_ascii=True,
+                    ),
+                    flush=True,
+                )
             return 1
     raise AssertionError("status poller ended without completion or timeout")
+
+
+def cmd_follow(args: argparse.Namespace) -> int:
+    return _follow_run(
+        repository_root(),
+        args.run_id,
+        timeout=float(args.timeout),
+        poll_seconds=float(args.poll_seconds),
+    )
 
 
 def cmd_wait(args: argparse.Namespace) -> int:
@@ -1409,7 +1535,6 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
 
 def cmd_fault_test(args: argparse.Namespace) -> int:
     launch_args = argparse.Namespace(
-        goal_file=Path("experiments/goals/VizdoomBasic-v1/_goal.yaml"),
         recipe_file=Path("experiments/goals/VizdoomBasic-v1/recipes/ppo.yaml"),
         seed=17,
         run_description=(
@@ -1433,6 +1558,7 @@ def cmd_fault_test(args: argparse.Namespace) -> int:
         existing_runtime_only=bool(args.existing_runtime_only),
         runtime_readiness_timeout=args.runtime_readiness_timeout,
         supervision_fault_fixture=str(args.mode),
+        follow=False,
         json=bool(args.json),
     )
     return cmd_launch(launch_args)
@@ -1859,15 +1985,23 @@ def build_parser() -> argparse.ArgumentParser:
         "launch",
         help="Launch a checked-in goal and recipe with an exact-source runtime image.",
         description=(
-            "Launch one checked-in goal and recipe through dstack. The command requires "
-            "a clean committed source revision and resolves its exact-source immutable "
-            "runtime image before scheduling compute; it never falls back to an older image."
+            "Launch one checked-in goal-owned recipe through dstack. The recipe path "
+            "resolves its owning goal. The command requires a clean committed source "
+            "revision and resolves its exact-source immutable runtime image before "
+            "scheduling compute; it never falls back to an older image."
         ),
     )
-    launch.add_argument("--goal-file", type=Path, required=True)
     launch.add_argument("--recipe-file", type=Path, required=True)
-    launch.add_argument("--seed", type=int, required=True)
-    launch.add_argument("--run-description", required=True)
+    launch.add_argument(
+        "--goal-file",
+        type=Path,
+        help=argparse.SUPPRESS,
+    )
+    launch.add_argument("--seed", type=int, default=DEFAULT_LAUNCH_SEED)
+    launch.add_argument(
+        "--run-description",
+        help="Optional description; defaults to '<goal> <recipe> seed <seed>'.",
+    )
     launch.add_argument(
         "--set",
         dest="recipe_overrides",
@@ -1919,6 +2053,14 @@ def build_parser() -> argparse.ArgumentParser:
         type=_parse_duration,
         default=DEFAULT_RUNTIME_READINESS_TIMEOUT_SECONDS,
     )
+    launch.add_argument(
+        "--follow",
+        action="store_true",
+        help=(
+            "Stream authoritative run-state changes after submission and exit when the "
+            "run is terminal. Interrupting the client does not cancel the run."
+        ),
+    )
     launch.add_argument("--json", action="store_true")
     launch.set_defaults(func=cmd_launch)
 
@@ -1962,7 +2104,7 @@ def build_parser() -> argparse.ArgumentParser:
     follow = commands.add_parser("follow", help="Stream changes in semantic run state.")
     follow.add_argument("--run", dest="run_id", type=_require_run_id, required=True)
     follow.add_argument("--poll-seconds", type=float, default=2.0)
-    follow.add_argument("--timeout", type=_parse_duration, default=12 * 60 * 60)
+    follow.add_argument("--timeout", type=_parse_duration, default=DEFAULT_FOLLOW_TIMEOUT_SECONDS)
     follow.set_defaults(func=cmd_follow)
 
     wait = commands.add_parser("wait", help="Wait for one run state.")

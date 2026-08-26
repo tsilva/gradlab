@@ -19,7 +19,7 @@ When changing dstack host behavior, preserve the root-owned runtime-image cleanu
 ## Stable Retro
 
 - Use PyPI `env-stableretro-turbo`; import path remains `stable_retro`.
-- Current required Turbo API v2 runtimes are `env-stableretro-turbo==1.0.1.post44`, `env-supermariobrosnes-turbo-emu==0.7.0`, `env-breakoutatari2600-turbo-native==0.5.7`, `env-vizdoom-turbo==1.3.0.post27`, and `env-doom-turbo-torch==0.1.0a4`.
+- Current required Turbo API v2 runtimes are `env-stableretro-turbo==1.0.1.post44`, `env-supermariobrosnes-turbo-emu==0.7.0`, `env-breakoutatari2600-turbo-native==0.5.7`, `env-vizdoom-turbo==1.3.0.post27`, and `env-doom-turbo-torch==0.1.0`.
 - Native-vector code should use `stable_retro.RetroVecEnv`, whose constructor follows the original `RetroEnv` positional signature plus vector-only keyword arguments.
 - Runtime version source of truth: the exact pins in `pyproject.toml` and the resolved versions in `uv.lock`. Use `uv sync --frozen`; make overrides explicit in recipes, compute policy, run descriptions, and W&B tags.
 - Every Turbo provider must declare and pass the strict Turbo Vector API v2 contract before gradlab consumes it. Do not add provider probing or legacy fallbacks.
@@ -35,7 +35,7 @@ When changing dstack host behavior, preserve the root-owned runtime-image cleanu
 - Launchable recipes live under their owning active goal's `recipes/` directory and may inherit reusable defaults from `experiments/recipes/_presets/`.
 - Keep generated artifacts out of source control; store runs under `~/.config/gradlab/runs/` and use ignored `logs/` and `models/` paths for other generated outputs.
 - The lease-holding run supervisor is the sole W&B writer. Training attempts use the training-container supervisor; operator-initiated post-training evaluation may use the local background evaluation supervisor after it exclusively acquires the run writer lease. W&B stores metrics, metadata, hashes, and R2 URLs only; checkpoints, evidence, replays, ROMs, and recovery bytes belong in their scoped R2 buckets.
-- Every training run needs a specific description via `--run-description`.
+- Every training run needs a specific description; `gradlab experiment launch` derives one from the goal, recipe, and seed when `--run-description` is omitted.
 - Training tasks are profileless and locked to exact-source immutable runtime-image digests. One task owns one single-GPU host in v1.
 - Logical run IDs are `gradlab-<32 lowercase hex>` and attempt IDs are `attempt-<16 lowercase hex>`. Retries preserve the run ID and create a new attempt ID. Do not introduce numeric database job IDs or batch IDs.
 - Route W&B projects by canonical game family and keep provider identity and `environment_hash` in config. The W&B run ID and group are the immutable gradlab run ID.

@@ -316,9 +316,9 @@ required_metrics: [train/throughput/not_real]
                 shape,
             )
 
-    def test_queue_backed_benchmark_commands_include_goal_and_recipe(self) -> None:
+    def test_queue_backed_benchmark_commands_resolve_goal_from_recipe(self) -> None:
         command = build_benchmark_commands(find_benchmark_profile("local-smoke-mario-l11"))[0]
-        self.assertIn("--goal-file", command.argv)
+        self.assertNotIn("--goal-file", command.argv)
         self.assertIn("--recipe-file", command.argv)
 
     def test_local_smoke_result_gate_requires_successful_terminal_jobs(self) -> None:
