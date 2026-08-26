@@ -9,7 +9,7 @@ train:
   checkpoint_eval_backend: none
   environment:
     # Training uses GraDOOM; the goal-owned checkpoint evaluator remains env-vizdoom-turbo.
-    env_provider: env-doom-turbo-torch
+    env_provider: env-gradoom-turbo-torch
     env_config:
       # GPU-resident GraDOOM scales to thousands of lanes; 2048 won the 128..4096
       # time-to-rolling-kills sweep on beast-3 (~9.5k steps/s, best kills curve).

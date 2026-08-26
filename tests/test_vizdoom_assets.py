@@ -58,7 +58,7 @@ def _vizdoom_document() -> dict:
 
 def _gradoom_document() -> dict:
     document = _vizdoom_document()
-    document["train_config"]["env_provider"] = "env-doom-turbo-torch"
+    document["train_config"]["env_provider"] = "env-gradoom-turbo-torch"
     document["train_config"]["game"] = "VizdoomDeathmatch-v1"
     return document
 

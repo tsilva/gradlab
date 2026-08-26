@@ -1584,7 +1584,7 @@ class GraDoomProviderTests(unittest.TestCase):
                 )
 
         config = EnvConfig(
-            env_provider="env-doom-turbo-torch",
+            env_provider="env-gradoom-turbo-torch",
             game="VizdoomDeathmatch-v1",
             env_args={},
         )

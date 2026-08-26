@@ -38,7 +38,7 @@ def test_gradoom_button_metadata_does_not_import_the_cuda_runtime(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", guarded_import)
 
     assert provider_buttons(
-        "env-doom-turbo-torch",
+        "env-gradoom-turbo-torch",
         "VizdoomDeathmatch-v1",
         env_args={"scenario": "scenario"},
     ) == (

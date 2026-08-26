@@ -6,7 +6,7 @@ cd "$ROOT"
 
 PACKAGES=(
     env-breakoutatari2600-turbo-native
-    env-doom-turbo-torch
+    env-gradoom-turbo-torch
     env-stableretro-turbo
     env-supermariobrosnes-turbo-emu
     env-vizdoom-turbo
@@ -38,7 +38,7 @@ update_cutoffs "${UV_CONFIG_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/uv/uv.toml}"
 
 uv lock \
     --upgrade-package env-breakoutatari2600-turbo-native \
-    --upgrade-package env-doom-turbo-torch \
+    --upgrade-package env-gradoom-turbo-torch \
     --upgrade-package env-stableretro-turbo \
     --upgrade-package env-supermariobrosnes-turbo-emu \
     --upgrade-package env-vizdoom-turbo

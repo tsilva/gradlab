@@ -127,18 +127,18 @@ def test_resolves_vizdoom_turbo_builtin_and_custom_scenarios() -> None:
 
 
 def test_resolves_gradoom_only_for_the_certified_deathmatch_profile() -> None:
-    env_id = "env-doom-turbo-torch:VizdoomDeathmatch-v1"
+    env_id = "env-gradoom-turbo-torch:VizdoomDeathmatch-v1"
 
     resolved = resolve_env_id(env_id)
 
     assert env_id in registered_env_ids()
-    assert resolved.provider_id == "env-doom-turbo-torch"
+    assert resolved.provider_id == "env-gradoom-turbo-torch"
     assert resolved.provider_env_id == "VizdoomDeathmatch-v1"
     assert resolved.import_name == "gradoom"
-    assert environment_spec("env-doom-turbo-torch", resolved.provider_env_id) is environment_spec(
+    assert environment_spec("env-gradoom-turbo-torch", resolved.provider_env_id) is environment_spec(
         "env-vizdoom-turbo", resolved.provider_env_id
     )
-    provider = resolve_env_provider("env-doom-turbo-torch")
+    provider = resolve_env_provider("env-gradoom-turbo-torch")
     assert provider.turbo_api_version == 2
     assert provider.native_episode_horizon is not None
     assert provider.constructor_contract is not None
@@ -151,11 +151,11 @@ def test_resolves_gradoom_only_for_the_certified_deathmatch_profile() -> None:
         "vizdoom_config": {"render_hud": False}
     }
     assert policy_environment_compatibility_id(
-        "env-doom-turbo-torch", "VizdoomDeathmatch-v1"
+        "env-gradoom-turbo-torch", "VizdoomDeathmatch-v1"
     ) == policy_environment_compatibility_id("env-vizdoom-turbo", "VizdoomDeathmatch-v1")
     assert policy_environment_compatibility_id("env-vizdoom-turbo", "VizdoomBasic-v1") is None
     with pytest.raises(ValueError, match="does not register environment"):
-        resolve_env_id("env-doom-turbo-torch:VizdoomBasic-v1")
+        resolve_env_id("env-gradoom-turbo-torch:VizdoomBasic-v1")
 
     with pytest.raises(ValueError, match="unknown environment provider"):
         resolve_env_provider("gradoom")

@@ -5,7 +5,7 @@ constraint-dependencies = [
 ]
 [exclude-newer-package]
 env-breakoutatari2600-turbo-native = false
-env-doom-turbo-torch = false
+env-gradoom-turbo-torch = false
 env-stableretro-turbo = false
 env-supermariobrosnes-turbo-emu = false
 env-vizdoom-turbo = false
