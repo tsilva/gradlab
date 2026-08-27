@@ -67,3 +67,17 @@ When asked to build, cut, tag, publish, or verify a GradLab PyPI release, use th
 
 Use `uv` for dependency resolution and keep `uv.lock` committed. Preserve Python supply-chain hardening in `pyproject.toml`.
 The intentional exceptions to the seven-day `exclude-newer` window are `env-breakoutatari2600-turbo-native`, `env-gradoom-turbo-torch`, `env-stableretro-turbo`, `env-supermariobrosnes-turbo-emu`, and `env-vizdoom-turbo`, because this project tracks current forward native Breakout, Torch-native Doom, Stable Retro, Mario, and ViZDoom runtimes while keeping the rest of the dependency graph age-gated. Keep the per-package cutoffs in `[tool.uv.exclude-newer-package]`, `uv-tool.toml`, and the user-level uv config in sync so `uv tool install . --editable` remains installable without extra flags.
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked in this repository's GitHub Issues. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage roles use their default label names. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This is a single-context repository with a root `CONTEXT.md` and ADRs under `docs/adr/`. See `docs/agents/domain.md`.
