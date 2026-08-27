@@ -122,7 +122,7 @@ AUTOMATIC_EVAL_PROTOCOL = "modal-acceptance-v3"
 WANDB_WARNING_SECONDS = 45.0
 WANDB_UNHEALTHY_SECONDS = 60.0
 WANDB_DRAIN_TIMEOUT_SECONDS = 300.0
-SCRATCH_STOP_FRACTION = 0.80
+SCRATCH_STOP_FRACTION = 0.95
 METRIC_JOURNAL_RETENTION_DAYS = 7
 HEALTH_SAMPLE_SECONDS = 15.0
 WANDB_REMOTE_PROBE_SECONDS = 30.0
@@ -1936,8 +1936,8 @@ class RunSupervisor:
     def _scratch_guard(self) -> None:
         usage = self.runtime.disk_usage(self.output_root)
         fraction = usage.used / max(usage.total, 1)
-        if fraction >= SCRATCH_STOP_FRACTION:
-            self._request_learner_stop("scratch_storage_above_80_percent")
+        if fraction > SCRATCH_STOP_FRACTION:
+            self._request_learner_stop("scratch_storage_above_95_percent")
             raise RuntimeError(
                 f"scratch storage is {fraction:.1%} full; stopped before evidence loss"
             )
