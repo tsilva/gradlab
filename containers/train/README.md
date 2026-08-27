@@ -7,9 +7,11 @@ checkpoints, W&B data, or run outputs.
 The learner writes structured events and checkpoint notifications to local
 SQLite. The supervisor is the only networked process: it owns the R2 writer
 lease, uploads immutable checkpoints, dispatches Modal evaluations, and is the
-sole W&B writer. A task is successful only after the terminal drain proves that
-all ready checkpoints have terminal evaluations and W&B reached its durable
-high-water mark.
+sole W&B writer. A task is successful only after the terminal drain proves the
+complete checkpoint inventory, the terminal status of every automatically
+submitted evaluation, and W&B's durable high-water mark. Checkpoints not
+admitted for evaluation before Acceptance can remain unevaluated for later
+explicit action.
 
 ## Image contract
 

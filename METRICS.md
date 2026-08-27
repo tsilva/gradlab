@@ -3,6 +3,13 @@
 This file is the source of truth for gradlab telemetry. The Python registry loads the table below
 and requires every emitted metric to match an exact registry entry or a bounded template.
 
+`Training Success` is a provisional Run classification produced by a Research Goal's declared
+threshold over training-time metrics. It is a cheap proxy used to classify and compare Runs; it
+does not establish that a Research Goal is solved. `Acceptance` is the separate determination from
+an Evaluated Goal's stricter checkpoint evaluation on seeds different from the training seeds.
+Only Acceptance can authorize Promotion, and neither metric delivery nor its W&B projection is the
+authority for that decision.
+
 ## Surfaces and dimensions
 
 - W&B is the authoritative scientific metric surface. One supervisor process inside the training
