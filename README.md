@@ -58,8 +58,9 @@ gradlab train Blackjack-v1/ppo
 
 Use `gymnasium:<environment-id>` for the qualified environment ID. These goals
 use isolated spawned lanes, explicit masked resets, native rewards, and RGB
-rendering through the same training, evaluation, publication, and playback
-workflows as other GradLab providers. Native categorical observations remain
+rendering through the same training, checkpoint-publication, and playback
+workflows as other GradLab providers. They can establish Training Success but
+cannot establish Acceptance, Promotion, or Release. Native categorical observations remain
 categorical; Blackjack uses the fixed `MultiDiscrete([32, 11, 2])` encoding
 `(player sum, dealer card, usable ace)`.
 
@@ -145,9 +146,9 @@ explicitly authorized. See [COMPUTE.md](COMPUTE.md) and the
 - GradLab requires Python 3.14 and uses `uv` with a committed lockfile and a
   seven-day dependency age gate. Supported binary targets are macOS arm64 and
   Linux x86_64.
-- Local `gradlab train` runs disable W&B and checkpoint evaluation by default.
-  They are training-only and cannot establish goal acceptance or checkpoint
-  promotion.
+- Local `gradlab train` Runs disable W&B and acceptance evaluation by default.
+  They can establish Training Success but cannot establish Acceptance or
+  Promotion.
 - `gradlab.ppo` is the opt-in tensor-native PPO backend. It accepts the
   `sb3.ppo` configuration surface plus `precision` (`fp32`, `amp-fp16`, or
   `amp-bf16`) and an `execution_profile`. `sb3-parity` preserves SB3's eager,
@@ -166,9 +167,11 @@ explicitly authorized. See [COMPUTE.md](COMPUTE.md) and the
 - dstack task success is not scientific success. A queued run succeeds only
   when its terminal receipt proves checkpoint publication, evaluation drain,
   promotion state, and metric delivery.
-- [SPECS.md](SPECS.md) defines product requirements, [METRICS.md](METRICS.md)
-  defines metric semantics, and [experiments/README.md](experiments/README.md)
-  explains the checked-in research contracts.
+- [SPECS.md](SPECS.md) defines project-wide product requirements,
+  [docs/specs/](docs/specs/README.md) defines scoped product requirements,
+  [METRICS.md](METRICS.md) defines metric semantics, and
+  [experiments/README.md](experiments/README.md) explains the checked-in
+  research contracts.
 
 ## Architecture
 
