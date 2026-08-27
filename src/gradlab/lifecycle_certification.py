@@ -1457,11 +1457,19 @@ def _scenario_scratch_preservation_stop(root: Path) -> dict[str, Any]:
         step=560,
         source="learner",
     )
+    scratch_usage = {"used": 95}
     prepared.runtime.disk_usage = lambda _path: SimpleNamespace(
         total=100,
-        used=81,
-        free=19,
+        used=scratch_usage["used"],
+        free=100 - scratch_usage["used"],
     )
+    fixture.clock.advance(5)
+    boundary_continued = True
+    try:
+        supervisor.active_iteration()
+    except RuntimeError:
+        boundary_continued = False
+    scratch_usage["used"] = 96
     fixture.clock.advance(5)
     stopped = False
     try:
@@ -1469,18 +1477,20 @@ def _scenario_scratch_preservation_stop(root: Path) -> dict[str, Any]:
     except RuntimeError as exc:
         stopped = "evidence loss" in str(exc)
     recorder.require(
-        "scratch-pressure-stops-before-evidence-loss",
-        stopped
-        and supervisor.stop_reason == "scratch_storage_above_80_percent"
+        "scratch-pressure-stops-only-above-95-percent",
+        boundary_continued
+        and stopped
+        and supervisor.stop_reason == "scratch_storage_above_95_percent"
         and supervisor.store.metric_segment_high_water() == 1,
         evidence={
+            "boundary_continued": boundary_continued,
             "stop_reason": supervisor.stop_reason,
             "r2_high_water": supervisor.store.metric_segment_high_water(),
         },
     )
     return {
         "invariants": recorder.invariants,
-        "evidence": {"scratch_used_fraction": 0.81},
+        "evidence": {"continued_fraction": 0.95, "stopped_fraction": 0.96},
     }
 
 

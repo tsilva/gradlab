@@ -386,7 +386,7 @@ export function runFinishPresentation(item) {
     pre_submit_failure: "Submission failed",
     supervisor_startup_failure: "Supervisor failed to start",
     supervisor_failure: "Supervisor failed",
-    scratch_storage_above_80_percent: "Scratch storage limit reached",
+    scratch_storage_above_95_percent: "Scratch storage limit reached",
   };
   return {
     label: known[reason] || humanizeMetricPart(reason),
