@@ -23,7 +23,7 @@ When changing dstack host behavior, preserve the root-owned runtime-image cleanu
 ## Stable Retro
 
 - Use PyPI `env-stableretro-turbo`; import path remains `stable_retro`.
-- Current required Turbo API v2 runtimes are `env-stableretro-turbo==1.0.1.post44`, `env-supermariobrosnes-turbo-emu==0.7.0`, `env-breakoutatari2600-turbo-native==0.5.7`, `env-vizdoom-turbo==1.3.0.post27`, and `env-gradoom-turbo-torch==0.2.0`.
+- Current required Turbo API v2 runtimes are `env-stableretro-turbo==1.0.1.post44`, `env-supermariobrosnes-turbo-emu==0.7.0`, `env-breakoutatari2600-turbo-native==0.5.8`, `env-vizdoom-turbo==1.3.0.post27`, and `env-gradoom-turbo-torch==0.2.0`.
 - Native-vector code should use `stable_retro.RetroVecEnv`, whose constructor follows the original `RetroEnv` positional signature plus vector-only keyword arguments.
 - Runtime version source of truth: the exact pins in `pyproject.toml` and the resolved versions in `uv.lock`. Use `uv sync --frozen`; make overrides explicit in recipes, compute policy, run descriptions, and W&B tags.
 - Every Turbo provider must declare and pass the strict Turbo Vector API v2 contract before gradlab consumes it. Do not add provider probing or legacy fallbacks.

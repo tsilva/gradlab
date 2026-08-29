@@ -303,7 +303,7 @@ def ale_py_atari_vector_env_type():
 
 def breakout_turbo_vec_env_type():
     try:
-        from breakout_turbo_env import BreakoutVecEnv
+        from env_breakoutatari2600_turbo_native import BreakoutVecEnv
     except ImportError as exc:
         raise ImportError(
             "env-breakoutatari2600-turbo-native provider requires env-breakoutatari2600-turbo-native",

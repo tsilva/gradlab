@@ -108,7 +108,7 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_explicit_goal_arg_contract_covers_provider_signatures(self) -> None:
         from ale_py.vector_env import AtariVectorEnv
-        from breakout_turbo_env import BreakoutVecEnv
+        from env_breakoutatari2600_turbo_native import BreakoutVecEnv
         from gradlab.bandit_env import BanditVectorEnv
         from stable_retro import RetroVecEnv
         from supermariobrosnes_turbo import SuperMarioBrosNesTurboVecEnv

@@ -42,7 +42,7 @@ def smoke_lunar_lander() -> None:
 def smoke_breakout_render() -> None:
     import numpy as np
 
-    from breakout_turbo_env import BreakoutVecEnv
+    from env_breakoutatari2600_turbo_native import BreakoutVecEnv
 
     env = BreakoutVecEnv(
         "Breakout-Atari2600-v0",

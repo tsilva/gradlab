@@ -37,6 +37,12 @@ CAPABILITY_KEYS = (
     "supports_sticky_action_prob",
     "supports_surface_variants",
 )
+FILTERED_ACTION_CAPABILITY = "supported_filtered_actions"
+FILTERED_ACTION_CAPABILITY_KEYS = (
+    CAPABILITY_KEYS[0],
+    FILTERED_ACTION_CAPABILITY,
+    *CAPABILITY_KEYS[1:],
+)
 SEQUENCE_CAPABILITIES = CAPABILITY_KEYS[:7]
 FEATURE_METHODS = MappingProxyType(
     {
@@ -172,9 +178,10 @@ def validate_turbo_vector_env(env: Any, provider_id: str) -> TurboApiContract:
     capabilities = _require_mapping(getattr(env, "capabilities", None), "capabilities")
     if not isinstance(capabilities, IMMUTABLE_MAPPING_TYPE):
         raise TypeError(f"{provider_id} capabilities must be immutable")
-    if tuple(capabilities) != CAPABILITY_KEYS:
+    capability_keys = tuple(capabilities)
+    if capability_keys not in {CAPABILITY_KEYS, FILTERED_ACTION_CAPABILITY_KEYS}:
         missing = set(CAPABILITY_KEYS) - set(capabilities)
-        extra = set(capabilities) - set(CAPABILITY_KEYS)
+        extra = set(capabilities) - set(FILTERED_ACTION_CAPABILITY_KEYS)
         raise RuntimeError(
             f"{provider_id} capabilities mismatch or order drift; "
             f"missing={sorted(missing)}, extra={sorted(extra)}"
@@ -212,6 +219,34 @@ def validate_turbo_vector_env(env: Any, provider_id: str) -> TurboApiContract:
         value is not None and not isinstance(value, str) for value in buttons
     ):
         raise TypeError(f"{provider_id} buttons must be an immutable tuple of labels")
+    if FILTERED_ACTION_CAPABILITY in capabilities:
+        filtered_actions = capabilities[FILTERED_ACTION_CAPABILITY]
+        if not isinstance(filtered_actions, tuple) or any(
+            not isinstance(row, tuple) for row in filtered_actions
+        ):
+            raise TypeError(
+                f"{provider_id} capability {FILTERED_ACTION_CAPABILITY!r} must be an "
+                "immutable tuple of tuples"
+            )
+        if not filtered_actions or len(set(filtered_actions)) != len(filtered_actions):
+            raise ValueError(
+                f"{provider_id} capability {FILTERED_ACTION_CAPABILITY!r} must be "
+                "non-empty and unique"
+            )
+        if any(len(row) != len(buttons) for row in filtered_actions):
+            raise ValueError(
+                f"{provider_id} capability {FILTERED_ACTION_CAPABILITY!r} rows must "
+                "match the button transport width"
+            )
+        if any(
+            not isinstance(value, int) or isinstance(value, bool) or value not in {0, 1}
+            for row in filtered_actions
+            for value in row
+        ):
+            raise TypeError(
+                f"{provider_id} capability {FILTERED_ACTION_CAPABILITY!r} rows must "
+                "contain integer zeros and ones"
+            )
     table = getattr(env, "action_table")
     meanings = getattr(env, "action_meanings")
     table_hash = getattr(env, "action_table_hash")

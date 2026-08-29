@@ -22,7 +22,7 @@ from gradlab.preprocessing import preprocessing_contract
 RUNTIME_VERSION_PACKAGES = {
     "stable_retro_turbo": "env-stableretro-turbo",
     "supermariobrosnes_turbo": "env-supermariobrosnes-turbo-emu",
-    "breakout_turbo_env": "env-breakoutatari2600-turbo-native",
+    "env_breakoutatari2600_turbo_native": "env-breakoutatari2600-turbo-native",
     "vizdoom_turbo": "env-vizdoom-turbo",
     "stable_baselines3": "stable-baselines3",
 }

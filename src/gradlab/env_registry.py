@@ -500,7 +500,7 @@ GRADOOM_PROVIDER = EnvProvider(
 
 BREAKOUT_TURBO_ENV_PROVIDER = EnvProvider(
     provider_id="env-breakoutatari2600-turbo-native",
-    import_name="breakout_turbo_env",
+    import_name="env_breakoutatari2600_turbo_native",
     distribution_name="env-breakoutatari2600-turbo-native",
     environments={
         "Breakout-Atari2600-v0": EnvRegistration("Breakout-Atari2600-v0"),

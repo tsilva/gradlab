@@ -456,7 +456,7 @@ class BreakoutTurboProviderTests(unittest.TestCase):
 
     def test_runtime_matches_turbo_api_v2_release(self) -> None:
         installed = Version(importlib.metadata.version("env-breakoutatari2600-turbo-native"))
-        self.assertEqual(installed, Version("0.5.7"))
+        self.assertEqual(installed, Version("0.5.8"))
 
     def test_player_boundary_renders_canonical_stella_rgb(self) -> None:
         env = make_vec_envs(self.config(), 1, 17)
