@@ -1403,22 +1403,26 @@ class RunSupervisorTests(unittest.TestCase):
 
         self.assertEqual(supervisor.wandb_remote_high_water, 777)
 
-    def test_wandb_delivery_drain_accepts_flattened_max_summary(self) -> None:
+    def test_wandb_delivery_drain_accepts_stale_reducer_with_current_step(self) -> None:
         supervisor = self.supervisor()
         supervisor.store.init()
         supervisor.wandb_run_path = f"entity/project/{self.run_id}"
         supervisor.runtime.remote_summary = MagicMock(
-            return_value={"orchestration/event/sequence.max": 777}
+            return_value={
+                "orchestration/event/sequence.max": 777,
+                "_step": 778,
+            }
         )
 
         with (
             patch.object(supervisor, "_lease_heartbeat"),
+            patch.object(supervisor.clock, "monotonic", side_effect=[0.0, 2.0, 300.0]),
             patch.object(supervisor.clock, "sleep") as sleep,
         ):
-            supervisor._wait_for_remote_delivery(777)
+            supervisor._wait_for_remote_delivery(778)
 
         sleep.assert_not_called()
-        self.assertEqual(supervisor.wandb_remote_high_water, 777)
+        self.assertEqual(supervisor.wandb_remote_high_water, 778)
 
     def test_materializes_exact_mario_acceptance_contract(self) -> None:
         supervisor = self.supervisor()
