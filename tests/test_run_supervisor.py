@@ -14,7 +14,9 @@ from gradlab.eval_backend import EvalHandle, EvalPoll
 from gradlab.file_utils import atomic_write_json
 from gradlab.goal_variants import build_goal_variant_descriptor
 from gradlab.metric_names import (
+    ORCHESTRATION_EVENT_SEQUENCE,
     TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN,
+    summary_metric_value,
     summary_value,
 )
 from gradlab.manual_evaluation import ManualEvaluationSupervisor
@@ -859,6 +861,20 @@ class RunSupervisorTests(unittest.TestCase):
 
         self.assertEqual(summary_value({"max": 10}), 10)
         self.assertEqual(summary_value(SummarySubDict({"max": 10})), 10)
+        self.assertEqual(
+            summary_metric_value(
+                {ORCHESTRATION_EVENT_SEQUENCE: SummarySubDict({"max": 10})},
+                ORCHESTRATION_EVENT_SEQUENCE,
+            ),
+            10,
+        )
+        self.assertEqual(
+            summary_metric_value(
+                {f"{ORCHESTRATION_EVENT_SEQUENCE}.max": 777},
+                ORCHESTRATION_EVENT_SEQUENCE,
+            ),
+            777,
+        )
 
     def test_health_publication_keeps_only_the_v19_operational_surface(self) -> None:
         supervisor = self.supervisor()
@@ -1370,6 +1386,39 @@ class RunSupervisorTests(unittest.TestCase):
 
         self.assertEqual(api.path, supervisor.wandb_run_path)
         self.assertEqual(supervisor.wandb_remote_high_water, 10)
+
+    def test_wandb_remote_probe_reads_flattened_max_summary(self) -> None:
+        supervisor = self.supervisor()
+        supervisor.store.init()
+        supervisor.wandb_run_path = f"entity/project/{self.run_id}"
+        supervisor.runtime.remote_summary = MagicMock(
+            return_value={"orchestration/event/sequence.max": 777}
+        )
+
+        supervisor._probe_wandb_remote(
+            10.0,
+            local_high_water=777,
+            force=True,
+        )
+
+        self.assertEqual(supervisor.wandb_remote_high_water, 777)
+
+    def test_wandb_delivery_drain_accepts_flattened_max_summary(self) -> None:
+        supervisor = self.supervisor()
+        supervisor.store.init()
+        supervisor.wandb_run_path = f"entity/project/{self.run_id}"
+        supervisor.runtime.remote_summary = MagicMock(
+            return_value={"orchestration/event/sequence.max": 777}
+        )
+
+        with (
+            patch.object(supervisor, "_lease_heartbeat"),
+            patch.object(supervisor.clock, "sleep") as sleep,
+        ):
+            supervisor._wait_for_remote_delivery(777)
+
+        sleep.assert_not_called()
+        self.assertEqual(supervisor.wandb_remote_high_water, 777)
 
     def test_materializes_exact_mario_acceptance_contract(self) -> None:
         supervisor = self.supervisor()
