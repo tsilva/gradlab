@@ -68,7 +68,7 @@ def test_resolves_registered_stable_retro_turbo_atari_env_ids() -> None:
         assert env_supports_states("env-stableretro-turbo", game)
 
 
-def test_resolves_registered_breakout_turbo_env_id() -> None:
+def test_resolves_registered_breakout_turbo_native_env_id() -> None:
     env_id = "env-breakoutatari2600-turbo-native:Breakout-Atari2600-v0"
 
     resolved = resolve_env_id(env_id)
@@ -77,7 +77,7 @@ def test_resolves_registered_breakout_turbo_env_id() -> None:
     assert resolved.qualified_id == env_id
     assert resolved.provider_id == "env-breakoutatari2600-turbo-native"
     assert resolved.provider_env_id == "Breakout-Atari2600-v0"
-    assert resolved.import_name == "breakout_turbo_env"
+    assert resolved.import_name == "env_breakoutatari2600_turbo_native"
     assert env_supports_states("env-breakoutatari2600-turbo-native", "Breakout-Atari2600-v0")
 
     with pytest.raises(ValueError, match="does not register environment"):

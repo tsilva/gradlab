@@ -233,12 +233,12 @@ import json, sys
 from gradlab.env_cli import main
 assert 'stable_retro' not in sys.modules
 assert 'supermariobrosnes_turbo' not in sys.modules
-assert 'breakout_turbo_env' not in sys.modules
+assert 'env_breakoutatari2600_turbo_native' not in sys.modules
 assert 'vizdoom_turbo' not in sys.modules
 assert main(['list', '--json']) == 0
 assert 'stable_retro' not in sys.modules
 assert 'supermariobrosnes_turbo' not in sys.modules
-assert 'breakout_turbo_env' not in sys.modules
+assert 'env_breakoutatari2600_turbo_native' not in sys.modules
 assert 'vizdoom_turbo' not in sys.modules
 """
     result = subprocess.run(

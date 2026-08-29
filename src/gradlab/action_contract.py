@@ -127,7 +127,7 @@ def _packaged_action_sets(provider_id: str, game: str) -> Mapping[str, Any]:
     else:
         package = {
             "env-supermariobrosnes-turbo-emu": "supermariobrosnes_turbo",
-            "env-breakoutatari2600-turbo-native": "breakout_turbo_env",
+            "env-breakoutatari2600-turbo-native": "env_breakoutatari2600_turbo_native",
         }.get(provider_id)
         if package is None:
             return {}
@@ -195,7 +195,7 @@ def provider_buttons(
 
         return tuple(NES_BUTTONS)
     if provider_id == "env-breakoutatari2600-turbo-native":
-        from breakout_turbo_env import BUTTONS
+        from env_breakoutatari2600_turbo_native import BUTTONS
 
         return tuple(BUTTONS)
     if provider_id == "env-stableretro-turbo":
