@@ -38,12 +38,10 @@ from gradlab.metric_names import (
     ORCHESTRATION_CHECKPOINT_PENDING_COUNT,
     ORCHESTRATION_DRAIN_GPU_IDLE_SECONDS,
     ORCHESTRATION_EVAL_PENDING_COUNT,
-    ORCHESTRATION_EVENT_SEQUENCE,
     ORCHESTRATION_OUTBOX_OLDEST_AGE_SECONDS,
     ORCHESTRATION_OUTBOX_PENDING_COUNT,
     ORCHESTRATION_OUTBOX_REMOTE_VISIBILITY_LAG_SECONDS,
     ORCHESTRATION_SCRATCH_USED_FRACTION,
-    summary_metric_value,
 )
 from gradlab.metric_store import metric_store_path
 from gradlab.model_sources import download_public_checkpoint_manifest_source
@@ -105,7 +103,11 @@ from gradlab.training_lifecycle import (
     TrainingExecutionMode,
 )
 from gradlab.trusted_inputs import stage_model_input
-from gradlab.wandb_publisher import WandbProjector, promotion_summary_matches
+from gradlab.wandb_publisher import (
+    WandbProjector,
+    promotion_summary_matches,
+    wandb_delivery_high_water,
+)
 from gradlab.vizdoom_assets import (
     bind_vizdoom_iwad_to_document,
     install_vizdoom_iwad_file,
@@ -1967,9 +1969,7 @@ class RunSupervisor:
         self.last_remote_probe = now
         try:
             remote_summary = self.runtime.remote_summary(self.wandb_run_path)
-            remote_high_water = int(
-                summary_metric_value(remote_summary, ORCHESTRATION_EVENT_SEQUENCE) or 0
-            )
+            remote_high_water = wandb_delivery_high_water(remote_summary)
             self.wandb_remote_high_water = max(
                 self.wandb_remote_high_water,
                 remote_high_water,

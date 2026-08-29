@@ -26,6 +26,7 @@ from gradlab.metric_names import (
     ORCHESTRATION_RUN_TERMINAL_STATE,
     leader_metric_for_rank_metric,
     require_current_metrics_schema,
+    summary_metric_value,
     summary_value,
     validate_metric_payload,
 )
@@ -51,6 +52,14 @@ def _write_wandb_identity(run, run_dir: str) -> None:
         value = getattr(run, attribute, None)
         if value:
             Path(run_dir, filename).write_text(f"{value}\n", encoding="utf-8")
+
+
+def wandb_delivery_high_water(summary: Mapping[str, Any]) -> int:
+    reducer_high_water = int(
+        summary_metric_value(summary, ORCHESTRATION_EVENT_SEQUENCE) or 0
+    )
+    history_high_water = int(summary_value(summary.get("_step")) or 0)
+    return max(reducer_high_water, history_high_water)
 
 
 def _wandb_tags(value: Any) -> list[str]:

@@ -42,9 +42,7 @@ from gradlab.metric_names import (
     EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
     EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MEAN,
     EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MIN,
-    ORCHESTRATION_EVENT_SEQUENCE,
     eval_full_progress_metric,
-    summary_metric_value,
 )
 from gradlab.modal_eval_backend import ModalEvalBackend
 from gradlab.modal_eval_config import ModalEvalConfig, load_modal_eval_config
@@ -67,7 +65,7 @@ from gradlab.run_contracts import (
 from gradlab.runtime_refs import RuntimeImageInfo, modal_readiness_for_release
 from gradlab.supervisor_ledger import SupervisorLedger
 from gradlab.supervisor_runtime import SupervisorRuntime
-from gradlab.wandb_publisher import promotion_summary_matches
+from gradlab.wandb_publisher import promotion_summary_matches, wandb_delivery_high_water
 
 
 MANUAL_EVAL_PROTOCOL = "modal-acceptance-v4"
@@ -617,7 +615,7 @@ class ManualEvaluationSupervisor:
             row = connection.execute("SELECT COALESCE(MAX(id), 0) FROM metric_frames").fetchone()
         high_water = event_seq_offset + int(row[0] if row else 0)
         remote = self.runtime.remote_summary(self._wandb_run_path(context.manifest))
-        if int(summary_metric_value(remote, ORCHESTRATION_EVENT_SEQUENCE) or 0) < high_water:
+        if wandb_delivery_high_water(remote) < high_water:
             return False
         self.authority.control.put_json(
             projection_key,
