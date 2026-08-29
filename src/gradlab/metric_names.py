@@ -361,6 +361,16 @@ def summary_value(value: Any) -> Any:
     return value
 
 
+def summary_metric_value(summary: Mapping[str, Any], name: str) -> Any:
+    direct = summary_value(summary.get(name))
+    if direct is not None:
+        return direct
+    definition = metric_definition(name)
+    if definition is None or definition.summary_reducer == "none":
+        return None
+    return summary_value(summary.get(f"{name}.{definition.summary_reducer}"))
+
+
 def metric_path_segment(value: object) -> str:
     segment = str(value).strip()
     if not segment or _SAFE_SEGMENT_RE.fullmatch(segment) is None:

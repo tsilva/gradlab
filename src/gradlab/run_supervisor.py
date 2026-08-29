@@ -43,7 +43,7 @@ from gradlab.metric_names import (
     ORCHESTRATION_OUTBOX_PENDING_COUNT,
     ORCHESTRATION_OUTBOX_REMOTE_VISIBILITY_LAG_SECONDS,
     ORCHESTRATION_SCRATCH_USED_FRACTION,
-    summary_value,
+    summary_metric_value,
 )
 from gradlab.metric_store import metric_store_path
 from gradlab.model_sources import download_public_checkpoint_manifest_source
@@ -1966,10 +1966,10 @@ class RunSupervisor:
             return
         self.last_remote_probe = now
         try:
-            remote_value = self.runtime.remote_summary(self.wandb_run_path).get(
-                ORCHESTRATION_EVENT_SEQUENCE
+            remote_summary = self.runtime.remote_summary(self.wandb_run_path)
+            remote_high_water = int(
+                summary_metric_value(remote_summary, ORCHESTRATION_EVENT_SEQUENCE) or 0
             )
-            remote_high_water = int(summary_value(remote_value) or 0)
             self.wandb_remote_high_water = max(
                 self.wandb_remote_high_water,
                 remote_high_water,
