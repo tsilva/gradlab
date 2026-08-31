@@ -519,7 +519,7 @@ test("goal configuration metadata and exact changes render as tables", async () 
   );
 });
 
-test("goal activity unifies variants with recent and best runs", async () => {
+test("goal activity shows recent runs directly without section chrome", async () => {
   const source = await readFile(
     new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
     "utf8",
@@ -534,10 +534,25 @@ test("goal activity unifies variants with recent and best runs", async () => {
     source,
     /this\.route\.level === "goal_variants"\s*&& this\.activityHasActiveRuns/,
   );
-  assert.match(source, /heading\.textContent = "Runs using this configuration"/);
-  assert.match(source, /\["recent", "Recent"\]/);
-  assert.match(source, /\["best", "Best"\]/);
+  assert.doesNotMatch(source, /Runs using this configuration/);
+  assert.doesNotMatch(source, /goal-configuration-runs-header/);
+  assert.doesNotMatch(source, /goal-configuration-run-sort/);
+  assert.doesNotMatch(source, /goalVariantRunSort/);
+  assert.match(source, /const baseItems = page\?\.items\?\.length\s*\? page\.items\s*:\s*variant\.recent_runs;/);
   assert.match(source, /page\?\.nextCursor \? "Load more" : "Load older runs"/);
+
+  const styles = await readFile(
+    new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    styles,
+    /\.goal-configuration-runs\s*\{[^}]*padding: 0;/,
+  );
+  assert.match(
+    styles,
+    /\.goal-configuration-run-list\s*\{[^}]*border: 0;[^}]*border-radius: 0;[^}]*margin: 0;/,
+  );
 });
 
 test("run checkpoint pages refresh only on explicit request", (context) => {
