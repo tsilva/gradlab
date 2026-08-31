@@ -24,6 +24,7 @@ import {
   lineLegendPresentation,
   lineLegendPresentationAtIndex,
   lineBlockFootPresentation,
+  rewardSummaryCards,
   selectedPoint,
   statsBlockFoot,
 } from "../../src/gradlab/web_player/panels/telemetry-panel.js";
@@ -86,6 +87,25 @@ test("policy distributions omit the redundant action summary caption", () => {
   assert.doesNotMatch(
     telemetryPanelSource,
     /executed actions? in the retained episode|setActionComparisonCaption/,
+  );
+});
+
+test("reward totals show pre-clip and post-clip values without a formula", () => {
+  assert.doesNotMatch(telemetryPanelSource, /reward-transform-strip/);
+  assert.doesNotMatch(telemetryPanelSource, /reward-ledger-summary-detail/);
+  assert.deepEqual(
+    rewardSummaryCards({
+      positive: 4,
+      negative: -2,
+      preclip: 2,
+      final: 2,
+    }),
+    [
+      ["Bonuses", 4, "positive"],
+      ["Penalties", -2, "negative"],
+      ["Pre-clip", 2, "preclip"],
+      ["Post-clip", 2, "postclip"],
+    ],
   );
 });
 

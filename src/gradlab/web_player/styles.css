@@ -1658,27 +1658,6 @@ select {
 }
 .reward-analysis-state.protocol-error,
 .reward-analysis-state.partial-history { color: var(--color-training-text); }
-.reward-transform-strip {
-  display: flex;
-  align-items: center;
-  gap: .38rem;
-  flex-wrap: wrap;
-  padding: .52rem .62rem;
-  border: 1px solid var(--color-training-text);
-  border-radius: .45rem;
-  background: var(--color-training-surface);
-  color: var(--color-training-text);
-  font-family: var(--font-family-mono);
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-semibold);
-  font-variant-numeric: tabular-nums;
-}
-.reward-transform-strip span + span::before {
-  content: "→";
-  margin-right: .38rem;
-  color: var(--color-text-muted);
-}
-.reward-transform-strip .final { color: var(--color-series-lavender); }
 .reward-ledger-scroll { max-height: none; }
 .reward-ledger-table { min-width: 45rem; }
 .reward-ledger-table th,
@@ -1735,14 +1714,14 @@ select {
 .reward-zero-bar span.zero { left: 50%; width: 0; }
 .reward-ledger-summary {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: .55rem;
   margin-top: .7rem;
 }
 .reward-ledger-summary > div {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: baseline;
-  justify-content: space-between;
   gap: .5rem;
   padding: .55rem .65rem;
   border: 1px solid var(--color-border);
@@ -1759,8 +1738,8 @@ select {
 }
 .reward-ledger-summary .positive strong { color: var(--color-evaluation-text); }
 .reward-ledger-summary .negative strong { color: var(--color-error-text); }
-.reward-ledger-summary .final { border-color: var(--color-series-lavender); }
-.reward-ledger-summary .final strong { color: var(--color-series-lavender); }
+.reward-ledger-summary .postclip { border-color: var(--color-series-lavender); }
+.reward-ledger-summary .postclip strong { color: var(--color-series-lavender); }
 .distribution-summary {
   color: var(--color-text);
   font-family: var(--font-family-mono);

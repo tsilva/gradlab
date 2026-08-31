@@ -327,6 +327,61 @@ class RuntimeRefsTests(unittest.TestCase):
 
         modal_wait.assert_called_once()
 
+    def test_missing_modal_readiness_dispatches_lifecycle_safe_deployment(self) -> None:
+        release = replace(
+            image_info(),
+            runtime_input_sha256="b" * 64,
+            runtime_build_source_sha="2" * 40,
+        )
+        readiness = runtime_refs.ModalReadinessInfo(
+            runtime_image_ref=release.runtime_image_ref,
+            source_sha=release.source_sha,
+            modal_app_name="gradlab-eval-v3-111111111111",
+            startup_probe={},
+            workflow_run_id="13",
+            runtime_input_sha256=release.runtime_input_sha256,
+            runtime_build_source_sha=release.runtime_build_source_sha,
+        )
+        completed_image = {
+            "databaseId": 12,
+            "headSha": SOURCE_SHA,
+            "status": "completed",
+            "conclusion": "success",
+            "url": "https://example.test/run/12",
+        }
+        with (
+            mock.patch.object(
+                runtime_refs,
+                "modal_readiness_for_release",
+                side_effect=[RuntimeError("missing"), readiness],
+            ),
+            mock.patch.object(
+                runtime_refs,
+                "_matching_runs",
+                side_effect=[[completed_image], []],
+            ),
+            mock.patch.object(runtime_refs, "require_remote_source"),
+            mock.patch.object(runtime_refs, "_run_gh") as dispatch,
+            mock.patch.object(runtime_refs.time, "sleep"),
+        ):
+            actual = runtime_refs.wait_for_modal_readiness(
+                release,
+                timeout=60,
+                branch="main",
+                protected_app_names=("gradlab-eval-v3-222222222222",),
+            )
+
+        self.assertEqual(actual.modal_app_name, readiness.modal_app_name)
+        dispatch.assert_called_once()
+        command = dispatch.call_args.args[0]
+        self.assertIn(runtime_refs.DEFAULT_MODAL_WORKFLOW, command)
+        self.assertIn(f"source_sha={SOURCE_SHA}", command)
+        self.assertIn("cleanup_authorized=true", command)
+        self.assertIn(
+            'protected_modal_apps_json=["gradlab-eval-v3-222222222222"]',
+            command,
+        )
+
     def test_explicit_runtime_receipt_does_not_require_git_branch(self) -> None:
         args = SimpleNamespace(
             image_workflow=runtime_refs.DEFAULT_IMAGE_WORKFLOW,

@@ -10,6 +10,7 @@ import sys
 import time
 import zipfile
 from collections.abc import Mapping, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
@@ -435,6 +436,61 @@ def _run_gh(command: Sequence[str]) -> None:
         raise RuntimeError(f"gh command failed: {' '.join(command)}\n{output}")
 
 
+def nonterminal_modal_app_names(repo_root: Path | str = ".") -> tuple[str, ...]:
+    from gradlab.operator_environment import load_repository_operator_environment
+    from gradlab.play_catalog_authority import CONTROL_R2_ENV_NAMES
+    from gradlab.r2_store import BucketConfig, R2Bucket
+
+    root = Path(repo_root).resolve()
+    load_repository_operator_environment(root, requested_names=CONTROL_R2_ENV_NAMES)
+    control = R2Bucket(BucketConfig.from_env("GRADLAB_CONTROL_R2"))
+    keys = list(control.iter_keys("runs/"))
+    manifests = {
+        key.split("/")[1]: key
+        for key in keys
+        if key.count("/") == 2 and key.endswith("/manifest.json")
+    }
+    terminal_run_ids = {
+        key.split("/")[1] for key in keys if key.count("/") == 2 and key.endswith("/terminal.json")
+    }
+    protected_manifest_keys = [
+        key for run_id, key in manifests.items() if run_id not in terminal_run_ids
+    ]
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        protected_manifests = list(pool.map(control.get_json, protected_manifest_keys))
+    return tuple(
+        sorted(
+            {
+                app_name
+                for manifest in protected_manifests
+                if (app_name := str((manifest.get("modal") or {}).get("app_name") or "").strip())
+            }
+        )
+    )
+
+
+def _modal_cleanup_arguments(
+    *,
+    protected_app_names: Sequence[str] | None,
+    protect_nonterminal_apps: bool,
+    repo_root: Path | str,
+) -> list[str]:
+    if protected_app_names is None and not protect_nonterminal_apps:
+        return []
+    protected = (
+        tuple(protected_app_names)
+        if protected_app_names is not None
+        else nonterminal_modal_app_names(repo_root)
+    )
+    encoded = json.dumps(sorted(set(protected)), separators=(",", ":"))
+    return [
+        "-f",
+        f"protected_modal_apps_json={encoded}",
+        "-f",
+        "cleanup_authorized=true",
+    ]
+
+
 @lru_cache(maxsize=1)
 def _repository_name() -> str:
     payload = _run_gh_json(["gh", "repo", "view", "--json", "nameWithOwner"])
@@ -583,6 +639,8 @@ def wait_for_runtime_release(
     timeout: float,
     repo_root: Path | str = ".",
     poll_seconds: float = 5.0,
+    protected_app_names: Sequence[str] | None = None,
+    protect_nonterminal_apps: bool = False,
 ) -> RuntimeImageInfo:
     deadline = time.monotonic() + max(timeout, 0.0)
     dispatched = False
@@ -613,6 +671,11 @@ def wait_for_runtime_release(
             if not active and not dispatched:
                 run_ids_before_dispatch = {str(row.get("databaseId") or "") for row in runs}
                 require_remote_source(source_sha, branch=branch, repo_root=repo_root)
+                cleanup_arguments = _modal_cleanup_arguments(
+                    protected_app_names=protected_app_names,
+                    protect_nonterminal_apps=protect_nonterminal_apps,
+                    repo_root=repo_root,
+                )
                 _run_gh(
                     [
                         "gh",
@@ -623,6 +686,7 @@ def wait_for_runtime_release(
                         branch,
                         "-f",
                         f"source_sha={source_sha}",
+                        *cleanup_arguments,
                     ]
                 )
                 dispatched = True
@@ -683,8 +747,14 @@ def wait_for_modal_readiness(
     timeout: float,
     image_workflow: str = DEFAULT_IMAGE_WORKFLOW,
     poll_seconds: float = 5.0,
+    branch: str = "",
+    repo_root: Path | str = ".",
+    protected_app_names: Sequence[str] | None = None,
+    protect_nonterminal_apps: bool = False,
 ) -> RuntimeImageInfo:
     deadline = time.monotonic() + max(timeout, 0.0)
+    dispatched = False
+    modal_run_ids_before_dispatch: set[str] = set()
     while True:
         try:
             readiness = modal_readiness_for_release(
@@ -703,11 +773,58 @@ def wait_for_modal_readiness(
             )
             runs = [*image_runs, *modal_runs]
             active = any(str(row.get("status") or "") in ACTIVE_WORKFLOW_STATUSES for row in runs)
-            if runs and not active:
+            current_modal_run_ids = {str(row.get("databaseId") or "") for row in modal_runs}
+            dispatched_terminal = (
+                bool(current_modal_run_ids - modal_run_ids_before_dispatch) and not active
+            )
+            if dispatched and dispatched_terminal:
                 raise RuntimeError(
                     f"Modal deployment completed without valid readiness for "
                     f"{release.runtime_image_ref}; {_workflow_status_detail(runs)}"
                 ) from readiness_error
+            if not active and not dispatched:
+                selected_branch = str(branch or "").strip()
+                if not selected_branch:
+                    selected_branch = current_git_branch(repo_root)
+                require_remote_source(
+                    release.source_sha,
+                    branch=selected_branch,
+                    repo_root=repo_root,
+                )
+                modal_run_ids_before_dispatch = current_modal_run_ids
+                cleanup_arguments = _modal_cleanup_arguments(
+                    protected_app_names=protected_app_names,
+                    protect_nonterminal_apps=protect_nonterminal_apps,
+                    repo_root=repo_root,
+                )
+                _run_gh(
+                    [
+                        "gh",
+                        "workflow",
+                        "run",
+                        DEFAULT_MODAL_WORKFLOW,
+                        "--ref",
+                        selected_branch,
+                        "-f",
+                        f"runtime_image_ref={release.runtime_image_ref}",
+                        "-f",
+                        f"source_sha={release.source_sha}",
+                        "-f",
+                        f"runtime_input_sha256={release.runtime_input_sha256}",
+                        "-f",
+                        f"runtime_build_source_sha={release.runtime_build_source_sha}",
+                        "-f",
+                        "deploy_required=true",
+                        *cleanup_arguments,
+                    ]
+                )
+                dispatched = True
+                print(
+                    f"Modal readiness missing; dispatched {DEFAULT_MODAL_WORKFLOW!r} "
+                    f"for {release.source_sha}",
+                    file=sys.stderr,
+                    flush=True,
+                )
             if time.monotonic() >= deadline:
                 raise TimeoutError(
                     f"timed out waiting for Modal readiness after {timeout:g}s; "
@@ -758,6 +875,7 @@ def runtime_release_from_args(
             artifact_name=artifact_name,
             timeout=timeout,
             repo_root=repo_root,
+            protect_nonterminal_apps=wait_for_modal,
         )
     expected = {
         "runtime_image_ref": str(getattr(args, "expected_runtime_image_ref", "") or "").strip(),
@@ -791,6 +909,9 @@ def runtime_release_from_args(
             release,
             timeout=remaining,
             image_workflow=workflow,
+            branch=str(getattr(args, "image_branch", None) or ""),
+            repo_root=repo_root,
+            protect_nonterminal_apps=True,
         )
     return release
 

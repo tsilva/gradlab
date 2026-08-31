@@ -398,6 +398,16 @@ class TrainImageTests(unittest.TestCase):
         self.assertIn("group: gradlab-modal-eval-${{ inputs.source_sha }}", modal)
         self.assertNotIn("group: ${{ github.workflow }}", modal)
 
+    def test_push_builds_do_not_consume_modal_app_slots(self) -> None:
+        workflow = Path(".github/workflows/gradlab-train-image.yml").read_text(encoding="utf-8")
+        modal = Path(".github/workflows/gradlab-modal-eval.yml").read_text(encoding="utf-8")
+
+        deploy = workflow.split("  deploy-modal-evaluator:", maxsplit=1)[1]
+        self.assertIn("if: github.event_name == 'workflow_dispatch'", deploy)
+        self.assertIn("protected_modal_apps_json:", workflow)
+        self.assertIn("cleanup_authorized:", workflow)
+        self.assertIn("Retire unreferenced Modal evaluator apps", modal)
+
 
 if __name__ == "__main__":
     unittest.main()
