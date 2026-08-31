@@ -63,6 +63,13 @@ test("distribution contents use the panel as their only scroll container", () =>
   assert.doesNotMatch(comparisonRule, /(?:max-height|overflow)\s*:/);
 });
 
+test("policy distributions omit the redundant action summary caption", () => {
+  assert.doesNotMatch(
+    telemetryPanelSource,
+    /executed actions? in the retained episode|setActionComparisonCaption/,
+  );
+});
+
 test("namespace telemetry tables use the panel as their only scroll container", () => {
   assert.match(telemetryPanelSource, /table\.className = "telemetry-namespace-table";/);
   const rule = styles.match(/\.telemetry-namespace-table \{([^}]*)\}/)?.[1] || "";
@@ -348,10 +355,12 @@ test("hovered line-chart samples drive every legend value", () => {
   );
 });
 
-test("line legends place the label and equals sign before the value", () => {
-  assert.equal(
-    lineLegendPrefix(descriptorFor("reward/provider")),
-    "Provider r = ",
+test("step reward legends use native and shaped reward labels", () => {
+  assert.deepEqual(
+    ["reward/provider", "reward/shaped"].map((key) => (
+      lineLegendPrefix(descriptorFor(key))
+    )),
+    ["Native R = ", "Shaped R = "],
   );
 });
 

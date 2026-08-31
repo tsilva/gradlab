@@ -97,11 +97,12 @@ test("episode completion uses the player controls instead of a toast", () => {
   assert.match(app, /if \(statusMessageShouldToast\(snapshot\)\) \{/);
 });
 
-test("task views are fixed while Customize is explicitly editable", () => {
+test("the single all-panels workspace is editable", () => {
   assert.equal(workspaceIsEditable("watch"), false);
   assert.equal(workspaceIsEditable("explain"), false);
   assert.equal(workspaceIsEditable("debug"), false);
-  assert.equal(workspaceIsEditable("custom"), true);
+  assert.equal(workspaceIsEditable("custom"), false);
+  assert.equal(workspaceIsEditable("all"), true);
   assert.equal(
     playbackSourceTitle({
       environment_id: "SuperMarioBros-Nes-v0",
@@ -142,19 +143,40 @@ test("the timeline track is fully filled at its final retained step", () => {
   );
 });
 
-test("Debug view overlays an idle-hiding transport on the game stage", () => {
+test("the scrubber delegates arrow keys to native one-step range behavior", () => {
+  assert.match(
+    page,
+    /id="timeline-scrubber"[^>]*type="range"[^>]*step="1"/,
+  );
+  const bindTimeline = app.slice(
+    app.indexOf("function bindTimeline()"),
+    app.indexOf("function initWorkspace()"),
+  );
+  assert.doesNotMatch(bindTimeline, /ArrowLeft|ArrowRight/);
+  assert.match(bindTimeline, /event\.code !== "Space"/);
+});
+
+test("the player has no view selector", () => {
+  assert.doesNotMatch(page, /workspace-preset|Workspace view|<option[^>]*>(?:Watch|Explain|Debug|Customize)<\/option>/);
+  assert.doesNotMatch(app, /workspace-preset|applyWorkspacePreset/);
+  assert.doesNotMatch(styles, /workspace-preset|data-workspace-view="(?:watch|explain|debug)"/);
+});
+
+test("the all-panels workspace overlays an idle-hiding transport on the game stage", () => {
   assert.match(page, /id="timeline-home" hidden/);
-  assert.match(app, /const DEBUG_TIMELINE_HIDE_DELAY_MS = 1600/);
+  assert.equal((page.match(/id="timeline"/g) || []).length, 1);
+  assert.match(app, /const TIMELINE_HIDE_DELAY_MS = 1600/);
   assert.match(app, /stage\.append\(timeline\)/);
   assert.match(app, /timeline\.classList\.add\("game-timeline-overlay", "visible"\)/);
   assert.match(app, /\["pointerenter", "pointermove", "pointerdown", "focusin"\]/);
-  assert.match(app, /stage\.addEventListener\("pointerleave", scheduleDebugTimelineHide/);
-  assert.match(app, /timeline\.addEventListener\("focusout", scheduleDebugTimelineHide/);
+  assert.match(app, /stage\.addEventListener\("pointerleave", scheduleTimelineOverlayHide/);
+  assert.match(app, /timeline\.addEventListener\("focusout", scheduleTimelineOverlayHide/);
   assert.match(app, /timeline\?\.contains\(document\.activeElement\)/);
   assert.match(app, /settingsOpen/);
+  assert.doesNotMatch(app, /state\.layout\?\.preset !== "debug"/);
   assert.match(
     styles,
-    /body\[data-workspace-view="debug"\] \.game-stage > \.timeline\.game-timeline-overlay \{[^}]*position: absolute;[^}]*inset: auto 0 0;[^}]*opacity: 0;[^}]*pointer-events: none;/,
+    /\.game-stage > \.timeline\.game-timeline-overlay \{[^}]*position: absolute;[^}]*inset: auto 0 0;[^}]*opacity: 0;[^}]*pointer-events: none;/,
   );
   assert.match(
     styles,
@@ -178,13 +200,12 @@ test("timeline controls use accessible icons and distinct action colors", () => 
   assert.match(styles, /#playback-settings-toggle:not\(:disabled\)[^{]*\{[^}]*var\(--color-series-aqua\)/);
 });
 
-test("header checkpoint, workspace, and overflow controls share one height", () => {
+test("header checkpoint and overflow controls share one height", () => {
   assert.match(styles, /--header-control-height: 2\.25rem/);
   assert.match(
     styles,
-    /\.header-status > \.checkpoint-navigation,[\s\S]*\.header-status > \.workspace-preset-picker,[\s\S]*\.header-status > #more-toggle \{ height: var\(--header-control-height\); \}/,
+    /\.header-status > \.checkpoint-navigation,[\s\S]*\.header-status > #more-toggle \{ height: var\(--header-control-height\); \}/,
   );
-  assert.match(styles, /\.workspace-preset-picker select \{[^}]*height: 100%/);
   assert.match(styles, /\.checkpoint-navigation-button \{[^}]*height: 100%/);
   assert.match(styles, /\.checkpoint-navigation-position \{[^}]*height: 100%/);
   assert.match(styles, /\.checkpoint-navigation-position \{[^}]*min-width: 4\.25rem/);

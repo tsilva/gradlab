@@ -1,7 +1,7 @@
 const STATIC_DESCRIPTORS = Object.freeze({
   "reward/provider": {
     label: "Provider output reward",
-    shortLabel: "Provider r",
+    shortLabel: "Native R",
     type: "scalar",
     unit: "step-reward",
     phase: "post-action",
@@ -12,7 +12,7 @@ const STATIC_DESCRIPTORS = Object.freeze({
   },
   "reward/shaped": {
     label: "Policy-facing reward",
-    shortLabel: "Policy r",
+    shortLabel: "Shaped R",
     type: "scalar",
     unit: "step-reward",
     phase: "post-action",

@@ -26,7 +26,6 @@ import {
 } from "./panels/layout-sizing.js";
 import { setSvgUseHref, text, timelineLabel } from "./panels/shared.js";
 import {
-  applyWorkspacePreset,
   bumpWorkspaceRevision,
   compareWorkspaceRevisions,
   createDefaultWorkspace,
@@ -117,9 +116,9 @@ let gridCellHeight = DEFAULT_GRID_CELL_HEIGHT;
 let syncingGrid = false;
 let panelManager = null;
 let playbackSettings = null;
-const DEBUG_TIMELINE_HIDE_DELAY_MS = 1600;
-let debugTimelineHideTimer = null;
-let debugTimelineEvents = null;
+const TIMELINE_HIDE_DELAY_MS = 1600;
+let timelineHideTimer = null;
+let timelineOverlayEvents = null;
 let youtubeOAuthPopup = null;
 
 const workspaceChannel = "BroadcastChannel" in window
@@ -135,14 +134,10 @@ function clamp(value, minimum, maximum) {
 
 function readStoredLayout() {
   try {
-    const workspace = normalizeWorkspace(
+    return normalizeWorkspace(
       JSON.parse(localStorage.getItem(LAYOUT_KEY) || "null"),
       { paired: pairedWorkspace, writer: windowId },
     );
-    if (!workspaceIsEditable(workspace.preset)) {
-      applyWorkspacePreset(workspace, workspace.preset, { paired: pairedWorkspace });
-    }
-    return workspace;
   } catch {
     return defaultLayout();
   }
@@ -180,7 +175,6 @@ function setDetachedLayout() {
     "stats-window",
     pairedWorkspace && state.windowId === STATS_WINDOW_ID,
   );
-  $("#workspace-preset-picker").hidden = secondary;
 }
 
 function showToast(message, error = false) {
@@ -311,7 +305,6 @@ function setSourceMode(active, snapshot = null) {
   );
   document.body.classList.toggle("source-selection", state.sourceMode);
   $("#source-browser").hidden = !state.sourceMode;
-  $("#workspace-preset-picker").hidden = state.sourceMode || state.windowId !== "main";
   $("#checkpoint-navigation").hidden = Boolean(state.sourceMode || !activeCheckpointRoute);
   $("#page-title").hidden = state.sourceMode;
   $("#source-back").hidden = Boolean(
@@ -1117,23 +1110,20 @@ function unavailableDiagnosticPresentation(statuses) {
 
 function renderUnavailableDiagnostics() {
   const root = $("#unavailable-diagnostics");
-  const explain = state.layout?.preset === "explain";
   const rows = [];
   $$("#dashboard .grid-stack-item").forEach((gridItem) => {
-    gridItem.classList.remove("explain-unavailable");
-    if (!explain || gridItem.dataset.panel === "game") return;
+    if (gridItem.dataset.panel === "game") return;
     const telemetryStatuses = [...gridItem.querySelectorAll("[data-telemetry-status]")]
       .map((element) => String(element.dataset.telemetryStatus || ""))
       .filter(Boolean);
     if (!telemetryStatuses.length || telemetryStatuses.includes("available")) return;
     const presentation = unavailableDiagnosticPresentation(telemetryStatuses);
-    gridItem.classList.add("explain-unavailable");
     rows.push({
       panel: panelLabel(gridItem.dataset.panel),
       ...presentation,
     });
   });
-  root.hidden = !explain || !rows.length;
+  root.hidden = !rows.length;
   if (!root.hidden) {
     root.querySelector("[data-unavailable-diagnostics-title]").textContent = (
       `Unavailable diagnostics (${rows.length.toLocaleString()})`
@@ -1417,7 +1407,7 @@ function renderTimeline() {
   }));
 }
 
-function debugTimelineInteractionActive() {
+function timelineInteractionActive() {
   const timeline = $("#timeline");
   const stage = timeline?.closest(".game-stage");
   const settingsMenu = $("#playback-settings-menu");
@@ -1430,53 +1420,52 @@ function debugTimelineInteractionActive() {
   );
 }
 
-function revealDebugTimeline() {
+function revealTimelineOverlay() {
   const timeline = $("#timeline");
   if (!timeline?.classList.contains("game-timeline-overlay")) return;
-  clearTimeout(debugTimelineHideTimer);
-  debugTimelineHideTimer = null;
+  clearTimeout(timelineHideTimer);
+  timelineHideTimer = null;
   timeline.classList.add("visible");
 }
 
-function scheduleDebugTimelineHide() {
+function scheduleTimelineOverlayHide() {
   const timeline = $("#timeline");
-  clearTimeout(debugTimelineHideTimer);
-  debugTimelineHideTimer = null;
+  clearTimeout(timelineHideTimer);
+  timelineHideTimer = null;
   if (!timeline?.classList.contains("game-timeline-overlay")) return;
-  debugTimelineHideTimer = window.setTimeout(() => {
-    debugTimelineHideTimer = null;
-    if (!debugTimelineInteractionActive()) timeline.classList.remove("visible");
-  }, DEBUG_TIMELINE_HIDE_DELAY_MS);
+  timelineHideTimer = window.setTimeout(() => {
+    timelineHideTimer = null;
+    if (!timelineInteractionActive()) timeline.classList.remove("visible");
+  }, TIMELINE_HIDE_DELAY_MS);
 }
 
 function restoreTimelineHome() {
-  debugTimelineEvents?.abort();
-  debugTimelineEvents = null;
-  clearTimeout(debugTimelineHideTimer);
-  debugTimelineHideTimer = null;
+  timelineOverlayEvents?.abort();
+  timelineOverlayEvents = null;
+  clearTimeout(timelineHideTimer);
+  timelineHideTimer = null;
   const timeline = $("#timeline");
   const home = $("#timeline-home");
   timeline?.classList.remove("game-timeline-overlay", "visible");
   if (timeline && home && timeline.previousElementSibling !== home) home.after(timeline);
 }
 
-function syncDebugTimelineOverlay() {
+function syncTimelineOverlay() {
   restoreTimelineHome();
-  if (state.layout?.preset !== "debug") return;
   const timeline = $("#timeline");
   const stage = $(".game-panel .game-stage");
   if (!timeline || !stage) return;
   stage.append(timeline);
   timeline.classList.add("game-timeline-overlay", "visible");
-  debugTimelineEvents = new AbortController();
-  const options = { signal: debugTimelineEvents.signal };
+  timelineOverlayEvents = new AbortController();
+  const options = { signal: timelineOverlayEvents.signal };
   ["pointerenter", "pointermove", "pointerdown", "focusin"].forEach((name) => {
-    stage.addEventListener(name, revealDebugTimeline, options);
+    stage.addEventListener(name, revealTimelineOverlay, options);
   });
-  stage.addEventListener("pointerleave", scheduleDebugTimelineHide, options);
-  timeline.addEventListener("focusout", scheduleDebugTimelineHide, options);
-  timeline.addEventListener("input", revealDebugTimeline, options);
-  scheduleDebugTimelineHide();
+  stage.addEventListener("pointerleave", scheduleTimelineOverlayHide, options);
+  timeline.addEventListener("focusout", scheduleTimelineOverlayHide, options);
+  timeline.addEventListener("input", revealTimelineOverlay, options);
+  scheduleTimelineOverlayHide();
 }
 
 function maxPanelRow(targetWindow = state.windowId) {
@@ -1484,11 +1473,6 @@ function maxPanelRow(targetWindow = state.windowId) {
     .filter((panel) => (
       panel.placement.visible
       && panel.placement.window === targetWindow
-      && !$$(`#dashboard .grid-stack-item`).some((item) => (
-        item.dataset.panel
-        && state.layout.panels[item.dataset.panel] === panel
-        && item.classList.contains("explain-unavailable")
-      ))
     ))
     .map((panel) => panel.placement.y + panel.placement.h));
 }
@@ -1546,8 +1530,8 @@ function syncGridNodes(nodes = null) {
   });
 }
 
-function persistLayout({ announce = true, customize = true } = {}) {
-  if (customize) state.layout.preset = "custom";
+function persistLayout({ announce = true } = {}) {
+  state.layout.preset = "all";
   bumpWorkspaceRevision(state.layout, state.windowId);
   localStorage.setItem(LAYOUT_KEY, JSON.stringify(state.layout));
   if (announce) workspaceChannel?.postMessage({ type: "layout", layout: state.layout, source: state.windowId });
@@ -1569,16 +1553,13 @@ function updateLayoutTitle() {
       : environmentTitle;
   $("#page-title").textContent = title;
   $("#layout-name-input").value = state.layout.name;
-  $("#workspace-preset").value = state.layout.preset || "custom";
   document.title = `${title} · gradlab`;
 }
 
 function updateWorkspaceEditing() {
-  const preset = state.layout?.preset || "watch";
-  const editable = workspaceIsEditable(preset);
-  document.body.dataset.workspaceView = preset;
+  const editable = workspaceIsEditable(state.layout?.preset);
+  document.body.dataset.workspaceView = "all";
   document.body.classList.toggle("workspace-editing", editable);
-  document.body.classList.toggle("workspace-debug", preset === "debug");
   $$('[data-customize-actions]').forEach((element) => { element.hidden = !editable; });
   gridStack?.enableMove(editable);
   gridStack?.enableResize(editable);
@@ -1619,7 +1600,7 @@ async function applyLayout() {
     syncingGrid = false;
   }
   updateWorkspaceEditing();
-  syncDebugTimelineOverlay();
+  syncTimelineOverlay();
   fitGridToViewport();
   syncGridNodes();
   if (state.snapshot) {
@@ -1750,7 +1731,7 @@ function bindPanelElement(panel, name) {
       const instance = state.layout.panels[name];
       if (!instance) return;
       instance.enabled = input.checked;
-      persistLayout({ customize: false });
+      persistLayout();
       void applyLayout();
       showToast(
         captureLabel
@@ -1760,7 +1741,7 @@ function bindPanelElement(panel, name) {
     });
     toggle.append(input);
     const menu = panel.querySelector("[data-panel-menu]");
-    menu?.after(toggle);
+    menu?.before(toggle);
   }
   const handle = panel.querySelector("[data-drag-handle]");
   if (handle) {
@@ -1966,21 +1947,6 @@ function bindWorkspaceMenus() {
     $("#panels-toggle").setAttribute("aria-expanded", "false");
     positionMenu($("#layout-menu"), event.currentTarget);
   });
-  $("#workspace-preset").addEventListener("change", (event) => {
-    const preset = event.target.value;
-    if (preset === "custom") {
-      state.layout.preset = "custom";
-      state.layout.name = "Customize";
-      persistLayout({ customize: false });
-      void applyLayout();
-      showToast("Customize mode enabled. Panels can now be moved and resized.");
-      return;
-    }
-    applyWorkspacePreset(state.layout, preset, { paired: pairedWorkspace });
-    persistLayout({ customize: false });
-    void applyLayout();
-    showToast(`${event.target.selectedOptions[0].textContent} view applied.`);
-  });
   $("#save-layout").addEventListener("click", () => {
     if (!workspaceIsEditable(state.layout.preset)) return;
     const name = $("#layout-name-input").value.trim().slice(0, 48) || "Workspace";
@@ -1995,10 +1961,10 @@ function bindWorkspaceMenus() {
   });
   $("#reset-layout").addEventListener("click", () => {
     state.layout = defaultLayout();
-    persistLayout({ customize: false });
+    persistLayout();
     applyLayout();
     $("#layout-menu").hidden = true;
-    showToast("Watch view restored.");
+    showToast("All panels restored.");
   });
   $("#panel-new-window").addEventListener("click", () => {
     if (!workspaceIsEditable(state.layout.preset)) return;
@@ -2089,7 +2055,7 @@ function bindWorkspaceMenus() {
       $("#playback-settings-menu").hidden = true;
       $("#playback-settings-toggle").setAttribute("aria-expanded", "false");
     }
-    scheduleDebugTimelineHide();
+    scheduleTimelineOverlayHide();
   });
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
@@ -2100,7 +2066,7 @@ function bindWorkspaceMenus() {
     $("#panels-toggle").setAttribute("aria-expanded", "false");
     $("#playback-settings-menu").hidden = true;
     $("#playback-settings-toggle").setAttribute("aria-expanded", "false");
-    scheduleDebugTimelineHide();
+    scheduleTimelineOverlayHide();
   });
 }
 
@@ -2262,16 +2228,16 @@ function bindTimeline() {
     menu.hidden = true;
     event.currentTarget.setAttribute("aria-expanded", String(opening));
     if (opening) {
-      revealDebugTimeline();
+      revealTimelineOverlay();
       positionMenu(menu, event.currentTarget);
     } else {
-      scheduleDebugTimelineHide();
+      scheduleTimelineOverlayHide();
     }
   });
   $("#playback-settings-close").addEventListener("click", () => {
     $("#playback-settings-menu").hidden = true;
     $("#playback-settings-toggle").setAttribute("aria-expanded", "false");
-    scheduleDebugTimelineHide();
+    scheduleTimelineOverlayHide();
   });
   const selectIndex = (index) => {
     stopInspectionReplay({ render: false });
@@ -2284,18 +2250,6 @@ function bindTimeline() {
     selectIndex(Number(event.target.value));
   });
   scrubber.addEventListener("keydown", (event) => {
-    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-      event.preventDefault();
-      const direction = event.key === "ArrowLeft" ? -1 : 1;
-      const index = clamp(
-        Number(scrubber.value) + direction,
-        0,
-        Math.max(0, state.timelineSequences.length - 1),
-      );
-      scrubber.value = String(index);
-      selectIndex(index);
-      return;
-    }
     if (event.code !== "Space" || event.repeat) return;
     event.preventDefault();
     $("#timeline-playback-toggle").click();

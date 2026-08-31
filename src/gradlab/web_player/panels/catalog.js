@@ -78,45 +78,20 @@ export const PANEL_TYPES = Object.freeze({
   },
 });
 
-const EXPLAIN_LAYOUT = Object.freeze({
-  game: { x: 0, y: 0, w: 8, h: 15, visible: true, window: "main" },
-  controls: { x: 8, y: 0, w: 2, h: 15, visible: false, window: "main" },
-  policy: { x: 8, y: 0, w: 4, h: 15, visible: true, window: "main" },
-  value: { x: 0, y: 15, w: 4, h: 7, visible: true, window: "main" },
-  "step-reward": { x: 4, y: 15, w: 4, h: 7, visible: true, window: "main" },
-  "episode-return": { x: 8, y: 15, w: 4, h: 7, visible: true, window: "main" },
-  observation: { x: 4, y: 22, w: 5, h: 8, visible: false, window: "main" },
-  signals: { x: 9, y: 22, w: 3, h: 8, visible: false, window: "main" },
-  events: { x: 0, y: 30, w: 4, h: 7, visible: false, window: "main" },
-  raw: { x: 4, y: 30, w: 8, h: 7, visible: false, window: "main" },
-  "reward-analysis": { x: 0, y: 37, w: 12, h: 15, visible: false, window: "main" },
-  attribution: { x: 0, y: 52, w: 4, h: 8, visible: false, window: "main" },
-  cnn: { x: 0, y: 52, w: 8, h: 15, visible: false, window: "main" },
-});
-
-const WATCH_LAYOUT = Object.freeze({
-  ...EXPLAIN_LAYOUT,
-  game: { x: 0, y: 0, w: 12, h: 15, visible: true, window: "main" },
-  controls: { x: 9, y: 0, w: 3, h: 15, visible: false, window: "main" },
-  policy: { ...EXPLAIN_LAYOUT.policy, visible: false },
-  value: { ...EXPLAIN_LAYOUT.value, visible: false },
-  "step-reward": { ...EXPLAIN_LAYOUT["step-reward"], visible: false },
-  "episode-return": { ...EXPLAIN_LAYOUT["episode-return"], visible: false },
-});
-
-const DEBUG_LAYOUT = Object.freeze({
-  ...EXPLAIN_LAYOUT,
+const ALL_PANELS_LAYOUT = Object.freeze({
   game: { x: 0, y: 0, w: 8, h: 15, visible: true, window: "main" },
   controls: { x: 8, y: 0, w: 2, h: 15, visible: false, window: "main" },
   observation: { x: 8, y: 0, w: 4, h: 15, visible: true, window: "main" },
   policy: { x: 0, y: 15, w: 4, h: 8, visible: true, window: "main" },
-  signals: { x: 4, y: 15, w: 4, h: 8, visible: true, window: "main" },
-  events: { x: 8, y: 15, w: 4, h: 8, visible: true, window: "main" },
-  raw: { x: 0, y: 23, w: 12, h: 7, visible: true, window: "main" },
-  value: { ...EXPLAIN_LAYOUT.value, visible: false },
-  "step-reward": { ...EXPLAIN_LAYOUT["step-reward"], visible: false },
-  "episode-return": { ...EXPLAIN_LAYOUT["episode-return"], visible: false },
-  "reward-analysis": { x: 0, y: 30, w: 12, h: 15, visible: true, window: "main" },
+  value: { x: 4, y: 15, w: 4, h: 8, visible: true, window: "main" },
+  signals: { x: 8, y: 15, w: 4, h: 8, visible: true, window: "main" },
+  "step-reward": { x: 0, y: 23, w: 4, h: 7, visible: true, window: "main" },
+  "episode-return": { x: 4, y: 23, w: 4, h: 7, visible: true, window: "main" },
+  events: { x: 8, y: 23, w: 4, h: 7, visible: true, window: "main" },
+  raw: { x: 0, y: 30, w: 12, h: 7, visible: true, window: "main" },
+  "reward-analysis": { x: 0, y: 37, w: 12, h: 15, visible: true, window: "main" },
+  attribution: { x: 0, y: 52, w: 4, h: 15, visible: true, window: "main" },
+  cnn: { x: 4, y: 52, w: 8, h: 15, visible: true, window: "main" },
 });
 
 const PAIRED_LAYOUT = Object.freeze({
@@ -294,21 +269,8 @@ export function telemetryPanelProcessing(config) {
   return [...processing];
 }
 
-export const WORKSPACE_PRESETS = Object.freeze({
-  watch: { label: "Watch", description: "Game-first playback and the episode summary" },
-  explain: { label: "Explain", description: "Policy, value, and reward evidence" },
-  debug: { label: "Debug", description: "Observation, signals, events, and raw transition data" },
-  custom: { label: "Customize", description: "Your current panel arrangement" },
-});
-
-export function defaultPanelInstances({ paired = false, preset = "watch" } = {}) {
-  const layout = paired
-    ? PAIRED_LAYOUT
-    : preset === "debug"
-      ? DEBUG_LAYOUT
-      : preset === "explain"
-        ? EXPLAIN_LAYOUT
-        : WATCH_LAYOUT;
+export function defaultPanelInstances({ paired = false } = {}) {
+  const layout = paired ? PAIRED_LAYOUT : ALL_PANELS_LAYOUT;
   return Object.fromEntries(
     Object.entries(BUILTIN_PANEL_PRESETS).map(([id, preset]) => [
       id,

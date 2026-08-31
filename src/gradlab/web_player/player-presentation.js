@@ -1,5 +1,5 @@
 export function workspaceIsEditable(preset) {
-  return preset === "custom";
+  return preset === "all";
 }
 
 export function playbackSourceTitle(route = {}) {

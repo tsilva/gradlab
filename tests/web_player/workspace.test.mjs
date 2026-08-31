@@ -3,7 +3,6 @@ import test from "node:test";
 
 import {
   WORKSPACE_VERSION,
-  applyWorkspacePreset,
   bumpWorkspaceRevision,
   compareWorkspaceRevisions,
   createDefaultWorkspace,
@@ -17,11 +16,11 @@ import {
 
 const CUSTOM_ID = "panel-00000000-0000-4000-8000-000000000000";
 
-test("default workspace is a v7 Watch view without a standalone action panel", () => {
+test("default workspace is a v7 editable all-panels view without redundant controls", () => {
   const workspace = createDefaultWorkspace({ writer: "main" });
   assert.equal(workspace.version, 7);
   assert.equal(workspace.version, WORKSPACE_VERSION);
-  assert.equal(workspace.preset, "watch");
+  assert.equal(workspace.preset, "all");
   assert.equal(Object.hasOwn(workspace.panels, "reward"), false);
   assert.equal(Object.hasOwn(workspace.panels, "actions"), false);
   assert.deepEqual(
@@ -39,18 +38,18 @@ test("default workspace is a v7 Watch view without a standalone action panel", (
   assert.deepEqual(workspace.panels.game.placement, {
     x: 0,
     y: 0,
-    w: 12,
+    w: 8,
     h: 15,
     visible: true,
     window: "main",
   });
   assert.equal(workspace.panels.controls.placement.visible, false);
   assert.deepEqual(workspace.panels["step-reward"].placement, {
-    x: 4,
-    y: 15,
+    x: 0,
+    y: 23,
     w: 4,
     h: 7,
-    visible: false,
+    visible: true,
     window: "main",
   });
   assert.deepEqual(workspace.panels["reward-analysis"].config.blocks, [
@@ -61,36 +60,43 @@ test("default workspace is a v7 Watch view without a standalone action panel", (
     y: 37,
     w: 12,
     h: 15,
-    visible: false,
+    visible: true,
     window: "main",
   });
   assert.equal(workspace.panels.cnn.type, "cnn");
-  assert.equal(workspace.panels.cnn.placement.visible, false);
+  assert.equal(workspace.panels.cnn.placement.visible, true);
   assert.equal(workspace.panels.cnn.enabled, false);
   assert.equal(workspace.panels.attribution.type, "attribution");
-  assert.equal(workspace.panels.attribution.placement.visible, false);
+  assert.equal(workspace.panels.attribution.placement.visible, true);
   assert.equal(workspace.panels.attribution.enabled, false);
   assert.ok(
     Object.entries(workspace.panels)
       .filter(([id]) => !["attribution", "cnn"].includes(id))
       .every(([, panel]) => panel.enabled === true),
   );
+  assert.ok(
+    Object.entries(workspace.panels)
+      .filter(([id]) => id !== "controls")
+      .every(([, panel]) => panel.placement.visible === true),
+  );
 });
 
-test("task presets switch panel emphasis without deleting custom panels", () => {
+test("legacy fixed views migrate to all panels without deleting custom panels", () => {
   const workspace = createDefaultWorkspace();
   workspace.panels[CUSTOM_ID] = createTelemetryInstance({ id: CUSTOM_ID, title: "Mine" });
+  workspace.preset = "debug";
+  workspace.name = "Debug";
+  workspace.panels.value.placement.visible = false;
+  workspace.panels.attribution.placement.visible = false;
+  workspace.panels[CUSTOM_ID].placement.visible = false;
 
-  applyWorkspacePreset(workspace, "explain");
-  assert.equal(workspace.preset, "explain");
-  assert.equal(workspace.panels.policy.placement.visible, true);
-  assert.equal(workspace.panels.observation.placement.visible, false);
-  assert.equal(workspace.panels[CUSTOM_ID].placement.visible, false);
+  const normalized = normalizeWorkspace(workspace);
 
-  applyWorkspacePreset(workspace, "debug");
-  assert.equal(workspace.preset, "debug");
-  assert.equal(workspace.panels.observation.placement.visible, true);
-  assert.equal(workspace.panels.raw.placement.visible, true);
+  assert.equal(normalized.preset, "all");
+  assert.equal(normalized.name, "All panels");
+  assert.equal(normalized.panels.value.placement.visible, true);
+  assert.equal(normalized.panels.attribution.placement.visible, true);
+  assert.equal(normalized.panels[CUSTOM_ID].placement.visible, false);
 });
 
 test("panel processing demand excludes disabled panels and follows telemetry metrics", () => {

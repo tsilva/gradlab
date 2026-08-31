@@ -20,11 +20,11 @@ test("stats panels expose one standardized persisted processing switch", () => {
   assert.match(app, /input\.role = "switch"/);
   assert.match(app, /instance\.enabled = input\.checked/);
   assert.match(app, /processing: processing\(\)/);
-  assert.match(app, /menu\?\.after\(toggle\)/);
+  assert.match(app, /menu\?\.before\(toggle\)/);
   assert.doesNotMatch(app, /label\.textContent = definition\.enabled \? "Enabled" : "Disabled"/);
   assert.match(
     styles,
-    /\.panel-processing-toggle \{[^}]*grid-column: -2 \/ -1;[^}]*justify-self: end;/,
+    /\.panel-processing-toggle \{[^}]*grid-column: -3 \/ -2;[^}]*justify-self: end;/,
   );
   assert.match(
     styles,
