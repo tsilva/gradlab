@@ -1,3 +1,58 @@
+# Flat goal-configuration runs design QA — 2026-08-31
+
+**Comparison target**
+
+- Source visual truth: `/var/folders/wz/x29jb7_x5rdc_5dcjr4qnhg00000gn/T/codex-clipboard-0b2a0a81-bd71-4e7f-9299-1f3205ef2981.png`.
+- Browser-rendered implementation: `/tmp/gradlab-goal-runs-flat.png`.
+- Full selected-region and focused comparison evidence: `/tmp/gradlab-goal-runs-comparison.png`.
+- Source pixels: 3404 × 610. The selected source is itself a focused desktop crop of the goal-configuration browser.
+- Implementation element capture: 1406 × 223 at 1× density from a 3415 × 616 CSS viewport.
+- Comparison normalization: the 1695 × 350 source component crop was resized to 703 × 145; the 703 × 112 implementation component crop was top-aligned and padded to 703 × 145 without scaling.
+- State: Acrobot current-default goal configuration with one successful training run and the contract-differences disclosure collapsed.
+
+**Findings**
+
+- No actionable P0, P1, or P2 mismatch remains for the requested flattening.
+- The “Runs using this configuration” heading and Recent/Best controls are absent.
+- The run list is the first child beneath the selected configuration and spans the detail container edge-to-edge.
+- Computed browser styles confirm zero run-section padding, zero list margin, zero list border, and zero list radius.
+
+**Required fidelity surfaces**
+
+- Fonts and typography: the existing Inter hierarchy, run-name weight, supporting description, status, date, and evidence badge typography are unchanged.
+- Spacing and layout rhythm: the removed sub-section chrome and all surrounding run-list inset are gone; row padding remains inside the clickable run row for legibility.
+- Colors and visual tokens: existing canvas, surface, separator, hover, text, and evidence colors are unchanged.
+- Image quality and asset fidelity: the selected component contains no imagery requiring replacement; the existing YAML icon and evidence treatment remain intact.
+- Copy and content: run identity, description, success evidence, terminal state, date, configuration metadata, and contract-difference copy are preserved.
+
+**Primary interactions and runtime verification**
+
+- Selecting the edge-to-edge run row opened its checkpoint-selection route.
+- Browser history returned to the same selected goal configuration.
+- DOM verification found no remaining runs header or sort controls and confirmed the run row is the list's direct child.
+- Browser console check returned no warnings or errors.
+- Automated verification: all 58 source-browser tests passed.
+
+**Comparison history**
+
+- The first browser-rendered comparison found no unintended P0/P1/P2 difference after the requested chrome and padding removal, so no visual repair iteration was required.
+
+**Implementation checklist**
+
+- [x] Remove the runs sub-section heading.
+- [x] Remove Recent and Best controls and their state.
+- [x] Render recent run rows directly.
+- [x] Remove surrounding padding, margin, border, and radius.
+- [x] Preserve run navigation, evidence, empty state, pagination, and contract differences.
+
+**Follow-up polish**
+
+- None required for this change.
+
+final result: passed
+
+---
+
 # Icon-only playback controls design QA
 
 ## Evidence
@@ -55,6 +110,58 @@
 - [x] Give transport states, Reset, and Settings distinct semantic colors.
 - [x] Preserve a fixed-width action rail so state changes never move the scrubber.
 - [x] Preserve accessible labels, tooltips, focus behavior, settings interaction, and disabled states.
+
+final result: passed
+
+---
+
+# Goal-configuration action simplification design QA — 2026-08-31
+
+## Evidence
+
+- Source visual truth: `/var/folders/wz/x29jb7_x5rdc_5dcjr4qnhg00000gn/T/codex-clipboard-5f17fec8-18bb-42a4-a4df-59da276cd237.png`.
+- Browser-rendered implementation: `/Users/tsilva/.codex/visualizations/2026/08/31/01a05785-40db-7321-a366-ded71a566fef/goal-configuration-final-current-crop.png`.
+- Combined comparison input: `/Users/tsilva/.codex/visualizations/2026/08/31/01a05785-40db-7321-a366-ded71a566fef/goal-configuration-comparison.png`.
+- Source pixels: 3036 × 938, normalized to the implementation's 1280 × 395 focused region for comparison.
+- Implementation pixels and CSS viewport: 1280 × 720 at 1× density, cropped to 1280 × 395 from the Search disclosure to match the source region.
+- State: dark desktop Acrobot goal-configuration browser with the current default selected, one successful run visible, and contract differences collapsed.
+
+## Findings
+
+- No actionable P0, P1, or P2 mismatch remains for the requested simplification.
+- The selected-goal-version banner, its large `View YAML` and `View run` actions, and the redundant run-section heading and sort chrome are removed, reducing the screen to configuration selection, the directly clickable runs, and contract differences.
+- A compact code-icon action remains on the selected configuration row for goal YAML, while the run card itself remains the primary navigation affordance.
+
+## Required fidelity surfaces
+
+- Fonts and typography: the existing UI family, weights, sizes, capitalization, wrapping, and truncation are unchanged.
+- Spacing and layout rhythm: removing the banner and intermediate run-section chrome closes the redundant vertical gaps while preserving table alignment, run-row padding, section borders, and the existing responsive table overflow.
+- Colors and visual tokens: the existing canvas, selected-row tint, borders, foregrounds, semantic success color, and interaction tokens are unchanged.
+- Image quality and asset fidelity: the compact YAML affordance reuses the packaged code icon; no raster substitute, custom SVG, CSS drawing, or placeholder was introduced.
+- Copy and content: the configuration metadata, run identity, description, success evidence, status, timestamp, and contract-difference summary are unchanged. Only the redundant selected-version copy and duplicated run action were removed.
+- Accessibility and interaction states: the goal YAML icon has the accessible name and native title `View goal YAML`; the run card remains a semantic button with full-row hover and keyboard activation.
+
+## Primary interactions and runtime verification
+
+- Opened Environment → Goal → current goal configuration in the in-app browser.
+- Opened goal YAML from the selected configuration's compact code action and verified the resolved-contract dialog.
+- Activated the run card and verified direct navigation to that run's checkpoint screen.
+- Opened `Inspect run YAML` inside the run and verified the run contract dialog.
+- Browser console errors: none.
+- Focused source-browser tests: 58 passed.
+- Complete web-player suite: 174 passed and one unrelated pre-existing typography-token test failed on raw font sizes already present outside this change.
+
+## Comparison history
+
+- Pass 1 compared the provided before-state and the browser-rendered simplified state in one normalized composite. The visible structural differences are exactly the requested removals; no unintended P0/P1/P2 issue was found, so no visual repair loop was required.
+
+## Implementation checklist
+
+- [x] Remove the selected-goal-version banner.
+- [x] Remove the duplicated `View run` action.
+- [x] Keep run cards as the direct navigation target.
+- [x] Preserve compact configuration-level goal YAML access.
+- [x] Verify run-level YAML remains available inside the run.
 
 final result: passed
 

@@ -1098,7 +1098,6 @@ export class SourceBrowser {
     this.goalVariantDiffController = null;
     this.goalVariantDiffSerial = 0;
     this.goalVariantRunPages = new Map();
-    this.goalVariantRunSort = new Map();
     this.activityRevision = "";
     this.activityHasActiveRuns = false;
     this.autoSelectedRoute = "";
@@ -1406,7 +1405,6 @@ export class SourceBrowser {
     this.goalConfigurationsExpanded = false;
     this.goalVariantDiff = null;
     this.goalVariantRunPages.clear();
-    this.goalVariantRunSort.clear();
     this.activityRevision = "";
     this.activityHasActiveRuns = false;
   }
@@ -2736,35 +2734,11 @@ export class SourceBrowser {
   renderEmbeddedGoalRuns(variant) {
     const section = document.createElement("section");
     section.className = "goal-configuration-runs";
-    const header = document.createElement("div");
-    header.className = "goal-configuration-runs-header";
-    const heading = document.createElement("h3");
-    heading.textContent = "Runs using this configuration";
-    const sort = document.createElement("div");
-    sort.className = "goal-configuration-run-sort";
     const variantId = String(variant?.variant_id || "");
-    const sortMode = this.goalVariantRunSort.get(variantId) || "recent";
-    [
-      ["recent", "Recent"],
-      ["best", "Best"],
-    ].forEach(([mode, label]) => {
-      const control = button(label, { quiet: mode !== sortMode });
-      control.classList.toggle("active", mode === sortMode);
-      control.addEventListener("click", () => {
-        this.goalVariantRunSort.set(variantId, mode);
-        this.renderView();
-      });
-      sort.append(control);
-    });
-    header.append(heading, sort);
-    section.append(header);
-
     const page = this.goalVariantRunPages.get(variantId);
     const baseItems = page?.items?.length
       ? page.items
-      : sortMode === "best"
-        ? variant.best_runs
-        : variant.recent_runs;
+      : variant.recent_runs;
     const items = Array.isArray(baseItems) ? baseItems : [];
     if (!items.length) {
       const empty = document.createElement("p");
