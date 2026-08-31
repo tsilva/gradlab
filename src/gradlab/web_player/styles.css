@@ -582,27 +582,7 @@ h2 { font-size: var(--font-size-lg); margin: 0; font-weight: var(--font-weight-s
   background: var(--color-surface-primary);
 }
 .source-results.loading-empty { min-height: 3.5rem; }
-.source-list-loading-indicator {
-  position: absolute;
-  top: .38rem;
-  left: 50%;
-  z-index: 4;
-  display: grid;
-  place-items: center;
-  width: 1.7rem;
-  height: 1.7rem;
-  border: 1px solid var(--color-outline-strong);
-  border-radius: 50%;
-  background: var(--color-surface-secondary);
-  box-shadow: 0 .2rem .7rem var(--color-shadow-strong);
-  pointer-events: none;
-  transform: translateX(-50%);
-}
-.source-list-loading-indicator .spinner {
-  width: .9rem;
-  height: .9rem;
-  border-width: 1.5px;
-}
+.source-head .icon-only.refreshing .icon { animation: source-spin .8s linear infinite; }
 
 .source-leader-badge {
   display: inline-flex;
@@ -652,6 +632,10 @@ h2 { font-size: var(--font-size-lg); margin: 0; font-weight: var(--font-weight-s
   border-color: var(--color-evaluation-text);
   background: var(--color-evaluation-surface);
   color: var(--color-evaluation-text);
+}
+.success-badge.training {
+  font-size: .6875rem;
+  font-weight: var(--font-weight-regular);
 }
 
 .environment-list,
@@ -972,6 +956,8 @@ h2 { font-size: var(--font-size-lg); margin: 0; font-weight: var(--font-weight-s
   font-size: var(--font-size-xs);
   white-space: nowrap;
 }
+.environment-row .success-badge.training,
+.goal-row .success-badge.training { font-size: .6875rem; }
 .environment-row .success-badge.evaluation,
 .goal-row .success-badge.evaluation { color: var(--color-evaluation-text); }
 .goal-row span {
@@ -1223,25 +1209,7 @@ h2 { font-size: var(--font-size-lg); margin: 0; font-weight: var(--font-weight-s
   line-height: var(--line-height-default);
 }
 .source-table .finish-evidence-metric { margin-top: .42rem; color: var(--color-text-muted); }
-.source-table .inspection-cell { min-width: 12rem; }
-.source-table .run-goal-contract {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: .7rem;
-}
-.source-table .run-goal-contract-identity { min-width: 0; }
-.source-table .run-goal-contract-kind {
-  color: var(--color-text);
-  font-size: var(--font-size-sm);
-  white-space: nowrap;
-}
-.source-table .run-goal-contract-kind.current_modified,
-.source-table .run-goal-contract-kind.previous_modified { color: var(--color-interaction); }
-.source-table .run-goal-contract small {
-  max-width: 9rem;
-  white-space: nowrap;
-}
+.source-table .inspection-cell { width: 1%; white-space: nowrap; }
 .source-table tbody tr { cursor: pointer; transition: background .12s ease; }
 .source-table tbody tr.selected {
   background: var(--color-interaction-tint);

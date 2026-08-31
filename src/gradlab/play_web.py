@@ -3558,10 +3558,6 @@ class PlaybackWebServer:
                     self.catalog_goal_activity,
                 ),
                 web.get(
-                    ("/api/catalog/environments/{environment_id}/goals/{goal_id}/runs"),
-                    self.catalog_runs,
-                ),
-                web.get(
                     (
                         "/api/catalog/environments/{environment_id}/goals/{goal_id}"
                         "/variants/{goal_variant_id}/inspection"
