@@ -2816,14 +2816,14 @@ export class SourceBrowser {
     const table = document.createElement("table");
     table.className = "goal-configuration-run-table";
     const columns = document.createElement("colgroup");
-    ["run", "train-success", "eval-success", "result", "last-activity"].forEach((name) => {
+    ["run", "train-success", "eval-success", "last-activity"].forEach((name) => {
       const column = document.createElement("col");
       column.className = `goal-configuration-run-column ${name}`;
       columns.append(column);
     });
     const head = document.createElement("thead");
     const headerRow = document.createElement("tr");
-    ["Run", "train/success", "eval/success", "Result", "Last activity"].forEach((label) => {
+    ["Run", "train/success", "eval/success", "Last activity"].forEach((label) => {
       const cell = document.createElement("th");
       cell.scope = "col";
       cell.textContent = label;
@@ -2851,7 +2851,14 @@ export class SourceBrowser {
       const description = document.createElement("small");
       description.textContent = String(run?.description || run?.run_id || "");
       identity.append(name, description);
-      navigate.append(identity);
+      const presentation = runStatePresentation(run);
+      const statusName = humanizeMetricPart(run?.state || "unknown");
+      const state = document.createElement("span");
+      state.className = `goal-configuration-run-state ${presentation.tone}`;
+      state.title = statusName;
+      state.setAttribute("aria-label", statusName);
+      state.append(icon(presentation.iconName));
+      navigate.append(state, identity);
       runCell.append(navigate);
       const runEvidence = { ...run, run_count: 1 };
       const trainingCell = document.createElement("td");
@@ -2866,11 +2873,6 @@ export class SourceBrowser {
       evaluationCell.textContent = evaluationStatus.label;
       evaluationCell.title = evaluationStatus.description;
       evaluationCell.setAttribute("aria-label", evaluationStatus.description);
-      const result = document.createElement("td");
-      const state = document.createElement("span");
-      state.className = `goal-configuration-run-state ${String(run?.state || "unknown")}`;
-      state.textContent = String(run?.state || "unknown");
-      result.append(state);
       const updated = document.createElement("td");
       updated.className = "goal-configuration-run-updated";
       updated.textContent = run?.updated_at ? formatDate(run.updated_at) : "—";
@@ -2884,7 +2886,7 @@ export class SourceBrowser {
       row.addEventListener("click", (event) => {
         if (!event.target.closest("button")) openRun();
       });
-      row.append(runCell, trainingCell, evaluationCell, result, updated);
+      row.append(runCell, trainingCell, evaluationCell, updated);
       body.append(row);
     });
     table.append(columns, head, body);

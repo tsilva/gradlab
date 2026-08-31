@@ -25,9 +25,6 @@ import {
   signedContributionLabel,
 } from "./reward-breakdown.js";
 
-const VALUE_COMPARISON_FOOT =
-  "V(s) is expected discounted future policy reward; G(s) is this trajectory’s realized discounted future reward—not its success flag or cumulative episode return.";
-
 export function selectedPoint(history, snapshot, view) {
   const sequence = view?.selectedSequence ?? snapshot?.transition?.sequence;
   if (sequence !== null && sequence !== undefined) {
@@ -119,31 +116,12 @@ export function statsBlockFoot(block, snapshot) {
   return block.foot || "";
 }
 
-function finiteHorizonFoot(snapshot) {
-  const condition = snapshot?.session?.termination_conditions?.find(
-    (item) => item?.id === "limit:max_episode_steps" && item.enabled,
-  );
-  const steps = Number(condition?.value);
-  if (!Number.isInteger(steps) || steps <= 0) return "";
-  return `Finite horizon: ${steps.toLocaleString()} policy steps. If remaining time is absent from the policy observation, visually similar early and late states can share one V(s).`;
-}
-
-export function lineBlockFootPresentation(block, unavailable, snapshot = null) {
+export function lineBlockFootPresentation(block, unavailable) {
   const visibleUnavailable = unavailable?.status === "protocol-error"
     ? null
     : unavailable;
-  const valueComparison = Array.isArray(block.metrics)
-    && block.metrics.includes("policy/value")
-    && block.metrics.includes("policy/realized-return");
-  const horizon = valueComparison
-    ? finiteHorizonFoot(snapshot)
-    : "";
-  const text = [
-    block.foot || (valueComparison ? VALUE_COMPARISON_FOOT : ""),
-    horizon,
-  ].filter(Boolean).join(" ");
   return {
-    text: visibleUnavailable?.message || text,
+    text: visibleUnavailable?.message || block.foot || "",
     warning: Boolean(visibleUnavailable),
   };
 }
@@ -260,7 +238,7 @@ function makeLineBlock(block) {
           && availability.status !== "not-yet-observed",
       );
       if (foot) {
-        const presentation = lineBlockFootPresentation(block, unavailable, snapshot);
+        const presentation = lineBlockFootPresentation(block, unavailable);
         foot.textContent = presentation.text;
         foot.hidden = !foot.textContent;
         foot.classList.toggle("warning", presentation.warning);
@@ -508,8 +486,10 @@ function makeDistributionBlock(block) {
   const legend = document.createElement("div");
   legend.className = "action-comparison-legend";
   legend.innerHTML = `
-    <span class="episode">Episode executed frequency</span>
-    <span class="step">Selected-step policy probability</span>
+    <div class="action-comparison-legend-series">
+      <span class="episode">Episode executed frequency</span>
+      <span class="step">Selected-step policy probability</span>
+    </div>
   `;
   section.append(legend, target);
   const foot = appendFoot(section, block.foot, { force: true });
