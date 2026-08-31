@@ -636,16 +636,16 @@ h2 { font-size: var(--font-size-lg); margin: 0; font-weight: var(--font-weight-s
   display: inline-flex;
   align-items: center;
   width: max-content;
-  padding: .2rem .38rem;
-  border: 1px solid var(--color-training-success-text);
+  padding: .14rem .32rem;
+  border: 1px solid color-mix(in srgb, var(--color-training-success-text) 36%, transparent);
   border-radius: 99rem;
-  background: var(--color-training-success-surface);
-  color: var(--color-training-success-text);
+  background: color-mix(in srgb, var(--color-training-success-surface) 48%, transparent);
+  color: color-mix(in srgb, var(--color-training-success-text) 74%, var(--color-text-muted));
   font-family: var(--font-family-mono);
   font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-bold);
+  font-weight: var(--font-weight-semibold);
   line-height: var(--line-height-tight);
-  letter-spacing: var(--letter-spacing-label);
+  letter-spacing: 0;
   white-space: nowrap;
 }
 .success-badge.evaluation {
@@ -968,7 +968,7 @@ h2 { font-size: var(--font-size-lg); margin: 0; font-weight: var(--font-weight-s
 .goal-row .success-badge {
   display: inline-flex;
   margin-top: 0;
-  color: var(--color-training-success-text);
+  color: color-mix(in srgb, var(--color-training-success-text) 74%, var(--color-text-muted));
   font-size: var(--font-size-xs);
   white-space: nowrap;
 }
@@ -1223,7 +1223,25 @@ h2 { font-size: var(--font-size-lg); margin: 0; font-weight: var(--font-weight-s
   line-height: var(--line-height-default);
 }
 .source-table .finish-evidence-metric { margin-top: .42rem; color: var(--color-text-muted); }
-.source-table .inspection-cell { width: 1%; white-space: nowrap; }
+.source-table .inspection-cell { min-width: 12rem; }
+.source-table .run-goal-contract {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .7rem;
+}
+.source-table .run-goal-contract-identity { min-width: 0; }
+.source-table .run-goal-contract-kind {
+  color: var(--color-text);
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+}
+.source-table .run-goal-contract-kind.current_modified,
+.source-table .run-goal-contract-kind.previous_modified { color: var(--color-interaction); }
+.source-table .run-goal-contract small {
+  max-width: 9rem;
+  white-space: nowrap;
+}
 .source-table tbody tr { cursor: pointer; transition: background .12s ease; }
 .source-table tbody tr.selected {
   background: var(--color-interaction-tint);

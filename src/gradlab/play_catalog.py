@@ -1900,6 +1900,36 @@ class PlayCatalog:
             fallback_metric_specs=fallback_metric_specs,
             generation_scope=generation_scope,
         )
+        if repository_goal:
+            goal_configurations = {
+                str(item.get("variant_id") or ""): item
+                for item in self._load_goal_variants(
+                    repository_goal=repository_goal,
+                    generation_scope=generation_scope,
+                )
+            }
+            summaries = tuple(
+                {
+                    **summary,
+                    "goal_configuration_kind": str(
+                        goal_configurations.get(
+                            str(summary.get("goal_variant_id") or ""),
+                            {},
+                        ).get("configuration_kind")
+                        or "previous_default"
+                    ),
+                    "goal_configuration_label": str(
+                        goal_configurations.get(
+                            str(summary.get("goal_variant_id") or ""),
+                            {},
+                        ).get("display_label")
+                        or summary.get("goal_variant_label")
+                        or summary.get("goal_variant_id")
+                        or "Goal configuration"
+                    ),
+                }
+                for summary in summaries
+            )
         filtered = [
             summary
             for summary in summaries
@@ -1920,6 +1950,8 @@ class PlayCatalog:
                 summary.get("effective_goal_contract_sha256"),
                 summary.get("goal_variant_id"),
                 summary.get("goal_variant_label"),
+                summary.get("goal_configuration_kind"),
+                summary.get("goal_configuration_label"),
                 summary.get("description"),
                 summary.get("seed"),
                 summary.get("success_badges"),
