@@ -163,6 +163,26 @@ export function goalConfigurationPresentation(item, nowValue = Date.now()) {
   };
 }
 
+export function runGoalConfigurationPresentation(item) {
+  const kind = String(item?.goal_configuration_kind || "previous_default");
+  const labels = {
+    current_default: "Current default",
+    current_modified: "Current variant",
+    previous_default: "Historical default",
+    previous_modified: "Historical variant",
+  };
+  return {
+    kind,
+    kindLabel: labels[kind] || "Historical configuration",
+    detail: String(
+      item?.goal_configuration_label
+      || item?.goal_variant_label
+      || item?.goal_variant_id
+      || "Goal configuration",
+    ),
+  };
+}
+
 export function formatGoalDiffValue(value, { unavailable = false } = {}) {
   if (unavailable) return "—";
   if (value === undefined) return "—";
@@ -799,7 +819,7 @@ export function sourceRouteFromPath(pathname = location.pathname) {
   if (!goal_id) return null;
   if (parts.length === 4) {
     return {
-      level: "goal_variants",
+      level: "runs",
       environment_id,
       goal_id,
       goal_variant_id: "",
@@ -950,9 +970,9 @@ export function sourceBreadcrumbItems(route) {
     items.push({
       label: humanSourceLabel(route.goal_id, "goal"),
       title: route.goal_id,
-      current: route.level === "goal_variants" && !hasActiveCheckpoint,
+      current: route.level === "runs" && !route.run_id && !route.goal_variant_id && !hasActiveCheckpoint,
       route: {
-        level: "goal_variants",
+        level: "runs",
         goal_variant_id: "",
         run_id: "",
         checkpoint_id: "",
@@ -1135,11 +1155,16 @@ export class SourceBrowser {
     const signature = routeSignature(appRoute);
     if (signature !== this.lastAppRoute) {
       this.lastAppRoute = signature;
+      const appRouteLevel = appRoute.level === "goal_variants"
+        ? "runs"
+        : appRoute.level || "environments";
       this.route = {
-        level: appRoute.level || "environments",
+        level: appRouteLevel,
         environment_id: appRoute.environment_id || "",
         goal_id: appRoute.goal_id || "",
-        goal_variant_id: appRoute.goal_variant_id || "",
+        goal_variant_id: appRouteLevel === "runs" && appRoute.level === "goal_variants"
+          ? ""
+          : appRoute.goal_variant_id || "",
         run_id: appRoute.run_id || "",
         checkpoint_id: appRoute.checkpoint_id || "",
       };
@@ -1496,9 +1521,6 @@ export class SourceBrowser {
     if (this.route.level === "goals") {
       return `/api/catalog/environments/${encodeURIComponent(this.route.environment_id)}/goals?${query}`;
     }
-    if (this.route.level === "goal_variants") {
-      return `/api/catalog/environments/${encodeURIComponent(this.route.environment_id)}/goals/${encodeURIComponent(this.route.goal_id)}/activity?${query}`;
-    }
     if (this.route.level === "runs" && this.route.run_id) {
       if (this.route.goal_variant_id) {
         query.set("goal_variant_id", this.route.goal_variant_id);
@@ -1506,7 +1528,10 @@ export class SourceBrowser {
       return `/api/catalog/runs/${encodeURIComponent(this.route.run_id)}/checkpoints?${query}`;
     }
     if (this.route.level === "runs") {
-      return `/api/catalog/environments/${encodeURIComponent(this.route.environment_id)}/goals/${encodeURIComponent(this.route.goal_id)}/variants/${encodeURIComponent(this.route.goal_variant_id)}/runs?${query}`;
+      const scope = this.route.goal_variant_id
+        ? `/variants/${encodeURIComponent(this.route.goal_variant_id)}`
+        : "";
+      return `/api/catalog/environments/${encodeURIComponent(this.route.environment_id)}/goals/${encodeURIComponent(this.route.goal_id)}${scope}/runs?${query}`;
     }
     return `/api/catalog/environments?${query}`;
   }
@@ -1582,10 +1607,6 @@ export class SourceBrowser {
         this.selectionFence = typeof payload.selection_fence === "string"
           ? payload.selection_fence
           : "";
-        if (this.route.level === "goal_variants") {
-          this.activityRevision = String(payload.revision || "");
-          this.activityHasActiveRuns = Boolean(payload.has_active_runs);
-        }
         this.metricColumns = Array.isArray(payload.metric_columns)
           ? payload.metric_columns
           : [];
@@ -1715,24 +1736,19 @@ export class SourceBrowser {
   }
 
   updatePolling() {
-    const shouldPoll = (
-      this.app.phase === "selecting"
-      && this.route.level === "goal_variants"
-      && this.activityHasActiveRuns
-    );
-    if (shouldPoll && this.pollTimer === null) {
-      this.pollTimer = window.setInterval(() => {
-        this.loadedKey = "";
-        this.load({ quiet: true });
-      }, 5000);
-    } else if (!shouldPoll && this.pollTimer !== null) {
+    if (this.pollTimer !== null) {
       clearInterval(this.pollTimer);
       this.pollTimer = null;
     }
   }
 
   applyRoute(route, { seedItems = null } = {}) {
-    this.route = { ...this.route, ...route };
+    const nextRoute = { ...route };
+    if (nextRoute.level === "goal_variants") {
+      nextRoute.level = "runs";
+      nextRoute.goal_variant_id = "";
+    }
+    this.route = { ...this.route, ...nextRoute };
     this.query = "";
     this.searchOpen = false;
     this.items = [];
@@ -1837,15 +1853,13 @@ export class SourceBrowser {
 
   back() {
     if (this.route.level === "runs" && this.route.run_id) {
-      this.navigate({ level: "runs", run_id: "", checkpoint_id: "" });
-    } else if (this.route.level === "runs") {
       this.navigate({
-        level: "goal_variants",
+        level: "runs",
         goal_variant_id: "",
         run_id: "",
         checkpoint_id: "",
       });
-    } else if (this.route.level === "goal_variants") {
+    } else if (this.route.level === "runs") {
       this.navigate({
         level: "goals",
         goal_id: "",
@@ -1904,7 +1918,9 @@ export class SourceBrowser {
     head.append(titleBlock);
 
     if (this.app.phase === "selecting") {
-      const refresh = button("Refresh", { iconName: "refresh", quiet: true });
+      const refresh = button("", { iconName: "refresh", quiet: true });
+      refresh.classList.add("icon-only");
+      refresh.setAttribute("aria-label", "Refresh");
       refresh.title = "Refresh this list";
       refresh.disabled = this.loading;
       refresh.addEventListener("click", () => {
@@ -1941,15 +1957,6 @@ export class SourceBrowser {
     } else if (["resolving", "verifying", "loading"].includes(this.app.phase)) {
       shell.append(this.renderProgress());
     } else {
-      if (this.route.level === "goal_variants") {
-        const description = document.createElement("p");
-        description.className = "source-description";
-        description.textContent = (
-          "Each configuration groups runs with the same resolved goal behavior. "
-          + "Select one to inspect its exact differences from the current checked-in goal."
-        );
-        shell.append(description);
-      }
       if (this.app.has_active_runner) shell.append(this.renderContinuePlayback());
       shell.append(this.renderSearch());
       if (this.route.level === "runs" && this.route.run_id) {
@@ -1974,9 +1981,6 @@ export class SourceBrowser {
       return "Runs · choose a checkpoint";
     }
     if (this.route.level === "runs") return "Choose a run";
-    if (this.route.level === "goal_variants") {
-      return "Choose a goal version";
-    }
     if (this.route.level === "goals") return "Choose a goal";
     return "Choose an environment";
   }
@@ -2007,10 +2011,8 @@ export class SourceBrowser {
       ? "Search environments"
       : this.route.level === "goals"
         ? "Search goals"
-        : this.route.level === "goal_variants"
-          ? "Search configuration, difference, status, date, or contract hash"
-          : this.route.level === "runs" && !this.route.run_id
-          ? "Search run, finish reason, description, recipe, variant, override, or seed"
+        : this.route.level === "runs" && !this.route.run_id
+          ? "Search run, goal configuration, finish reason, recipe, override, or seed"
           : "Search checkpoint, step, hash, purpose, or evaluation";
     input.setAttribute("aria-label", input.placeholder);
     input.addEventListener("input", (event) => this.setSearch(event.target.value));
@@ -2262,9 +2264,7 @@ export class SourceBrowser {
       ? this.renderEnvironments()
       : this.route.level === "goals"
         ? this.renderGoals()
-        : this.route.level === "goal_variants"
-          ? this.renderGoalVariants()
-          : this.route.level === "runs"
+        : this.route.level === "runs"
             ? this.renderRunResults()
             : this.renderTable();
     if (this.route.level === "runs" && this.route.run_id) {
@@ -2346,7 +2346,7 @@ export class SourceBrowser {
       }
       navigate.append(identity);
       navigate.addEventListener("click", () => this.navigate({
-        level: "goal_variants",
+        level: "runs",
         goal_id: goal.goal_id,
         goal_variant_id: "",
         run_id: "",
@@ -2820,7 +2820,7 @@ export class SourceBrowser {
             label: metricLabel(column.metric),
           })),
           { label: "Updated" },
-          { label: "Contract" },
+          { label: "Goal contract" },
         ]
       : [
           ...(showingCheckpoints ? [{ label: "", selection: true }] : []),
@@ -3012,6 +3012,18 @@ export class SourceBrowser {
           return;
         }
         if (className.includes("inspection-cell")) {
+          const presentation = runGoalConfigurationPresentation(item);
+          const contract = document.createElement("div");
+          contract.className = "run-goal-contract";
+          const identity = document.createElement("div");
+          identity.className = "run-goal-contract-identity";
+          const kind = document.createElement("strong");
+          kind.className = `run-goal-contract-kind ${presentation.kind}`;
+          kind.textContent = presentation.kindLabel;
+          const detail = document.createElement("small");
+          detail.textContent = presentation.detail;
+          detail.title = presentation.detail;
+          identity.append(kind, detail);
           const inspect = button("Inspect", { iconName: "code", quiet: true });
           inspect.addEventListener("click", (event) => {
             event.stopPropagation();
@@ -3019,7 +3031,8 @@ export class SourceBrowser {
               (error) => this.showToast(String(error?.message || error), true),
             );
           });
-          cell.append(inspect);
+          contract.append(identity, inspect);
+          cell.append(contract);
           row.append(cell);
           return;
         }
@@ -3139,6 +3152,7 @@ export class SourceBrowser {
         if (showingRuns) {
           this.navigate({
             level: "runs",
+            goal_variant_id: item.goal_variant_id,
             run_id: item.run_id,
             checkpoint_id: "",
           });

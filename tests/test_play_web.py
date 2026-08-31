@@ -1792,6 +1792,7 @@ def test_publication_authority_is_exact_tab_private_and_rotates(tmp_path: Path) 
 def test_catalog_http_api_requires_the_fragment_session_token() -> None:
     class FakeCatalog:
         checkpoint_modes: list[bool] = []
+        run_goal_variant_ids: list[str] = []
 
         @staticmethod
         def environments(*, query, cursor):
@@ -1951,19 +1952,14 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
             query,
             cursor,
         ):
-            assert (
-                environment_id,
-                goal_id,
-                goal_variant_id,
-                query,
-                cursor,
-            ) == (
+            assert (environment_id, goal_id, query, cursor) == (
                 "Mario",
                 "Level1-1",
-                "goal-variant-" + "c" * 24,
                 "",
                 None,
             )
+            assert goal_variant_id in ("", "goal-variant-" + "c" * 24)
+            FakeCatalog.run_goal_variant_ids.append(goal_variant_id)
             return CatalogPage(
                 items=(
                     {
@@ -2196,6 +2192,13 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 )
                 assert runs.status == 200
                 assert (await runs.json())["items"][0]["goal_variant_id"] == variant_id
+                all_runs = await client.get(
+                    (f"{server.origin}/api/catalog/environments/Mario/goals/Level1-1/runs"),
+                    headers={"Authorization": f"Bearer {server.token}"},
+                )
+                assert all_runs.status == 200
+                assert (await all_runs.json())["items"][0]["goal_variant_id"] == ""
+                assert FakeCatalog.run_goal_variant_ids == [variant_id, ""]
                 checkpoints = await client.get(
                     f"{server.origin}/api/catalog/runs/gradlab-{'a' * 32}/checkpoints",
                     headers={"Authorization": f"Bearer {server.token}"},

@@ -26,6 +26,7 @@ import {
   metricLabel,
   rankRunItems,
   runFinishPresentation,
+  runGoalConfigurationPresentation,
   runStatePresentation,
   SourceBrowser,
   successBadgeLabels,
@@ -336,7 +337,7 @@ test("scientific success badges are ordered, independent, and evidence-labelled"
   );
   assert.match(
     styles,
-    /\.success-badge\s*\{[^}]*background: var\(--color-training-success-surface\);[^}]*color: var\(--color-training-success-text\);/,
+    /\.success-badge\s*\{[^}]*padding: \.14rem \.32rem;[^}]*border: 1px solid color-mix\(in srgb, var\(--color-training-success-text\) 36%, transparent\);[^}]*background: color-mix\(in srgb, var\(--color-training-success-surface\) 48%, transparent\);[^}]*font-weight: var\(--font-weight-semibold\);[^}]*letter-spacing: 0;/,
   );
   assert.match(styles, /\.success-badge\.evaluation/);
 });
@@ -459,28 +460,35 @@ test("goal configuration metadata and exact changes render as tables", async () 
   );
 });
 
-test("goal activity unifies variants with recent and best runs", async () => {
+test("goal selection opens one unified run screen with goal-contract identity", async () => {
   const source = await readFile(
     new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
     "utf8",
   );
 
-  assert.match(source, /\/goals\/\$\{encodeURIComponent\(this\.route\.goal_id\)\}\/activity/);
-  assert.doesNotMatch(source, /If-None-Match/);
-  assert.match(source, /Array\.isArray\(variant\.current_diff\)/);
-  assert.doesNotMatch(source, /Goal diff request failed/);
-  assert.match(source, /this\.activityHasActiveRuns = Boolean\(payload\.has_active_runs\)/);
-  assert.match(
-    source,
-    /this\.route\.level === "goal_variants"\s*&& this\.activityHasActiveRuns/,
+  assert.match(source, /level: "runs",\s*goal_id: goal\.goal_id/);
+  assert.match(source, /\/goals\/\$\{encodeURIComponent\(this\.route\.goal_id\)\}\$\{scope\}\/runs/);
+  assert.doesNotMatch(source, /return "Choose a goal version"/);
+  assert.doesNotMatch(source, /this\.renderGoalVariants\(\)/);
+  assert.match(source, /\{ label: "Goal contract" \}/);
+  assert.match(source, /runGoalConfigurationPresentation\(item\)/);
+  assert.match(source, /goal_variant_id: item\.goal_variant_id/);
+
+  assert.deepEqual(runGoalConfigurationPresentation({
+    goal_configuration_kind: "current_modified",
+    goal_configuration_label: "Current goal with frame_skip=2",
+  }), {
+    kind: "current_modified",
+    kindLabel: "Current variant",
+    detail: "Current goal with frame_skip=2",
+  });
+  assert.equal(
+    runGoalConfigurationPresentation({ goal_configuration_kind: "previous_default" }).kindLabel,
+    "Historical default",
   );
-  assert.match(source, /heading\.textContent = "Runs using this configuration"/);
-  assert.match(source, /\["recent", "Recent"\]/);
-  assert.match(source, /\["best", "Best"\]/);
-  assert.match(source, /page\?\.nextCursor \? "Load more" : "Load older runs"/);
 });
 
-test("run checkpoint pages refresh only on explicit request", (context) => {
+test("run selection and checkpoint pages refresh only on explicit request", (context) => {
   const originalLocation = globalThis.location;
   const originalWindow = globalThis.window;
   let intervalStarts = 0;
@@ -517,11 +525,11 @@ test("run checkpoint pages refresh only on explicit request", (context) => {
   assert.equal(intervalStarts, 0);
   assert.equal(browser.pollTimer, null);
 
-  browser.route = { level: "goal_variants" };
+  browser.route = { level: "runs", run_id: "" };
   browser.updatePolling();
 
-  assert.equal(intervalStarts, 1);
-  assert.equal(browser.pollTimer, 73);
+  assert.equal(intervalStarts, 0);
+  assert.equal(browser.pollTimer, null);
 });
 
 test("run table hover highlights only the complete row", async () => {
@@ -748,7 +756,8 @@ test("source discovery progressively discloses secondary controls", async () => 
     "utf8",
   );
 
-  assert.match(source, /return "Choose a goal version"/);
+  assert.doesNotMatch(source, /return "Choose a goal version"/);
+  assert.match(source, /if \(this\.route\.level === "runs"\) return "Choose a run"/);
   assert.match(source, /source-search-disclosure/);
   assert.match(source, /disclosure\.open = this\.searchOpen/);
   assert.doesNotMatch(source, /resultCount > 8/);
@@ -771,6 +780,10 @@ test("catalog refresh uses one non-blocking indicator across source lists", asyn
 
   assert.match(source, /indicator\.className = "source-list-loading-indicator"/);
   assert.match(source, /indicator\.setAttribute\("aria-label", "Refreshing list"\)/);
+  assert.match(source, /const refresh = button\("", \{ iconName: "refresh", quiet: true \}\)/);
+  assert.match(source, /refresh\.classList\.add\("icon-only"\)/);
+  assert.match(source, /refresh\.setAttribute\("aria-label", "Refresh"\)/);
+  assert.doesNotMatch(source, /button\("Refresh", \{ iconName: "refresh", quiet: true \}\)/);
   assert.doesNotMatch(source, /loadingState\("Loading catalog…"\)/);
   assert.doesNotMatch(source, /Some catalog evidence is unavailable/);
   assert.match(styles, /\.source-results \{[^}]*position: relative;/);
@@ -873,7 +886,7 @@ test("active checkpoint breadcrumb navigation exits playback at the selected anc
   assert.equal(browser.navigate(target), true);
 
   const expected = {
-    level: "goal_variants",
+    level: "runs",
     environment_id: "ViZDoom",
     goal_id: "DefendTheLine-v1",
     goal_variant_id: "",
@@ -1507,7 +1520,15 @@ test("late catalog responses cannot populate a newer route", async (context) => 
   assert.equal(sourceBrowser.items[0].recipe_count, 1);
 });
 
-test("goal variants are a first-class canonical route between goals and runs", () => {
+test("goal routes open unified runs while variant deep links retain provenance", () => {
+  assert.deepEqual(sourceRouteFromPath("/environments/Mario/goals/Level1-1"), {
+    level: "runs",
+    environment_id: "Mario",
+    goal_id: "Level1-1",
+    goal_variant_id: "",
+    run_id: "",
+    checkpoint_id: "",
+  });
   const variant = "goal-variant-0123456789abcdef01234567";
   const run = `gradlab-${"a".repeat(32)}`;
   const checkpoint = `checkpoint-12-${"b".repeat(16)}`;
