@@ -330,15 +330,11 @@ test("scientific success badges are ordered, independent, and evidence-labelled"
     "utf8",
   );
   assert.doesNotMatch(source, /renderSuccessBadges\(environment\)/);
-  assert.match(source, /renderSuccessBadges\(goal\)/);
+  assert.doesNotMatch(source, /renderSuccessBadges\(goal\)/);
   assert.match(source, /renderSuccessBadges\(variant\)/);
   assert.match(source, /renderSuccessBadges\(run\)/);
   assert.match(source, /renderSuccessBadges\(item\)/);
-  assert.match(source, /heading\.className = "goal-row-heading"/);
-  assert.match(
-    styles,
-    /\.goal-row-heading\s*\{[^}]*display: flex;[^}]*align-items: center;[^}]*gap: \.45rem;/,
-  );
+  assert.doesNotMatch(source, /heading\.className = "goal-row-heading"/);
   assert.match(
     styles,
     /\.success-badge\s*\{[^}]*padding: \.14rem \.32rem;[^}]*border: 1px solid color-mix\(in srgb, var\(--color-training-success-text\) 36%, transparent\);[^}]*background: color-mix\(in srgb, var\(--color-training-success-surface\) 48%, transparent\);[^}]*font-weight: var\(--font-weight-semibold\);[^}]*letter-spacing: 0;/,
@@ -348,6 +344,20 @@ test("scientific success badges are ordered, independent, and evidence-labelled"
     styles,
     /\.success-badge\.training\s*\{[^}]*font-size: \.6875rem;[^}]*font-weight: var\(--font-weight-regular\);/,
   );
+});
+
+test("goals render as table status columns", async () => {
+  const source = await readFile(
+    new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(source, /table\.className = "goal-table"/);
+  assert.match(source, /\["Goal", "Recipes", "train\/success", "eval\/success", "YAML"\]/);
+  assert.match(source, /recipesCell\.textContent = Number\(goal\.recipe_count\)\.toLocaleString\(\);/);
+  assert.match(source, /environmentSuccessStatus\(goal, "train\/success"\)/);
+  assert.match(source, /environmentSuccessStatus\(goal, "eval\/success"\)/);
+  assert.match(source, /row\.append\(goalCell, recipesCell, trainingCell, evaluationCell, inspectCell\);/);
 });
 
 test("environment success is rendered as table status columns", async () => {
@@ -381,7 +391,10 @@ test("environment success is rendered as table status columns", async () => {
     "utf8",
   );
   assert.match(source, /document\.createElement\("table"\)/);
-  assert.match(source, /\["Environment", "train\/success", "eval\/success", "Goals"\]/);
+  assert.match(source, /\["Environment", "Goals", "train\/success", "eval\/success"\]/);
+  assert.match(source, /goalsCell\.textContent = Number\(environment\.goal_count\)\.toLocaleString\(\);/);
+  assert.match(source, /row\.append\(environmentCell, goalsCell, trainingCell, evaluationCell\);/);
+  assert.doesNotMatch(source, /const goalLabel =/);
 });
 
 test("goal configurations expose exact diff counts and date columns", () => {
@@ -463,6 +476,10 @@ test("goal configuration metadata and exact changes render as tables", async () 
   assert.match(source, /this\.goalConfigurationsExpanded \? variants : \[selected\]/);
   assert.match(source, /this\.goalConfigurationsExpanded = false;\s*this\.renderView\(\);/);
   assert.doesNotMatch(source, /Older goal/);
+  assert.doesNotMatch(source, /Selected goal version/);
+  assert.doesNotMatch(source, /presentation\.runCount === 1 \? "View run"/);
+  assert.match(source, /inspect\.title = "View goal YAML"/);
+  assert.match(source, /row\.addEventListener\("click", \(\) => this\.navigate\(\{/);
   assert.match(source, /sourceLabel: "Current"/);
   assert.match(styles, /\.goal-configuration-toggle \{[^}]*text-transform: none;/);
   assert.match(

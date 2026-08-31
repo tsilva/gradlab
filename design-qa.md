@@ -60,6 +60,61 @@ final result: passed
 
 ---
 
+# Environment success table design QA — 2026-08-31
+
+**Comparison target**
+
+- Source visual truth: `/var/folders/wz/x29jb7_x5rdc_5dcjr4qnhg00000gn/T/codex-clipboard-6a43019b-8f5f-43c9-892e-92e31cbb7768.png`.
+- Browser-rendered implementation: `/tmp/gradlab-environment-table.png`.
+- Full-view comparison evidence: `/tmp/gradlab-environment-comparison.png`.
+- Focused table comparison evidence: `/tmp/gradlab-environment-focused-comparison.png`.
+- Source pixels: 3182 × 1780 at 2× density, normalized to 1591 × 890.
+- Implementation pixels: 1591 × 890 at 1× density. The in-app browser CSS viewport was 1602 × 896; its captured content surface was 1591 × 890.
+- State: dark-theme Environment discovery with live catalog enrichment, showing satisfied, attempted-but-unsatisfied, and no-run rows.
+
+**Findings**
+
+- No actionable P0, P1, or P2 mismatch remains.
+- The list is now a semantic table while retaining the source screen's container width, borders, row density, typography, hierarchy, and dark-theme tokens.
+- The Goals value is preserved as its own compact column. `train/success` and `eval/success` are independent columns and no longer appear as Environment-row badges.
+- Requested evidence states are visibly distinct: green check emoji for satisfied, red cross emoji for attempted but unsatisfied, and `N/A` when the current goal revisions have no runs.
+
+**Required fidelity surfaces**
+
+- Fonts and typography: the existing Inter UI family, weights, sizing tokens, uppercase column headers, truncation, and line height remain consistent with the source.
+- Spacing and layout rhythm: the bordered catalog container, row height, cell padding, alignment, radius, and vertical rhythm match the existing discovery screen; the table scrolls horizontally at narrow widths.
+- Colors and visual tokens: the original canvas, surface, border, text, hover, and focus tokens are preserved. Emoji colors provide the requested success/failure semantics without new CSS palette drift.
+- Image quality and asset fidelity: no source imagery or custom visual asset was replaced. The status glyphs are the user-requested native emoji rather than approximated image assets.
+- Copy and content: Environment names and Goal counts are preserved. The status headers use the exact `train/success` and `eval/success` terms requested.
+
+**Primary interactions and runtime verification**
+
+- Search filtered the authoritative table to the matching Environment and restored the complete list when cleared.
+- Selecting an Environment opened its Goal screen, and the Environment breadcrumb returned to the table.
+- Full-row hover and keyboard focus styling remain available.
+- Browser console check returned no warnings or errors.
+- Automated verification: 57 source-browser tests and 30 PlayCatalog tests passed.
+
+**Comparison history**
+
+- Initial comparison found no actionable P0/P1/P2 issue, so no visual repair iteration was required.
+
+**Implementation checklist**
+
+- [x] Render Environment discovery as a semantic table.
+- [x] Replace Environment success badges with independent status columns.
+- [x] Derive `N/A` from an authoritative zero current-revision Run count.
+- [x] Preserve search, navigation, hover, focus, and responsive overflow.
+- [x] Verify all three status outcomes in the real browser-rendered catalog.
+
+**Follow-up polish**
+
+- None required for this change.
+
+final result: passed
+
+---
+
 # Compact checkpoint metric headers design QA
 
 ## Evidence

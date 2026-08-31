@@ -856,6 +856,10 @@ def test_success_badges_propagate_from_runs_through_current_goals_and_environmen
         "Level1-1": ("train/success", "eval/success"),
         "Level1-2": ("train/success",),
     }
+    assert {item["goal_id"]: item["run_count"] for item in goals.items} == {
+        "Level1-1": 1,
+        "Level1-2": 1,
+    }
     assert environments.items[0]["success_badges"] == ("train/success",)
     assert environments.items[0]["run_count"] == 2
     assert len(environment_bulk_calls) == 2

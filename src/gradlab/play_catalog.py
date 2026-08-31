@@ -198,6 +198,7 @@ class GoalSummary:
     goal_slug: str
     title: str
     recipe_count: int
+    run_count: int
     goal_path: str
     success_badges: tuple[str, ...]
 
@@ -1981,7 +1982,7 @@ class PlayCatalog:
         repository_goals = self._repository_goals(environment_id=environment_id)
         generation_scopes = self._control_generation_scopes(repository_goals)
         for goal, scope in zip(repository_goals, generation_scopes, strict=True):
-            badges = self._current_goal_success_badges(
+            badges, run_count = self._current_goal_evidence(
                 goal,
                 generation_scope=scope,
             )
@@ -2000,6 +2001,7 @@ class PlayCatalog:
                     goal_slug=goal.goal_slug,
                     title=goal.title,
                     recipe_count=goal.recipe_count,
+                    run_count=run_count,
                     goal_path=goal.goal_path,
                     success_badges=badges,
                 ).to_dict()
