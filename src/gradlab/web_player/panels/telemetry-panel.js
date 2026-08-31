@@ -430,21 +430,6 @@ function actionComparisonRow(row) {
   return item;
 }
 
-function setActionComparisonCaption(target, presentation, decision, snapshot) {
-  const count = presentation.history.sampleCount;
-  const facts = [
-    `${count.toLocaleString()} executed action${count === 1 ? "" : "s"} in the retained episode`,
-  ];
-  if (decision.selected_action !== null && decision.selected_action !== undefined) {
-    facts.push(`policy selected ${formatActionValue(decision.selected_action, snapshot)}`);
-  }
-  const executed = snapshot?.transition?.executed_action;
-  if (executed !== null && executed !== undefined) {
-    facts.push(`executed ${formatActionValue(executed, snapshot)}`);
-  }
-  target.textContent = `${facts.join(" · ")}.`;
-}
-
 export function histogramSelectedLabel(names, highlightIndex) {
   return Number.isInteger(highlightIndex)
     && highlightIndex >= 0
@@ -526,9 +511,7 @@ function makeDistributionBlock(block) {
     <span class="episode">Episode executed frequency</span>
     <span class="step">Selected-step policy probability</span>
   `;
-  const caption = document.createElement("p");
-  caption.className = "panel-foot";
-  section.append(legend, target, caption);
+  section.append(legend, target);
   const foot = appendFoot(section, block.foot, { force: true });
   return {
     element: section,
@@ -543,7 +526,6 @@ function makeDistributionBlock(block) {
         }.`);
       }
       legend.hidden = true;
-      caption.hidden = true;
       foot.classList.remove("warning");
       section.hidden = !distributionBlockVisible(availability.status);
       if (
@@ -582,8 +564,6 @@ function makeDistributionBlock(block) {
       target.className = "action-comparison";
       target.replaceChildren(...presentation.rows.map(actionComparisonRow));
       legend.hidden = false;
-      caption.hidden = false;
-      setActionComparisonCaption(caption, presentation, decision, snapshot);
       for (const state of [presentation.history, presentation.step]) {
         if (state.message) footMessages.push(state.message);
         if (["contract-incomparable", "protocol-error"].includes(state.status)) {

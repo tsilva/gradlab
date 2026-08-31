@@ -1,7 +1,6 @@
 import {
   BUILTIN_PANEL_PRESETS,
   PANEL_TYPES,
-  WORKSPACE_PRESETS,
   defaultPanelInstances,
 } from "./catalog.js";
 
@@ -121,21 +120,13 @@ function normalizePanel(id, value, fallback) {
   };
 }
 
-function normalizedPreset(value, paired = false) {
-  if (paired) return "debug";
-  return Object.hasOwn(WORKSPACE_PRESETS, value) && value !== "custom"
-    ? value
-    : "watch";
-}
-
-export function createDefaultWorkspace({ paired = false, preset = "watch", writer = "" } = {}) {
-  const selectedPreset = normalizedPreset(preset, paired);
+export function createDefaultWorkspace({ paired = false, writer = "" } = {}) {
   return {
     version: WORKSPACE_VERSION,
     revision: { counter: 0, writer: String(writer) },
-    name: WORKSPACE_PRESETS[selectedPreset].label,
-    preset: selectedPreset,
-    panels: defaultPanelInstances({ paired, preset: selectedPreset }),
+    name: "All panels",
+    preset: "all",
+    panels: defaultPanelInstances({ paired }),
   };
 }
 
@@ -145,9 +136,21 @@ export function normalizeWorkspace(value, { paired = false, writer = "" } = {}) 
     return fallback;
   }
   const panels = {};
+  const legacyFixedView = ["watch", "explain", "debug"].includes(value.preset);
   Object.entries(fallback.panels).forEach(([id, panel]) => {
-    panels[id] = normalizePanel(id, value.panels?.[id], panel);
-    if (["reward-analysis", "attribution", "cnn"].includes(id) && value.panels?.[id] === undefined) {
+    const source = legacyFixedView && id !== "controls"
+      ? { ...value.panels?.[id], placement: panel.placement }
+      : value.panels?.[id];
+    panels[id] = normalizePanel(
+      id,
+      source,
+      panel,
+    );
+    if (
+      !legacyFixedView
+      && ["reward-analysis", "attribution", "cnn"].includes(id)
+      && value.panels?.[id] === undefined
+    ) {
       panels[id].placement.visible = false;
     }
   });
@@ -162,24 +165,10 @@ export function normalizeWorkspace(value, { paired = false, writer = "" } = {}) 
       counter: Math.max(0, Number(value.revision?.counter) || 0),
       writer: String(value.revision?.writer || writer).slice(0, 80),
     },
-    name: cleanTitle(value.name, fallback.name).slice(0, 48),
-    preset: Object.hasOwn(WORKSPACE_PRESETS, value.preset)
-      ? value.preset
-      : "custom",
+    name: legacyFixedView ? fallback.name : cleanTitle(value.name, fallback.name).slice(0, 48),
+    preset: "all",
     panels,
   };
-}
-
-export function applyWorkspacePreset(workspace, preset, { paired = false } = {}) {
-  const selectedPreset = normalizedPreset(preset, paired);
-  const placements = defaultPanelInstances({ paired, preset: selectedPreset });
-  Object.entries(workspace.panels || {}).forEach(([id, panel]) => {
-    if (placements[id]) panel.placement = clone(placements[id].placement);
-    else if (panel?.placement) panel.placement.visible = false;
-  });
-  workspace.preset = selectedPreset;
-  workspace.name = WORKSPACE_PRESETS[selectedPreset].label;
-  return workspace;
 }
 
 export function compareWorkspaceRevisions(left, right) {
