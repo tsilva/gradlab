@@ -648,11 +648,14 @@ h2 { font-size: var(--font-size-lg); margin: 0; font-weight: var(--font-weight-s
   border-collapse: collapse;
   font-size: var(--font-size-sm);
 }
-.goal-configuration-table { min-width: 64rem; table-layout: fixed; }
+.goal-configuration-table { min-width: 81rem; table-layout: fixed; }
 .goal-configuration-column.differences { width: 18rem; }
 .goal-configuration-column.runs { width: 6rem; }
+.goal-configuration-column.train-success,
+.goal-configuration-column.eval-success { width: 8.5rem; }
 .goal-configuration-column.first-used,
 .goal-configuration-column.last-activity { width: 11rem; }
+.goal-configuration-table th.goal-configuration-status { text-align: center; }
 .goal-configuration-diff-table { min-width: 54rem; }
 .goal-configuration-table th,
 .goal-configuration-diff-table th {
@@ -756,7 +759,10 @@ h2 { font-size: var(--font-size-lg); margin: 0; font-weight: var(--font-weight-s
 .goal-configuration-number,
 .goal-configuration-date { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .goal-configuration-number { color: var(--color-text); }
-.goal-configuration-date { color: var(--color-text-muted); }
+.goal-configuration-table .goal-configuration-date {
+  color: var(--color-text-muted);
+  text-align: left;
+}
 .goal-configuration-difference.unavailable { color: var(--color-training-text); }
 .goal-configuration-detail {
   min-width: 0;
@@ -909,7 +915,8 @@ h2 { font-size: var(--font-size-lg); margin: 0; font-weight: var(--font-weight-s
 .goal-table th:nth-child(3),
 .goal-table th:nth-child(4),
 .environment-status,
-.goal-status { width: 8.5rem; text-align: center; }
+.goal-status,
+.goal-configuration-status { width: 8.5rem; text-align: center; }
 .goal-table th:last-child,
 .goal-row td:last-child { width: 5rem; text-align: right; }
 .environment-row,
@@ -954,12 +961,17 @@ h2 { font-size: var(--font-size-lg); margin: 0; font-weight: var(--font-weight-s
   background: transparent;
 }
 .environment-status,
-.goal-status {
+.goal-status,
+.goal-configuration-status {
   font-size: var(--font-size-md);
   font-weight: var(--font-weight-semibold);
 }
+.environment-table .environment-status,
+.goal-table .goal-status,
+.goal-configuration-table .goal-configuration-status { text-align: center; }
 .environment-status.not-applicable,
-.goal-status.not-applicable {
+.goal-status.not-applicable,
+.goal-configuration-status.not-applicable {
   color: var(--color-text-muted);
   font-size: var(--font-size-xs);
 }

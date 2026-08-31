@@ -1,3 +1,60 @@
+# Goal-configuration success columns design QA — 2026-08-31
+
+**Evidence**
+
+- Source visual truth: the existing environment success-column pattern captured at `/tmp/gradlab-environment-status-columns-reference.png`.
+- Browser-rendered implementation: `/tmp/gradlab-goal-configuration-status-columns-final.png`.
+- Focused reference/implementation comparison: `/tmp/gradlab-status-table-comparison.png`.
+- Both browser captures are 1280 × 720 pixels at the same desktop viewport and 1× density; focused crops preserve their original scale.
+- State: Acrobot current-default goal configuration with one run, satisfied training success, unsatisfied evaluation success, populated dates, and the run detail visible.
+
+**Findings**
+
+- No actionable P0, P1, or P2 mismatch remains.
+- The configuration table uses dedicated `train/success` and `eval/success` columns in the same order, alignment, typography, and semantic-state treatment as the environment and goal tables.
+- Configuration-level success badges are absent. Status cells expose ✅ for satisfied evidence, ❌ when runs exist without that evidence, and N/A when no runs exist.
+- Both status headers and body cells are centered; both date columns remain left aligned.
+- Fonts and typography, spacing and layout rhythm, colors and tokens, copy, and existing table affordances are preserved. No image assets are present in this component.
+- Browser console checks returned no warnings or errors, and accessible labels describe each status.
+
+**Comparison history**
+
+- The first browser pass found the final environment evaluation cell inherited a generic right alignment. The shared table-status selector was strengthened; the post-fix comparison confirms centered status columns across environment, goal, and configuration tables.
+
+**Implementation checklist**
+
+- [x] Add independent training and evaluation status columns.
+- [x] Remove success badges from configuration identity cells.
+- [x] Reuse the established ✅, ❌, and N/A evidence semantics.
+- [x] Preserve date alignment and configuration/run interactions.
+- [x] Verify the rendered table, accessibility labels, console, and all 58 source-browser tests.
+
+final result: passed
+
+---
+
+# Goal-configuration date alignment design QA — 2026-08-31
+
+**Evidence**
+
+- Source follow-up: `/var/folders/wz/x29jb7_x5rdc_5dcjr4qnhg00000gn/T/codex-clipboard-0b2a0a81-bd71-4e7f-9299-1f3205ef2981.png` plus the explicit requirement that both date columns be left aligned.
+- Browser-rendered implementation: `/tmp/gradlab-goal-dates-left-aligned-final.png`.
+- Focused source/implementation comparison: `/tmp/gradlab-goal-dates-comparison.png`.
+- State: Acrobot current-default goal configuration with one successful training run and both dates populated.
+
+**Findings**
+
+- No actionable P0, P1, or P2 mismatch remains for the requested date alignment.
+- `First used` and `Last activity` headers both compute to `text-align: left`.
+- Both populated date cells also compute to `text-align: left`; the goal-table-specific selector overrides the generic last-cell alignment rule.
+- Typography, color, widths, spacing, copy, and table interaction remain unchanged.
+- Browser console check returned no warnings or errors.
+- Automated verification: all 58 source-browser tests passed, and the diff check passed.
+
+final result: passed
+
+---
+
 # Flat goal-configuration runs design QA — 2026-08-31
 
 **Comparison target**
