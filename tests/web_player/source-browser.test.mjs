@@ -20,6 +20,7 @@ import {
   checkpointRecommendation,
   checkpointRecommendationMetrics,
   environmentEvidenceRank,
+  environmentSuccessStatus,
   formatGoalDiffValue,
   formatMetricValue,
   goalConfigurationPresentation,
@@ -299,7 +300,11 @@ test("catalog list hover highlights the complete row", async () => {
 
   assert.match(
     styles,
-    /\.environment-row:hover:not\(:disabled\),\s*\.goal-row:hover,\s*\.goal-row:focus-within\s*\{[^}]*background: var\(--color-surface-tertiary\);/,
+    /\.environment-row:hover,\s*\.environment-row:focus-within\s*\{[^}]*background: var\(--color-surface-tertiary\);/,
+  );
+  assert.match(
+    styles,
+    /\.goal-row:hover,\s*\.goal-row:focus-within\s*\{[^}]*background: var\(--color-surface-tertiary\);/,
   );
   assert.match(
     styles,
@@ -324,7 +329,7 @@ test("scientific success badges are ordered, independent, and evidence-labelled"
     new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
     "utf8",
   );
-  assert.match(source, /renderSuccessBadges\(environment\)/);
+  assert.doesNotMatch(source, /renderSuccessBadges\(environment\)/);
   assert.match(source, /renderSuccessBadges\(goal\)/);
   assert.match(source, /renderSuccessBadges\(variant\)/);
   assert.match(source, /renderSuccessBadges\(run\)/);
@@ -343,6 +348,40 @@ test("scientific success badges are ordered, independent, and evidence-labelled"
     styles,
     /\.success-badge\.training\s*\{[^}]*font-size: \.6875rem;[^}]*font-weight: var\(--font-weight-regular\);/,
   );
+});
+
+test("environment success is rendered as table status columns", async () => {
+  assert.deepEqual(environmentSuccessStatus({
+    run_count: 2,
+    success_badges: ["train/success"],
+  }, "train/success"), {
+    label: "✅",
+    className: "satisfied",
+    description: "Training success satisfied",
+  });
+  assert.deepEqual(environmentSuccessStatus({
+    run_count: 2,
+    success_badges: ["train/success"],
+  }, "eval/success"), {
+    label: "❌",
+    className: "unsatisfied",
+    description: "Training runs exist, but evaluation success is not satisfied",
+  });
+  assert.deepEqual(environmentSuccessStatus({
+    run_count: 0,
+    success_badges: [],
+  }, "train/success"), {
+    label: "N/A",
+    className: "not-applicable",
+    description: "No runs yet",
+  });
+
+  const source = await readFile(
+    new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
+    "utf8",
+  );
+  assert.match(source, /document\.createElement\("table"\)/);
+  assert.match(source, /\["Environment", "train\/success", "eval\/success", "Goals"\]/);
 });
 
 test("goal configurations expose exact diff counts and date columns", () => {

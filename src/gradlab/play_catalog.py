@@ -184,6 +184,7 @@ class CheckpointPage:
 class EnvironmentSummary:
     name: str
     goal_count: int
+    run_count: int
     success_badges: tuple[str, ...]
 
     def to_dict(self) -> dict[str, Any]:
@@ -1596,14 +1597,14 @@ class PlayCatalog:
         items.sort(key=lambda item: kind_order.get(str(item.get("configuration_kind")), 4))
         return tuple(items)
 
-    def _current_goal_success_badges(
+    def _current_goal_evidence(
         self,
         repository_goal: _RepositoryGoal,
         *,
         generation_scope: object = _CONTROL_DOCUMENT_UNSET,
-    ) -> tuple[str, ...]:
+    ) -> tuple[tuple[str, ...], int]:
         if self.control_bucket is None:
-            return ()
+            return (), 0
         try:
             scope = (
                 self._control_generation_scope(goal_slug=repository_goal.goal_slug)
@@ -1611,9 +1612,9 @@ class PlayCatalog:
                 else generation_scope
             )
         except CatalogUnavailable:
-            return ()
+            return (), 0
         if scope is None:
-            return ()
+            return (), 0
         if not isinstance(scope, Mapping):
             raise CatalogIntegrityError("goal catalog scope is malformed")
         current, _current_goal = self._current_goal_variant(repository_goal)
@@ -1621,8 +1622,23 @@ class PlayCatalog:
         runs = [run for run in scope.get("runs", ()) if isinstance(run, Mapping)]
         for raw in scope.get("variants", ()):
             if isinstance(raw, Mapping) and str(raw.get("variant_id") or "") == current_variant_id:
-                return _projected_variant_success_badges(raw, runs)
-        return ()
+                return (
+                    _projected_variant_success_badges(raw, runs),
+                    max(0, int(raw.get("run_count") or 0)),
+                )
+        return (), 0
+
+    def _current_goal_success_badges(
+        self,
+        repository_goal: _RepositoryGoal,
+        *,
+        generation_scope: object = _CONTROL_DOCUMENT_UNSET,
+    ) -> tuple[str, ...]:
+        badges, _run_count = self._current_goal_evidence(
+            repository_goal,
+            generation_scope=generation_scope,
+        )
+        return badges
 
     def environments(
         self,
@@ -1633,16 +1649,20 @@ class PlayCatalog:
         normalized = str(query or "").strip().casefold()
         goal_counts = self._repository_environments()
         environment_badges: dict[str, tuple[str, ...]] = {}
+        environment_run_counts: dict[str, int] = {}
         if self.control_bucket is not None:
             badges_by_environment: dict[str, list[tuple[str, ...]]] = {}
             repository_goals = self._repository_goals()
             generation_scopes = self._control_generation_scopes(repository_goals)
             for goal, scope in zip(repository_goals, generation_scopes, strict=True):
-                badges = self._current_goal_success_badges(
+                badges, run_count = self._current_goal_evidence(
                     goal,
                     generation_scope=scope,
                 )
                 badges_by_environment.setdefault(goal.environment_id, []).append(badges)
+                environment_run_counts[goal.environment_id] = (
+                    environment_run_counts.get(goal.environment_id, 0) + run_count
+                )
             for environment_id, goal_badges in badges_by_environment.items():
                 if not goal_badges:
                     continue
@@ -1660,6 +1680,7 @@ class PlayCatalog:
                 EnvironmentSummary(
                     name=environment_id,
                     goal_count=goal_count,
+                    run_count=environment_run_counts.get(environment_id, 0),
                     success_badges=badges,
                 ).to_dict()
             )
@@ -1679,6 +1700,7 @@ class PlayCatalog:
                 EnvironmentSummary(
                     name=environment_id,
                     goal_count=goal_count,
+                    run_count=0,
                     success_badges=(),
                 ).to_dict()
                 for environment_id, goal_count in sorted(self._repository_environments().items())

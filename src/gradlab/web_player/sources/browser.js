@@ -761,6 +761,32 @@ export function environmentEvidenceRank(item) {
   return 2;
 }
 
+export function environmentSuccessStatus(item, badge) {
+  if (successBadgeLabels(item).includes(badge)) {
+    return {
+      label: "✅",
+      className: "satisfied",
+      description: badge === "train/success"
+        ? "Training success satisfied"
+        : "Evaluation success satisfied",
+    };
+  }
+  if (Math.max(0, Number(item?.run_count) || 0) > 0) {
+    return {
+      label: "❌",
+      className: "unsatisfied",
+      description: badge === "train/success"
+        ? "Training runs exist, but training success is not satisfied"
+        : "Training runs exist, but evaluation success is not satisfied",
+    };
+  }
+  return {
+    label: "N/A",
+    className: "not-applicable",
+    description: "No runs yet",
+  };
+}
+
 function decodePathPart(value) {
   try {
     return decodeURIComponent(value);
@@ -2278,37 +2304,65 @@ export class SourceBrowser {
   }
 
   renderEnvironments() {
-    const list = document.createElement("div");
-    list.className = "environment-list";
+    const scroll = document.createElement("div");
+    scroll.className = "environment-table-scroll";
+    const table = document.createElement("table");
+    table.className = "environment-table";
+    const head = document.createElement("thead");
+    const headings = document.createElement("tr");
+    ["Environment", "train/success", "eval/success", "Goals"].forEach((label) => {
+      const heading = document.createElement("th");
+      heading.scope = "col";
+      heading.textContent = label;
+      headings.append(heading);
+    });
+    head.append(headings);
+    const body = document.createElement("tbody");
     [...this.items].sort((left, right) => (
       environmentEvidenceRank(left) - environmentEvidenceRank(right)
     )).forEach((environment) => {
-      const row = document.createElement("button");
-      row.type = "button";
+      const row = document.createElement("tr");
       row.className = "environment-row";
-      row.disabled = !this.hasControl();
-      const identity = document.createElement("span");
-      identity.className = "environment-row-identity";
-      const name = document.createElement("strong");
-      name.textContent = environment.name;
-      identity.append(name);
-      const success = renderSuccessBadges(environment);
-      if (success) identity.append(success);
-      const meta = document.createElement("span");
+      const environmentCell = document.createElement("td");
+      const navigate = document.createElement("button");
+      navigate.type = "button";
+      navigate.className = "environment-row-navigation";
+      navigate.disabled = !this.hasControl();
+      navigate.textContent = environment.name;
+      environmentCell.append(navigate);
+      const trainingCell = document.createElement("td");
+      const trainingStatus = environmentSuccessStatus(environment, "train/success");
+      trainingCell.className = `environment-status ${trainingStatus.className}`;
+      trainingCell.textContent = trainingStatus.label;
+      trainingCell.title = trainingStatus.description;
+      trainingCell.setAttribute("aria-label", trainingStatus.description);
+      const evaluationCell = document.createElement("td");
+      const evaluationStatus = environmentSuccessStatus(environment, "eval/success");
+      evaluationCell.className = `environment-status ${evaluationStatus.className}`;
+      evaluationCell.textContent = evaluationStatus.label;
+      evaluationCell.title = evaluationStatus.description;
+      evaluationCell.setAttribute("aria-label", evaluationStatus.description);
+      const goalsCell = document.createElement("td");
       const goalLabel = Number(environment.goal_count) === 1 ? "goal" : "goals";
-      meta.textContent = `${Number(environment.goal_count).toLocaleString()} ${goalLabel}`;
-      row.append(identity, meta);
-      row.addEventListener("click", () => this.navigate({
+      goalsCell.textContent = `${Number(environment.goal_count).toLocaleString()} ${goalLabel}`;
+      const openEnvironment = () => this.navigate({
         level: "goals",
         environment_id: environment.name,
         goal_id: "",
         goal_variant_id: "",
         run_id: "",
         checkpoint_id: "",
-      }));
-      list.append(row);
+      });
+      navigate.addEventListener("click", openEnvironment);
+      row.addEventListener("click", (event) => {
+        if (event.target !== navigate && this.hasControl()) openEnvironment();
+      });
+      row.append(environmentCell, trainingCell, evaluationCell, goalsCell);
+      body.append(row);
     });
-    return list;
+    table.append(head, body);
+    scroll.append(table);
+    return scroll;
   }
 
   renderGoals() {

@@ -687,6 +687,7 @@ def test_goal_variants_explain_previous_defaults_and_aggregate_run_activity(
     assert previous["success_badges"] == ["train/success"]
     assert catalog.goals(environment_id="Mario").items[0]["success_badges"] == ()
     assert catalog.environments().items[0]["success_badges"] == ()
+    assert catalog.environments().items[0]["run_count"] == 0
     search = catalog.goal_variants(
         environment_id="Mario",
         goal_id="Level1-1",
@@ -856,6 +857,7 @@ def test_success_badges_propagate_from_runs_through_current_goals_and_environmen
         "Level1-2": ("train/success",),
     }
     assert environments.items[0]["success_badges"] == ("train/success",)
+    assert environments.items[0]["run_count"] == 2
     assert len(environment_bulk_calls) == 2
     assert set(environment_bulk_calls[0]) == {
         goal_catalog_pointer_key("Mario/Level1-1"),
