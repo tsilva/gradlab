@@ -836,8 +836,6 @@ def test_success_badges_propagate_from_runs_through_current_goals_and_environmen
 
     runs = catalog.runs(environment_id="Mario", goal_id="Level1-1")
     assert runs.items[0]["success_badges"] == ("train/success", "eval/success")
-    assert runs.items[0]["goal_configuration_kind"] == "current_default"
-    assert runs.items[0]["goal_configuration_label"]
 
     variants = catalog.goal_variants(environment_id="Mario", goal_id="Level1-1")
     current_variant = next(

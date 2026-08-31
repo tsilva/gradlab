@@ -4,12 +4,12 @@ This specification applies to the public checkpoint browser and interactive web 
 
 ## Discovery
 
-- Discovery must provide a searchable Environment → Research Goal → Run → public Checkpoint flow without a separate Goal Revision or Goal Variant selection screen.
+- Discovery must provide a searchable Environment → Research Goal → Goal Revision or Goal Variant → Run → public Checkpoint flow.
 - Discovery routes must preserve browser history at each hierarchy level.
 - Discovery must use a rebuildable precomputed catalog and must not perform synchronous storage scans.
 - Discovery must show only available Acceptance evidence and must resolve CLI references progressively.
-- Run selection must span and distinguish the current Goal Revision, current Goal Variants, and historical Goal Revisions in plain language.
-- Each Run must identify its Goal Revision or Goal Variant and expose its proven scientific differences through contract inspection.
+- Goal selection must distinguish the current Goal Revision, current Goal Variants, and historical Goal Revisions in plain language.
+- Each Goal Variant entry must show its normalized scientific difference, first-used date, last-activity date, and Run count.
 - Run selection must distinguish checked-in recipes from launch-time overrides without requiring a new recipe.
 - Playback must expose the resolved Research Goal and Run Configuration as YAML.
 - Goal Variants and overridden Run Configurations must show their proven differences from their authoritative bases.
