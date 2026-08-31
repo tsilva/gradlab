@@ -331,7 +331,7 @@ test("scientific success badges are ordered, independent, and evidence-labelled"
   );
   assert.doesNotMatch(source, /renderSuccessBadges\(environment\)/);
   assert.doesNotMatch(source, /renderSuccessBadges\(goal\)/);
-  assert.match(source, /renderSuccessBadges\(variant\)/);
+  assert.doesNotMatch(source, /renderSuccessBadges\(variant\)/);
   assert.match(source, /renderSuccessBadges\(run\)/);
   assert.match(source, /renderSuccessBadges\(item\)/);
   assert.doesNotMatch(source, /heading\.className = "goal-row-heading"/);
@@ -471,7 +471,7 @@ test("goal configuration metadata and exact changes render as tables", async () 
 
   assert.match(
     source,
-    /\["Configuration", "Differences", "Runs", "First used", "Last activity"\]/,
+    /"Configuration",\s*"Differences",\s*"Runs",\s*"train\/success",\s*"eval\/success",\s*"First used",\s*"Last activity"/,
   );
   assert.match(source, /this\.goalConfigurationsExpanded \? variants : \[selected\]/);
   assert.match(source, /this\.goalConfigurationsExpanded = false;\s*this\.renderView\(\);/);
@@ -484,17 +484,43 @@ test("goal configuration metadata and exact changes render as tables", async () 
   assert.match(styles, /\.goal-configuration-toggle \{[^}]*text-transform: none;/);
   assert.match(
     styles,
-    /\.goal-configuration-table \{ min-width: 64rem; table-layout: fixed; \}/,
+    /\.goal-configuration-table \{ min-width: 81rem; table-layout: fixed; \}/,
   );
   assert.match(
     source,
-    /\["configuration", "differences", "runs", "first-used", "last-activity"\]/,
+    /"configuration",\s*"differences",\s*"runs",\s*"train-success",\s*"eval-success",\s*"first-used",\s*"last-activity"/,
   );
   assert.match(styles, /\.goal-configuration-column\.differences \{ width: 18rem; \}/);
   assert.match(styles, /\.goal-configuration-column\.runs \{ width: 6rem; \}/);
   assert.match(
     styles,
+    /\.goal-configuration-column\.train-success,\s*\.goal-configuration-column\.eval-success \{ width: 8\.5rem; \}/,
+  );
+  assert.match(
+    styles,
+    /\.goal-configuration-table th\.goal-configuration-status \{ text-align: center; \}/,
+  );
+  assert.match(
+    styles,
+    /\.environment-table \.environment-status,\s*\.goal-table \.goal-status,\s*\.goal-configuration-table \.goal-configuration-status \{ text-align: center; \}/,
+  );
+  assert.match(source, /environmentSuccessStatus\(variant, "train\/success"\)/);
+  assert.match(source, /environmentSuccessStatus\(variant, "eval\/success"\)/);
+  assert.match(
+    source,
+    /row\.append\(\s*configuration,\s*differences,\s*runs,\s*trainingCell,\s*evaluationCell,\s*firstUsed,\s*lastActivity,/,
+  );
+  assert.match(
+    styles,
     /\.goal-configuration-column\.first-used,\s*\.goal-configuration-column\.last-activity \{ width: 11rem; \}/,
+  );
+  assert.match(
+    source,
+    /\["First used", "Last activity"\]\.includes\(label\)[\s\S]*?cell\.classList\.add\("goal-configuration-date"\)/,
+  );
+  assert.match(
+    styles,
+    /\.goal-configuration-table \.goal-configuration-date\s*\{[^}]*text-align: left;/,
   );
   assert.match(
     styles,

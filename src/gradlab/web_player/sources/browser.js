@@ -2464,16 +2464,38 @@ export class SourceBrowser {
     const table = document.createElement("table");
     table.className = "goal-configuration-table";
     const columns = document.createElement("colgroup");
-    ["configuration", "differences", "runs", "first-used", "last-activity"].forEach((name) => {
+    [
+      "configuration",
+      "differences",
+      "runs",
+      "train-success",
+      "eval-success",
+      "first-used",
+      "last-activity",
+    ].forEach((name) => {
       const column = document.createElement("col");
       column.className = `goal-configuration-column ${name}`;
       columns.append(column);
     });
     const head = document.createElement("thead");
     const headerRow = document.createElement("tr");
-    ["Configuration", "Differences", "Runs", "First used", "Last activity"].forEach((label) => {
+    [
+      "Configuration",
+      "Differences",
+      "Runs",
+      "train/success",
+      "eval/success",
+      "First used",
+      "Last activity",
+    ].forEach((label) => {
       const cell = document.createElement("th");
       cell.scope = "col";
+      if (["train/success", "eval/success"].includes(label)) {
+        cell.classList.add("goal-configuration-status");
+      }
+      if (["First used", "Last activity"].includes(label)) {
+        cell.classList.add("goal-configuration-date");
+      }
       if (label === "Configuration" && variants.length > 1) {
         cell.className = "goal-configuration-heading";
         const heading = document.createElement("span");
@@ -2534,8 +2556,6 @@ export class SourceBrowser {
       behaviorBadge.className = "goal-configuration-badge behavior";
       behaviorBadge.textContent = presentation.behaviorLabel;
       badges.append(behaviorBadge);
-      const success = renderSuccessBadges(variant);
-      if (success) badges.append(success);
       choice.append(radio, badges);
       configurationContent.append(choice);
       if (isSelected) {
@@ -2561,13 +2581,33 @@ export class SourceBrowser {
       const runs = document.createElement("td");
       runs.className = "goal-configuration-number";
       runs.textContent = presentation.runCount.toLocaleString();
+      const trainingCell = document.createElement("td");
+      const trainingStatus = environmentSuccessStatus(variant, "train/success");
+      trainingCell.className = `goal-configuration-status ${trainingStatus.className}`;
+      trainingCell.textContent = trainingStatus.label;
+      trainingCell.title = trainingStatus.description;
+      trainingCell.setAttribute("aria-label", trainingStatus.description);
+      const evaluationCell = document.createElement("td");
+      const evaluationStatus = environmentSuccessStatus(variant, "eval/success");
+      evaluationCell.className = `goal-configuration-status ${evaluationStatus.className}`;
+      evaluationCell.textContent = evaluationStatus.label;
+      evaluationCell.title = evaluationStatus.description;
+      evaluationCell.setAttribute("aria-label", evaluationStatus.description);
       const firstUsed = document.createElement("td");
       firstUsed.className = "goal-configuration-date";
       firstUsed.textContent = presentation.firstUsedDate;
       const lastActivity = document.createElement("td");
       lastActivity.className = "goal-configuration-date";
       lastActivity.textContent = presentation.lastActivityDate;
-      row.append(configuration, differences, runs, firstUsed, lastActivity);
+      row.append(
+        configuration,
+        differences,
+        runs,
+        trainingCell,
+        evaluationCell,
+        firstUsed,
+        lastActivity,
+      );
       body.append(row);
     });
     table.append(columns, head, body);
