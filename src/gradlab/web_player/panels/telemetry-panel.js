@@ -668,6 +668,15 @@ function rewardNumber(value, { signed = false } = {}) {
   })}`;
 }
 
+export function rewardSummaryCards(presentation) {
+  return [
+    ["Bonuses", presentation.positive, "positive"],
+    ["Penalties", presentation.negative, "negative"],
+    ["Pre-clip", presentation.preclip, "preclip"],
+    ["Post-clip", presentation.final, "postclip"],
+  ];
+}
+
 function rewardLedgerRow(row, maxMagnitude) {
   const tr = document.createElement("tr");
   const component = document.createElement("th");
@@ -730,8 +739,6 @@ function makeRewardBreakdownBlock(block, definition, services) {
   state.className = "reward-analysis-state empty-state";
   const content = document.createElement("div");
   content.className = "reward-analysis-content";
-  const transform = document.createElement("div");
-  transform.className = "reward-transform-strip";
   const scroll = document.createElement("div");
   scroll.className = "table-scroll reward-ledger-scroll";
   const table = document.createElement("table");
@@ -751,7 +758,7 @@ function makeRewardBreakdownBlock(block, definition, services) {
   scroll.append(table);
   const summary = document.createElement("div");
   summary.className = "reward-ledger-summary";
-  content.append(transform, scroll, summary);
+  content.append(scroll, summary);
   const foot = appendFoot(
     section,
     block.foot || "Signed contribution uses |final reward|; activity share uses absolute per-step impacts, so penalties remain negative and cancellation stays visible.",
@@ -782,23 +789,6 @@ function makeRewardBreakdownBlock(block, definition, services) {
       state.textContent = presentation.message;
       return;
     }
-    const clip = presentation.contract.clipBounds;
-    transform.replaceChildren();
-    const parts = [
-      `${presentation.scope === "episode" ? "Σ raw" : "Raw"} ${rewardNumber(presentation.raw, { signed: true })}`,
-      `× ${rewardNumber(presentation.contract.rewardScale)}`,
-      `= ${rewardNumber(presentation.preclip, { signed: true })} pre-clip`,
-      clip
-        ? `clip each step to [${rewardNumber(clip[0])}, ${rewardNumber(clip[1])}]`
-        : "no clipping",
-      `final ${rewardNumber(presentation.final, { signed: true })}`,
-    ];
-    parts.forEach((value, index) => {
-      const item = document.createElement("span");
-      item.textContent = value;
-      if (index === parts.length - 1) item.className = "final";
-      transform.append(item);
-    });
     const maxMagnitude = Math.max(
       0,
       ...presentation.rows.map((row) => Math.abs(row.impact)),
@@ -806,11 +796,7 @@ function makeRewardBreakdownBlock(block, definition, services) {
     body.replaceChildren(...presentation.rows.map(
       (row) => rewardLedgerRow(row, maxMagnitude),
     ));
-    const cards = [
-      ["Bonuses", presentation.positive, "positive"],
-      ["Penalties", presentation.negative, "negative"],
-      [presentation.scope === "episode" ? "Episode return" : "Final reward", presentation.final, "final"],
-    ].map(([label, value, kind]) => {
+    const cards = rewardSummaryCards(presentation).map(([label, value, kind]) => {
       const card = document.createElement("div");
       card.className = kind;
       const name = document.createElement("span");
