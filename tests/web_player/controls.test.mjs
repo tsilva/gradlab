@@ -143,6 +143,27 @@ test("the timeline track is fully filled at its final retained step", () => {
   );
 });
 
+test("timeline event markers render below the progress bar", () => {
+  const scrubberPosition = page.indexOf('id="timeline-scrubber"');
+  const markersPosition = page.indexOf('id="timeline-markers"');
+  assert.ok(scrubberPosition >= 0 && markersPosition > scrubberPosition);
+  assert.match(
+    styles,
+    /\.timeline-scrubber-track \{[^}]*display: grid;[^}]*grid-template-rows: 1rem \.6rem;/,
+  );
+  assert.match(
+    styles,
+    /\.timeline-markers \{[^}]*position: relative;[^}]*margin-inline: \.45rem;/,
+  );
+});
+
+test("timeline keyboard focus uses a discreet visible outline", () => {
+  assert.match(
+    styles,
+    /#timeline-scrubber:focus-visible \{[^}]*outline: 1px solid color-mix\([^;]+45%, transparent\);[^}]*outline-offset: 1px;/,
+  );
+});
+
 test("the scrubber delegates arrow keys to native one-step range behavior", () => {
   assert.match(
     page,

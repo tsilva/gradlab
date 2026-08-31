@@ -63,6 +63,25 @@ test("distribution contents use the panel as their only scroll container", () =>
   assert.doesNotMatch(comparisonRule, /(?:max-height|overflow)\s*:/);
 });
 
+test("policy distribution legend labels align with their data columns", () => {
+  const legendRule = styles.match(/\.action-comparison-legend \{([^}]*)\}/)?.[1] || "";
+  const legendSeriesRule = styles.match(
+    /\.action-comparison-legend-series \{([^}]*)\}/,
+  )?.[1] || "";
+  const rowRule = styles.match(/\.action-comparison-row \{([^}]*)\}/)?.[1] || "";
+  const barsRule = styles.match(/\.action-comparison-bars \{([^}]*)\}/)?.[1] || "";
+
+  assert.match(legendRule, /grid-template-columns: minmax\(5rem, 1fr\) 4fr;/);
+  assert.match(rowRule, /grid-template-columns: minmax\(5rem, 1fr\) 4fr;/);
+  assert.match(legendSeriesRule, /grid-column: 2;/);
+  assert.match(
+    legendSeriesRule,
+    /grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/,
+  );
+  assert.match(barsRule, /grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/);
+  assert.match(telemetryPanelSource, /class="action-comparison-legend-series"/);
+});
+
 test("policy distributions omit the redundant action summary caption", () => {
   assert.doesNotMatch(
     telemetryPanelSource,
@@ -650,27 +669,14 @@ test("component action spaces render only complete declared semantics", () => {
   );
 });
 
-test("value comparison foot explains returns and finite-horizon aliasing", () => {
+test("value comparison omits its redundant explanatory label", () => {
   const presentation = lineBlockFootPresentation(
     {
       metrics: ["policy/value", "policy/realized-return"],
     },
     null,
-    {
-      session: {
-        termination_conditions: [
-          {
-            id: "limit:max_episode_steps",
-            enabled: true,
-            value: 512,
-          },
-        ],
-      },
-    },
   );
 
-  assert.match(presentation.text, /not its success flag or cumulative episode return/);
-  assert.match(presentation.text, /Finite horizon: 512 policy steps/);
-  assert.match(presentation.text, /remaining time is absent from the policy observation/);
+  assert.equal(presentation.text, "");
   assert.equal(presentation.warning, false);
 });

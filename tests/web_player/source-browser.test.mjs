@@ -273,7 +273,11 @@ test("environment favorite controls toggle between an emoji and an outline", asy
     source,
     /row\.append\(favoriteCell, environmentCell, goalsCell, trainingCell, evaluationCell\);/,
   );
-  assert.match(styles, /\.environment-favorite-column,[\s\S]*width: 3\.25rem; text-align: center;/);
+  assert.match(styles, /\.environment-favorite-column,[\s\S]*width: 2\.5rem; text-align: center;/);
+  assert.match(
+    styles,
+    /\.environment-favorite \{[\s\S]*color: color-mix\(in srgb, var\(--color-text-muted\) 55%, transparent\);/,
+  );
   assert.match(styles, /\.environment-favorite\.selected \{ color: var\(--color-series-amber\); \}/);
 });
 
@@ -630,13 +634,18 @@ test("goal activity renders recent runs as a status table without section chrome
   assert.match(source, /table\.className = "goal-configuration-run-table"/);
   assert.match(
     source,
-    /\["Run", "train\/success", "eval\/success", "Result", "Last activity"\]/,
+    /\["Run", "train\/success", "eval\/success", "Last activity"\]/,
   );
+  assert.doesNotMatch(source, /goal-configuration-run-column\.result/);
+  assert.match(source, /const presentation = runStatePresentation\(run\);/);
+  assert.match(source, /state\.title = statusName;/);
+  assert.match(source, /state\.setAttribute\("aria-label", statusName\);/);
+  assert.match(source, /navigate\.append\(state, identity\);/);
   assert.match(source, /environmentSuccessStatus\(runEvidence, "train\/success"\)/);
   assert.match(source, /environmentSuccessStatus\(runEvidence, "eval\/success"\)/);
   assert.match(
     source,
-    /row\.append\(runCell, trainingCell, evaluationCell, result, updated\);/,
+    /row\.append\(runCell, trainingCell, evaluationCell, updated\);/,
   );
   assert.match(source, /page\?\.nextCursor \? "Load more" : "Load older runs"/);
 
@@ -648,7 +657,11 @@ test("goal activity renders recent runs as a status table without section chrome
     styles,
     /\.goal-configuration-runs\s*\{[^}]*padding: 0;/,
   );
-  assert.match(styles, /\.goal-configuration-run-table \{ min-width: 58rem; table-layout: fixed; \}/);
+  assert.match(styles, /\.goal-configuration-run-table \{ min-width: 48rem; table-layout: fixed; \}/);
+  assert.match(
+    styles,
+    /\.goal-configuration-run-state \.icon \{ width: \.9rem; height: \.9rem; \}/,
+  );
   assert.match(
     styles,
     /\.goal-configuration-run-table \.goal-configuration-run-status\s*\{[^}]*text-align: center;/,
