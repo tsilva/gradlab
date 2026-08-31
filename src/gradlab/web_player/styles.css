@@ -850,6 +850,7 @@ h2 { font-size: var(--font-size-lg); margin: 0; font-weight: var(--font-weight-s
   font-family: var(--font-family-ui);
   font-size: var(--font-size-sm);
 }
+.environment-table { table-layout: fixed; }
 .goal-table { min-width: 46rem; }
 .environment-table th,
 .goal-table th {
@@ -864,15 +865,20 @@ h2 { font-size: var(--font-size-lg); margin: 0; font-weight: var(--font-weight-s
   text-transform: uppercase;
   white-space: nowrap;
 }
+.environment-table th:nth-child(1),
+.environment-row td:nth-child(1) { width: 5%; }
+.environment-table th:nth-child(2),
+.environment-row td:nth-child(2) { width: 45%; }
 .environment-table th:nth-child(3),
-.environment-row td:nth-child(3),
-.goal-table th:nth-child(2),
-.goal-row td:nth-child(2) { width: 7rem; text-align: right; }
+.environment-row td:nth-child(3) { width: 12%; text-align: right; }
 .environment-table th:nth-child(4),
 .environment-table th:nth-child(5),
+.environment-row td:nth-child(4),
+.environment-row td:nth-child(5) { width: 19%; text-align: center; }
+.goal-table th:nth-child(2),
+.goal-row td:nth-child(2) { width: 7rem; text-align: right; }
 .goal-table th:nth-child(3),
 .goal-table th:nth-child(4),
-.environment-status,
 .goal-status,
 .goal-configuration-status { width: 8.5rem; text-align: center; }
 .goal-table th:last-child,

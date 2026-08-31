@@ -461,6 +461,16 @@ test("environment success is rendered as table status columns", async () => {
     /row\.append\(favoriteCell, environmentCell, goalsCell, trainingCell, evaluationCell\);/,
   );
   assert.doesNotMatch(source, /const goalLabel =/);
+
+  const styles = await readFile(
+    new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
+    "utf8",
+  );
+  assert.match(styles, /\.environment-table \{ table-layout: fixed; \}/);
+  assert.match(
+    styles,
+    /\.environment-table th:nth-child\(2\),\s*\.environment-row td:nth-child\(2\) \{ width: 45%; \}/,
+  );
 });
 
 test("goal configurations expose exact diff counts and date columns", () => {
