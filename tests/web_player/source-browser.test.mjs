@@ -8,7 +8,6 @@ import {
   bestRunEfficiency,
   catalogItemMatchesSearch,
   checkpointCanEvaluate,
-  checkpointEvidencePresentation,
   checkpointMetricBestBadge,
   checkpointMetricDescription,
   checkpointMetricHeaderLabel,
@@ -17,9 +16,8 @@ import {
   checkpointNavigationPresentation,
   checkpointPrefetchSources,
   checkpointPlaybackSeed,
-  checkpointRecommendation,
-  checkpointRecommendationMetrics,
   environmentEvidenceRank,
+  readEnvironmentFavorites,
   environmentSuccessStatus,
   formatGoalDiffValue,
   formatMetricValue,
@@ -31,9 +29,12 @@ import {
   SourceBrowser,
   successBadgeLabels,
   sortRunItems,
+  sortEnvironmentItems,
   sourceBreadcrumbItems,
   sourceRouteFromPath,
   sourceRoutePath,
+  toggleEnvironmentFavorite,
+  writeEnvironmentFavorites,
 } from "../../src/gradlab/web_player/sources/browser.js";
 
 test("checkpoint navigation reports chronological position and neighbors", () => {
@@ -218,6 +219,64 @@ test("environment discovery prioritizes accepted and successful evidence", () =>
   assert.equal(environmentEvidenceRank({}), 2);
 });
 
+test("environment favorites persist defensively in browser storage", () => {
+  const values = new Map();
+  const storage = {
+    getItem: (key) => values.get(key) ?? null,
+    setItem: (key, value) => values.set(key, value),
+  };
+
+  assert.equal(writeEnvironmentFavorites(new Set(["VizDoom", "Acrobot"]), storage), true);
+  assert.deepEqual([...readEnvironmentFavorites(storage)], ["Acrobot", "VizDoom"]);
+
+  storage.setItem("gradlab.playback.favorite-environments.v1", "not-json");
+  assert.deepEqual([...readEnvironmentFavorites(storage)], []);
+  assert.equal(writeEnvironmentFavorites(new Set(["Mario"]), null), false);
+});
+
+test("favorite environments sort first and alphabetically", () => {
+  const environments = [
+    { name: "Zulu", success_badges: ["eval/success"] },
+    { name: "Mario" },
+    { name: "Acrobot" },
+    { name: "CartPole", success_badges: ["train/success"] },
+  ];
+
+  assert.deepEqual(
+    sortEnvironmentItems(environments, new Set(["Mario", "Acrobot"]))
+      .map((environment) => environment.name),
+    ["Acrobot", "Mario", "Zulu", "CartPole"],
+  );
+});
+
+test("environment favorites toggle on and back off", () => {
+  const selected = toggleEnvironmentFavorite(new Set(["Acrobot"]), "Mario");
+  assert.deepEqual([...selected], ["Acrobot", "Mario"]);
+  assert.deepEqual([...toggleEnvironmentFavorite(selected, "Mario")], ["Acrobot"]);
+});
+
+test("environment favorite controls toggle between an emoji and an outline", async () => {
+  const source = await readFile(
+    new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
+    "utf8",
+  );
+  const styles = await readFile(
+    new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(source, /favorite\.textContent = isFavorite \? "⭐" : "☆";/);
+  assert.match(source, /favorite\.setAttribute\("aria-pressed", String\(isFavorite\)\);/);
+  assert.match(source, /writeEnvironmentFavorites\(next\);/);
+  assert.match(source, /headings\.append\(favoriteHeading\);/);
+  assert.match(
+    source,
+    /row\.append\(favoriteCell, environmentCell, goalsCell, trainingCell, evaluationCell\);/,
+  );
+  assert.match(styles, /\.environment-favorite-column,[\s\S]*width: 3\.25rem; text-align: center;/);
+  assert.match(styles, /\.environment-favorite\.selected \{ color: var\(--color-series-amber\); \}/);
+});
+
 test("goal variant selection uses the exact live activity diff", () => {
   const browser = Object.create(SourceBrowser.prototype);
   const state = browser.goalVariantDiffFromActivity({
@@ -332,7 +391,7 @@ test("scientific success badges are ordered, independent, and evidence-labelled"
   assert.doesNotMatch(source, /renderSuccessBadges\(environment\)/);
   assert.doesNotMatch(source, /renderSuccessBadges\(goal\)/);
   assert.doesNotMatch(source, /renderSuccessBadges\(variant\)/);
-  assert.match(source, /renderSuccessBadges\(run\)/);
+  assert.doesNotMatch(source, /renderSuccessBadges\(run\)/);
   assert.match(source, /renderSuccessBadges\(item\)/);
   assert.doesNotMatch(source, /heading\.className = "goal-row-heading"/);
   assert.match(
@@ -393,7 +452,10 @@ test("environment success is rendered as table status columns", async () => {
   assert.match(source, /document\.createElement\("table"\)/);
   assert.match(source, /\["Environment", "Goals", "train\/success", "eval\/success"\]/);
   assert.match(source, /goalsCell\.textContent = Number\(environment\.goal_count\)\.toLocaleString\(\);/);
-  assert.match(source, /row\.append\(environmentCell, goalsCell, trainingCell, evaluationCell\);/);
+  assert.match(
+    source,
+    /row\.append\(favoriteCell, environmentCell, goalsCell, trainingCell, evaluationCell\);/,
+  );
   assert.doesNotMatch(source, /const goalLabel =/);
 });
 
@@ -479,7 +541,7 @@ test("goal configuration metadata and exact changes render as tables", async () 
   assert.doesNotMatch(source, /Selected goal version/);
   assert.doesNotMatch(source, /presentation\.runCount === 1 \? "View run"/);
   assert.match(source, /inspect\.title = "View goal YAML"/);
-  assert.match(source, /row\.addEventListener\("click", \(\) => this\.navigate\(\{/);
+  assert.match(source, /radio\.addEventListener\("change", \(\) => this\.selectGoalVariant\(variant\)\);/);
   assert.match(source, /sourceLabel: "Current"/);
   assert.match(styles, /\.goal-configuration-toggle \{[^}]*text-transform: none;/);
   assert.match(
@@ -545,7 +607,7 @@ test("goal configuration metadata and exact changes render as tables", async () 
   );
 });
 
-test("goal activity shows recent runs directly without section chrome", async () => {
+test("goal activity renders recent runs as a status table without section chrome", async () => {
   const source = await readFile(
     new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
     "utf8",
@@ -565,6 +627,17 @@ test("goal activity shows recent runs directly without section chrome", async ()
   assert.doesNotMatch(source, /goal-configuration-run-sort/);
   assert.doesNotMatch(source, /goalVariantRunSort/);
   assert.match(source, /const baseItems = page\?\.items\?\.length\s*\? page\.items\s*:\s*variant\.recent_runs;/);
+  assert.match(source, /table\.className = "goal-configuration-run-table"/);
+  assert.match(
+    source,
+    /\["Run", "train\/success", "eval\/success", "Result", "Last activity"\]/,
+  );
+  assert.match(source, /environmentSuccessStatus\(runEvidence, "train\/success"\)/);
+  assert.match(source, /environmentSuccessStatus\(runEvidence, "eval\/success"\)/);
+  assert.match(
+    source,
+    /row\.append\(runCell, trainingCell, evaluationCell, result, updated\);/,
+  );
   assert.match(source, /page\?\.nextCursor \? "Load more" : "Load older runs"/);
 
   const styles = await readFile(
@@ -575,9 +648,14 @@ test("goal activity shows recent runs directly without section chrome", async ()
     styles,
     /\.goal-configuration-runs\s*\{[^}]*padding: 0;/,
   );
+  assert.match(styles, /\.goal-configuration-run-table \{ min-width: 58rem; table-layout: fixed; \}/);
   assert.match(
     styles,
-    /\.goal-configuration-run-list\s*\{[^}]*border: 0;[^}]*border-radius: 0;[^}]*margin: 0;/,
+    /\.goal-configuration-run-table \.goal-configuration-run-status\s*\{[^}]*text-align: center;/,
+  );
+  assert.match(
+    styles,
+    /\.goal-configuration-run-table \.goal-configuration-run-updated \{ text-align: left; \}/,
   );
 });
 
@@ -790,53 +868,19 @@ test("all active checkpoint ancestors remain clickable with stale route levels",
   }
 });
 
-test("checkpoint recommendations prefer authoritative evidence over later diagnostic checkpoints", () => {
-  const items = [
-    {
-      checkpoint_id: "checkpoint-300-training",
-      step: 300,
-      best_metrics: ["train/outcome/success/starts/all/rolling/rate/mean"],
-    },
-    {
-      checkpoint_id: "checkpoint-200-accepted",
-      step: 200,
-      evaluation: { status: "accepted", pass: true },
-    },
-    { checkpoint_id: "checkpoint-400-final", step: 400, purpose: "final" },
-  ];
-
-  const result = checkpointRecommendation(items);
-  assert.equal(result.item.checkpoint_id, "checkpoint-200-accepted");
-  assert.equal(result.evidence.label, "Accepted");
-  assert.match(checkpointEvidencePresentation(items[0]).detail, /evaluation remains authoritative/);
-});
-
-test("checkpoint recommendations surface exact evidence metrics and roles", () => {
-  const metrics = checkpointRecommendationMetrics(
-    {
-      metrics: {
-        "eval/full/outcome/success/starts/rate/min": 1,
-        "train/episode/return/shaped/origin/target/rolling/mean": 3119.135,
-      },
-    },
-    [
-      {
-        metric: "eval/full/outcome/success/starts/rate/min",
-        evidence: "evaluation",
-        roles: ["acceptance"],
-      },
-      {
-        metric: "train/episode/return/shaped/origin/target/rolling/mean",
-        evidence: "training",
-        roles: ["training_proxy"],
-      },
-    ],
+test("run checkpoint discovery omits the redundant recommendation banner", async () => {
+  const source = await readFile(
+    new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
+    "utf8",
+  );
+  const styles = await readFile(
+    new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
+    "utf8",
   );
 
-  assert.deepEqual(metrics.map(({ role, tone, value }) => ({ role, tone, value })), [
-    { role: "Acceptance", tone: "evaluation", value: "100%" },
-    { role: "Training proxy", tone: "training", value: "3,119.135" },
-  ]);
+  assert.doesNotMatch(source, /BEST AVAILABLE TO WATCH/);
+  assert.doesNotMatch(source, /renderCheckpointRecommendation/);
+  assert.doesNotMatch(styles, /checkpoint-recommendation/);
 });
 
 test("source discovery progressively discloses secondary controls", async () => {
@@ -883,6 +927,163 @@ test("catalog refresh animates and disables only the header refresh control", as
   assert.match(
     styles,
     /\.source-head \.icon-only\.refreshing \.icon \{ animation: source-spin \.8s linear infinite; \}/,
+  );
+});
+
+test("returning to environments keeps the last table visible during refresh", async (context) => {
+  const originalLocation = globalThis.location;
+  globalThis.location = { pathname: "/embedded-player", search: "", hash: "" };
+  context.after(() => {
+    if (originalLocation === undefined) delete globalThis.location;
+    else globalThis.location = originalLocation;
+  });
+
+  const sourceBrowser = new SourceBrowser(
+    {},
+    { replaceChildren() {}, hidden: false },
+    {
+      token: "token",
+      command() {},
+      getState: () => ({ hasControl: true }),
+      showToast() {},
+    },
+  );
+  sourceBrowser.sourceItems = [{ name: "Mario", goal_count: 18 }];
+  sourceBrowser.items = [...sourceBrowser.sourceItems];
+  sourceBrowser.loadedKey = sourceBrowser.routeKey();
+  sourceBrowser.rememberEnvironmentCatalog();
+
+  sourceBrowser.route = {
+    ...sourceBrowser.route,
+    level: "goals",
+    environment_id: "Mario",
+  };
+  sourceBrowser.sourceItems = [{ goal_id: "Level1-1" }];
+  sourceBrowser.items = [...sourceBrowser.sourceItems];
+  sourceBrowser.renderView = () => {};
+  sourceBrowser.updatePolling = () => {};
+  const loads = [];
+  sourceBrowser.ensureLoaded = (options) => loads.push(options);
+
+  sourceBrowser.applyRoute({
+    level: "environments",
+    environment_id: "",
+    goal_id: "",
+  });
+
+  assert.deepEqual(sourceBrowser.items, [{ name: "Mario", goal_count: 18 }]);
+  assert.deepEqual(loads, [{ quiet: true }]);
+  assert.equal(sourceBrowser.loadedKey, "");
+});
+
+test("returning to goals restores the last table without refreshing", async (context) => {
+  const originalLocation = globalThis.location;
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.location = { pathname: "/embedded-player", search: "", hash: "" };
+  globalThis.fetch = (...args) => {
+    requests.push(args);
+    throw new Error("cached goals should not request the catalog");
+  };
+  context.after(() => {
+    if (originalLocation === undefined) delete globalThis.location;
+    else globalThis.location = originalLocation;
+    if (originalFetch === undefined) delete globalThis.fetch;
+    else globalThis.fetch = originalFetch;
+  });
+
+  const sourceBrowser = new SourceBrowser(
+    {},
+    { replaceChildren() {}, hidden: false },
+    {
+      token: "token",
+      command() {},
+      getState: () => ({ hasControl: true }),
+      showToast() {},
+    },
+  );
+  sourceBrowser.route = {
+    ...sourceBrowser.route,
+    level: "goals",
+    environment_id: "Mario",
+  };
+  sourceBrowser.sourceItems = [{ goal_id: "Level1-1", recipe_count: 1 }];
+  sourceBrowser.items = [...sourceBrowser.sourceItems];
+  sourceBrowser.loadedKey = sourceBrowser.routeKey();
+  sourceBrowser.rememberGoalCatalog();
+  sourceBrowser.route = {
+    ...sourceBrowser.route,
+    level: "goal_variants",
+    goal_id: "Level1-1",
+  };
+  sourceBrowser.renderView = () => {};
+  sourceBrowser.updatePolling = () => {};
+
+  sourceBrowser.applyRoute({
+    level: "goals",
+    goal_id: "",
+    goal_variant_id: "",
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.deepEqual(sourceBrowser.items, [{ goal_id: "Level1-1", recipe_count: 1 }]);
+  assert.equal(sourceBrowser.loadedKey, sourceBrowser.routeKey());
+  assert.equal(requests.length, 0);
+});
+
+test("refreshing cached goals keeps old rows until the new catalog arrives", async (context) => {
+  const originalLocation = globalThis.location;
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.location = { pathname: "/embedded-player", search: "", hash: "" };
+  globalThis.fetch = (url, options) => new Promise((resolve) => {
+    requests.push({ url, options, resolve });
+  });
+  context.after(() => {
+    if (originalLocation === undefined) delete globalThis.location;
+    else globalThis.location = originalLocation;
+    if (originalFetch === undefined) delete globalThis.fetch;
+    else globalThis.fetch = originalFetch;
+  });
+
+  const sourceBrowser = new SourceBrowser(
+    {},
+    { replaceChildren() {}, hidden: false },
+    {
+      token: "token",
+      command() {},
+      getState: () => ({ hasControl: true }),
+      showToast() {},
+    },
+  );
+  sourceBrowser.route = {
+    ...sourceBrowser.route,
+    level: "goals",
+    environment_id: "Mario",
+  };
+  sourceBrowser.sourceItems = [{ goal_id: "Old", recipe_count: 1 }];
+  sourceBrowser.items = [...sourceBrowser.sourceItems];
+  sourceBrowser.renderView = () => {};
+  sourceBrowser.updatePolling = () => {};
+
+  const refresh = sourceBrowser.load({ force: true, quiet: true });
+  assert.deepEqual(sourceBrowser.items, [{ goal_id: "Old", recipe_count: 1 }]);
+  assert.equal(requests.length, 1);
+  assert.match(requests[0].url, /\/environments\/Mario\/goals\?refresh=1/);
+
+  requests[0].resolve({
+    ok: true,
+    json: async () => ({
+      items: [{ goal_id: "New", recipe_count: 2 }],
+      next_cursor: null,
+    }),
+  });
+  await refresh;
+
+  assert.deepEqual(sourceBrowser.items, [{ goal_id: "New", recipe_count: 2 }]);
+  assert.deepEqual(
+    sourceBrowser.goalCatalogCache.get("Mario").sourceItems,
+    [{ goal_id: "New", recipe_count: 2 }],
   );
 });
 
@@ -1019,35 +1220,7 @@ test("browsing from an active player keeps the current runner available", () => 
   assert.equal(browser.route.checkpoint_id, "");
 });
 
-test("continue playback context retains the active checkpoint while browsing", () => {
-  const activeRoute = {
-    level: "runs",
-    environment_id: "ViZDoom",
-    goal_id: "DefendTheLine-v1",
-    goal_variant_id: "goal-variant-a27a8239",
-    run_id: "gradlab-c22f7c7a",
-    checkpoint_id: "checkpoint-10002432-b285ff3b",
-  };
-  const browser = Object.create(SourceBrowser.prototype);
-  browser.getState = () => ({
-    backgroundPlaybackSnapshot: { app: { route: activeRoute } },
-  });
-  browser.playbackRoute = null;
-  browser.app = {
-    route: {
-      level: "runs",
-      environment_id: "ViZDoom",
-      goal_id: "DefendTheLine-v1",
-      goal_variant_id: "goal-variant-a27a8239",
-      run_id: "gradlab-c22f7c7a",
-      checkpoint_id: "",
-    },
-  };
-
-  assert.deepEqual(browser.currentPlaybackRoute(), activeRoute);
-});
-
-test("continue playback banner identifies the checkpoint and uses the eye icon", async () => {
+test("source discovery omits the redundant continue-watching banner", async () => {
   const source = await readFile(
     new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
     "utf8",
@@ -1056,16 +1229,10 @@ test("continue playback banner identifies the checkpoint and uses the eye icon",
     new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
     "utf8",
   );
-  const sprite = await readFile(
-    new URL("../../src/gradlab/web_player/tabler-icons.svg", import.meta.url),
-    "utf8",
-  );
-
-  assert.match(source, /sourceBreadcrumbItems\(playbackRoute\)\.slice\(1\)/);
-  assert.match(source, /className = "continue-playback-breadcrumb"/);
-  assert.match(source, /button\("Continue watching", \{ iconName: "eye", primary: true \}\)/);
-  assert.match(styles, /\.continue-playback-breadcrumb \{/);
-  assert.match(sprite, /id="ti-eye"/);
+  assert.doesNotMatch(source, /Continue current playback/);
+  assert.doesNotMatch(source, /Continue watching/);
+  assert.doesNotMatch(source, /renderContinuePlayback/);
+  assert.doesNotMatch(styles, /continue-playback/);
 });
 
 test("rejected active breadcrumb navigation leaves playback and history unchanged", () => {

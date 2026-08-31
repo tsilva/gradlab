@@ -16,6 +16,17 @@ export function playbackSourceTitle(route = {}) {
   return `${environment} · ${Number(match[1]).toLocaleString()} steps`;
 }
 
+export function timelineProgress(index, count) {
+  const retainedCount = Math.max(0, Number(count) || 0);
+  if (retainedCount === 0) return 0;
+  if (retainedCount === 1) return 100;
+  const selectedIndex = Math.min(
+    retainedCount - 1,
+    Math.max(0, Number(index) || 0),
+  );
+  return (selectedIndex / (retainedCount - 1)) * 100;
+}
+
 export function statusMessageShouldToast({ status_message: statusMessage = "", session = {} } = {}) {
   const message = String(statusMessage || "").trim();
   if (!message) return false;
