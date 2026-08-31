@@ -2310,7 +2310,7 @@ export class SourceBrowser {
     table.className = "environment-table";
     const head = document.createElement("thead");
     const headings = document.createElement("tr");
-    ["Environment", "train/success", "eval/success", "Goals"].forEach((label) => {
+    ["Environment", "Goals", "train/success", "eval/success"].forEach((label) => {
       const heading = document.createElement("th");
       heading.scope = "col";
       heading.textContent = label;
@@ -2343,8 +2343,7 @@ export class SourceBrowser {
       evaluationCell.title = evaluationStatus.description;
       evaluationCell.setAttribute("aria-label", evaluationStatus.description);
       const goalsCell = document.createElement("td");
-      const goalLabel = Number(environment.goal_count) === 1 ? "goal" : "goals";
-      goalsCell.textContent = `${Number(environment.goal_count).toLocaleString()} ${goalLabel}`;
+      goalsCell.textContent = Number(environment.goal_count).toLocaleString();
       const openEnvironment = () => this.navigate({
         level: "goals",
         environment_id: environment.name,
@@ -2357,7 +2356,7 @@ export class SourceBrowser {
       row.addEventListener("click", (event) => {
         if (event.target !== navigate && this.hasControl()) openEnvironment();
       });
-      row.append(environmentCell, trainingCell, evaluationCell, goalsCell);
+      row.append(environmentCell, goalsCell, trainingCell, evaluationCell);
       body.append(row);
     });
     table.append(head, body);
@@ -2366,40 +2365,67 @@ export class SourceBrowser {
   }
 
   renderGoals() {
-    const list = document.createElement("div");
-    list.className = "goal-list";
+    const scroll = document.createElement("div");
+    scroll.className = "goal-table-scroll";
+    const table = document.createElement("table");
+    table.className = "goal-table";
+    const head = document.createElement("thead");
+    const headings = document.createElement("tr");
+    ["Goal", "Recipes", "train/success", "eval/success", "YAML"].forEach((label) => {
+      const heading = document.createElement("th");
+      heading.scope = "col";
+      heading.textContent = label;
+      headings.append(heading);
+    });
+    head.append(headings);
+    const body = document.createElement("tbody");
     this.items.forEach((goal) => {
-      const row = document.createElement("div");
+      const row = document.createElement("tr");
       row.className = "goal-row";
+      const goalCell = document.createElement("td");
       const navigate = document.createElement("button");
       navigate.type = "button";
       navigate.className = "goal-row-navigation";
       navigate.disabled = !this.hasControl();
       const identity = document.createElement("div");
       identity.className = "goal-row-identity";
-      const heading = document.createElement("div");
-      heading.className = "goal-row-heading";
       const name = document.createElement("strong");
       name.textContent = goal.goal_id;
-      heading.append(name);
-      const success = renderSuccessBadges(goal);
-      if (success) heading.append(success);
-      identity.append(heading);
+      identity.append(name);
       const meta = document.createElement("span");
-      const recipeLabel = Number(goal.recipe_count) === 1 ? "recipe" : "recipes";
-      meta.textContent = `${goal.title || goal.goal_slug} · ${Number(goal.recipe_count).toLocaleString()} ${recipeLabel}`;
+      meta.textContent = goal.title || goal.goal_slug;
       identity.append(meta);
       if (goal.goal_slug && goal.goal_slug !== goal.goal_id) {
         navigate.title = `Goal slug: ${goal.goal_slug}`;
       }
       navigate.append(identity);
-      navigate.addEventListener("click", () => this.navigate({
+      goalCell.append(navigate);
+      const recipesCell = document.createElement("td");
+      recipesCell.textContent = Number(goal.recipe_count).toLocaleString();
+      const trainingCell = document.createElement("td");
+      const trainingStatus = environmentSuccessStatus(goal, "train/success");
+      trainingCell.className = `goal-status ${trainingStatus.className}`;
+      trainingCell.textContent = trainingStatus.label;
+      trainingCell.title = trainingStatus.description;
+      trainingCell.setAttribute("aria-label", trainingStatus.description);
+      const evaluationCell = document.createElement("td");
+      const evaluationStatus = environmentSuccessStatus(goal, "eval/success");
+      evaluationCell.className = `goal-status ${evaluationStatus.className}`;
+      evaluationCell.textContent = evaluationStatus.label;
+      evaluationCell.title = evaluationStatus.description;
+      evaluationCell.setAttribute("aria-label", evaluationStatus.description);
+      const openGoal = () => this.navigate({
         level: "goal_variants",
         goal_id: goal.goal_id,
         goal_variant_id: "",
         run_id: "",
         checkpoint_id: "",
-      }));
+      });
+      navigate.addEventListener("click", openGoal);
+      row.addEventListener("click", (event) => {
+        if (!event.target.closest("button") && this.hasControl()) openGoal();
+      });
+      const inspectCell = document.createElement("td");
       const inspect = button("", { iconName: "code", quiet: true });
       inspect.classList.add("goal-row-inspect", "icon-only");
       inspect.title = `Inspect ${goal.goal_id} YAML`;
@@ -2409,10 +2435,13 @@ export class SourceBrowser {
           (error) => this.showToast(String(error?.message || error), true),
         );
       });
-      row.append(navigate, inspect);
-      list.append(row);
+      inspectCell.append(inspect);
+      row.append(goalCell, recipesCell, trainingCell, evaluationCell, inspectCell);
+      body.append(row);
     });
-    return list;
+    table.append(head, body);
+    scroll.append(table);
+    return scroll;
   }
 
   renderGoalVariants() {
@@ -2485,6 +2514,8 @@ export class SourceBrowser {
       const isSelected = variant.variant_id === selected.variant.variant_id;
       row.className = `goal-configuration-row${isSelected ? " selected" : ""}`;
       const configuration = document.createElement("td");
+      const configurationContent = document.createElement("div");
+      configurationContent.className = "goal-configuration-cell";
       const choice = document.createElement("label");
       choice.className = "goal-configuration-choice";
       const radio = document.createElement("input");
@@ -2508,7 +2539,23 @@ export class SourceBrowser {
       const success = renderSuccessBadges(variant);
       if (success) badges.append(success);
       choice.append(radio, badges);
-      configuration.append(choice);
+      configurationContent.append(choice);
+      if (isSelected) {
+        const inspect = button("", { iconName: "code", quiet: true });
+        inspect.classList.add("goal-configuration-inspect", "icon-only");
+        inspect.title = "View goal YAML";
+        inspect.setAttribute("aria-label", inspect.title);
+        inspect.addEventListener("click", () => {
+          const inspection = presentation.kind === "current_default"
+            ? this.inspectGoal({ goal_id: this.route.goal_id })
+            : this.inspectGoalVariant(variant);
+          void inspection.catch(
+            (error) => this.showToast(String(error?.message || error), true),
+          );
+        });
+        configurationContent.append(inspect);
+      }
+      configuration.append(configurationContent);
 
       const differences = document.createElement("td");
       differences.className = `goal-configuration-difference${presentation.comparisonAvailable ? "" : " unavailable"}`;
@@ -2535,42 +2582,7 @@ export class SourceBrowser {
   renderGoalVariantDetail({ variant, presentation }) {
     const section = document.createElement("section");
     section.className = "goal-configuration-detail";
-    const header = document.createElement("div");
-    header.className = "goal-configuration-detail-header";
-    const identity = document.createElement("div");
-    const heading = document.createElement("h3");
-    heading.textContent = "Selected goal version";
-    const baseline = document.createElement("p");
-    baseline.textContent = `${presentation.kindLabel} · ${presentation.runLabel}`;
-    identity.append(heading, baseline);
-    const actions = document.createElement("div");
-    actions.className = "goal-configuration-detail-actions";
-    const inspect = button("View YAML", { iconName: "code", quiet: true });
-    inspect.addEventListener("click", () => {
-      const inspection = presentation.kind === "current_default"
-        ? this.inspectGoal({ goal_id: this.route.goal_id })
-        : this.inspectGoalVariant(variant);
-      void inspection.catch(
-        (error) => this.showToast(String(error?.message || error), true),
-      );
-    });
-    const viewRuns = button(
-      presentation.runCount === 1 ? "View run" : `View ${presentation.runCount.toLocaleString()} runs`,
-      { iconName: "external-link", primary: true },
-    );
-    viewRuns.disabled = !this.hasControl() || presentation.runCount === 0;
-    viewRuns.addEventListener("click", () => this.navigate(
-      {
-        level: "runs",
-        goal_variant_id: variant.variant_id,
-        run_id: "",
-        checkpoint_id: "",
-      },
-      { seedItems: Array.isArray(variant.recent_runs) ? variant.recent_runs : [] },
-    ));
-    actions.append(inspect, viewRuns);
-    header.append(identity, actions);
-    section.append(header, this.renderEmbeddedGoalRuns(variant));
+    section.append(this.renderEmbeddedGoalRuns(variant));
 
     const differences = document.createElement("details");
     differences.className = "goal-configuration-differences";
