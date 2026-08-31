@@ -5,6 +5,7 @@ import test from "node:test";
 import {
   playbackSourceTitle,
   statusMessageShouldToast,
+  timelineProgress,
   transportPresentation,
   workspaceIsEditable,
 } from "../../src/gradlab/web_player/player-presentation.js";
@@ -127,6 +128,18 @@ test("the scrubber stays left of a fixed-width playback action rail", () => {
   assert.match(icons, /id="ti-settings"/);
   assert.equal(settings.includes("data-next-episode"), false);
   assert.equal(settings.includes("data-reset-episode"), false);
+});
+
+test("the timeline track is fully filled at its final retained step", () => {
+  assert.equal(timelineProgress(0, 0), 0);
+  assert.equal(timelineProgress(0, 1), 100);
+  assert.equal(timelineProgress(2, 5), 50);
+  assert.equal(timelineProgress(4, 5), 100);
+  assert.match(app, /--timeline-progress/);
+  assert.match(
+    styles,
+    /#timeline-scrubber::-(?:webkit-slider-runnable-track|moz-range-track)[\s\S]*var\(--timeline-progress\)/,
+  );
 });
 
 test("Debug view overlays an idle-hiding transport on the game stage", () => {

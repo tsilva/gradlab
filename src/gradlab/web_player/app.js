@@ -14,6 +14,7 @@ import { mountPlaybackSettings } from "./playback-settings.js";
 import {
   playbackSourceTitle,
   statusMessageShouldToast,
+  timelineProgress,
   transportPresentation,
   workspaceIsEditable,
 } from "./player-presentation.js";
@@ -255,7 +256,6 @@ async function ensureSourceBrowser() {
         beginCheckpointLoad,
         openInspection: (endpoint, options) => openContractInspection(endpoint, options),
         openSourceRoute: (route) => openSourceRoute(route),
-        resumePlayback: () => resumeCurrentPlayback(),
       });
       return sourceBrowser;
     });
@@ -301,19 +301,6 @@ function openSourceRoute(route) {
   state.liveSnapshot = snapshot;
   state.snapshot = snapshot;
   setSourceMode(true, snapshot);
-}
-
-function resumeCurrentPlayback() {
-  const snapshot = state.backgroundPlaybackSnapshot;
-  if (!snapshot) return false;
-  state.applicationSnapshot = snapshot;
-  state.liveSnapshot = snapshot;
-  state.snapshot = snapshot;
-  state.backgroundPlaybackSnapshot = null;
-  if (sourceBrowser) sourceBrowser.activeBreadcrumbRoute = "";
-  setSourceMode(false, snapshot);
-  renderSnapshot();
-  return true;
 }
 
 function setSourceMode(active, snapshot = null) {
@@ -1402,7 +1389,12 @@ function renderTimeline() {
   scrubber.disabled = sequences.length < 2;
   const selected = state.inspectionSequence ?? sequences.at(-1);
   const selectedIndex = sequences.indexOf(selected);
-  scrubber.value = String(selectedIndex < 0 ? Math.max(0, sequences.length - 1) : selectedIndex);
+  const scrubberIndex = selectedIndex < 0 ? Math.max(0, sequences.length - 1) : selectedIndex;
+  scrubber.value = String(scrubberIndex);
+  scrubber.style.setProperty(
+    "--timeline-progress",
+    `${timelineProgress(scrubberIndex, sequences.length)}%`,
+  );
   renderWorkspaceStatus();
 
   const markers = $("#timeline-markers");

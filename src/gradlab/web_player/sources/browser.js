@@ -97,6 +97,53 @@ const GOAL_CONFIGURATION_KINDS = {
 };
 
 const SUCCESS_BADGES = ["train/success", "eval/success"];
+const ENVIRONMENT_FAVORITES_STORAGE_KEY = "gradlab.playback.favorite-environments.v1";
+
+export function readEnvironmentFavorites(storage) {
+  try {
+    const target = storage === undefined ? globalThis.window?.localStorage : storage;
+    const value = JSON.parse(target?.getItem(ENVIRONMENT_FAVORITES_STORAGE_KEY) || "[]");
+    if (!Array.isArray(value)) return new Set();
+    return new Set(value.map((name) => String(name).trim()).filter(Boolean));
+  } catch {
+    return new Set();
+  }
+}
+
+export function writeEnvironmentFavorites(favorites, storage) {
+  try {
+    const target = storage === undefined ? globalThis.window?.localStorage : storage;
+    if (!target) return false;
+    const names = [...favorites]
+      .map((name) => String(name).trim())
+      .filter(Boolean)
+      .sort((left, right) => left.localeCompare(right));
+    target.setItem(ENVIRONMENT_FAVORITES_STORAGE_KEY, JSON.stringify(names));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function toggleEnvironmentFavorite(favorites, name) {
+  const next = new Set(favorites || []);
+  if (next.has(name)) next.delete(name);
+  else next.add(name);
+  return next;
+}
+
+export function sortEnvironmentItems(items, favorites) {
+  const favoriteNames = favorites instanceof Set ? favorites : new Set(favorites || []);
+  return [...items].sort((left, right) => {
+    const leftFavorite = favoriteNames.has(String(left?.name || ""));
+    const rightFavorite = favoriteNames.has(String(right?.name || ""));
+    if (leftFavorite !== rightFavorite) return leftFavorite ? -1 : 1;
+    if (leftFavorite) {
+      return String(left?.name || "").localeCompare(String(right?.name || ""));
+    }
+    return environmentEvidenceRank(left) - environmentEvidenceRank(right);
+  });
+}
 
 export function successBadgeLabels(item) {
   const badges = Array.isArray(item?.success_badges) ? item.success_badges : [];
@@ -670,56 +717,6 @@ export function checkpointMetricBestBadge() {
   return "Best";
 }
 
-export function checkpointEvidencePresentation(item) {
-  const evaluation = item?.evaluation || {};
-  const accepted = evaluation.pass === true || String(evaluation.status || "") === "accepted";
-  const best = Array.isArray(item?.best_metrics) ? item.best_metrics : [];
-  const hasEvaluationLead = best.some((metric) => /^(eval\/|leader\/)/.test(String(metric)));
-  const hasTrainingLead = best.some((metric) => String(metric).startsWith("train/"));
-  if (item?.promoted) {
-    return { label: "Promoted", detail: "Authoritative promoted checkpoint", tone: "evaluation", rank: 0 };
-  }
-  if (accepted) {
-    return { label: "Accepted", detail: "Accepted checkpoint evaluation", tone: "evaluation", rank: 1 };
-  }
-  if (hasEvaluationLead) {
-    return { label: "Evaluation lead", detail: "Best available frozen evaluation evidence", tone: "evaluation", rank: 2 };
-  }
-  if (hasTrainingLead) {
-    return { label: "Training lead", detail: "Diagnostic training evidence; evaluation remains authoritative", tone: "training", rank: 3 };
-  }
-  if (/final/i.test(String(item?.purpose || ""))) {
-    return { label: "Final checkpoint", detail: "Final checkpoint with no stronger evaluation signal", tone: "neutral", rank: 4 };
-  }
-  return { label: "Available", detail: "Playable checkpoint; no acceptance claim", tone: "neutral", rank: 5 };
-}
-
-export function checkpointRecommendation(items) {
-  const ranked = (Array.isArray(items) ? items : [])
-    .map((item, index) => ({ item, index, evidence: checkpointEvidencePresentation(item) }))
-    .sort((left, right) => (
-      left.evidence.rank - right.evidence.rank
-      || (Number(right.item?.step) || 0) - (Number(left.item?.step) || 0)
-      || left.index - right.index
-    ));
-  return ranked[0] || null;
-}
-
-export function checkpointRecommendationMetrics(item, columns) {
-  return (Array.isArray(columns) ? columns : [])
-    .filter((column) => {
-      const value = item?.metrics?.[column.metric];
-      return value !== null && value !== undefined && Number.isFinite(Number(value));
-    })
-    .map((column) => ({
-      metric: String(column.metric),
-      label: column.label || metricLabel(column.metric),
-      role: checkpointMetricRoleLabel(column),
-      tone: column.evidence || "training",
-      value: formatMetricValue(column.metric, item.metrics[column.metric]),
-    }));
-}
-
 export function humanSourceLabel(value, kind) {
   const raw = String(value || "").trim();
   if (!raw) return "";
@@ -1032,7 +1029,6 @@ export class SourceBrowser {
       beginCheckpointLoad = null,
       openInspection,
       openSourceRoute,
-      resumePlayback = null,
       catalogRequestTimeoutMs = 30_000,
     },
   ) {
@@ -1055,7 +1051,6 @@ export class SourceBrowser {
     this.beginCheckpointLoad = beginCheckpointLoad;
     this.openInspection = openInspection;
     this.openSourceRoute = openSourceRoute;
-    this.resumePlayback = resumePlayback;
     this.route = {
       level: "environments",
       environment_id: "",
@@ -1111,6 +1106,9 @@ export class SourceBrowser {
     this.adjacentPrefetchKey = "";
     this.initialEnvironmentCatalog = null;
     this.initialCatalogConsumed = false;
+    this.environmentCatalogCache = null;
+    this.goalCatalogCache = new Map();
+    this.favoriteEnvironments = readEnvironmentFavorites();
     this.historyEnabled = (
       location.pathname === "/"
       || location.pathname.startsWith("/environments/")
@@ -1133,6 +1131,7 @@ export class SourceBrowser {
   }
 
   render(snapshot) {
+    let restoredCatalog = false;
     this.hideActiveCheckpointNavigation();
     this.app = snapshot?.app || { phase: "active" };
     if (
@@ -1189,11 +1188,14 @@ export class SourceBrowser {
       this.selectedCheckpoints.clear();
       this.resetGoalVariantDetail();
       this.autoSelectedRoute = "";
+      restoredCatalog = this.restoreEnvironmentCatalog() || this.restoreGoalCatalog();
       this.syncUrl("replace");
     }
     this.hydrateInitialEnvironments();
     this.renderView();
-    if (this.app.phase === "selecting") this.ensureLoaded();
+    if (this.app.phase === "selecting") {
+      this.ensureLoaded({ quiet: restoredCatalog });
+    }
     this.updatePolling();
   }
 
@@ -1390,13 +1392,6 @@ export class SourceBrowser {
     return Boolean(this.getState()?.hasControl);
   }
 
-  currentPlaybackRoute() {
-    const retainedRoute = this.getState()?.backgroundPlaybackSnapshot?.app?.route;
-    const route = [retainedRoute, this.playbackRoute, this.app?.route]
-      .find((candidate) => candidate?.checkpoint_id);
-    return route ? { ...route } : null;
-  }
-
   resetGoalVariantDetail() {
     this.goalVariantDiffController?.abort();
     this.goalVariantDiffController = null;
@@ -1509,6 +1504,77 @@ export class SourceBrowser {
     this.freshness = "partial";
     this.catalogWarnings = Array.isArray(catalog.warnings) ? catalog.warnings : [];
     this.error = "";
+    this.rememberEnvironmentCatalog();
+    return true;
+  }
+
+  rememberEnvironmentCatalog() {
+    if (this.route.level !== "environments" || this.query.trim()) return false;
+    this.environmentCatalogCache = {
+      sourceItems: [...this.sourceItems],
+      metricColumns: [...this.metricColumns],
+      fallbackMetricColumns: [...this.fallbackMetricColumns],
+      nextCursor: this.nextCursor,
+      freshness: this.freshness,
+      catalogWarnings: [...this.catalogWarnings],
+      catalogSource: this.catalogSource ? { ...this.catalogSource } : null,
+      generatedAt: this.generatedAt,
+      selectionFence: this.selectionFence,
+    };
+    return true;
+  }
+
+  restoreEnvironmentCatalog() {
+    const catalog = this.environmentCatalogCache;
+    if (!catalog || this.route.level !== "environments" || this.query.trim()) return false;
+    this.sourceItems = [...catalog.sourceItems];
+    this.items = [...this.sourceItems];
+    this.metricColumns = [...catalog.metricColumns];
+    this.fallbackMetricColumns = [...catalog.fallbackMetricColumns];
+    this.nextCursor = catalog.nextCursor;
+    this.freshness = catalog.freshness;
+    this.catalogWarnings = [...catalog.catalogWarnings];
+    this.catalogSource = catalog.catalogSource ? { ...catalog.catalogSource } : null;
+    this.generatedAt = catalog.generatedAt;
+    this.selectionFence = catalog.selectionFence;
+    return true;
+  }
+
+  rememberGoalCatalog() {
+    if (this.route.level !== "goals" || this.query.trim() || !this.route.environment_id) {
+      return false;
+    }
+    this.goalCatalogCache.set(this.route.environment_id, {
+      sourceItems: [...this.sourceItems],
+      metricColumns: [...this.metricColumns],
+      fallbackMetricColumns: [...this.fallbackMetricColumns],
+      nextCursor: this.nextCursor,
+      freshness: this.freshness,
+      catalogWarnings: [...this.catalogWarnings],
+      catalogSource: this.catalogSource ? { ...this.catalogSource } : null,
+      generatedAt: this.generatedAt,
+      selectionFence: this.selectionFence,
+    });
+    return true;
+  }
+
+  restoreGoalCatalog() {
+    if (this.route.level !== "goals" || this.query.trim() || !this.route.environment_id) {
+      return false;
+    }
+    const catalog = this.goalCatalogCache.get(this.route.environment_id);
+    if (!catalog) return false;
+    this.sourceItems = [...catalog.sourceItems];
+    this.items = [...this.sourceItems];
+    this.metricColumns = [...catalog.metricColumns];
+    this.fallbackMetricColumns = [...catalog.fallbackMetricColumns];
+    this.nextCursor = catalog.nextCursor;
+    this.freshness = catalog.freshness;
+    this.catalogWarnings = [...catalog.catalogWarnings];
+    this.catalogSource = catalog.catalogSource ? { ...catalog.catalogSource } : null;
+    this.generatedAt = catalog.generatedAt;
+    this.selectionFence = catalog.selectionFence;
+    this.loadedKey = this.routeKey();
     return true;
   }
 
@@ -1535,10 +1601,10 @@ export class SourceBrowser {
     return `/api/catalog/environments?${query}`;
   }
 
-  async ensureLoaded() {
+  async ensureLoaded({ quiet = false } = {}) {
     const key = this.routeKey();
     if ((this.loading && this.loadingKey === key) || this.loadedKey === key) return;
-    await this.load();
+    await this.load({ quiet });
   }
 
   async load({ append = false, quiet = false, force = false } = {}) {
@@ -1627,6 +1693,8 @@ export class SourceBrowser {
         this.nextCursor = payload.next_cursor || null;
       this.loadedKey = this.routeKey();
       this.error = "";
+      this.rememberEnvironmentCatalog();
+      this.rememberGoalCatalog();
       if (
         !append
         && payload.training_enrichment === "pending"
@@ -1649,10 +1717,16 @@ export class SourceBrowser {
       }
     } catch (error) {
       if (serial !== this.requestSerial || key !== this.routeKey()) return;
-      this.error = timedOut
+      const message = timedOut
         ? "Catalog request timed out. Try Refresh."
         : String(error?.message || error);
-      if (quiet) this.showToast(this.error, true);
+      if (quiet && this.items.length) {
+        this.error = "";
+        this.showToast(message, true);
+      } else {
+        this.error = message;
+        if (quiet) this.showToast(message, true);
+      }
     } finally {
       clearTimeout(timeout);
       if (serial === this.requestSerial) {
@@ -1778,14 +1852,17 @@ export class SourceBrowser {
     this.selectedCheckpoints.clear();
     this.resetGoalVariantDetail();
     this.autoSelectedRoute = "";
+    let restoredCatalog = false;
     if (Array.isArray(seedItems) && seedItems.length) {
       this.sourceItems = seedItems.map((item) => ({ ...item }));
       this.items = [...this.sourceItems];
       this.freshness = "partial";
+    } else {
+      restoredCatalog = this.restoreEnvironmentCatalog() || this.restoreGoalCatalog();
     }
     this.hydrateInitialEnvironments();
     this.renderView();
-    this.ensureLoaded();
+    this.ensureLoaded({ quiet: restoredCatalog });
     this.updatePolling();
   }
 
@@ -1936,7 +2013,7 @@ export class SourceBrowser {
       refresh.disabled = this.loading;
       refresh.addEventListener("click", () => {
         this.loadedKey = "";
-        this.load({ force: true });
+        this.load({ force: true, quiet: Boolean(this.items.length) });
       });
       head.append(refresh);
     }
@@ -1977,11 +2054,7 @@ export class SourceBrowser {
         );
         shell.append(description);
       }
-      if (this.app.has_active_runner) shell.append(this.renderContinuePlayback());
       shell.append(this.renderSearch());
-      if (this.route.level === "runs" && this.route.run_id) {
-        shell.append(this.renderCheckpointRecommendation());
-      }
       shell.append(this.renderResults());
     }
     this.root.replaceChildren(shell);
@@ -2057,42 +2130,6 @@ export class SourceBrowser {
     return disclosure;
   }
 
-  renderContinuePlayback() {
-    const card = document.createElement("section");
-    card.className = "continue-playback-card";
-    const copy = document.createElement("div");
-    const heading = document.createElement("strong");
-    heading.textContent = "Continue current playback";
-    copy.append(heading);
-    const playbackRoute = this.currentPlaybackRoute();
-    const breadcrumbItems = playbackRoute
-      ? sourceBreadcrumbItems(playbackRoute).slice(1)
-      : [];
-    if (breadcrumbItems.length) {
-      const breadcrumb = document.createElement("nav");
-      breadcrumb.className = "continue-playback-breadcrumb";
-      breadcrumb.setAttribute("aria-label", "Current playback source");
-      breadcrumbItems.forEach((item) => {
-        const crumb = document.createElement("span");
-        crumb.textContent = item.label;
-        if (item.title) crumb.title = item.title;
-        breadcrumb.append(crumb);
-      });
-      copy.append(breadcrumb);
-    } else {
-      const detail = document.createElement("p");
-      detail.textContent = "Loaded checkpoint";
-      copy.append(detail);
-    }
-    const resume = button("Continue watching", { iconName: "eye", primary: true });
-    resume.disabled = !this.hasControl();
-    resume.addEventListener("click", () => {
-      if (!this.resumePlayback?.()) this.command("cancel_source");
-    });
-    card.append(copy, resume);
-    return card;
-  }
-
   renderEvaluationActions() {
     const actions = document.createElement("div");
     actions.className = "source-evaluation-actions";
@@ -2119,48 +2156,6 @@ export class SourceBrowser {
     });
     actions.append(summary, inspect, evaluate);
     return actions;
-  }
-
-  renderCheckpointRecommendation() {
-    const recommendation = checkpointRecommendation(this.items);
-    const card = document.createElement("section");
-    card.className = "checkpoint-recommendation";
-    if (!recommendation) {
-      card.hidden = true;
-      return card;
-    }
-    const copy = document.createElement("div");
-    const eyebrow = document.createElement("span");
-    eyebrow.className = "eyebrow";
-    eyebrow.textContent = "BEST AVAILABLE TO WATCH";
-    const heading = document.createElement("strong");
-    heading.textContent = `${recommendation.evidence.label} · step ${Number(recommendation.item.step).toLocaleString()}`;
-    const detail = document.createElement("p");
-    detail.textContent = recommendation.evidence.detail;
-    copy.append(eyebrow, heading, detail);
-    const metrics = checkpointRecommendationMetrics(
-      recommendation.item,
-      this.metricColumns,
-    );
-    if (metrics.length) {
-      const evidence = document.createElement("dl");
-      evidence.className = "checkpoint-recommendation-metrics";
-      metrics.forEach((metric) => {
-        const term = document.createElement("dt");
-        term.className = metric.tone;
-        term.textContent = `${metric.label} · ${metric.role}`;
-        const value = document.createElement("dd");
-        value.textContent = metric.value;
-        evidence.append(term, value);
-      });
-      copy.append(evidence);
-    }
-    const play = button("Watch checkpoint", { iconName: "player-play", primary: true });
-    play.disabled = !this.hasControl();
-    play.addEventListener("click", () => this.selectCheckpoint(recommendation.item));
-    card.classList.add(recommendation.evidence.tone);
-    card.append(copy, play);
-    return card;
   }
 
   async evaluateSelected() {
@@ -2308,6 +2303,14 @@ export class SourceBrowser {
     table.className = "environment-table";
     const head = document.createElement("thead");
     const headings = document.createElement("tr");
+    const favoriteHeading = document.createElement("th");
+    favoriteHeading.scope = "col";
+    favoriteHeading.className = "environment-favorite-column";
+    const favoriteHeadingLabel = document.createElement("span");
+    favoriteHeadingLabel.className = "visually-hidden";
+    favoriteHeadingLabel.textContent = "Favorite";
+    favoriteHeading.append(favoriteHeadingLabel);
+    headings.append(favoriteHeading);
     ["Environment", "Goals", "train/success", "eval/success"].forEach((label) => {
       const heading = document.createElement("th");
       heading.scope = "col";
@@ -2316,9 +2319,7 @@ export class SourceBrowser {
     });
     head.append(headings);
     const body = document.createElement("tbody");
-    [...this.items].sort((left, right) => (
-      environmentEvidenceRank(left) - environmentEvidenceRank(right)
-    )).forEach((environment) => {
+    sortEnvironmentItems(this.items, this.favoriteEnvironments).forEach((environment) => {
       const row = document.createElement("tr");
       row.className = "environment-row";
       const environmentCell = document.createElement("td");
@@ -2328,6 +2329,29 @@ export class SourceBrowser {
       navigate.disabled = !this.hasControl();
       navigate.textContent = environment.name;
       environmentCell.append(navigate);
+      const favoriteCell = document.createElement("td");
+      favoriteCell.className = "environment-favorite-cell";
+      const favorite = document.createElement("button");
+      favorite.type = "button";
+      favorite.className = "environment-favorite";
+      const isFavorite = this.favoriteEnvironments.has(environment.name);
+      favorite.classList.toggle("selected", isFavorite);
+      favorite.textContent = isFavorite ? "⭐" : "☆";
+      favorite.setAttribute("aria-pressed", String(isFavorite));
+      favorite.setAttribute(
+        "aria-label",
+        `${isFavorite ? "Remove" : "Add"} ${environment.name} ${isFavorite ? "from" : "to"} favorites`,
+      );
+      favorite.title = isFavorite
+        ? `Remove ${environment.name} from favorites`
+        : `Add ${environment.name} to favorites`;
+      favorite.addEventListener("click", () => {
+        const next = toggleEnvironmentFavorite(this.favoriteEnvironments, environment.name);
+        this.favoriteEnvironments = next;
+        writeEnvironmentFavorites(next);
+        this.renderView();
+      });
+      favoriteCell.append(favorite);
       const trainingCell = document.createElement("td");
       const trainingStatus = environmentSuccessStatus(environment, "train/success");
       trainingCell.className = `environment-status ${trainingStatus.className}`;
@@ -2352,9 +2376,9 @@ export class SourceBrowser {
       });
       navigate.addEventListener("click", openEnvironment);
       row.addEventListener("click", (event) => {
-        if (event.target !== navigate && this.hasControl()) openEnvironment();
+        if (!event.target.closest("button") && this.hasControl()) openEnvironment();
       });
-      row.append(environmentCell, goalsCell, trainingCell, evaluationCell);
+      row.append(favoriteCell, environmentCell, goalsCell, trainingCell, evaluationCell);
       body.append(row);
     });
     table.append(head, body);
@@ -2787,12 +2811,39 @@ export class SourceBrowser {
       section.append(empty);
       return section;
     }
-    const list = document.createElement("div");
-    list.className = "goal-configuration-run-list";
+    const scroll = document.createElement("div");
+    scroll.className = "goal-configuration-run-table-scroll";
+    const table = document.createElement("table");
+    table.className = "goal-configuration-run-table";
+    const columns = document.createElement("colgroup");
+    ["run", "train-success", "eval-success", "result", "last-activity"].forEach((name) => {
+      const column = document.createElement("col");
+      column.className = `goal-configuration-run-column ${name}`;
+      columns.append(column);
+    });
+    const head = document.createElement("thead");
+    const headerRow = document.createElement("tr");
+    ["Run", "train/success", "eval/success", "Result", "Last activity"].forEach((label) => {
+      const cell = document.createElement("th");
+      cell.scope = "col";
+      cell.textContent = label;
+      if (["train/success", "eval/success"].includes(label)) {
+        cell.classList.add("goal-configuration-run-status");
+      }
+      if (label === "Last activity") {
+        cell.classList.add("goal-configuration-run-updated");
+      }
+      headerRow.append(cell);
+    });
+    head.append(headerRow);
+    const body = document.createElement("tbody");
     items.forEach((run) => {
-      const row = document.createElement("button");
-      row.type = "button";
+      const row = document.createElement("tr");
       row.className = "goal-configuration-run-row";
+      const runCell = document.createElement("td");
+      const navigate = document.createElement("button");
+      navigate.type = "button";
+      navigate.className = "goal-configuration-run-navigation";
       const identity = document.createElement("span");
       identity.className = "goal-configuration-run-identity";
       const name = document.createElement("strong");
@@ -2800,24 +2851,45 @@ export class SourceBrowser {
       const description = document.createElement("small");
       description.textContent = String(run?.description || run?.run_id || "");
       identity.append(name, description);
-      const success = renderSuccessBadges(run);
-      if (success) identity.append(success);
+      navigate.append(identity);
+      runCell.append(navigate);
+      const runEvidence = { ...run, run_count: 1 };
+      const trainingCell = document.createElement("td");
+      const trainingStatus = environmentSuccessStatus(runEvidence, "train/success");
+      trainingCell.className = `goal-configuration-run-status ${trainingStatus.className}`;
+      trainingCell.textContent = trainingStatus.label;
+      trainingCell.title = trainingStatus.description;
+      trainingCell.setAttribute("aria-label", trainingStatus.description);
+      const evaluationCell = document.createElement("td");
+      const evaluationStatus = environmentSuccessStatus(runEvidence, "eval/success");
+      evaluationCell.className = `goal-configuration-run-status ${evaluationStatus.className}`;
+      evaluationCell.textContent = evaluationStatus.label;
+      evaluationCell.title = evaluationStatus.description;
+      evaluationCell.setAttribute("aria-label", evaluationStatus.description);
+      const result = document.createElement("td");
       const state = document.createElement("span");
       state.className = `goal-configuration-run-state ${String(run?.state || "unknown")}`;
       state.textContent = String(run?.state || "unknown");
-      const updated = document.createElement("span");
+      result.append(state);
+      const updated = document.createElement("td");
       updated.className = "goal-configuration-run-updated";
       updated.textContent = run?.updated_at ? formatDate(run.updated_at) : "—";
-      row.append(identity, state, updated);
-      row.addEventListener("click", () => this.navigate({
+      const openRun = () => this.navigate({
         level: "runs",
         goal_variant_id: variantId,
         run_id: String(run.run_id || ""),
         checkpoint_id: "",
-      }));
-      list.append(row);
+      });
+      navigate.addEventListener("click", openRun);
+      row.addEventListener("click", (event) => {
+        if (!event.target.closest("button")) openRun();
+      });
+      row.append(runCell, trainingCell, evaluationCell, result, updated);
+      body.append(row);
     });
-    section.append(list);
+    table.append(columns, head, body);
+    scroll.append(table);
+    section.append(scroll);
     if (page?.error) {
       const error = document.createElement("p");
       error.className = "source-inline-error";
