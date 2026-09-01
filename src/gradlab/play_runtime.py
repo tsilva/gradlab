@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any, Literal
 
 from gradlab.action_contract import assert_action_contract_compatible
-from gradlab.device import resolve_sb3_device
 from gradlab.env import (
     assert_provider_runtime_available,
     make_eval_vec_env,
@@ -32,6 +31,7 @@ from gradlab.policy_bundle import (
     playback_contract_audit,
 )
 from gradlab.play_session import (
+    PLAYBACK_DEVICE,
     _PlaybackSession,
     resolved_play_launch_lines,
 )
@@ -63,14 +63,10 @@ ProgressCallback = Callable[[str, str], None]
 PlaybackContractMode = Literal["training", "evaluation", "counterfactual"]
 
 
-def _with_playback_device_override(
-    config: EnvConfig,
-    requested_device: str,
-) -> dict[str, Any]:
-    resolved_device = resolve_sb3_device(requested_device)
+def _with_playback_device_override(config: EnvConfig) -> dict[str, Any]:
     if config.env_provider != GRADOOM_PROVIDER.provider_id:
         return {}
-    return {"device": resolved_device}
+    return {"device": PLAYBACK_DEVICE}
 
 
 @dataclass(frozen=True)
@@ -434,8 +430,9 @@ class PlaybackLoader:
         from gradlab.policy_runtime import PolicyRuntime
 
         args = candidate.args
+        args.device = PLAYBACK_DEVICE
         progress("loading", "Loading policy runtime")
-        playback_device = resolve_sb3_device(args.device)
+        playback_device = args.device
         algorithm_id = resolve_policy_algorithm(candidate.source.bundle.model["policy"])
         with verify_staged_model(candidate.staged) as verified:
             model = load_policy_model(
@@ -501,10 +498,7 @@ class PlaybackLoader:
                 rom_binding=candidate.rom_binding,
                 state_archive=playback_archive_config,
                 state_archive_root=(None if archive_resource is None else archive_resource.name),
-                native_kwargs_overrides=_with_playback_device_override(
-                    config,
-                    playback_device,
-                ),
+                native_kwargs_overrides=_with_playback_device_override(config),
             )
 
         policy_env = make_policy_env(candidate.config, args.seed)

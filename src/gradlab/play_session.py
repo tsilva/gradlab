@@ -80,6 +80,9 @@ from gradlab.seeds import DEFAULT_EVAL_SEED, EVAL_SEED_START
 from gradlab.env_registry import environment_spec
 
 
+PLAYBACK_DEVICE = "cpu"
+
+
 ANSI_RESET = "\033[0m"
 ANSI_STYLES = {
     "bold": "\033[1m",
@@ -335,7 +338,12 @@ def build_parser() -> argparse.ArgumentParser:
             f"range >= {EVAL_SEED_START}; overrides must stay in that range."
         ),
     )
-    parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "mps"])
+    parser.add_argument(
+        "--device",
+        default=PLAYBACK_DEVICE,
+        choices=[PLAYBACK_DEVICE],
+        help="Inference device; playback currently runs on CPU only.",
+    )
     parser.add_argument(
         "--env-provider",
         help=(

@@ -417,6 +417,16 @@ def test_play_parser_allows_bare_launch_and_rejects_wandb_project_urls() -> None
         parser.parse_args(["--rom", "/tmp/game.nes"])
 
 
+def test_play_parser_exposes_cpu_as_the_only_playback_device() -> None:
+    parser = build_play_parser()
+
+    assert parser.parse_args([]).device == "cpu"
+    assert parser.parse_args(["--device", "cpu"]).device == "cpu"
+    for unsupported in ("auto", "cuda", "mps"):
+        with pytest.raises(SystemExit):
+            parser.parse_args(["--device", unsupported])
+
+
 def test_goal_variants_use_one_private_index_read_without_wandb(
     tmp_path: Path,
 ) -> None:
