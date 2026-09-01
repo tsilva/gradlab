@@ -182,9 +182,9 @@ def manifest_from_train_config(
 def provider_rom_identity(path: Path, algorithm: str = ROM_ASSET_IDENTITY_ALGORITHM) -> str:
     if algorithm != ROM_ASSET_IDENTITY_ALGORITHM:
         raise ValueError(f"unsupported provider ROM identity algorithm: {algorithm}")
-    import stable_retro
+    import env_stableretro_turbo
 
-    system = stable_retro.get_romfile_system(str(path))
+    system = env_stableretro_turbo.get_romfile_system(str(path))
     digest = hashlib.sha1()
     with path.open("rb") as handle:
         if system == "Nes":
@@ -285,12 +285,12 @@ def ensure_rom_cache(
 
 
 def _expected_provider_identities(game: str) -> set[str]:
-    import stable_retro
+    import env_stableretro_turbo
 
-    expected_path = stable_retro.data.get_file_path(
+    expected_path = env_stableretro_turbo.data.get_file_path(
         game,
         "rom.sha",
-        inttype=stable_retro.data.Integrations.ALL,
+        inttype=env_stableretro_turbo.data.Integrations.ALL,
     )
     return {
         line.strip().lower()

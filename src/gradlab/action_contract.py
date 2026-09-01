@@ -114,10 +114,10 @@ def _packaged_action_sets(provider_id: str, game: str) -> Mapping[str, Any]:
     if game == "Breakout-Atari2600-v0" and provider_id == "env-stableretro-turbo":
         return BREAKOUT_ACTION_TABLES
     if provider_id == "env-stableretro-turbo":
-        import stable_retro
+        import env_stableretro_turbo
 
         path = (
-            Path(stable_retro.__file__).resolve().parent
+            Path(env_stableretro_turbo.__file__).resolve().parent
             / "data"
             / "stable"
             / game
@@ -126,7 +126,7 @@ def _packaged_action_sets(provider_id: str, game: str) -> Mapping[str, Any]:
         metadata = json.loads(path.read_text(encoding="utf-8"))
     else:
         package = {
-            "env-supermariobrosnes-turbo-emu": "supermariobrosnes_turbo",
+            "env-supermariobrosnes-turbo-emu": "env_supermariobrosnes_turbo_emu",
             "env-breakoutatari2600-turbo-native": "env_breakoutatari2600_turbo_native",
         }.get(provider_id)
         if package is None:
@@ -187,11 +187,11 @@ def provider_buttons(
             return buttons
         if provider_id == "env-gradoom-turbo-torch":
             return _gradoom_scenario_buttons(game, scenario=args.get("scenario"))
-        from vizdoom_turbo import scenario_buttons
+        from env_vizdoom_turbo import scenario_buttons
 
         return scenario_buttons(game, scenario=args.get("scenario"))
     if provider_id == "env-supermariobrosnes-turbo-emu":
-        from supermariobrosnes_turbo import NES_BUTTONS
+        from env_supermariobrosnes_turbo_emu import NES_BUTTONS
 
         return tuple(NES_BUTTONS)
     if provider_id == "env-breakoutatari2600-turbo-native":
@@ -199,12 +199,12 @@ def provider_buttons(
 
         return tuple(BUTTONS)
     if provider_id == "env-stableretro-turbo":
-        import stable_retro
+        import env_stableretro_turbo
 
         parts = game.rsplit("-", 2)
         if len(parts) != 3:
             raise ValueError(f"cannot infer Stable Retro system from game id {game!r}")
-        return tuple(stable_retro.get_system_info(parts[-2])["buttons"])
+        return tuple(env_stableretro_turbo.get_system_info(parts[-2])["buttons"])
     return ()
 
 
@@ -234,7 +234,7 @@ def declared_action_contract(config: Any) -> dict[str, Any] | None:
         "filtered",
         "multi_discrete",
     }:
-        from vizdoom_turbo.action_tables import resolve_custom_action
+        from env_vizdoom_turbo.action_tables import resolve_custom_action
 
         resolved = resolve_custom_action(
             request,

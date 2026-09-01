@@ -549,21 +549,21 @@ wheels = [
 
 [[package]]
 name = "env-breakoutatari2600-turbo-native"
-version = "0.5.8"
+version = "0.5.9"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "gymnasium", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
     { name = "numpy", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/58/65/37c174043a6a407a36d189ff8848c10e574aa2d579b7415aa64c550de995/env_breakoutatari2600_turbo_native-0.5.8.tar.gz", hash = "sha256:1d3ac7f883f4c4b6eaeafe5bb8bf8ae72b2c8bb2cc2f9f9b7d74a12e54a66563", size = 14915218, upload-time = "2026-08-28T17:37:15.254Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/99/a9/c90e9e36245ce949b16a343a24a573b88cea6eaa16cad13ee6513cff4c26/env_breakoutatari2600_turbo_native-0.5.9.tar.gz", hash = "sha256:7edce4701cd87c0b2f3559e067c6377bdf093cf815df045bc201d934a2f64202", size = 21471753, upload-time = "2026-08-31T20:10:35.609Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/71/77/58fcea7a888ab471fefcfb99efa73f9c72e1b47edef93578caeca4134f90/env_breakoutatari2600_turbo_native-0.5.8-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:b7c8736851224ff51f35c0cd33e3a34117d67a5640ec5b3b3050fb1df200caa0", size = 292547, upload-time = "2026-08-28T17:37:12.35Z" },
-    { url = "https://files.pythonhosted.org/packages/7b/97/3d094bf41623bf7c17b32d5e211d61f973d2ecb28485e14abd83fa21da7a/env_breakoutatari2600_turbo_native-0.5.8-cp311-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:fac49f3673343c5b6df48a0a0d6bf7b26cd7d8e921705bf2e58f0d20f924bfb5", size = 331018, upload-time = "2026-08-28T17:37:13.721Z" },
+    { url = "https://files.pythonhosted.org/packages/38/24/aa9ff7d7329d59ae7dd41d2d62cfeecfb7c6939008ec4f5eaf9f4c2a5cc0/env_breakoutatari2600_turbo_native-0.5.9-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:6b247761836bf75077a036c6262c56cb4fbecd646f7d976eb7b4c6666b901802", size = 292456, upload-time = "2026-08-31T20:10:31.771Z" },
+    { url = "https://files.pythonhosted.org/packages/67/bb/ac064cef8db5bd34a864dd886f2fa264b24807eaf26c39ad9a5fe0b84d96/env_breakoutatari2600_turbo_native-0.5.9-cp311-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:ca4e34e73c03abaf9cc0369a0c82f416fcd4417c3374e71b739fd2a49dced4ce", size = 330994, upload-time = "2026-08-31T20:10:33.627Z" },
 ]
 
 [[package]]
 name = "env-gradoom-turbo-torch"
-version = "0.2.0"
+version = "0.2.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "gymnasium", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
@@ -571,14 +571,14 @@ dependencies = [
     { name = "torch", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
     { name = "wandb", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/f0/d6/5f9ef56acb4694ab220dbd373ae47dea75e7c58588e0f152d46b4b7757e5/env_gradoom_turbo_torch-0.2.0.tar.gz", hash = "sha256:6543830f5d66fdbd21bab8106e9e072a2c687eaef47d78c17bd3a5a1614a9840", size = 263568, upload-time = "2026-08-26T13:32:01.277Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/83/6f/180246ad5983024f45678e2a80797a141c10ef32364161a56491d4f1d6b3/env_gradoom_turbo_torch-0.2.1.tar.gz", hash = "sha256:12408a53076a720d7b9e64e5b74e149fc86754baf1ff6a002d8f38a3b33191d3", size = 263544, upload-time = "2026-08-31T19:29:09.96Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b4/4b/55d360d97e729eefbd6723421dd71bb1b993787d37a2a9b307ffaf5418d5/env_gradoom_turbo_torch-0.2.0-py3-none-any.whl", hash = "sha256:92327acce234ae5213df6aa9c3bc7a1af10f917dded4c291199aa1ab0305f2ff", size = 194323, upload-time = "2026-08-26T13:31:59.737Z" },
+    { url = "https://files.pythonhosted.org/packages/0f/ca/ee04e410cc3d87aa9cf3475c2f71533089655a6d08ca8cb746e18a529557/env_gradoom_turbo_torch-0.2.1-py3-none-any.whl", hash = "sha256:7e1212056632be665746addcfb06f0fc56f8713506eb3f922530e8326bf68abf", size = 194322, upload-time = "2026-08-31T19:29:08.601Z" },
 ]
 
 [[package]]
 name = "env-stableretro-turbo"
-version = "1.0.1.post44"
+version = "1.0.1.post48"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "farama-notifications", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
@@ -586,29 +586,29 @@ dependencies = [
     { name = "numpy", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
     { name = "pyglet", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3a/7a/394f308bc7dda55f5974fee28ece6a74fcae06fe682db233d3f998bcaa69/env_stableretro_turbo-1.0.1.post44.tar.gz", hash = "sha256:39270faa21c3523aa6528dc1763b13208dfea66d799761172ba8cd5ff78e72cb", size = 96176974, upload-time = "2026-08-20T12:13:27.239Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/16/b1/32ca14fc35740974ae415136e2c27275d3f48b6b0d9c89b5faea614c6c32/env_stableretro_turbo-1.0.1.post48.tar.gz", hash = "sha256:65e770a017508b3ab5af5207b97395034eec41beab2d49578a252ce6b6924b27", size = 96192753, upload-time = "2026-09-01T20:29:54.674Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/6c/f4/4e2d0cb8be5329d0b7194bf2a14b8c100d0ce564398fbb3d5e8592b1035c/env_stableretro_turbo-1.0.1.post44-cp314-cp314-macosx_14_0_arm64.whl", hash = "sha256:70fe4c4aab83c025c85a2d03d3efe16b2a377531dae2e784a5bb9c9adb14dbbf", size = 85866424, upload-time = "2026-08-20T12:13:11.898Z" },
-    { url = "https://files.pythonhosted.org/packages/79/0e/9e34e4fda94e5eac98d140ed158547639128c918beb21c5d8002d58e15b4/env_stableretro_turbo-1.0.1.post44-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:bbc59d33fa51b6f92005d34e3b4da4f3d3ef6e4019f9d432da8467333952e918", size = 91576904, upload-time = "2026-08-20T12:13:19.327Z" },
+    { url = "https://files.pythonhosted.org/packages/c7/16/54d34835f636f9af7a1a55ffddb486223e5f8040b9b5b128142c057a4d2e/env_stableretro_turbo-1.0.1.post48-cp314-cp314-macosx_14_0_arm64.whl", hash = "sha256:303cd0e707748c496739307659a94fe2aa440832e031aa201c88ffd181cbaabb", size = 85980464, upload-time = "2026-09-01T20:29:21.736Z" },
+    { url = "https://files.pythonhosted.org/packages/78/a5/2478cb87035f25d78d7088e981921541eda81d904bac265e23276a5fc99e/env_stableretro_turbo-1.0.1.post48-cp314-cp314-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:11025ef86158b424ee339bcb23f5c1ae0d5f2187cb213fb3232c19eb6d82a123", size = 91690943, upload-time = "2026-09-01T20:29:48.255Z" },
 ]
 
 [[package]]
 name = "env-supermariobrosnes-turbo-emu"
-version = "0.7.0"
+version = "0.7.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "gymnasium", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
     { name = "numpy", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/0a/c6/da4365f69a0fb727c9d289921f4f2ca5d2c4c1cdb895ded7cef856e312da/env_supermariobrosnes_turbo_emu-0.7.0.tar.gz", hash = "sha256:f87047ea27e09c9071e98b1d976fa499a711806c18831ce27aa6c46bc69d4b70", size = 16550953, upload-time = "2026-08-20T11:36:00.601Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e5/89/aa7eb96caf4db45aeec39784c133695fdb682c16b402ca75769e55bcb9c8/env_supermariobrosnes_turbo_emu-0.7.3.tar.gz", hash = "sha256:f3b8f34d97a9fe3e3c121c95dadec590ee5f709fe119c2587bb0e7867e07c59d", size = 20968559, upload-time = "2026-08-31T20:08:05.58Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/fb/a9/99c2e4c950f119742ef5320b4f501e2f901a8e1c150c7751e6804586ea16/env_supermariobrosnes_turbo_emu-0.7.0-cp39-abi3-macosx_14_0_arm64.whl", hash = "sha256:563a6cd3eff6cd92f01ced1a3b4871aa09ade69a29af89984326fa870ff425de", size = 489091, upload-time = "2026-08-20T11:35:56.804Z" },
-    { url = "https://files.pythonhosted.org/packages/42/82/076a0555850abd0579c5a199cbe0f71368ab5871196805b337880900d739/env_supermariobrosnes_turbo_emu-0.7.0-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:d872daefc14ee9c082635c984b2e46ce277e0055bbb8df9f136c7ae7c352522c", size = 533245, upload-time = "2026-08-20T11:35:58.5Z" },
+    { url = "https://files.pythonhosted.org/packages/c6/6c/b87f7563646523248cccde53fc244cb5199aea1c2f19be382cbfdd556776/env_supermariobrosnes_turbo_emu-0.7.3-cp39-abi3-macosx_14_0_arm64.whl", hash = "sha256:d0e26ad8d04c8318119e834db4bf39f8219a3df201562bdd0f898a84ce0b60c5", size = 489955, upload-time = "2026-08-31T20:08:01.232Z" },
+    { url = "https://files.pythonhosted.org/packages/38/ee/372c40753a0a85243cc74c9282b4289996c3cfe4e0fbe3552dc232733796/env_supermariobrosnes_turbo_emu-0.7.3-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:67424dce6eb74529e0f8b9bd813fd0625130c05a9f0a1e30c5985c982960113d", size = 534647, upload-time = "2026-08-31T20:08:03.127Z" },
 ]
 
 [[package]]
 name = "env-vizdoom-turbo"
-version = "1.3.0.post27"
+version = "1.3.0.post30"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "gymnasium", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
@@ -616,8 +616,8 @@ dependencies = [
     { name = "pygame-ce", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f5/c9/834fd9d4b07d26ab3aeb72bc54c8df77f405d0c9a75b15c61419650d88bb/env_vizdoom_turbo-1.3.0.post27-cp314-cp314-macosx_15_0_arm64.whl", hash = "sha256:24e497212f7dd21e59fb1051333eb3c99fbfb999e79274e27341f50d74f56178", size = 42915993, upload-time = "2026-08-20T12:33:49.802Z" },
-    { url = "https://files.pythonhosted.org/packages/e5/20/5cc05f31e704fd4c19630c53d4b2493dc694df0d4d26337fa53029f307dc/env_vizdoom_turbo-1.3.0.post27-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:7d895d44cac2c58dd10e192ebdc84e1cd6bdad62abe6ab6fba7b54562e2c649d", size = 39925492, upload-time = "2026-08-20T12:33:52.835Z" },
+    { url = "https://files.pythonhosted.org/packages/48/10/6d076cd05153c4d70712ee8ed69d868ef6bb8cf33d1968eae40458992662/env_vizdoom_turbo-1.3.0.post30-cp314-cp314-macosx_15_0_arm64.whl", hash = "sha256:5f3cc19fa45ac5c3cc6b8212585604de21be66d98e6f24d23045ea0bb5365d4b", size = 42918541, upload-time = "2026-09-01T05:32:18.017Z" },
+    { url = "https://files.pythonhosted.org/packages/00/55/5329eef70c03ad90c7cd3b7aba2ee7cb33d5ed90e426607c2be09e245d35/env_vizdoom_turbo-1.3.0.post30-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:3d07ae56bb89a203c723aa5d0b31111fc0cd521ad8c96ab01761074be3dd2f6f", size = 39927646, upload-time = "2026-09-01T05:32:21.163Z" },
 ]
 
 [[package]]
@@ -845,16 +845,16 @@ requires-dist = [
     { name = "certifi", specifier = ">=2026.5.20" },
     { name = "datasets", marker = "extra == 'dataset'", specifier = ">=5,<6" },
     { name = "datasets", marker = "extra == 'dataset-minari'", specifier = ">=5,<6" },
-    { name = "env-breakoutatari2600-turbo-native", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = "==0.5.8" },
-    { name = "env-breakoutatari2600-turbo-native", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==0.5.8" },
-    { name = "env-gradoom-turbo-torch", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = "==0.2.0" },
-    { name = "env-gradoom-turbo-torch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==0.2.0" },
-    { name = "env-stableretro-turbo", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = "==1.0.1.post44" },
-    { name = "env-stableretro-turbo", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==1.0.1.post44" },
-    { name = "env-supermariobrosnes-turbo-emu", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = "==0.7.0" },
-    { name = "env-supermariobrosnes-turbo-emu", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==0.7.0" },
-    { name = "env-vizdoom-turbo", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = "==1.3.0.post27" },
-    { name = "env-vizdoom-turbo", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==1.3.0.post27" },
+    { name = "env-breakoutatari2600-turbo-native", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = "==0.5.9" },
+    { name = "env-breakoutatari2600-turbo-native", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==0.5.9" },
+    { name = "env-gradoom-turbo-torch", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = "==0.2.1" },
+    { name = "env-gradoom-turbo-torch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==0.2.1" },
+    { name = "env-stableretro-turbo", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = "==1.0.1.post48" },
+    { name = "env-stableretro-turbo", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==1.0.1.post48" },
+    { name = "env-supermariobrosnes-turbo-emu", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = "==0.7.3" },
+    { name = "env-supermariobrosnes-turbo-emu", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==0.7.3" },
+    { name = "env-vizdoom-turbo", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = "==1.3.0.post30" },
+    { name = "env-vizdoom-turbo", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==1.3.0.post30" },
     { name = "gymnasium", specifier = ">=1.2,<1.3" },
     { name = "huggingface-hub", specifier = ">=1.0,<2" },
     { name = "jinja2", specifier = ">=3.1,<4" },
@@ -900,11 +900,11 @@ train-runtime = [
     { name = "box2d-py", specifier = "==2.3.5" },
     { name = "captum", specifier = ">=0.9,<1" },
     { name = "certifi", specifier = ">=2026.5.20" },
-    { name = "env-breakoutatari2600-turbo-native", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==0.5.8" },
-    { name = "env-gradoom-turbo-torch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==0.2.0" },
-    { name = "env-stableretro-turbo", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==1.0.1.post44" },
-    { name = "env-supermariobrosnes-turbo-emu", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==0.7.0" },
-    { name = "env-vizdoom-turbo", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==1.3.0.post27" },
+    { name = "env-breakoutatari2600-turbo-native", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==0.5.9" },
+    { name = "env-gradoom-turbo-torch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==0.2.1" },
+    { name = "env-stableretro-turbo", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==1.0.1.post48" },
+    { name = "env-supermariobrosnes-turbo-emu", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==0.7.3" },
+    { name = "env-vizdoom-turbo", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==1.3.0.post30" },
     { name = "gymnasium", specifier = ">=1.2,<1.3" },
     { name = "huggingface-hub", specifier = ">=1.0,<2" },
     { name = "modal", specifier = ">=1.3,<2" },

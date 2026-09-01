@@ -8,7 +8,7 @@ from unittest import mock
 
 import gymnasium as gym
 import numpy as np
-import stable_retro as retro
+import env_stableretro_turbo as retro
 
 from gradlab.action_contract import MARIO_ACTION_TABLES
 from gradlab.env import EnvConfig, _bound_task_kernel, make_vec_envs
@@ -456,7 +456,7 @@ class BreakoutTurboProviderTests(unittest.TestCase):
 
     def test_runtime_matches_turbo_api_v2_release(self) -> None:
         installed = Version(importlib.metadata.version("env-breakoutatari2600-turbo-native"))
-        self.assertEqual(installed, Version("0.5.8"))
+        self.assertEqual(installed, Version("0.5.9"))
 
     def test_player_boundary_renders_canonical_stella_rgb(self) -> None:
         env = make_vec_envs(self.config(), 1, 17)
@@ -699,8 +699,8 @@ class MarioNativeProviderTests(unittest.TestCase):
 
     def test_runtime_matches_turbo_api_v2_releases(self) -> None:
         installed = Version(importlib.metadata.version("env-supermariobrosnes-turbo-emu"))
-        self.assertEqual(installed, Version("0.7.0"))
-        self.assertEqual(Version(retro.__version__), Version("1.0.1.post44"))
+        self.assertEqual(installed, Version("0.7.3"))
+        self.assertEqual(Version(retro.__version__), Version("1.0.1.post48"))
         env_type = super_mario_bros_nes_turbo_vec_env_type()
         self.assertIs(env_type.supports_live_snapshots, True)
         self.assertTrue(callable(getattr(env_type, "capture_snapshots", None)))
@@ -1469,7 +1469,7 @@ class VizdoomTurboProviderTests(unittest.TestCase):
             },
         )
         with (
-            mock.patch("vizdoom_turbo.VizdoomTurboVecEnv", InvalidVizdoomEnv),
+            mock.patch("env_vizdoom_turbo.EnvViZDoomTurboVecEnv", InvalidVizdoomEnv),
             mock.patch(
                 "gradlab.env_providers.validate_turbo_vector_env",
                 side_effect=RuntimeError("strict contract mismatch"),
