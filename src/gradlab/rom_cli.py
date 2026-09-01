@@ -56,17 +56,17 @@ def resolve_import_path(
 
 def cmd_import(args: argparse.Namespace) -> int:
     rom_path = resolve_import_path(args.rom_path)
-    from stable_retro.scripts.import_path import main as stable_retro_import
+    from env_stableretro_turbo.scripts.import_path import main as stable_retro_import
 
     previous_argv = sys.argv
-    sys.argv = ["stable_retro.import", str(rom_path)]
+    sys.argv = ["env_stableretro_turbo.import", str(rom_path)]
     try:
         stable_retro_import()
     finally:
         sys.argv = previous_argv
 
     if args.game:
-        import stable_retro as retro
+        import env_stableretro_turbo as retro
 
         imported = retro.data.get_romfile_path(args.game)
         print(f"{args.game} imported at {imported}")

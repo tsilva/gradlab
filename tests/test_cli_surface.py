@@ -47,7 +47,7 @@ for name in sorted(sys.modules):
         name == \"datasets\"
         or name == \"minari\"
         or name.startswith(\"gradlab.dataset_\")
-        or name == \"stable_retro.scripts.import_path\"
+        or name == \"env_stableretro_turbo.scripts.import_path\"
     ):
         print(name)
 """
@@ -64,7 +64,7 @@ for name in sorted(sys.modules):
             if line == "datasets"
             or line == "minari"
             or line.startswith("gradlab.dataset_")
-            or line == "stable_retro.scripts.import_path"
+            or line == "env_stableretro_turbo.scripts.import_path"
         ]
         self.assertEqual(imported, [])
 

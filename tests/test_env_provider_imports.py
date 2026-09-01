@@ -11,10 +11,10 @@ import sysconfig
 import pytest
 
 
-def test_provider_runtime_import_does_not_require_stable_retro_atari_vec_env(
+def test_provider_runtime_import_does_not_require_eager_atari_vec_env_import(
     tmp_path: Path,
 ) -> None:
-    (tmp_path / "stable_retro.py").write_text("class RetroVecEnv: pass\n")
+    (tmp_path / "env_stableretro_turbo.py").write_text("class RetroVecEnv: pass\n")
     env = dict(os.environ)
     env["PYTHONPATH"] = os.pathsep.join(
         (str(tmp_path), str(Path(__file__).parents[1] / "src"))
@@ -34,9 +34,9 @@ def test_provider_runtime_import_does_not_require_stable_retro_atari_vec_env(
 @pytest.mark.parametrize(
     ("distribution_name", "module_name"),
     [
-        ("env-stableretro-turbo", "stable_retro"),
-        ("env-supermariobrosnes-turbo-emu", "supermariobrosnes_turbo"),
-        ("env-vizdoom-turbo", "vizdoom_turbo"),
+        ("env-stableretro-turbo", "env_stableretro_turbo"),
+        ("env-supermariobrosnes-turbo-emu", "env_supermariobrosnes_turbo_emu"),
+        ("env-vizdoom-turbo", "env_vizdoom_turbo"),
     ],
 )
 def test_provider_runtime_is_loaded_from_its_installed_distribution(

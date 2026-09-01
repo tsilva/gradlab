@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import stable_retro
+import env_stableretro_turbo
 import yaml
 
 from gradlab.env import EnvConfig
@@ -49,5 +49,5 @@ def test_breakout_goal_uses_pinned_stable_retro_data() -> None:
     )
     assert Path(kwargs["info"]) == data_path
     assert Path(kwargs["scenario"]).is_relative_to(
-        Path(stable_retro.__file__).resolve().parent
+        Path(env_stableretro_turbo.__file__).resolve().parent
     )

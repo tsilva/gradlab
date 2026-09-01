@@ -110,9 +110,9 @@ class ConfigValidationTests(unittest.TestCase):
         from ale_py.vector_env import AtariVectorEnv
         from env_breakoutatari2600_turbo_native import BreakoutVecEnv
         from gradlab.bandit_env import BanditVectorEnv
-        from stable_retro import RetroVecEnv
-        from supermariobrosnes_turbo import SuperMarioBrosNesTurboVecEnv
-        from vizdoom_turbo import VizdoomTurboVecEnv
+        from env_stableretro_turbo import RetroVecEnv
+        from env_supermariobrosnes_turbo_emu import EnvSuperMarioBrosNesTurboEmuVecEnv
+        from env_vizdoom_turbo import EnvViZDoomTurboVecEnv
         from gradlab.reward_transform import PROVIDER_REWARD_TRANSFORM_KEYS
 
         constructors = {
@@ -120,8 +120,8 @@ class ConfigValidationTests(unittest.TestCase):
             "env-breakoutatari2600-turbo-native": BreakoutVecEnv,
             "gradlab": BanditVectorEnv,
             "env-stableretro-turbo": RetroVecEnv,
-            "env-supermariobrosnes-turbo-emu": SuperMarioBrosNesTurboVecEnv,
-            "env-vizdoom-turbo": VizdoomTurboVecEnv,
+            "env-supermariobrosnes-turbo-emu": EnvSuperMarioBrosNesTurboEmuVecEnv,
+            "env-vizdoom-turbo": EnvViZDoomTurboVecEnv,
         }
         for provider_id, constructor in constructors.items():
             with self.subTest(provider_id=provider_id):

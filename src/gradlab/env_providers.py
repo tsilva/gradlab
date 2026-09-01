@@ -8,10 +8,10 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import stable_retro as retro
+import env_stableretro_turbo as retro
 
 from gymnasium.vector import AutoresetMode
-from stable_retro import RetroVecEnv as DEFAULT_RETRO_VEC_ENV
+from env_stableretro_turbo import RetroVecEnv as DEFAULT_RETRO_VEC_ENV
 
 from gradlab.bandit_env import BanditVectorEnv
 from gradlab.action_contract import (
@@ -283,12 +283,12 @@ class _StartInfoAdapter:
 
 def super_mario_bros_nes_turbo_vec_env_type():
     try:
-        from supermariobrosnes_turbo import SuperMarioBrosNesTurboVecEnv
+        from env_supermariobrosnes_turbo_emu import EnvSuperMarioBrosNesTurboEmuVecEnv
     except ImportError as exc:
         raise ImportError(
             "env-supermariobrosnes-turbo-emu provider requires env-supermariobrosnes-turbo-emu",
         ) from exc
-    return SuperMarioBrosNesTurboVecEnv
+    return EnvSuperMarioBrosNesTurboEmuVecEnv
 
 
 def ale_py_atari_vector_env_type():
@@ -313,12 +313,12 @@ def breakout_turbo_vec_env_type():
 
 def vizdoom_turbo_vec_env_type():
     try:
-        from vizdoom_turbo import VizdoomTurboVecEnv
+        from env_vizdoom_turbo import EnvViZDoomTurboVecEnv
     except ImportError as exc:
         raise ImportError(
             "env-vizdoom-turbo provider requires env-vizdoom-turbo",
         ) from exc
-    return VizdoomTurboVecEnv
+    return EnvViZDoomTurboVecEnv
 
 
 def gradoom_vec_env_type():

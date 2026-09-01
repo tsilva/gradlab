@@ -41,8 +41,13 @@ def _combine_step_outputs(
 ):
     any_done = False
     for lane in range(terminated.shape[0]):
-        lane_terminated = provider_terminated[lane] or task_terminated[lane]
-        lane_truncated = (provider_truncated[lane] or task_truncated[lane]) and not lane_terminated
+        task_done = task_terminated[lane] or task_truncated[lane]
+        if task_done:
+            lane_terminated = task_terminated[lane]
+            lane_truncated = task_truncated[lane] and not lane_terminated
+        else:
+            lane_terminated = provider_terminated[lane]
+            lane_truncated = provider_truncated[lane] and not lane_terminated
         lane_done = lane_terminated or lane_truncated
         terminated[lane] = lane_terminated
         truncated[lane] = lane_truncated

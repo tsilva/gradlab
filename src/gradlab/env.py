@@ -10,7 +10,7 @@ from dataclasses import replace
 from typing import Any, Mapping, Sequence
 
 import numpy as np
-import stable_retro as retro
+import env_stableretro_turbo as retro
 
 from gradlab import env_providers as provider_runtime
 from gradlab.action_contract import compile_runtime_action_contract

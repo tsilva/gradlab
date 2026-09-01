@@ -110,7 +110,7 @@ def main() -> None:
 
     game = os.environ.get("RETRO_GAME")
     if game:
-        import stable_retro as retro
+        import env_stableretro_turbo as retro
 
         states = list(retro.data.list_states(game))[:12]
         print(f"retro_game={game}")
