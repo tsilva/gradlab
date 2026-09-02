@@ -262,6 +262,7 @@ class RunSummary:
     url: str
     metrics: Mapping[str, float | None]
     success_badges: tuple[str, ...]
+    evaluation_status: str
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -419,6 +420,32 @@ def _projected_run_success_badges(run: Mapping[str, Any]) -> tuple[str, ...]:
         for badge in GOAL_CATALOG_SUCCESS_BADGES
         if badge in explicit_badges or badge in evidenced
     )
+
+
+def _projected_run_evaluation_status(run: Mapping[str, Any]) -> str:
+    """Describe available evaluation evidence without fabricating failure."""
+
+    if "eval/success" in _projected_run_success_badges(run):
+        return "accepted"
+    records: list[Mapping[str, Any]] = []
+    evaluation = run.get("evaluation")
+    if isinstance(evaluation, Mapping) and evaluation:
+        records.append(evaluation)
+    evaluations = run.get("evaluations")
+    if isinstance(evaluations, Mapping):
+        records.extend(
+            value for value in evaluations.values() if isinstance(value, Mapping) and value
+        )
+    if not records:
+        return "not_evaluated"
+    statuses = {
+        str(record.get("status") or "").strip().lower()
+        for record in records
+        if str(record.get("status") or "").strip()
+    }
+    if statuses & {"pending", "queued", "submitted", "running", "evaluating"}:
+        return "in_progress"
+    return "not_accepted"
 
 
 def _projected_variant_success_badges(
@@ -1483,6 +1510,7 @@ class PlayCatalog:
         for raw in (*generation["active_runs"], *generation["terminal_runs"]):
             run = dict(raw)
             run["success_badges"] = list(_projected_run_success_badges(run))
+            run["evaluation_status"] = _projected_run_evaluation_status(run)
             runs.append(run)
         if include_archives:
             for reference in generation["archive_pages"]:
@@ -1498,6 +1526,7 @@ class PlayCatalog:
                 for raw in page["runs"]:
                     run = dict(raw)
                     run["success_badges"] = list(_projected_run_success_badges(run))
+                    run["evaluation_status"] = _projected_run_evaluation_status(run)
                     runs.append(run)
         return {
             "goal_slug": goal_slug,
@@ -1649,11 +1678,39 @@ class PlayCatalog:
     ) -> CatalogPage:
         normalized = str(query or "").strip().casefold()
         goal_counts = self._repository_environments()
+        possible_badge_sets = (
+            (),
+            *((badge,) for badge in GOAL_CATALOG_SUCCESS_BADGES),
+            GOAL_CATALOG_SUCCESS_BADGES,
+        )
+        candidate_environments = {
+            environment_id
+            for environment_id in goal_counts
+            if not normalized
+            or any(
+                normalized in _search_text(environment_id, *badges)
+                for badges in possible_badge_sets
+            )
+        }
+        if not candidate_environments:
+            return self._page(
+                [],
+                cursor,
+                identity={
+                    "level": "environments",
+                    "query": normalized,
+                    "repo_root": str(self.repo_root),
+                },
+            )
         environment_badges: dict[str, tuple[str, ...]] = {}
         environment_run_counts: dict[str, int] = {}
         if self.control_bucket is not None:
             badges_by_environment: dict[str, list[tuple[str, ...]]] = {}
-            repository_goals = self._repository_goals()
+            repository_goals = tuple(
+                goal
+                for goal in self._repository_goals()
+                if goal.environment_id in candidate_environments
+            )
             generation_scopes = self._control_generation_scopes(repository_goals)
             for goal, scope in zip(repository_goals, generation_scopes, strict=True):
                 badges, run_count = self._current_goal_evidence(
@@ -1859,6 +1916,7 @@ class PlayCatalog:
                         url=str(raw.get("url") or ""),
                         metrics={str(name): _safe_float(value) for name, value in metrics.items()},
                         success_badges=_projected_run_success_badges(raw),
+                        evaluation_status=_projected_run_evaluation_status(raw),
                     ).to_dict()
                 )
         summaries.sort(

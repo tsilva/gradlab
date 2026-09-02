@@ -1,3 +1,46 @@
+# Design QA — Goal configuration master-detail screen
+
+## Comparison target
+
+- Source visual truth: `/Users/tsilva/.codex/visualizations/2026/09/02/01a06296-cc5a-7550-9317-169f63a937d9/gradlab-goal-version-audit/figjam-board-final.png`
+- Normalized source crop: `/Users/tsilva/.codex/visualizations/2026/09/02/01a06296-cc5a-7550-9317-169f63a937d9/gradlab-goal-version-audit/reference-master-detail.png`
+- Rendered implementation: `/Users/tsilva/.codex/visualizations/2026/09/02/01a06296-cc5a-7550-9317-169f63a937d9/gradlab-goal-version-audit/implementation-desktop-final.png`
+- Full-view comparison: `/Users/tsilva/.codex/visualizations/2026/09/02/01a06296-cc5a-7550-9317-169f63a937d9/gradlab-goal-version-audit/comparison-desktop-final.png`
+- Focused comparison: `/Users/tsilva/.codex/visualizations/2026/09/02/01a06296-cc5a-7550-9317-169f63a937d9/gradlab-goal-version-audit/comparison-focus-final.png`
+
+The source board is 3000 × 1952 pixels. The normalized master-detail crop is 1060 × 1040 pixels. The final implementation capture is 2048 × 1058 pixels from a 2048 × 1058 CSS-pixel viewport at device scale factor 1. The source is a conceptual light-theme wireframe rather than a pixel target, so comparison was normalized around structure, hierarchy, copy, states, and interaction while retaining GradLab's checked-in dark-theme tokens and type system.
+
+State: Acrobot-v1 goal configuration browser, current default selected, one training-only Run, evaluation evidence absent. The historical configuration, exact-difference disclosure, and Run-to-Checkpoints navigation were also tested.
+
+## Findings
+
+No actionable P0, P1, or P2 findings remain.
+
+- Fonts and typography: the implementation uses GradLab's Chivo, Inter, and JetBrains Mono roles and the checked-in five-step type scale. Heading, metadata, evidence labels, and long Run descriptions remain readable without raw contract text controlling layout.
+- Spacing and layout rhythm: the desktop screen preserves the target's configuration-list / selected-detail split. It stacks into a two-column configuration list at 1024 px and a single-column flow at 390 px. There is no page-level horizontal overflow; the exact-difference table owns its horizontal scroll.
+- Colors and tokens: selected, success, accepted, warning, and neutral states use existing semantic tokens. “Not evaluated” is neutral rather than using the error color.
+- Image quality and assets: the target contains no product imagery. Visible icons use the existing Tabler sprite; no placeholder imagery, CSS art, inline SVG, or emoji substitutes were introduced.
+- Copy and content: raw `train/success` and `eval/success` keys are replaced in the selected Run with “Training target” and “Evaluation evidence.” Missing evidence reads “Not evaluated.” The historical summary is normalized and the exact contract values remain available on demand.
+- Accessibility and behavior: configuration choices and Run cards are semantic buttons with visible focus styling; selected configuration state uses `aria-pressed`; the configuration list and selected detail have accessible region labels. Current/historical selection, exact-difference expansion, responsive reflow, and “View checkpoints” navigation work. Browser console warnings/errors: none.
+
+## Focused comparison evidence
+
+The focused comparison shows the same information hierarchy in both artifacts: grouped current/previous configurations, one selected-detail panel, labeled YAML access, one Run card, explicit training/evaluation evidence, and a visible Checkpoints action. The implementation intentionally uses the product's denser scientific-editorial dark theme while preserving the proposal's decision order and disclosure model.
+
+## Comparison history
+
+1. Initial desktop pass — blocked by one P2: a historical `display_label` containing serialized contract data forced the option beyond the master-column boundary and obscured the Historical badge.
+2. Fix — added a bounded scientific summary that keeps readable normalized differences, falls back to the exact change count, and excludes serialized contract fragments; also added defensive `min-width: 0`, overflow containment, and wrapping to configuration options.
+3. Post-fix pass — the final desktop and focused comparisons show contained cards, restored badges, readable current/historical choices, and alignment with the master-detail target. Tablet and mobile captures show correct stacking with no page-level horizontal overflow. No P0/P1/P2 differences remain.
+
+## Residual test gaps
+
+- The conceptual source does not define loading, error, or empty-state visuals, so those states were validated through existing automated behavior rather than visual fidelity against the board.
+
+final result: passed
+
+---
+
 # Goal-configuration success columns design QA — 2026-08-31
 
 **Evidence**

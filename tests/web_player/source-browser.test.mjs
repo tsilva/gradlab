@@ -21,11 +21,15 @@ import {
   environmentSuccessStatus,
   formatGoalDiffValue,
   formatMetricValue,
+  groupGoalConfigurations,
   goalConfigurationPresentation,
+  goalConfigurationSummary,
   metricLabel,
   rankRunItems,
+  runEvaluationEvidenceStatus,
   runFinishPresentation,
   runStatePresentation,
+  runTrainingEvidenceStatus,
   SourceBrowser,
   successBadgeLabels,
   sortRunItems,
@@ -310,10 +314,51 @@ test("goal variant selection uses the exact live activity diff", () => {
   assert.equal(state.entries[0].path, "/train/checkpoint_freq");
 });
 
-test("selecting a goal configuration collapses the expanded list", () => {
+test("goal configurations group launch overrides under their exact revisions", () => {
+  const currentDefault = {
+    variant_id: "current-default",
+    goal_contract_sha256: "revision-current",
+    configuration_kind: "current_default",
+    source_relation: "canonical",
+  };
+  const historicalDefault = {
+    variant_id: "historical-default",
+    goal_contract_sha256: "revision-historical",
+    configuration_kind: "previous_default",
+    source_relation: "canonical",
+  };
+  const currentOverride = {
+    variant_id: "current-override",
+    goal_contract_sha256: "revision-current",
+    configuration_kind: "current_modified",
+    source_relation: "launch_override",
+  };
+  const historicalOverride = {
+    variant_id: "historical-override",
+    goal_contract_sha256: "revision-historical",
+    configuration_kind: "previous_modified",
+    source_relation: "launch_override",
+  };
+
+  const groups = groupGoalConfigurations([
+    historicalDefault,
+    currentOverride,
+    currentDefault,
+    historicalOverride,
+  ]);
+
+  assert.equal(groups.length, 2);
+  assert.equal(groups[0].revisionId, "revision-current");
+  assert.equal(groups[0].defaultVariant, currentDefault);
+  assert.deepEqual(groups[0].overrides, [currentOverride]);
+  assert.equal(groups[1].revisionId, "revision-historical");
+  assert.equal(groups[1].defaultVariant, historicalDefault);
+  assert.deepEqual(groups[1].overrides, [historicalOverride]);
+});
+
+test("selecting a goal configuration updates the master-detail selection", () => {
   const browser = Object.create(SourceBrowser.prototype);
   browser.selectedGoalVariantId = "goal-variant-current";
-  browser.goalConfigurationsExpanded = true;
   browser.goalVariantDiffController = null;
   browser.goalVariantDiffSerial = 0;
   browser.goalVariantDiff = null;
@@ -326,8 +371,26 @@ test("selecting a goal configuration collapses the expanded list", () => {
   });
 
   assert.equal(browser.selectedGoalVariantId, "goal-variant-previous");
-  assert.equal(browser.goalConfigurationsExpanded, false);
   assert.equal(renders, 1);
+});
+
+test("run evidence status distinguishes missing evaluation from failed evaluation", () => {
+  assert.deepEqual(runTrainingEvidenceStatus({ success_badges: ["train/success"] }), {
+    label: "Met",
+    className: "met",
+    description: "The Run met its declared Training Success proxy",
+  });
+  assert.equal(runTrainingEvidenceStatus({ state: "running" }).label, "In progress");
+  assert.equal(runTrainingEvidenceStatus({ state: "finished" }).label, "Not met");
+
+  assert.deepEqual(runEvaluationEvidenceStatus({ evaluation_status: "not_evaluated" }), {
+    label: "Not evaluated",
+    className: "not-evaluated",
+    description: "No evaluation evidence is available for this Run",
+  });
+  assert.equal(runEvaluationEvidenceStatus({ evaluation_status: "in_progress" }).label, "In progress");
+  assert.equal(runEvaluationEvidenceStatus({ evaluation_status: "not_accepted" }).label, "Not accepted");
+  assert.equal(runEvaluationEvidenceStatus({ success_badges: ["eval/success"] }).label, "Accepted");
 });
 
 const METRIC = "eval/full/episode/return/shaped/mean";
@@ -418,7 +481,7 @@ test("scientific success badges are ordered, independent, and evidence-labelled"
   assert.match(styles, /\.success-badge\.evaluation/);
   assert.match(
     styles,
-    /\.success-badge\.training\s*\{[^}]*font-size: \.6875rem;[^}]*font-weight: var\(--font-weight-regular\);/,
+    /\.success-badge\.training\s*\{[^}]*font-size: var\(--font-size-xs\);[^}]*font-weight: var\(--font-weight-regular\);/,
   );
 });
 
@@ -554,7 +617,19 @@ test("goal diff values preserve JSON types", () => {
   assert.equal(formatGoalDiffValue(null, { unavailable: true }), "—");
 });
 
-test("goal configuration metadata and exact changes render as tables", async () => {
+test("goal configuration summaries preserve useful science without leaking raw contracts", () => {
+  const presentation = {
+    kind: "previous_default",
+    differenceCount: 5,
+    differenceLabel: "5 changes",
+  };
+  assert.equal(goalConfigurationSummary({
+    display_label: "Eval → {\"acceptance\":[{\"metric\":\"eval/full/episode/return/shaped/mean\"}]} · Evaluation mode training_only → evaluated · +3 more",
+  }, presentation), "Evaluation mode training_only → evaluated · 5 changes total");
+  assert.equal(goalConfigurationSummary({ display_label: "" }, presentation), "5 changes from current goal");
+});
+
+test("goal configurations render as a master-detail browser with exact changes", async () => {
   const source = await readFile(
     new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
     "utf8",
@@ -564,63 +639,23 @@ test("goal configuration metadata and exact changes render as tables", async () 
     "utf8",
   );
 
-  assert.match(
-    source,
-    /"Configuration",\s*"Differences",\s*"Runs",\s*"train\/success",\s*"eval\/success",\s*"First used",\s*"Last activity"/,
-  );
-  assert.match(source, /this\.goalConfigurationsExpanded \? variants : \[selected\]/);
-  assert.match(source, /this\.goalConfigurationsExpanded = false;\s*this\.renderView\(\);/);
+  assert.match(source, /layout\.className = "goal-configuration-layout";/);
+  assert.match(source, /list\.setAttribute\("aria-label", "Goal configurations"\);/);
+  assert.match(source, /groupGoalConfigurations\(this\.items\)/);
+  assert.match(source, /appendGroups\("Current revision"/);
+  assert.match(source, /appendGroups\("Previous revisions"/);
+  assert.match(source, /renderGoalConfigurationOption\(entry, selected/);
+  assert.match(source, /option\.setAttribute\("aria-pressed", String\(isSelected\)\);/);
+  assert.match(source, /presentation\.runLabel} · Last activity/);
+  assert.match(source, /First used \$\{presentation\.firstUsedDate}/);
   assert.doesNotMatch(source, /Older goal/);
   assert.doesNotMatch(source, /Selected goal version/);
-  assert.doesNotMatch(source, /presentation\.runCount === 1 \? "View run"/);
-  assert.match(source, /inspect\.title = "View goal YAML"/);
-  assert.match(source, /radio\.addEventListener\("change", \(\) => this\.selectGoalVariant\(variant\)\);/);
-  assert.match(source, /sourceLabel: "Current"/);
-  assert.match(styles, /\.goal-configuration-toggle \{[^}]*text-transform: none;/);
-  assert.match(
-    styles,
-    /\.goal-configuration-table \{ min-width: 81rem; table-layout: fixed; \}/,
-  );
-  assert.match(
-    source,
-    /"configuration",\s*"differences",\s*"runs",\s*"train-success",\s*"eval-success",\s*"first-used",\s*"last-activity"/,
-  );
-  assert.match(styles, /\.goal-configuration-column\.differences \{ width: 18rem; \}/);
-  assert.match(styles, /\.goal-configuration-column\.runs \{ width: 6rem; \}/);
-  assert.match(
-    styles,
-    /\.goal-configuration-column\.train-success,\s*\.goal-configuration-column\.eval-success \{ width: 8\.5rem; \}/,
-  );
-  assert.match(
-    styles,
-    /\.goal-configuration-table th\.goal-configuration-status \{ text-align: center; \}/,
-  );
-  assert.match(
-    styles,
-    /\.environment-table \.environment-status,\s*\.goal-table \.goal-status,\s*\.goal-configuration-table \.goal-configuration-status \{ text-align: center; \}/,
-  );
-  assert.match(source, /environmentSuccessStatus\(variant, "train\/success"\)/);
-  assert.match(source, /environmentSuccessStatus\(variant, "eval\/success"\)/);
-  assert.match(
-    source,
-    /row\.append\(\s*configuration,\s*differences,\s*runs,\s*trainingCell,\s*evaluationCell,\s*firstUsed,\s*lastActivity,/,
-  );
-  assert.match(
-    styles,
-    /\.goal-configuration-column\.first-used,\s*\.goal-configuration-column\.last-activity \{ width: 11rem; \}/,
-  );
-  assert.match(
-    source,
-    /\["First used", "Last activity"\]\.includes\(label\)[\s\S]*?cell\.classList\.add\("goal-configuration-date"\)/,
-  );
-  assert.match(
-    styles,
-    /\.goal-configuration-table \.goal-configuration-date\s*\{[^}]*text-align: left;/,
-  );
-  assert.match(
-    styles,
-    /\.goal-configuration-table-scroll,\s*\.goal-configuration-diff-scroll \{ min-width: 0; overflow: auto; \}/,
-  );
+  assert.match(source, /button\("View goal YAML"/);
+  assert.doesNotMatch(source, /role", "treegrid"/);
+  assert.doesNotMatch(styles, /\.goal-configuration-table/);
+  assert.match(styles, /\.goal-configuration-layout \{[^}]*grid-template-columns: minmax\(18rem, 26rem\) minmax\(0, 1fr\);/);
+  assert.match(styles, /\.goal-configuration-option\.selected \{/);
+  assert.match(styles, /@media \(max-width: 1100px\)[\s\S]*\.goal-configuration-layout \{ grid-template-columns: 1fr; \}/);
   assert.match(source, /\["Operation", "Exact contract path", "Before", "After"\]/);
   assert.match(
     source,
@@ -640,7 +675,7 @@ test("goal configuration metadata and exact changes render as tables", async () 
   );
 });
 
-test("goal activity renders recent runs as a status table without section chrome", async () => {
+test("goal activity renders recent runs as action-oriented evidence cards", async () => {
   const source = await readFile(
     new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
     "utf8",
@@ -650,32 +685,21 @@ test("goal activity renders recent runs as a status table without section chrome
   assert.doesNotMatch(source, /If-None-Match/);
   assert.match(source, /Array\.isArray\(variant\.current_diff\)/);
   assert.doesNotMatch(source, /Goal diff request failed/);
-  assert.match(source, /this\.activityHasActiveRuns = Boolean\(payload\.has_active_runs\)/);
-  assert.match(
-    source,
-    /this\.route\.level === "goal_variants"\s*&& this\.activityHasActiveRuns/,
-  );
-  assert.doesNotMatch(source, /Runs using this configuration/);
-  assert.doesNotMatch(source, /goal-configuration-runs-header/);
+  assert.doesNotMatch(source, /activityHasActiveRuns/);
+  assert.doesNotMatch(source, /setInterval/);
+  assert.match(source, /heading\.className = "goal-configuration-runs-header";/);
+  assert.match(source, /title\.textContent = `Runs \(\$\{runCount\.toLocaleString\(\)\}\)`;/);
   assert.doesNotMatch(source, /goal-configuration-run-sort/);
   assert.doesNotMatch(source, /goalVariantRunSort/);
   assert.match(source, /const baseItems = page\?\.items\?\.length\s*\? page\.items\s*:\s*variant\.recent_runs;/);
-  assert.match(source, /table\.className = "goal-configuration-run-table"/);
-  assert.match(
-    source,
-    /\["Run", "train\/success", "eval\/success", "Last activity"\]/,
-  );
-  assert.doesNotMatch(source, /goal-configuration-run-column\.result/);
+  assert.match(source, /list\.className = "goal-configuration-run-list";/);
+  assert.match(source, /navigate\.className = "goal-configuration-run-card";/);
   assert.match(source, /const presentation = runStatePresentation\(run\);/);
-  assert.match(source, /state\.title = statusName;/);
-  assert.match(source, /state\.setAttribute\("aria-label", statusName\);/);
-  assert.match(source, /navigate\.append\(state, identity\);/);
-  assert.match(source, /environmentSuccessStatus\(runEvidence, "train\/success"\)/);
-  assert.match(source, /environmentSuccessStatus\(runEvidence, "eval\/success"\)/);
-  assert.match(
-    source,
-    /row\.append\(runCell, trainingCell, evaluationCell, updated\);/,
-  );
+  assert.match(source, /runTrainingEvidenceStatus\(run\)/);
+  assert.match(source, /runEvaluationEvidenceStatus\(run\)/);
+  assert.match(source, /addEvidence\("Training target"/);
+  assert.match(source, /addEvidence\("Evaluation evidence"/);
+  assert.match(source, /action\.append\(document\.createTextNode\("View checkpoints"\), icon\("arrow-right"\)\);/);
   assert.match(source, /page\?\.nextCursor \? "Load more" : "Load older runs"/);
 
   const styles = await readFile(
@@ -684,65 +708,23 @@ test("goal activity renders recent runs as a status table without section chrome
   );
   assert.match(
     styles,
-    /\.goal-configuration-runs\s*\{[^}]*padding: 0;/,
+    /\.goal-configuration-runs\s*\{[^}]*padding: 1\.15rem;/,
   );
-  assert.match(styles, /\.goal-configuration-run-table \{ min-width: 48rem; table-layout: fixed; \}/);
-  assert.match(
-    styles,
-    /\.goal-configuration-run-state \.icon \{ width: \.9rem; height: \.9rem; \}/,
-  );
-  assert.match(
-    styles,
-    /\.goal-configuration-run-table \.goal-configuration-run-status\s*\{[^}]*text-align: center;/,
-  );
-  assert.match(
-    styles,
-    /\.goal-configuration-run-table \.goal-configuration-run-updated \{ text-align: left; \}/,
-  );
+  assert.match(styles, /\.goal-configuration-run-card \{/);
+  assert.match(styles, /\.goal-configuration-run-evidence \{[^}]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\);/);
+  assert.match(styles, /\.goal-run-evidence\.not-evaluated \{/);
+  assert.doesNotMatch(styles, /\.goal-configuration-run-table/);
 });
 
-test("run checkpoint pages refresh only on explicit request", (context) => {
-  const originalLocation = globalThis.location;
-  const originalWindow = globalThis.window;
-  let intervalStarts = 0;
-  globalThis.location = { pathname: "/embedded-player", search: "", hash: "" };
-  globalThis.window = {
-    setInterval() {
-      intervalStarts += 1;
-      return 73;
-    },
-  };
-  context.after(() => {
-    if (originalLocation === undefined) delete globalThis.location;
-    else globalThis.location = originalLocation;
-    if (originalWindow === undefined) delete globalThis.window;
-    else globalThis.window = originalWindow;
-  });
-
-  const browser = new SourceBrowser(
-    {},
-    { replaceChildren() {}, hidden: false },
-    {
-      token: "token",
-      command() {},
-      getState: () => ({ hasControl: true }),
-      showToast() {},
-    },
+test("catalog pages refresh only on explicit request", async () => {
+  const source = await readFile(
+    new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
+    "utf8",
   );
-  browser.app = { phase: "selecting" };
-  browser.route = { level: "runs", run_id: "gradlab-run" };
-  browser.activityHasActiveRuns = true;
 
-  browser.updatePolling();
-
-  assert.equal(intervalStarts, 0);
-  assert.equal(browser.pollTimer, null);
-
-  browser.route = { level: "goal_variants" };
-  browser.updatePolling();
-
-  assert.equal(intervalStarts, 1);
-  assert.equal(browser.pollTimer, 73);
+  assert.doesNotMatch(source, /setInterval/);
+  assert.match(source, /refresh\.addEventListener\("click", \(\) => \{/);
+  assert.match(source, /this\.load\(\{ force: true, quiet: Boolean\(this\.items\.length\) \}\)/);
 });
 
 test("run table hover highlights only the complete row", async () => {
@@ -938,7 +920,7 @@ test("source discovery progressively discloses secondary controls", async () => 
     "utf8",
   );
 
-  assert.match(source, /return "Choose a goal version"/);
+  assert.match(source, /return "Choose a goal configuration"/);
   assert.match(source, /source-search-disclosure/);
   assert.match(source, /disclosure\.open = this\.searchOpen/);
   assert.match(source, /close\.setAttribute\("aria-label", "Close search"\);/);
@@ -947,7 +929,7 @@ test("source discovery progressively discloses secondary controls", async () => 
   assert.match(styles, /grid-template-columns: auto minmax\(0, 1fr\) auto;/);
   assert.doesNotMatch(source, /resultCount > 8/);
   assert.match(html, /id="contract-search-disclosure" class="contract-search-disclosure"/);
-  assert.match(source, /Contract differences · \$\{presentation\.differenceLabel\}/);
+  assert.match(source, /Exact contract differences · \$\{presentation\.differenceLabel\}/);
   assert.doesNotMatch(source, /Evaluation & technical details/);
   assert.doesNotMatch(source, /Compare all checkpoints/);
   assert.match(source, /body\.append\(this\.renderEvaluationActions\(\), results\)/);
@@ -964,12 +946,16 @@ test("catalog refresh animates and disables only the header refresh control", as
   );
 
   assert.doesNotMatch(source, /source-list-loading-indicator/);
-  assert.match(source, /const refresh = button\("", \{ iconName: "refresh", quiet: true \}\)/);
-  assert.match(source, /refresh\.classList\.add\("icon-only"\)/);
+  assert.match(source, /const labelsRefresh = this\.route\.level === "goal_variants";/);
+  assert.match(source, /const refresh = button\(labelsRefresh \? "Refresh" : "", \{ iconName: "refresh", quiet: true \}\)/);
+  assert.match(source, /if \(!labelsRefresh\) refresh\.classList\.add\("icon-only"\)/);
   assert.match(source, /if \(this\.loading\) refresh\.classList\.add\("refreshing"\)/);
   assert.match(source, /refresh\.setAttribute\("aria-label", this\.loading \? "Refreshing" : "Refresh"\)/);
   assert.match(source, /refresh\.disabled = this\.loading/);
-  assert.doesNotMatch(source, /button\("Refresh", \{ iconName: "refresh", quiet: true \}\)/);
+  assert.match(
+    source,
+    /if \(this\.loading && !this\.items\.length && !this\.query\.trim\(\)\) return body;/,
+  );
   assert.doesNotMatch(source, /loadingState\("Loading catalog…"\)/);
   assert.doesNotMatch(source, /Some catalog evidence is unavailable/);
   assert.doesNotMatch(styles, /source-list-loading-indicator/);
@@ -1010,7 +996,6 @@ test("returning to environments keeps the last table visible during refresh", as
   sourceBrowser.sourceItems = [{ goal_id: "Level1-1" }];
   sourceBrowser.items = [...sourceBrowser.sourceItems];
   sourceBrowser.renderView = () => {};
-  sourceBrowser.updatePolling = () => {};
   const loads = [];
   sourceBrowser.ensureLoaded = (options) => loads.push(options);
 
@@ -1066,7 +1051,6 @@ test("returning to goals restores the last table without refreshing", async (con
     goal_id: "Level1-1",
   };
   sourceBrowser.renderView = () => {};
-  sourceBrowser.updatePolling = () => {};
 
   sourceBrowser.applyRoute({
     level: "goals",
@@ -1113,7 +1097,6 @@ test("refreshing cached goals keeps old rows until the new catalog arrives", asy
   sourceBrowser.sourceItems = [{ goal_id: "Old", recipe_count: 1 }];
   sourceBrowser.items = [...sourceBrowser.sourceItems];
   sourceBrowser.renderView = () => {};
-  sourceBrowser.updatePolling = () => {};
 
   const refresh = sourceBrowser.load({ force: true, quiet: true });
   assert.deepEqual(sourceBrowser.items, [{ goal_id: "Old", recipe_count: 1 }]);
@@ -1768,7 +1751,6 @@ test("runless run routes return to goal versions instead of rendering run select
   browser.applyRoute = SourceBrowser.prototype.applyRoute;
   browser.renderView = () => {};
   browser.ensureLoaded = () => {};
-  browser.updatePolling = () => {};
   browser.resetGoalVariantDetail = () => {};
   browser.restoreEnvironmentCatalog = () => false;
   browser.restoreGoalCatalog = () => false;
@@ -1813,7 +1795,6 @@ test("late catalog responses cannot populate a newer route", async (context) => 
     },
   );
   sourceBrowser.renderView = () => {};
-  sourceBrowser.updatePolling = () => {};
   const environmentsRequest = sourceBrowser.load();
   assert.equal(requests.length, 1);
   assert.match(requests[0].url, /^\/api\/catalog\/environments/);

@@ -210,6 +210,75 @@ export function goalConfigurationPresentation(item, nowValue = Date.now()) {
   };
 }
 
+export function goalConfigurationSummary(item, presentation) {
+  if (presentation.kind === "current_default") return "Matches checked-in goal";
+  const label = String(item?.display_label || "").trim();
+  const readableParts = label
+    .split(" · ")
+    .map((part) => part.trim())
+    .filter((part) => (
+      part
+      && part.length <= 96
+      && !/[\[{]/.test(part)
+      && !/^\+\d+ more$/i.test(part)
+    ));
+  if (readableParts.length) {
+    const summary = readableParts.slice(0, 2).join(" · ");
+    const count = presentation.differenceCount;
+    if (count !== null && count > readableParts.length) {
+      return `${summary} · ${count.toLocaleString()} changes total`;
+    }
+    return summary;
+  }
+  return `${presentation.differenceLabel} from current goal`;
+}
+
+export function groupGoalConfigurations(items) {
+  const variants = Array.isArray(items) ? items : [];
+  const groups = [];
+  const byRevision = new Map();
+  const revisionId = (variant) => String(
+    variant?.goal_contract_sha256
+    || variant?.variant_id
+    || "unknown-goal-revision"
+  );
+  const ensureGroup = (variant) => {
+    const id = revisionId(variant);
+    let group = byRevision.get(id);
+    if (!group) {
+      group = {
+        revisionId: id,
+        defaultVariant: null,
+        overrides: [],
+        current: false,
+      };
+      byRevision.set(id, group);
+      groups.push(group);
+    }
+    if (String(variant?.configuration_kind || "").startsWith("current_")) {
+      group.current = true;
+    }
+    return group;
+  };
+
+  const isDefault = (variant) => (
+    variant?.source_relation === "canonical"
+    || String(variant?.configuration_kind || "").endsWith("_default")
+  );
+
+  variants
+    .filter(isDefault)
+    .forEach((variant) => {
+      ensureGroup(variant).defaultVariant = variant;
+    });
+  variants
+    .filter((variant) => !isDefault(variant))
+    .forEach((variant) => {
+      ensureGroup(variant).overrides.push(variant);
+    });
+  return groups.sort((left, right) => Number(right.current) - Number(left.current));
+}
+
 export function formatGoalDiffValue(value, { unavailable = false } = {}) {
   if (unavailable) return "—";
   if (value === undefined) return "—";
@@ -784,6 +853,86 @@ export function environmentSuccessStatus(item, badge) {
   };
 }
 
+export function runTrainingEvidenceStatus(item) {
+  if (successBadgeLabels(item).includes("train/success")) {
+    return {
+      label: "Met",
+      className: "met",
+      description: "The Run met its declared Training Success proxy",
+    };
+  }
+  const state = String(item?.state || "").trim().toLowerCase();
+  if (["pending", "queued", "starting", "running"].includes(state)) {
+    return {
+      label: "In progress",
+      className: "in-progress",
+      description: "The Run is still in progress",
+    };
+  }
+  return {
+    label: "Not met",
+    className: "not-met",
+    description: "The Run did not meet its declared Training Success proxy",
+  };
+}
+
+export function runEvaluationEvidenceStatus(item) {
+  if (successBadgeLabels(item).includes("eval/success")) {
+    return {
+      label: "Accepted",
+      className: "accepted",
+      description: "Verified evaluation evidence satisfied Acceptance",
+    };
+  }
+  const projected = String(item?.evaluation_status || "").trim().toLowerCase();
+  if (projected === "in_progress") {
+    return {
+      label: "In progress",
+      className: "in-progress",
+      description: "Evaluation is in progress",
+    };
+  }
+  if (projected === "not_accepted") {
+    return {
+      label: "Not accepted",
+      className: "not-accepted",
+      description: "Available evaluation evidence did not satisfy Acceptance",
+    };
+  }
+  if (projected === "not_evaluated") {
+    return {
+      label: "Not evaluated",
+      className: "not-evaluated",
+      description: "No evaluation evidence is available for this Run",
+    };
+  }
+  const evaluations = item?.evaluations;
+  const records = [
+    ...(item?.evaluation && typeof item.evaluation === "object" ? [item.evaluation] : []),
+    ...(evaluations && typeof evaluations === "object" ? Object.values(evaluations) : []),
+  ].filter((record) => record && typeof record === "object");
+  const statuses = records.map((record) => String(record.status || "").trim().toLowerCase());
+  if (statuses.some((status) => ["pending", "queued", "submitted", "running", "evaluating"].includes(status))) {
+    return {
+      label: "In progress",
+      className: "in-progress",
+      description: "Evaluation is in progress",
+    };
+  }
+  if (records.length) {
+    return {
+      label: "Not accepted",
+      className: "not-accepted",
+      description: "Available evaluation evidence did not satisfy Acceptance",
+    };
+  }
+  return {
+    label: "Not evaluated",
+    className: "not-evaluated",
+    description: "No evaluation evidence is available for this Run",
+  };
+}
+
 function decodePathPart(value) {
   try {
     return decodeURIComponent(value);
@@ -1076,17 +1225,14 @@ export class SourceBrowser {
     this.loadingKey = "";
     this.catalogRequestTimeoutMs = catalogRequestTimeoutMs;
     this.searchTimer = null;
-    this.pollTimer = null;
     this.selectedCheckpoints = new Set();
     this.evaluating = false;
     this.selectedGoalVariantId = "";
-    this.goalConfigurationsExpanded = false;
     this.goalVariantDiff = null;
     this.goalVariantDiffController = null;
     this.goalVariantDiffSerial = 0;
     this.goalVariantRunPages = new Map();
     this.activityRevision = "";
-    this.activityHasActiveRuns = false;
     this.autoSelectedRoute = "";
     this.playbackRoute = null;
     this.activeBreadcrumbRoute = "";
@@ -1188,13 +1334,10 @@ export class SourceBrowser {
     if (this.app.phase === "selecting") {
       this.ensureLoaded({ quiet: restoredCatalog });
     }
-    this.updatePolling();
   }
 
   stop({ preserveBreadcrumbs = false, preserveCheckpointNavigation = false } = {}) {
     clearTimeout(this.searchTimer);
-    clearInterval(this.pollTimer);
-    this.pollTimer = null;
     this.requestController?.abort();
     this.requestController = null;
     this.requestSerial += 1;
@@ -1389,11 +1532,9 @@ export class SourceBrowser {
     this.goalVariantDiffController = null;
     this.goalVariantDiffSerial += 1;
     this.selectedGoalVariantId = "";
-    this.goalConfigurationsExpanded = false;
     this.goalVariantDiff = null;
     this.goalVariantRunPages.clear();
     this.activityRevision = "";
-    this.activityHasActiveRuns = false;
   }
 
   inspectGoal(goal) {
@@ -1457,7 +1598,6 @@ export class SourceBrowser {
       this.selectedGoalVariantId = variantId;
       this.goalVariantDiff = this.goalVariantDiffFromActivity(variant);
     }
-    this.goalConfigurationsExpanded = false;
     this.renderView();
   }
 
@@ -1663,7 +1803,6 @@ export class SourceBrowser {
           : "";
         if (this.route.level === "goal_variants") {
           this.activityRevision = String(payload.revision || "");
-          this.activityHasActiveRuns = Boolean(payload.has_active_runs);
         }
         this.metricColumns = Array.isArray(payload.metric_columns)
           ? payload.metric_columns
@@ -1723,7 +1862,6 @@ export class SourceBrowser {
         this.loading = false;
         this.loadingKey = "";
         this.renderView();
-        this.updatePolling();
         if (
           key !== this.routeKey()
           && this.loadedKey !== this.routeKey()
@@ -1801,23 +1939,6 @@ export class SourceBrowser {
     }
   }
 
-  updatePolling() {
-    const shouldPoll = (
-      this.app.phase === "selecting"
-      && this.route.level === "goal_variants"
-      && this.activityHasActiveRuns
-    );
-    if (shouldPoll && this.pollTimer === null) {
-      this.pollTimer = window.setInterval(() => {
-        this.loadedKey = "";
-        this.load({ quiet: true });
-      }, 5000);
-    } else if (!shouldPoll && this.pollTimer !== null) {
-      clearInterval(this.pollTimer);
-      this.pollTimer = null;
-    }
-  }
-
   applyRoute(route, { seedItems = null } = {}) {
     this.route = canonicalSourceRoute({ ...this.route, ...route });
     this.query = "";
@@ -1852,7 +1973,6 @@ export class SourceBrowser {
     this.hydrateInitialEnvironments();
     this.renderView();
     this.ensureLoaded({ quiet: restoredCatalog });
-    this.updatePolling();
   }
 
   syncUrl(mode = "push") {
@@ -1992,8 +2112,9 @@ export class SourceBrowser {
     head.append(titleBlock);
 
     if (this.app.phase === "selecting") {
-      const refresh = button("", { iconName: "refresh", quiet: true });
-      refresh.classList.add("icon-only");
+      const labelsRefresh = this.route.level === "goal_variants";
+      const refresh = button(labelsRefresh ? "Refresh" : "", { iconName: "refresh", quiet: true });
+      if (!labelsRefresh) refresh.classList.add("icon-only");
       if (this.loading) refresh.classList.add("refreshing");
       refresh.setAttribute("aria-label", this.loading ? "Refreshing" : "Refresh");
       refresh.title = this.loading ? "Refreshing this list" : "Refresh this list";
@@ -2035,13 +2156,17 @@ export class SourceBrowser {
       if (this.route.level === "goal_variants") {
         const description = document.createElement("p");
         description.className = "source-description";
-        description.textContent = (
-          "Each configuration groups runs with the same resolved goal behavior. "
-          + "Select one to inspect its exact differences from the current checked-in goal."
-        );
+        description.textContent = "Select the scientific goal configuration used by the Run you want to inspect.";
         shell.append(description);
       }
-      shell.append(this.renderSearch());
+      if (
+        this.route.level !== "goal_variants"
+        || this.sourceItems.length > 8
+        || this.query
+        || this.searchOpen
+      ) {
+        shell.append(this.renderSearch());
+      }
       shell.append(this.renderResults());
     }
     this.root.replaceChildren(shell);
@@ -2061,7 +2186,7 @@ export class SourceBrowser {
       return "Runs · choose a checkpoint";
     }
     if (this.route.level === "goal_variants") {
-      return "Choose a goal version";
+      return "Choose a goal configuration";
     }
     if (this.route.level === "goals") return "Choose a goal";
     return "Choose an environment";
@@ -2252,7 +2377,7 @@ export class SourceBrowser {
       body.classList.add("loading");
       if (!this.items.length) body.classList.add("loading-empty");
     }
-    if (this.loading && !this.items.length) return body;
+    if (this.loading && !this.items.length && !this.query.trim()) return body;
     if (!this.items.length) {
       const empty = document.createElement("div");
       empty.className = "source-empty";
@@ -2491,6 +2616,7 @@ export class SourceBrowser {
       variant,
       presentation: goalConfigurationPresentation(variant),
     }));
+    const groups = groupGoalConfigurations(this.items);
     const selected = variants.find(
       ({ variant }) => variant.variant_id === this.selectedGoalVariantId,
     ) || variants.find(({ presentation }) => presentation.kind === "current_default")
@@ -2500,189 +2626,130 @@ export class SourceBrowser {
     if (this.goalVariantDiff?.variantId !== this.selectedGoalVariantId) {
       this.goalVariantDiff = this.goalVariantDiffFromActivity(selected.variant);
     }
+    const entriesById = new Map(
+      variants.map((entry) => [String(entry.variant.variant_id || ""), entry]),
+    );
+    const layout = document.createElement("div");
+    layout.className = "goal-configuration-layout";
+    const list = document.createElement("aside");
+    list.className = "goal-configuration-list";
+    list.setAttribute("aria-label", "Goal configurations");
+    const listHeading = document.createElement("h3");
+    listHeading.textContent = "Goal configurations";
+    list.append(listHeading);
 
-    const tableScroll = document.createElement("div");
-    tableScroll.className = "goal-configuration-table-scroll";
-    const table = document.createElement("table");
-    table.className = "goal-configuration-table";
-    const columns = document.createElement("colgroup");
-    [
-      "configuration",
-      "differences",
-      "runs",
-      "train-success",
-      "eval-success",
-      "first-used",
-      "last-activity",
-    ].forEach((name) => {
-      const column = document.createElement("col");
-      column.className = `goal-configuration-column ${name}`;
-      columns.append(column);
-    });
-    const head = document.createElement("thead");
-    const headerRow = document.createElement("tr");
-    [
-      "Configuration",
-      "Differences",
-      "Runs",
-      "train/success",
-      "eval/success",
-      "First used",
-      "Last activity",
-    ].forEach((label) => {
-      const cell = document.createElement("th");
-      cell.scope = "col";
-      if (["train/success", "eval/success"].includes(label)) {
-        cell.classList.add("goal-configuration-status");
-      }
-      if (["First used", "Last activity"].includes(label)) {
-        cell.classList.add("goal-configuration-date");
-      }
-      if (label === "Configuration" && variants.length > 1) {
-        cell.className = "goal-configuration-heading";
-        const heading = document.createElement("span");
-        heading.textContent = label;
-        const otherCount = variants.length - 1;
-        const toggle = button(
-          this.goalConfigurationsExpanded
-            ? "Show selected only"
-            : `Show ${otherCount.toLocaleString()} more`,
-          { quiet: true },
-        );
-        toggle.classList.add("goal-configuration-toggle");
-        toggle.setAttribute("aria-expanded", String(this.goalConfigurationsExpanded));
-        toggle.setAttribute(
-          "aria-label",
-          this.goalConfigurationsExpanded
-            ? "Show only the selected goal configuration"
-            : `Show ${otherCount.toLocaleString()} other goal configurations`,
-        );
-        toggle.addEventListener("click", () => {
-          this.goalConfigurationsExpanded = !this.goalConfigurationsExpanded;
-          this.renderView();
+    const appendGroups = (label, targetGroups) => {
+      if (!targetGroups.length) return;
+      const section = document.createElement("section");
+      section.className = "goal-configuration-group";
+      const heading = document.createElement("h4");
+      heading.textContent = label;
+      section.append(heading);
+      targetGroups.forEach((group) => {
+        const candidates = [group.defaultVariant, ...group.overrides]
+          .filter(Boolean)
+          .map((variant) => entriesById.get(String(variant.variant_id || "")))
+          .filter(Boolean);
+        candidates.forEach((entry) => {
+          section.append(this.renderGoalConfigurationOption(entry, selected, {
+            currentRevision: group.current,
+            revisionId: group.revisionId,
+          }));
         });
-        cell.append(heading, toggle);
-      } else {
-        cell.textContent = label;
-      }
-      headerRow.append(cell);
-    });
-    head.append(headerRow);
-    const body = document.createElement("tbody");
-
-    const displayedVariants = this.goalConfigurationsExpanded ? variants : [selected];
-    displayedVariants.forEach(({ variant, presentation }) => {
-      const row = document.createElement("tr");
-      const isSelected = variant.variant_id === selected.variant.variant_id;
-      row.className = `goal-configuration-row${isSelected ? " selected" : ""}`;
-      const configuration = document.createElement("td");
-      const configurationContent = document.createElement("div");
-      configurationContent.className = "goal-configuration-cell";
-      const choice = document.createElement("label");
-      choice.className = "goal-configuration-choice";
-      const radio = document.createElement("input");
-      radio.type = "radio";
-      radio.name = "goal-configuration";
-      radio.value = String(variant.variant_id || "");
-      radio.checked = isSelected;
-      radio.addEventListener("change", () => this.selectGoalVariant(variant));
-      const badges = document.createElement("span");
-      badges.className = "goal-configuration-badges";
-      if (presentation.sourceLabel) {
-        const sourceBadge = document.createElement("span");
-        sourceBadge.className = "goal-configuration-badge current";
-        sourceBadge.textContent = presentation.sourceLabel;
-        badges.append(sourceBadge);
-      }
-      const behaviorBadge = document.createElement("span");
-      behaviorBadge.className = "goal-configuration-badge behavior";
-      behaviorBadge.textContent = presentation.behaviorLabel;
-      badges.append(behaviorBadge);
-      choice.append(radio, badges);
-      configurationContent.append(choice);
-      if (isSelected) {
-        const inspect = button("", { iconName: "code", quiet: true });
-        inspect.classList.add("goal-configuration-inspect", "icon-only");
-        inspect.title = "View goal YAML";
-        inspect.setAttribute("aria-label", inspect.title);
-        inspect.addEventListener("click", () => {
-          const inspection = presentation.kind === "current_default"
-            ? this.inspectGoal({ goal_id: this.route.goal_id })
-            : this.inspectGoalVariant(variant);
-          void inspection.catch(
-            (error) => this.showToast(String(error?.message || error), true),
-          );
-        });
-        configurationContent.append(inspect);
-      }
-      configuration.append(configurationContent);
-
-      const differences = document.createElement("td");
-      differences.className = `goal-configuration-difference${presentation.comparisonAvailable ? "" : " unavailable"}`;
-      differences.textContent = presentation.differenceLabel;
-      const runs = document.createElement("td");
-      runs.className = "goal-configuration-number";
-      runs.textContent = presentation.runCount.toLocaleString();
-      const trainingCell = document.createElement("td");
-      const trainingStatus = environmentSuccessStatus(variant, "train/success");
-      trainingCell.className = `goal-configuration-status ${trainingStatus.className}`;
-      trainingCell.textContent = trainingStatus.label;
-      trainingCell.title = trainingStatus.description;
-      trainingCell.setAttribute("aria-label", trainingStatus.description);
-      const evaluationCell = document.createElement("td");
-      const evaluationStatus = environmentSuccessStatus(variant, "eval/success");
-      evaluationCell.className = `goal-configuration-status ${evaluationStatus.className}`;
-      evaluationCell.textContent = evaluationStatus.label;
-      evaluationCell.title = evaluationStatus.description;
-      evaluationCell.setAttribute("aria-label", evaluationStatus.description);
-      const firstUsed = document.createElement("td");
-      firstUsed.className = "goal-configuration-date";
-      firstUsed.textContent = presentation.firstUsedDate;
-      const lastActivity = document.createElement("td");
-      lastActivity.className = "goal-configuration-date";
-      lastActivity.textContent = presentation.lastActivityDate;
-      row.append(
-        configuration,
-        differences,
-        runs,
-        trainingCell,
-        evaluationCell,
-        firstUsed,
-        lastActivity,
-      );
-      body.append(row);
-    });
-    table.append(columns, head, body);
-    tableScroll.append(table);
-    container.append(tableScroll, this.renderGoalVariantDetail(selected));
+      });
+      list.append(section);
+    };
+    appendGroups("Current revision", groups.filter((group) => group.current));
+    appendGroups("Previous revisions", groups.filter((group) => !group.current));
+    layout.append(list, this.renderGoalConfigurationPanel(selected));
+    container.append(layout);
 
     return container;
   }
 
-  renderGoalVariantDetail({ variant, presentation }) {
-    const section = document.createElement("section");
-    section.className = "goal-configuration-detail";
-    section.append(this.renderEmbeddedGoalRuns(variant));
+  renderGoalConfigurationOption(entry, selected, { currentRevision, revisionId }) {
+    const { variant, presentation } = entry;
+    const isSelected = variant.variant_id === selected.variant.variant_id;
+    const option = document.createElement("button");
+    option.type = "button";
+    option.className = `goal-configuration-option${isSelected ? " selected" : ""}`;
+    option.setAttribute("aria-pressed", String(isSelected));
+    option.addEventListener("click", () => this.selectGoalVariant(variant));
+    const header = document.createElement("span");
+    header.className = "goal-configuration-option-header";
+    const title = document.createElement("strong");
+    title.textContent = presentation.behaviorLabel;
+    const badge = document.createElement("span");
+    badge.className = `goal-configuration-badge${currentRevision ? " current" : ""}`;
+    badge.textContent = currentRevision ? "Current" : "Historical";
+    header.append(title, badge);
+    const summary = document.createElement("span");
+    summary.className = "goal-configuration-option-summary";
+    summary.textContent = goalConfigurationSummary(variant, presentation);
+    const activity = document.createElement("span");
+    activity.className = "goal-configuration-option-meta";
+    activity.textContent = `${presentation.runLabel} · Last activity ${presentation.lastActivityDate}`;
+    const provenance = document.createElement("span");
+    provenance.className = "goal-configuration-option-meta";
+    provenance.textContent = `First used ${presentation.firstUsedDate} · Revision ${String(revisionId || "").slice(0, 8) || "unknown"}`;
+    option.append(header, summary, activity, provenance);
+    return option;
+  }
+
+  renderGoalConfigurationPanel({ variant, presentation }) {
+    const panel = document.createElement("section");
+    panel.className = "goal-configuration-panel";
+    panel.setAttribute("aria-label", "Selected goal configuration");
+    const header = document.createElement("header");
+    header.className = "goal-configuration-panel-header";
+    const identity = document.createElement("div");
+    const title = document.createElement("h3");
+    const currentRevision = presentation.kind.startsWith("current_");
+    title.textContent = `${currentRevision ? "Current" : "Historical"} revision · ${presentation.behaviorLabel}`;
+    const summary = document.createElement("p");
+    summary.textContent = presentation.kind === "current_default"
+      ? "Matches the checked-in goal contract"
+      : goalConfigurationSummary(variant, presentation);
+    const revision = document.createElement("small");
+    revision.textContent = `Goal Revision ${String(variant.goal_contract_sha256 || "").slice(0, 8) || "unknown"}`;
+    identity.append(title, summary, revision);
+    const inspect = button("View goal YAML", { iconName: "code", quiet: true });
+    inspect.classList.add("goal-configuration-inspect");
+    inspect.addEventListener("click", () => {
+      const inspection = presentation.kind === "current_default"
+        ? this.inspectGoal({ goal_id: this.route.goal_id })
+        : this.inspectGoalVariant(variant);
+      void inspection.catch(
+        (error) => this.showToast(String(error?.message || error), true),
+      );
+    });
+    header.append(identity, inspect);
+    panel.append(header, this.renderEmbeddedGoalRuns(variant));
+    const differences = this.renderGoalConfigurationDifferences({ variant, presentation });
+    if (differences) panel.append(differences);
+    return panel;
+  }
+
+  renderGoalConfigurationDifferences({ variant, presentation }) {
+    if (presentation.kind === "current_default") {
+      const baseline = document.createElement("p");
+      baseline.className = "goal-configuration-baseline";
+      baseline.textContent = "No contract differences. This configuration matches the current checked-in goal.";
+      return baseline;
+    };
 
     const differences = document.createElement("details");
     differences.className = "goal-configuration-differences";
     const differencesSummary = document.createElement("summary");
-    differencesSummary.textContent = `Contract differences · ${presentation.differenceLabel}`;
+    differencesSummary.textContent = `Exact contract differences · ${presentation.differenceLabel}`;
     const differencesIntro = document.createElement("p");
     differencesIntro.textContent = (
-      "Baseline: current checked-in goal · Exact JSON-Pointer paths and typed values."
+      "Baseline: current checked-in goal · Exact contract paths and typed values."
     );
     differences.append(differencesSummary, differencesIntro);
     const finishDifferences = (content) => {
       differences.append(content);
-      section.append(differences);
-      return section;
-    };
-
-    if (presentation.kind === "current_default") {
-      return finishDifferences(this.goalVariantDiffEmpty(
-        "This configuration exactly matches the current checked-in goal.",
-      ));
+      return differences;
     }
     if (!presentation.comparisonAvailable) {
       return finishDifferences(this.goalVariantDiffEmpty(
@@ -2822,6 +2889,15 @@ export class SourceBrowser {
       ? page.items
       : variant.recent_runs;
     const items = Array.isArray(baseItems) ? baseItems : [];
+    const heading = document.createElement("div");
+    heading.className = "goal-configuration-runs-header";
+    const title = document.createElement("h4");
+    const runCount = Math.max(items.length, Number(variant?.run_count) || 0);
+    title.textContent = `Runs (${runCount.toLocaleString()})`;
+    const instructions = document.createElement("p");
+    instructions.textContent = "Choose a Run to view its public Checkpoints.";
+    heading.append(title, instructions);
+    section.append(heading);
     if (!items.length) {
       const empty = document.createElement("p");
       empty.className = "goal-configuration-runs-empty";
@@ -2829,39 +2905,17 @@ export class SourceBrowser {
       section.append(empty);
       return section;
     }
-    const scroll = document.createElement("div");
-    scroll.className = "goal-configuration-run-table-scroll";
-    const table = document.createElement("table");
-    table.className = "goal-configuration-run-table";
-    const columns = document.createElement("colgroup");
-    ["run", "train-success", "eval-success", "last-activity"].forEach((name) => {
-      const column = document.createElement("col");
-      column.className = `goal-configuration-run-column ${name}`;
-      columns.append(column);
-    });
-    const head = document.createElement("thead");
-    const headerRow = document.createElement("tr");
-    ["Run", "train/success", "eval/success", "Last activity"].forEach((label) => {
-      const cell = document.createElement("th");
-      cell.scope = "col";
-      cell.textContent = label;
-      if (["train/success", "eval/success"].includes(label)) {
-        cell.classList.add("goal-configuration-run-status");
-      }
-      if (label === "Last activity") {
-        cell.classList.add("goal-configuration-run-updated");
-      }
-      headerRow.append(cell);
-    });
-    head.append(headerRow);
-    const body = document.createElement("tbody");
+    const list = document.createElement("div");
+    list.className = "goal-configuration-run-list";
+    list.setAttribute("role", "list");
     items.forEach((run) => {
-      const row = document.createElement("tr");
-      row.className = "goal-configuration-run-row";
-      const runCell = document.createElement("td");
+      const listItem = document.createElement("div");
+      listItem.setAttribute("role", "listitem");
       const navigate = document.createElement("button");
       navigate.type = "button";
-      navigate.className = "goal-configuration-run-navigation";
+      navigate.className = "goal-configuration-run-card";
+      const cardHeader = document.createElement("span");
+      cardHeader.className = "goal-configuration-run-card-header";
       const identity = document.createElement("span");
       identity.className = "goal-configuration-run-identity";
       const name = document.createElement("strong");
@@ -2873,27 +2927,33 @@ export class SourceBrowser {
       const statusName = humanizeMetricPart(run?.state || "unknown");
       const state = document.createElement("span");
       state.className = `goal-configuration-run-state ${presentation.tone}`;
-      state.title = statusName;
-      state.setAttribute("aria-label", statusName);
-      state.append(icon(presentation.iconName));
-      navigate.append(state, identity);
-      runCell.append(navigate);
-      const runEvidence = { ...run, run_count: 1 };
-      const trainingCell = document.createElement("td");
-      const trainingStatus = environmentSuccessStatus(runEvidence, "train/success");
-      trainingCell.className = `goal-configuration-run-status ${trainingStatus.className}`;
-      trainingCell.textContent = trainingStatus.label;
-      trainingCell.title = trainingStatus.description;
-      trainingCell.setAttribute("aria-label", trainingStatus.description);
-      const evaluationCell = document.createElement("td");
-      const evaluationStatus = environmentSuccessStatus(runEvidence, "eval/success");
-      evaluationCell.className = `goal-configuration-run-status ${evaluationStatus.className}`;
-      evaluationCell.textContent = evaluationStatus.label;
-      evaluationCell.title = evaluationStatus.description;
-      evaluationCell.setAttribute("aria-label", evaluationStatus.description);
-      const updated = document.createElement("td");
-      updated.className = "goal-configuration-run-updated";
-      updated.textContent = run?.updated_at ? formatDate(run.updated_at) : "—";
+      state.textContent = statusName;
+      cardHeader.append(identity, state);
+
+      const evidence = document.createElement("dl");
+      evidence.className = "goal-configuration-run-evidence";
+      const addEvidence = (label, status, className = "") => {
+        const item = document.createElement("div");
+        const term = document.createElement("dt");
+        term.textContent = label;
+        const value = document.createElement("dd");
+        value.className = className;
+        value.textContent = status.label;
+        value.title = status.description;
+        item.append(term, value);
+        evidence.append(item);
+      };
+      const trainingStatus = runTrainingEvidenceStatus(run);
+      const evaluationStatus = runEvaluationEvidenceStatus(run);
+      addEvidence("Training target", trainingStatus, `goal-run-evidence ${trainingStatus.className}`);
+      addEvidence("Evaluation evidence", evaluationStatus, `goal-run-evidence ${evaluationStatus.className}`);
+      addEvidence("Last activity", {
+        label: run?.updated_at ? formatDate(run.updated_at) : "—",
+        description: "Most recent Run activity",
+      });
+      const action = document.createElement("span");
+      action.className = "goal-configuration-run-action";
+      action.append(document.createTextNode("View checkpoints"), icon("arrow-right"));
       const openRun = () => this.navigate({
         level: "runs",
         goal_variant_id: variantId,
@@ -2901,15 +2961,11 @@ export class SourceBrowser {
         checkpoint_id: "",
       });
       navigate.addEventListener("click", openRun);
-      row.addEventListener("click", (event) => {
-        if (!event.target.closest("button")) openRun();
-      });
-      row.append(runCell, trainingCell, evaluationCell, updated);
-      body.append(row);
+      navigate.append(cardHeader, evidence, action);
+      listItem.append(navigate);
+      list.append(listItem);
     });
-    table.append(columns, head, body);
-    scroll.append(table);
-    section.append(scroll);
+    section.append(list);
     if (page?.error) {
       const error = document.createElement("p");
       error.className = "source-inline-error";
