@@ -312,10 +312,6 @@ function setSourceMode(active, snapshot = null) {
     || !(snapshot?.app?.has_active_runner || state.liveSnapshot?.app?.has_active_runner)
   );
   $("#more-toggle").hidden = state.sourceMode;
-  $("#change-source").hidden = (
-    state.sourceMode
-    || !(snapshot?.app?.has_active_runner || state.liveSnapshot?.app?.has_active_runner)
-  );
   $("#inspect-active").hidden = !(
     snapshot?.app?.has_active_runner || state.liveSnapshot?.app?.has_active_runner
   );
@@ -1934,12 +1930,6 @@ function bindWorkspaceMenus() {
     menu.hidden = true;
     event.currentTarget.setAttribute("aria-expanded", String(opening));
     if (opening) positionMenu(menu, event.currentTarget);
-  });
-  $("#change-source").addEventListener("click", () => {
-    closePlayerMenu();
-    void ensureSourceBrowser()
-      .then((browser) => browser.browseCurrentSource())
-      .catch((error) => showToast(`Source browser failed: ${error.message || error}`, true));
   });
   $("#layouts-toggle").addEventListener("click", (event) => {
     if (!workspaceIsEditable(state.layout.preset)) return;

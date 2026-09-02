@@ -43,6 +43,22 @@ test("default workspace is a v7 editable all-panels view without redundant contr
     visible: true,
     window: "main",
   });
+  assert.deepEqual(workspace.panels.policy.placement, {
+    x: 8,
+    y: 0,
+    w: 4,
+    h: 15,
+    visible: true,
+    window: "main",
+  });
+  assert.deepEqual(workspace.panels.observation.placement, {
+    x: 0,
+    y: 15,
+    w: 4,
+    h: 8,
+    visible: true,
+    window: "main",
+  });
   assert.equal(workspace.panels.controls.placement.visible, false);
   assert.deepEqual(workspace.panels["step-reward"].placement, {
     x: 0,
@@ -132,6 +148,34 @@ test("workspace normalization preserves explicit disabled processing state", () 
   assert.equal(normalized.panels.value.enabled, false);
   delete workspace.panels.value.enabled;
   assert.equal(normalizeWorkspace(workspace).panels.value.enabled, true);
+});
+
+test("workspace normalization preserves a saved custom panel arrangement", () => {
+  const workspace = createDefaultWorkspace();
+  workspace.panels.policy.placement = {
+    x: 0,
+    y: 30,
+    w: 6,
+    h: 10,
+    visible: true,
+    window: "main",
+  };
+  workspace.panels.observation.placement = {
+    x: 6,
+    y: 30,
+    w: 6,
+    h: 10,
+    visible: true,
+    window: "main",
+  };
+
+  const normalized = normalizeWorkspace(workspace);
+
+  assert.deepEqual(normalized.panels.policy.placement, workspace.panels.policy.placement);
+  assert.deepEqual(
+    normalized.panels.observation.placement,
+    workspace.panels.observation.placement,
+  );
 });
 
 test("existing v7 workspaces receive reward analysis hidden on the shelf", () => {

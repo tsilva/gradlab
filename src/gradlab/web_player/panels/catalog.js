@@ -81,8 +81,8 @@ export const PANEL_TYPES = Object.freeze({
 const ALL_PANELS_LAYOUT = Object.freeze({
   game: { x: 0, y: 0, w: 8, h: 15, visible: true, window: "main" },
   controls: { x: 8, y: 0, w: 2, h: 15, visible: false, window: "main" },
-  observation: { x: 8, y: 0, w: 4, h: 15, visible: true, window: "main" },
-  policy: { x: 0, y: 15, w: 4, h: 8, visible: true, window: "main" },
+  policy: { x: 8, y: 0, w: 4, h: 15, visible: true, window: "main" },
+  observation: { x: 0, y: 15, w: 4, h: 8, visible: true, window: "main" },
   value: { x: 4, y: 15, w: 4, h: 8, visible: true, window: "main" },
   signals: { x: 8, y: 15, w: 4, h: 8, visible: true, window: "main" },
   "step-reward": { x: 0, y: 23, w: 4, h: 7, visible: true, window: "main" },

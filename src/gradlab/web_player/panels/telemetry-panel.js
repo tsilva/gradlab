@@ -510,7 +510,10 @@ function makeDistributionBlock(block) {
       <span class="episode">Episode action frequency</span>
     </div>
   `;
-  section.append(legend, target);
+  const layout = document.createElement("div");
+  layout.className = "action-comparison-layout";
+  layout.append(legend, target);
+  section.append(layout);
   const foot = appendFoot(section, block.foot, { force: true });
   return {
     element: section,
