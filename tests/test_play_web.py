@@ -737,6 +737,13 @@ def test_source_browser_paths_are_hierarchical_and_url_encoded() -> None:
             "environment_id": "Mario Bros",
             "goal_id": "Level 1-1",
             "goal_variant_id": variant_id,
+        }
+    ) == "/environments/Mario%20Bros/goals/Level%201-1"
+    assert source_browser_path(
+        {
+            "environment_id": "Mario Bros",
+            "goal_id": "Level 1-1",
+            "goal_variant_id": variant_id,
             "run_id": run_id,
         }
     ) == (f"/environments/Mario%20Bros/goals/Level%201-1/variants/{variant_id}/runs/{run_id}")
@@ -2301,11 +2308,15 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                     "/",
                     "/environments/Mario",
                     "/environments/Mario/goals/Level1-1",
-                    (f"/environments/Mario/goals/Level1-1/variants/goal-variant-{'c' * 24}"),
                 ):
                     page = await client.get(f"{server.origin}{route}")
                     assert page.status == 200
                     assert "<title>gradlab</title>" in await page.text()
+                removed_run_selection = await client.get(
+                    f"{server.origin}/environments/Mario/goals/Level1-1"
+                    f"/variants/goal-variant-{'c' * 24}"
+                )
+                assert removed_run_selection.status == 404
         finally:
             runner.stop()
             await asyncio.wait_for(task, timeout=3.0)

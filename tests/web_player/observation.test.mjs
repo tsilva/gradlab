@@ -202,3 +202,10 @@ test("observation commits an exact decoded frame and its metadata without blanki
   assert.match(source, /baseCanvas\.hidden = true/);
   assert.doesNotMatch(source, /baseCanvas\.width = 1/);
 });
+
+test("observation omits the frame stage when no exact frame exists", () => {
+  assert.match(source, /<div class="observation-stage" hidden>/);
+  assert.match(source, /stage\.hidden = !exactBase/);
+  assert.doesNotMatch(source, /data-empty/);
+  assert.doesNotMatch(source, /No exact pre-action observation frame/);
+});

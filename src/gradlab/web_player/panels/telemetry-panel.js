@@ -126,6 +126,35 @@ export function lineBlockFootPresentation(block, unavailable) {
   };
 }
 
+export function lineBlockAvailability(descriptors, snapshot, history) {
+  const availabilities = descriptors.map((descriptor) => {
+    const point = history.find((candidate) => {
+      const value = descriptor?.history ? descriptor.history(candidate) : null;
+      return value !== null && value !== undefined && value !== "";
+    });
+    const availability = descriptorAvailability(descriptor, { snapshot, point });
+    if (
+      availability.status === "protocol-error"
+      && descriptor?.phase === "post-episode"
+      && !snapshot?.transition?.boundary
+    ) {
+      return { status: "not-yet-observed", message: "N/A" };
+    }
+    return availability;
+  });
+  const unavailable = availabilities.find(
+    (availability) => availability.status !== "available"
+      && availability.status !== "not-yet-observed",
+  ) || null;
+  const observed = descriptors.some((descriptor) => (
+    seriesForMetric(descriptor.key, history).some(Number.isFinite)
+  ));
+  return {
+    unavailable,
+    status: unavailable?.status || (observed ? "available" : "not-yet-observed"),
+  };
+}
+
 function makeStatsBlock(block) {
   const section = document.createElement("section");
   section.className = "telemetry-block telemetry-stats";
@@ -230,24 +259,14 @@ function makeLineBlock(block) {
     element: section,
     render({ snapshot, history, view }) {
       currentContext = { snapshot, history, view };
-      const availabilities = descriptors.map((descriptor) => (
-        descriptorAvailability(descriptor, { snapshot })
-      ));
-      const unavailable = availabilities.find(
-        (availability) => availability.status !== "available"
-          && availability.status !== "not-yet-observed",
-      );
+      const availability = lineBlockAvailability(descriptors, snapshot, history);
       if (foot) {
-        const presentation = lineBlockFootPresentation(block, unavailable);
+        const presentation = lineBlockFootPresentation(block, availability.unavailable);
         foot.textContent = presentation.text;
         foot.hidden = !foot.textContent;
         foot.classList.toggle("warning", presentation.warning);
       }
-      const observed = descriptors.some((descriptor) => (
-        seriesForMetric(descriptor.key, history).some(Number.isFinite)
-      ));
-      section.dataset.telemetryStatus = unavailable?.status
-        || (observed ? "available" : "not-yet-observed");
+      section.dataset.telemetryStatus = availability.status;
       renderChart(currentContext);
     },
   };
@@ -370,7 +389,7 @@ function actionComparisonBar(name, series, value) {
   track.className = "action-comparison-track";
   track.setAttribute("role", "progressbar");
   track.setAttribute("aria-label", `${name} ${
-    series === "episode" ? "episode executed frequency" : "selected-step probability"
+    series === "episode" ? "episode action frequency" : "step action probability"
   }`);
   track.setAttribute("aria-valuemin", "0");
   track.setAttribute("aria-valuemax", "100");
@@ -401,8 +420,8 @@ function actionComparisonRow(row) {
   const bars = document.createElement("div");
   bars.className = "action-comparison-bars";
   bars.append(
-    actionComparisonBar(row.name, "episode", row.episodeProbability),
     actionComparisonBar(row.name, "step", row.stepProbability),
+    actionComparisonBar(row.name, "episode", row.episodeProbability),
   );
   item.append(label, bars);
   return item;
@@ -487,8 +506,8 @@ function makeDistributionBlock(block) {
   legend.className = "action-comparison-legend";
   legend.innerHTML = `
     <div class="action-comparison-legend-series">
-      <span class="episode">Episode executed frequency</span>
-      <span class="step">Selected-step policy probability</span>
+      <span class="step">Step action probability</span>
+      <span class="episode">Episode action frequency</span>
     </div>
   `;
   section.append(legend, target);

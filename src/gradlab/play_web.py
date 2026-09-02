@@ -247,11 +247,9 @@ def source_browser_path(route: Mapping[str, Any] | None) -> str:
     if not goal_id:
         return path
     path += f"/goals/{quote(goal_id, safe='')}"
-    if not goal_variant_id:
+    if not goal_variant_id or not run_id:
         return path
     path += f"/variants/{quote(goal_variant_id, safe='')}"
-    if not run_id:
-        return path
     path += f"/runs/{quote(run_id, safe='')}"
     if not checkpoint_id:
         return path
@@ -3506,10 +3504,6 @@ class PlaybackWebServer:
                 web.get("/", self.page),
                 web.get("/environments/{environment_id}", self.page),
                 web.get("/environments/{environment_id}/goals/{goal_id}", self.page),
-                web.get(
-                    ("/environments/{environment_id}/goals/{goal_id}/variants/{goal_variant_id}"),
-                    self.page,
-                ),
                 web.get(
                     (
                         "/environments/{environment_id}/goals/{goal_id}"

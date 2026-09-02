@@ -866,15 +866,13 @@ h2 { font-size: var(--font-size-lg); margin: 0; font-weight: var(--font-weight-s
   white-space: nowrap;
 }
 .environment-table th:nth-child(1),
-.environment-row td:nth-child(1) { width: 5%; }
-.environment-table th:nth-child(2),
-.environment-row td:nth-child(2) { width: 45%; }
+.environment-row td:nth-child(1) { width: 2.5rem; }
 .environment-table th:nth-child(3),
-.environment-row td:nth-child(3) { width: 12%; text-align: right; }
+.environment-row td:nth-child(3) { width: 7rem; text-align: right; }
 .environment-table th:nth-child(4),
 .environment-table th:nth-child(5),
 .environment-row td:nth-child(4),
-.environment-row td:nth-child(5) { width: 19%; text-align: center; }
+.environment-row td:nth-child(5) { width: 8.5rem; text-align: center; }
 .goal-table th:nth-child(2),
 .goal-row td:nth-child(2) { width: 7rem; text-align: right; }
 .goal-table th:nth-child(3),
@@ -931,9 +929,9 @@ h2 { font-size: var(--font-size-lg); margin: 0; font-weight: var(--font-weight-s
   border: 0;
   background: transparent;
   color: color-mix(in srgb, var(--color-text-muted) 55%, transparent);
-  font-size: var(--font-size-xl);
   line-height: 1;
 }
+.environment-favorite .icon { width: 1.5rem; height: 1.5rem; }
 .environment-favorite:hover,
 .environment-favorite:focus-visible {
   border-color: transparent;
@@ -1560,8 +1558,8 @@ select {
 .action-comparison-legend-series {
   display: grid;
   grid-column: 2;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: .55rem;
+  grid-template-columns: minmax(0, 1fr);
+  gap: .22rem;
   min-width: 0;
 }
 .action-comparison-legend-series span { min-width: 0; }
@@ -1594,8 +1592,8 @@ select {
 .action-comparison-row.selected .action-comparison-label { color: var(--color-evaluation-text); font-weight: var(--font-weight-bold); }
 .action-comparison-bars {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: .55rem;
+  grid-template-columns: minmax(0, 1fr);
+  gap: .22rem;
   min-width: 0;
 }
 .action-comparison-bar {

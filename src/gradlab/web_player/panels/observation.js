@@ -36,10 +36,9 @@ export function mount({ definition }) {
         <strong data-diagnostic-label></strong>
         <span data-diagnostic-detail></span>
       </div>
-      <div class="observation-stage">
+      <div class="observation-stage" hidden>
         <canvas data-observation-canvas></canvas>
         <canvas data-diagnostic-canvas class="diagnostic-overlay-canvas"></canvas>
-        <div data-empty class="empty-state">No image stack is available.</div>
       </div>
       <div class="diagnostic-context" data-diagnostic-context hidden>
         <span data-diagnostic-explanation></span>
@@ -50,7 +49,7 @@ export function mount({ definition }) {
   });
   const baseCanvas = element.querySelector("[data-observation-canvas]");
   const overlayCanvas = element.querySelector("[data-diagnostic-canvas]");
-  const empty = element.querySelector("[data-empty]");
+  const stage = element.querySelector(".observation-stage");
   const status = element.querySelector("[data-diagnostic-state]");
   const statusLabel = element.querySelector("[data-diagnostic-label]");
   const statusDetail = element.querySelector("[data-diagnostic-detail]");
@@ -139,10 +138,10 @@ export function mount({ definition }) {
   };
   const draw = () => {
     const exactBase = Boolean(baseBitmap && baseIsExact());
+    stage.hidden = !exactBase;
     if (!exactBase) {
       baseCanvas.hidden = true;
       overlayCanvas.hidden = true;
-      empty.hidden = false;
       renderLegend();
       return;
     }
@@ -175,7 +174,6 @@ export function mount({ definition }) {
     }
     overlayCanvas.hidden = !shown;
     overlayCanvas.style.opacity = String(selectedOpacity());
-    empty.hidden = true;
     renderLegend();
   };
   const updateStatus = () => {
@@ -224,7 +222,6 @@ export function mount({ definition }) {
         if (!blob) {
           baseBitmapCommittedRequest = request;
           closeBase();
-          empty.textContent = "No exact pre-action observation frame was retained for this transition.";
           commitSnapshot(frameSnapshot);
           return true;
         }
@@ -242,7 +239,6 @@ export function mount({ definition }) {
         closeBase();
         baseBitmap = bitmap;
         baseIdentity = incoming;
-        empty.textContent = "No image stack is available.";
         commitSnapshot(frameSnapshot);
         return true;
       }
