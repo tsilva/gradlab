@@ -273,12 +273,17 @@ test("environment favorite controls use a thin outline and filled selected star"
   assert.doesNotMatch(source, /[⭐☆]/);
   assert.match(source, /favorite\.setAttribute\("aria-pressed", String\(isFavorite\)\);/);
   assert.match(source, /writeEnvironmentFavorites\(next\);/);
-  assert.match(source, /headings\.append\(favoriteHeading\);/);
+  assert.match(source, /environmentHeading\.scope = "colgroup";/);
+  assert.match(source, /environmentHeading\.colSpan = 2;/);
+  assert.match(source, /headings\.append\(environmentHeading\);/);
+  assert.doesNotMatch(source, /favoriteHeading/);
+  assert.match(source, /const environmentColumns = makeColumnGroup\(\[/);
+  assert.match(source, /table\.append\(environmentColumns, metricColumns, head, body\);/);
   assert.match(
     source,
     /row\.append\(favoriteCell, environmentCell, goalsCell, trainingCell, evaluationCell\);/,
   );
-  assert.match(styles, /\.environment-favorite-column,[\s\S]*width: 2\.5rem; text-align: center;/);
+  assert.match(styles, /\.environment-favorite-column,\s*\.environment-favorite-cell \{ width: 2\.5rem; \}/);
   assert.match(
     styles,
     /\.environment-favorite \{[\s\S]*color: color-mix\(in srgb, var\(--color-text-muted\) 55%, transparent\);/,
@@ -462,7 +467,8 @@ test("environment success is rendered as table status columns", async () => {
     "utf8",
   );
   assert.match(source, /document\.createElement\("table"\)/);
-  assert.match(source, /\["Environment", "Goals", "train\/success", "eval\/success"\]/);
+  assert.match(source, /environmentHeading\.textContent = "Environment";/);
+  assert.match(source, /\["Goals", "environment-goals-column"\]/);
   assert.match(source, /goalsCell\.textContent = Number\(environment\.goal_count\)\.toLocaleString\(\);/);
   assert.match(
     source,
@@ -477,11 +483,15 @@ test("environment success is rendered as table status columns", async () => {
   assert.match(styles, /\.environment-table \{ table-layout: fixed; \}/);
   assert.match(
     styles,
-    /\.environment-table th:nth-child\(3\),\s*\.environment-row td:nth-child\(3\) \{ width: 7rem; text-align: right; \}/,
+    /\.environment-table th\.environment-heading \{ padding-left: calc\(2\.5rem \+ \.65rem\); \}/,
   );
   assert.match(
     styles,
-    /\.environment-table th:nth-child\(4\),\s*\.environment-table th:nth-child\(5\),\s*\.environment-row td:nth-child\(4\),\s*\.environment-row td:nth-child\(5\) \{ width: 8\.5rem; text-align: center; \}/,
+    /\.environment-goals-column,\s*\.environment-row td:nth-child\(3\) \{ width: 7rem; text-align: right; \}/,
+  );
+  assert.match(
+    styles,
+    /\.environment-status-column,\s*\.environment-row td:nth-child\(4\),\s*\.environment-row td:nth-child\(5\) \{ width: 8\.5rem; text-align: center; \}/,
   );
 });
 
@@ -922,6 +932,10 @@ test("source discovery progressively discloses secondary controls", async () => 
     new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
     "utf8",
   );
+  const styles = await readFile(
+    new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
+    "utf8",
+  );
   const html = await readFile(
     new URL("../../src/gradlab/web_player/index.html", import.meta.url),
     "utf8",
@@ -930,6 +944,10 @@ test("source discovery progressively discloses secondary controls", async () => 
   assert.match(source, /return "Choose a goal version"/);
   assert.match(source, /source-search-disclosure/);
   assert.match(source, /disclosure\.open = this\.searchOpen/);
+  assert.match(source, /close\.setAttribute\("aria-label", "Close search"\);/);
+  assert.match(source, /this\.searchOpen = false;\s*if \(this\.query\) \{\s*this\.setSearch\(""\);/);
+  assert.match(styles, /\.source-search-disclosure\[open\] > summary \{ display: none; \}/);
+  assert.match(styles, /grid-template-columns: auto minmax\(0, 1fr\) auto;/);
   assert.doesNotMatch(source, /resultCount > 8/);
   assert.match(html, /id="contract-search-disclosure" class="contract-search-disclosure"/);
   assert.match(source, /Contract differences · \$\{presentation\.differenceLabel\}/);

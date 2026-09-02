@@ -66,21 +66,35 @@ test("distribution contents use the panel as their only scroll container", () =>
 });
 
 test("policy distribution legend labels align with their data columns", () => {
+  const layoutRule = styles.match(/\.action-comparison-layout \{([^}]*)\}/)?.[1] || "";
   const legendRule = styles.match(/\.action-comparison-legend \{([^}]*)\}/)?.[1] || "";
   const legendSeriesRule = styles.match(
     /\.action-comparison-legend-series \{([^}]*)\}/,
   )?.[1] || "";
+  const comparisonRule = styles.match(/\.action-comparison \{([^}]*)\}/)?.[1] || "";
   const rowRule = styles.match(/\.action-comparison-row \{([^}]*)\}/)?.[1] || "";
   const barsRule = styles.match(/\.action-comparison-bars \{([^}]*)\}/)?.[1] || "";
 
-  assert.match(legendRule, /grid-template-columns: minmax\(5rem, 1fr\) 4fr;/);
-  assert.match(rowRule, /grid-template-columns: minmax\(5rem, 1fr\) 4fr;/);
+  assert.match(layoutRule, /grid-template-columns: max-content minmax\(0, 1fr\);/);
+  assert.match(legendRule, /grid-template-columns: subgrid;/);
+  assert.match(comparisonRule, /grid-template-columns: subgrid;/);
+  assert.match(rowRule, /grid-template-columns: subgrid;/);
+  assert.match(telemetryPanelSource, /layout\.append\(legend, target\);/);
   assert.match(legendSeriesRule, /grid-column: 2;/);
   assert.match(
     legendSeriesRule,
     /grid-template-columns: minmax\(0, 1fr\);/,
   );
   assert.match(barsRule, /grid-template-columns: minmax\(0, 1fr\);/);
+  assert.match(barsRule, /gap: 0;/);
+  assert.match(
+    styles,
+    /\.action-comparison-bar\.step \.action-comparison-track \{\s*align-self: end;\s*border-radius: 99rem 99rem 0 0;/,
+  );
+  assert.match(
+    styles,
+    /\.action-comparison-bar\.episode \.action-comparison-track \{\s*align-self: start;\s*border-radius: 0 0 99rem 99rem;/,
+  );
   assert.match(telemetryPanelSource, /class="action-comparison-legend-series"/);
   assert.match(
     telemetryPanelSource,
@@ -125,11 +139,11 @@ test("namespace telemetry tables use the panel as their only scroll container", 
   assert.doesNotMatch(rule, /(?:max-height|overflow)\s*:/);
 });
 
-test("long action labels truncate on one line and retain their full tooltip", () => {
+test("action labels fit one content-sized column and retain their full tooltip", () => {
   const rule = styles.match(/\.action-comparison-label \{([^}]*)\}/)?.[1] || "";
-  assert.match(rule, /overflow: hidden;/);
-  assert.match(rule, /text-overflow: ellipsis;/);
   assert.match(rule, /white-space: nowrap;/);
+  assert.doesNotMatch(rule, /overflow: hidden;/);
+  assert.doesNotMatch(rule, /text-overflow: ellipsis;/);
   assert.doesNotMatch(rule, /overflow-wrap/);
   assert.match(telemetryPanelSource, /label\.title = row\.name;/);
 });

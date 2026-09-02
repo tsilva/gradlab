@@ -2082,7 +2082,7 @@ export class SourceBrowser {
   }
 
   renderSearch() {
-    const wrap = document.createElement("label");
+    const wrap = document.createElement("div");
     wrap.className = "source-search";
     wrap.append(icon("search"));
     const input = document.createElement("input");
@@ -2099,6 +2099,19 @@ export class SourceBrowser {
     input.setAttribute("aria-label", input.placeholder);
     input.addEventListener("input", (event) => this.setSearch(event.target.value));
     wrap.append(input);
+    const close = button("", { iconName: "x", quiet: true });
+    close.classList.add("source-search-close", "icon-only");
+    close.setAttribute("aria-label", "Close search");
+    close.title = "Close search";
+    close.addEventListener("click", () => {
+      this.searchOpen = false;
+      if (this.query) {
+        this.setSearch("");
+      } else {
+        this.renderView();
+      }
+    });
+    wrap.append(close);
     const disclosure = document.createElement("details");
     disclosure.className = "source-search-disclosure";
     disclosure.open = this.searchOpen;
@@ -2285,19 +2298,40 @@ export class SourceBrowser {
     scroll.className = "environment-table-scroll";
     const table = document.createElement("table");
     table.className = "environment-table";
+    const makeColumnGroup = (classNames) => {
+      const group = document.createElement("colgroup");
+      classNames.forEach((className) => {
+        const column = document.createElement("col");
+        column.className = className;
+        group.append(column);
+      });
+      return group;
+    };
+    const environmentColumns = makeColumnGroup([
+      "environment-favorite-column",
+      "environment-name-column",
+    ]);
+    const metricColumns = makeColumnGroup([
+      "environment-goals-column",
+      "environment-status-column",
+      "environment-status-column",
+    ]);
     const head = document.createElement("thead");
     const headings = document.createElement("tr");
-    const favoriteHeading = document.createElement("th");
-    favoriteHeading.scope = "col";
-    favoriteHeading.className = "environment-favorite-column";
-    const favoriteHeadingLabel = document.createElement("span");
-    favoriteHeadingLabel.className = "visually-hidden";
-    favoriteHeadingLabel.textContent = "Favorite";
-    favoriteHeading.append(favoriteHeadingLabel);
-    headings.append(favoriteHeading);
-    ["Environment", "Goals", "train/success", "eval/success"].forEach((label) => {
+    const environmentHeading = document.createElement("th");
+    environmentHeading.scope = "colgroup";
+    environmentHeading.colSpan = 2;
+    environmentHeading.className = "environment-heading";
+    environmentHeading.textContent = "Environment";
+    headings.append(environmentHeading);
+    [
+      ["Goals", "environment-goals-column"],
+      ["train/success", "environment-status-column"],
+      ["eval/success", "environment-status-column"],
+    ].forEach(([label, className]) => {
       const heading = document.createElement("th");
       heading.scope = "col";
+      heading.className = className;
       heading.textContent = label;
       headings.append(heading);
     });
@@ -2365,7 +2399,7 @@ export class SourceBrowser {
       row.append(favoriteCell, environmentCell, goalsCell, trainingCell, evaluationCell);
       body.append(row);
     });
-    table.append(head, body);
+    table.append(environmentColumns, metricColumns, head, body);
     scroll.append(table);
     return scroll;
   }

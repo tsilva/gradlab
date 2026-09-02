@@ -257,6 +257,13 @@ test("checkpoint navigation uses accessible directional icons", () => {
   assert.match(styles, /\.checkpoint-navigation-button\.icon-only \{ width: calc\(var\(--header-control-height\) - 2px\); \}/);
 });
 
+test("the overflow menu omits the redundant change-checkpoint action", () => {
+  assert.doesNotMatch(page, /change-source|Change checkpoint/);
+  assert.doesNotMatch(app, /change-source/);
+  assert.doesNotMatch(styles, /change-source/);
+  assert.match(page, /id="source-back"[^>]*aria-label="Back to source selection"/);
+});
+
 test("checkpoint changes block the whole player until the new frame is renderable", () => {
   assert.match(
     page,
