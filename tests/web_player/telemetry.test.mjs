@@ -89,11 +89,19 @@ test("policy distribution legend labels align with their data columns", () => {
   assert.match(barsRule, /gap: 0;/);
   assert.match(
     styles,
-    /\.action-comparison-bar\.step \.action-comparison-track \{\s*align-self: end;\s*border-radius: 99rem 99rem 0 0;/,
+    /\.action-comparison-track \{[^}]*border-radius: 0;/,
   );
   assert.match(
     styles,
-    /\.action-comparison-bar\.episode \.action-comparison-track \{\s*align-self: start;\s*border-radius: 0 0 99rem 99rem;/,
+    /\.action-comparison-bar\.step \.action-comparison-track \{\s*align-self: end;/,
+  );
+  assert.match(
+    styles,
+    /\.action-comparison-bar\.episode \.action-comparison-track \{\s*align-self: start;/,
+  );
+  assert.doesNotMatch(
+    styles,
+    /\.action-comparison-bar\.(?:step|episode) \.action-comparison-track \{[^}]*border-radius:/,
   );
   assert.match(telemetryPanelSource, /class="action-comparison-legend-series"/);
   assert.match(
@@ -114,6 +122,15 @@ test("policy distributions omit the redundant action summary caption", () => {
 });
 
 test("reward totals show pre-clip and post-clip values without a formula", () => {
+  assert.doesNotMatch(telemetryPanelSource, /block\.title \|\| "Reward ledger"/);
+  assert.doesNotMatch(
+    telemetryPanelSource,
+    /Signed contribution uses \|final reward\|/,
+  );
+  assert.match(telemetryPanelSource, /const foot = appendFoot\(section, block\.foot\);/);
+  assert.match(telemetryPanelSource, /foot\?\.classList\.toggle\(/);
+  assert.match(telemetryPanelSource, /classList\.toggle\("titleless", !block\.title\)/);
+  assert.match(styles, /\.reward-analysis-toolbar\.titleless \{ justify-content: flex-end; \}/);
   assert.doesNotMatch(telemetryPanelSource, /reward-transform-strip/);
   assert.doesNotMatch(telemetryPanelSource, /reward-ledger-summary-detail/);
   assert.deepEqual(

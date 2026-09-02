@@ -1622,16 +1622,14 @@ select {
 .action-comparison-track {
   height: .38rem;
   overflow: hidden;
-  border-radius: 99rem;
+  border-radius: 0;
   background: var(--color-chart-surface);
 }
 .action-comparison-bar.step .action-comparison-track {
   align-self: end;
-  border-radius: 99rem 99rem 0 0;
 }
 .action-comparison-bar.episode .action-comparison-track {
   align-self: start;
-  border-radius: 0 0 99rem 99rem;
 }
 .action-comparison-fill { height: 100%; }
 .action-comparison-bar.episode .action-comparison-fill { background: var(--color-interaction); }
@@ -1670,6 +1668,7 @@ select {
   gap: .8rem;
   margin-bottom: .55rem;
 }
+.reward-analysis-toolbar.titleless { justify-content: flex-end; }
 .reward-analysis-toolbar .chart-heading { margin: 0; font-weight: var(--font-weight-bold); }
 .reward-analysis-toolbar label {
   display: flex;
