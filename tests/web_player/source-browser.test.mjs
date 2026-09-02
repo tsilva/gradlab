@@ -481,13 +481,10 @@ test("environment success is rendered as table status columns", async () => {
     "utf8",
   );
   assert.match(styles, /\.environment-table \{ table-layout: fixed; \}/);
+  assert.doesNotMatch(styles, /\.environment-table th\.environment-heading/);
   assert.match(
     styles,
-    /\.environment-table th\.environment-heading \{ padding-left: calc\(2\.5rem \+ \.65rem\); \}/,
-  );
-  assert.match(
-    styles,
-    /\.environment-goals-column,\s*\.environment-row td:nth-child\(3\) \{ width: 7rem; text-align: right; \}/,
+    /\.environment-goals-column,\s*\.environment-row td:nth-child\(3\) \{ width: 7rem; text-align: left; \}/,
   );
   assert.match(
     styles,
