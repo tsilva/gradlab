@@ -20,6 +20,7 @@ import {
   cursorIndex,
   distributionBlockVisible,
   histogramSelectedLabel,
+  lineBlockAvailability,
   lineLegendPrefix,
   lineLegendPresentation,
   lineLegendPresentationAtIndex,
@@ -77,10 +78,18 @@ test("policy distribution legend labels align with their data columns", () => {
   assert.match(legendSeriesRule, /grid-column: 2;/);
   assert.match(
     legendSeriesRule,
-    /grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/,
+    /grid-template-columns: minmax\(0, 1fr\);/,
   );
-  assert.match(barsRule, /grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/);
+  assert.match(barsRule, /grid-template-columns: minmax\(0, 1fr\);/);
   assert.match(telemetryPanelSource, /class="action-comparison-legend-series"/);
+  assert.match(
+    telemetryPanelSource,
+    /<span class="step">Step action probability<\/span>\s*<span class="episode">Episode action frequency<\/span>/,
+  );
+  assert.match(
+    telemetryPanelSource,
+    /actionComparisonBar\(row\.name, "step", row\.stepProbability\),\s*actionComparisonBar\(row\.name, "episode", row\.episodeProbability\)/,
+  );
 });
 
 test("policy distributions omit the redundant action summary caption", () => {
@@ -153,6 +162,7 @@ test("catalog discovers signal and reward-component descriptors", () => {
 
 test("action descriptors distinguish policy-selected and executed action", () => {
   const point = { policy_action: 2, executed_action: 1 };
+  assert.equal(descriptorFor("action/policy").shortLabel, "Action");
   assert.equal(
     descriptorValue(descriptorFor("action/policy"), { point }),
     2,
@@ -511,6 +521,47 @@ test("policy descriptors distinguish pending and incomparable data", () => {
       { snapshot: incomparable },
     ).status,
     "contract-incomparable",
+  );
+});
+
+test("line charts recognize retained post-episode diagnostics", () => {
+  const snapshot = {
+    policy: {
+      algorithm_id: "ppo",
+      introspection: ["state_value"],
+    },
+    transition: {
+      boundary: true,
+      decision: { value: -14.153 },
+    },
+    session: { critic_comparison: { reasons: [] } },
+  };
+  const history = [{ value: -14.153, realized_return: -3.5 }];
+  const descriptors = [
+    descriptorFor("policy/value"),
+    descriptorFor("policy/realized-return"),
+  ];
+
+  assert.deepEqual(
+    lineBlockAvailability(descriptors, snapshot, history),
+    { unavailable: null, status: "available" },
+  );
+
+  assert.deepEqual(
+    lineBlockAvailability(
+      descriptors,
+      {
+        ...snapshot,
+        transition: { boundary: false, decision: { value: -14.153 } },
+      },
+      [{ value: -14.153 }],
+    ),
+    { unavailable: null, status: "available" },
+  );
+
+  assert.equal(
+    lineBlockAvailability(descriptors, snapshot, [{ value: -14.153 }]).status,
+    "protocol-error",
   );
 });
 

@@ -833,16 +833,7 @@ export function sourceRouteFromPath(pathname = location.pathname) {
   if (parts[4] !== "variants" || !parts[5]) return null;
   const goal_variant_id = decodePathPart(parts[5]);
   if (!goal_variant_id) return null;
-  if (parts.length === 6) {
-    return {
-      level: "runs",
-      environment_id,
-      goal_id,
-      goal_variant_id,
-      run_id: "",
-      checkpoint_id: "",
-    };
-  }
+  if (parts.length === 6) return null;
   if (parts[6] !== "runs" || !parts[7]) return null;
   const run_id = decodePathPart(parts[7]);
   if (!run_id) return null;
@@ -879,9 +870,8 @@ export function sourceRoutePath(route) {
   let path = `/environments/${encodeURIComponent(environmentId)}`;
   if (!goalId) return path;
   path += `/goals/${encodeURIComponent(goalId)}`;
-  if (!goalVariantId) return path;
+  if (!goalVariantId || !runId) return path;
   path += `/variants/${encodeURIComponent(goalVariantId)}`;
-  if (!runId) return path;
   path += `/runs/${encodeURIComponent(runId)}`;
   if (!checkpointId) return path;
   return `${path}/checkpoints/${encodeURIComponent(checkpointId)}`;
@@ -896,6 +886,20 @@ function routeSignature(route) {
     run_id: route?.run_id || "",
     checkpoint_id: route?.checkpoint_id || "",
   });
+}
+
+function canonicalSourceRoute(route) {
+  if (route?.level !== "runs" || route?.run_id) return route;
+  let level = "environments";
+  if (route?.goal_id) level = "goal_variants";
+  else if (route?.environment_id) level = "goals";
+  return {
+    ...route,
+    level,
+    goal_variant_id: "",
+    run_id: "",
+    checkpoint_id: "",
+  };
 }
 
 function activeCheckpointCacheKey(route) {
@@ -977,18 +981,6 @@ export function sourceBreadcrumbItems(route) {
       route: {
         level: "goal_variants",
         goal_variant_id: "",
-        run_id: "",
-        checkpoint_id: "",
-      },
-    });
-  }
-  if (route?.goal_variant_id) {
-    items.push({
-      label: humanSourceLabel(route.goal_variant_id, "variant"),
-      title: route.goal_variant_id,
-      current: route.level === "runs" && !route.run_id && !hasActiveCheckpoint,
-      route: {
-        level: "runs",
         run_id: "",
         checkpoint_id: "",
       },
@@ -1141,7 +1133,7 @@ export class SourceBrowser {
     ) {
       this.initialEnvironmentCatalog = this.app.catalog;
     }
-    const appRoute = this.app.route || {};
+    const appRoute = canonicalSourceRoute(this.app.route || {});
     if (
       this.pendingLocationRoute
       && location.pathname !== "/"
@@ -1595,9 +1587,6 @@ export class SourceBrowser {
       }
       return `/api/catalog/runs/${encodeURIComponent(this.route.run_id)}/checkpoints?${query}`;
     }
-    if (this.route.level === "runs") {
-      return `/api/catalog/environments/${encodeURIComponent(this.route.environment_id)}/goals/${encodeURIComponent(this.route.goal_id)}/variants/${encodeURIComponent(this.route.goal_variant_id)}/runs?${query}`;
-    }
     return `/api/catalog/environments?${query}`;
   }
 
@@ -1830,7 +1819,7 @@ export class SourceBrowser {
   }
 
   applyRoute(route, { seedItems = null } = {}) {
-    this.route = { ...this.route, ...route };
+    this.route = canonicalSourceRoute({ ...this.route, ...route });
     this.query = "";
     this.searchOpen = false;
     this.items = [];
@@ -1877,12 +1866,12 @@ export class SourceBrowser {
   }
 
   navigate(route, { historyMode = "push", seedItems = null } = {}) {
-    const nextRoute = { ...this.route, ...route };
+    const nextRoute = canonicalSourceRoute({ ...this.route, ...route });
     if (!this.app?.has_active_runner) {
       const commandId = this.command("browse_sources", { route: nextRoute });
       if (commandId === null) return false;
     }
-    this.applyRoute(route, { seedItems });
+    this.applyRoute(nextRoute, { seedItems });
     if (historyMode) this.syncUrl(historyMode);
     this.openSourceRoute?.({ ...this.route });
     return true;
@@ -1938,8 +1927,6 @@ export class SourceBrowser {
 
   back() {
     if (this.route.level === "runs" && this.route.run_id) {
-      this.navigate({ level: "runs", run_id: "", checkpoint_id: "" });
-    } else if (this.route.level === "runs") {
       this.navigate({
         level: "goal_variants",
         goal_variant_id: "",
@@ -2073,7 +2060,6 @@ export class SourceBrowser {
     if (this.route.level === "runs" && this.route.run_id) {
       return "Runs · choose a checkpoint";
     }
-    if (this.route.level === "runs") return "Choose a run";
     if (this.route.level === "goal_variants") {
       return "Choose a goal version";
     }
@@ -2109,8 +2095,6 @@ export class SourceBrowser {
         ? "Search goals"
         : this.route.level === "goal_variants"
           ? "Search configuration, difference, status, date, or contract hash"
-          : this.route.level === "runs" && !this.route.run_id
-          ? "Search run, finish reason, description, recipe, variant, override, or seed"
           : "Search checkpoint, step, hash, purpose, or evaluation";
     input.setAttribute("aria-label", input.placeholder);
     input.addEventListener("input", (event) => this.setSearch(event.target.value));
@@ -2336,7 +2320,7 @@ export class SourceBrowser {
       favorite.className = "environment-favorite";
       const isFavorite = this.favoriteEnvironments.has(environment.name);
       favorite.classList.toggle("selected", isFavorite);
-      favorite.textContent = isFavorite ? "⭐" : "☆";
+      favorite.append(icon(isFavorite ? "star-filled" : "star"));
       favorite.setAttribute("aria-pressed", String(isFavorite));
       favorite.setAttribute(
         "aria-label",

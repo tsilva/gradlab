@@ -139,7 +139,7 @@ const STATIC_DESCRIPTORS = Object.freeze({
   },
   "action/policy": {
     label: "Policy-selected action",
-    shortLabel: "Policy action",
+    shortLabel: "Action",
     type: "categorical",
     unit: "action",
     phase: "pre-action",

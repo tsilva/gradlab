@@ -255,7 +255,7 @@ test("environment favorites toggle on and back off", () => {
   assert.deepEqual([...toggleEnvironmentFavorite(selected, "Mario")], ["Acrobot"]);
 });
 
-test("environment favorite controls toggle between an emoji and an outline", async () => {
+test("environment favorite controls use a thin outline and filled selected star", async () => {
   const source = await readFile(
     new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
     "utf8",
@@ -264,8 +264,13 @@ test("environment favorite controls toggle between an emoji and an outline", asy
     new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
     "utf8",
   );
+  const sprite = await readFile(
+    new URL("../../src/gradlab/web_player/tabler-icons.svg", import.meta.url),
+    "utf8",
+  );
 
-  assert.match(source, /favorite\.textContent = isFavorite \? "⭐" : "☆";/);
+  assert.match(source, /favorite\.append\(icon\(isFavorite \? "star-filled" : "star"\)\);/);
+  assert.doesNotMatch(source, /[⭐☆]/);
   assert.match(source, /favorite\.setAttribute\("aria-pressed", String\(isFavorite\)\);/);
   assert.match(source, /writeEnvironmentFavorites\(next\);/);
   assert.match(source, /headings\.append\(favoriteHeading\);/);
@@ -278,7 +283,10 @@ test("environment favorite controls toggle between an emoji and an outline", asy
     styles,
     /\.environment-favorite \{[\s\S]*color: color-mix\(in srgb, var\(--color-text-muted\) 55%, transparent\);/,
   );
+  assert.match(styles, /\.environment-favorite \.icon \{ width: 1\.5rem; height: 1\.5rem; \}/);
   assert.match(styles, /\.environment-favorite\.selected \{ color: var\(--color-series-amber\); \}/);
+  assert.match(sprite, /id="ti-star"[^>]*stroke-width="1\.25"/);
+  assert.match(sprite, /id="ti-star-filled"[^>]*fill="currentColor"/);
 });
 
 test("goal variant selection uses the exact live activity diff", () => {
@@ -469,7 +477,11 @@ test("environment success is rendered as table status columns", async () => {
   assert.match(styles, /\.environment-table \{ table-layout: fixed; \}/);
   assert.match(
     styles,
-    /\.environment-table th:nth-child\(2\),\s*\.environment-row td:nth-child\(2\) \{ width: 45%; \}/,
+    /\.environment-table th:nth-child\(3\),\s*\.environment-row td:nth-child\(3\) \{ width: 7rem; text-align: right; \}/,
+  );
+  assert.match(
+    styles,
+    /\.environment-table th:nth-child\(4\),\s*\.environment-table th:nth-child\(5\),\s*\.environment-row td:nth-child\(4\),\s*\.environment-row td:nth-child\(5\) \{ width: 8\.5rem; text-align: center; \}/,
   );
 });
 
@@ -819,7 +831,6 @@ test("active checkpoint breadcrumbs retain the full source hierarchy", () => {
       { label: "Environments", current: false },
       { label: "ViZDoom", current: false },
       { label: "Defend The Line", current: false },
-      { label: "Goal configuration", current: false },
       { label: "Run", current: false },
       { label: "Checkpoint · 10,002,432 steps", current: true },
     ],
@@ -1715,17 +1726,48 @@ test("browser back through checkpoint routes preserves canonical environment ide
 
   globalThis.location.pathname = (
     "/environments/ViZDoom/goals/DefendTheLine-v1"
-    + "/variants/goal-variant-a27a8239"
   );
   popstate();
 
   assert.equal(sourceBrowser.route.environment_id, "ViZDoom");
   assert.equal(sourceBrowser.endpoint(), (
-    "/api/catalog/environments/ViZDoom/goals/DefendTheLine-v1"
-    + "/variants/goal-variant-a27a8239/runs?"
+    "/api/catalog/environments/ViZDoom/goals/DefendTheLine-v1/activity?"
   ));
   assert.equal(commands[1].name, "browse_sources");
   assert.equal(commands[1].payload.route.environment_id, "ViZDoom");
+  assert.equal(commands[1].payload.route.level, "goal_variants");
+  assert.equal(commands[1].payload.route.goal_variant_id, "");
+});
+
+test("runless run routes return to goal versions instead of rendering run selection", () => {
+  const browser = Object.create(SourceBrowser.prototype);
+  browser.app = { has_active_runner: true };
+  browser.route = {
+    level: "runs",
+    environment_id: "ViZDoom",
+    goal_id: "DefendTheLine-v1",
+    goal_variant_id: "goal-variant-a27a8239",
+    run_id: "gradlab-c22f7c7a",
+    checkpoint_id: "checkpoint-a",
+  };
+  browser.applyRoute = SourceBrowser.prototype.applyRoute;
+  browser.renderView = () => {};
+  browser.ensureLoaded = () => {};
+  browser.updatePolling = () => {};
+  browser.resetGoalVariantDetail = () => {};
+  browser.restoreEnvironmentCatalog = () => false;
+  browser.restoreGoalCatalog = () => false;
+  browser.hydrateInitialEnvironments = () => false;
+  browser.checkpointTrainingController = null;
+  browser.checkpointTrainingSerial = 0;
+  browser.selectedCheckpoints = new Set();
+  browser.syncUrl = () => {};
+  browser.openSourceRoute = () => {};
+
+  assert.equal(browser.navigate({ level: "runs", run_id: "", checkpoint_id: "" }), true);
+  assert.equal(browser.route.level, "goal_variants");
+  assert.equal(browser.route.goal_variant_id, "");
+  assert.equal(browser.route.run_id, "");
 });
 
 test("late catalog responses cannot populate a newer route", async (context) => {
@@ -1803,7 +1845,7 @@ test("late catalog responses cannot populate a newer route", async (context) => 
   assert.equal(sourceBrowser.items[0].recipe_count, 1);
 });
 
-test("goal variants are a first-class canonical route between goals and runs", () => {
+test("run and checkpoint routes preserve goal variant identity", () => {
   const variant = "goal-variant-0123456789abcdef01234567";
   const run = `gradlab-${"a".repeat(32)}`;
   const checkpoint = `checkpoint-12-${"b".repeat(16)}`;
@@ -1820,6 +1862,18 @@ test("goal variants are a first-class canonical route between goals and runs", (
     checkpoint_id: checkpoint,
   });
   assert.equal(sourceRoutePath(sourceRouteFromPath(path)), path);
+  assert.equal(
+    sourceRouteFromPath(`/environments/Mario/goals/Level1-1/variants/${variant}`),
+    null,
+  );
+  assert.equal(sourceRoutePath({
+    level: "goal_variants",
+    environment_id: "Mario",
+    goal_id: "Level1-1",
+    goal_variant_id: variant,
+    run_id: "",
+    checkpoint_id: "",
+  }), "/environments/Mario/goals/Level1-1");
 });
 
 test("stalled catalog requests time out with a recoverable error", async (context) => {
