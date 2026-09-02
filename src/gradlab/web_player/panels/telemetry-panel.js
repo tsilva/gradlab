@@ -742,9 +742,13 @@ function makeRewardBreakdownBlock(block, definition, services) {
   section.className = "telemetry-block telemetry-reward-breakdown";
   const toolbar = document.createElement("div");
   toolbar.className = "reward-analysis-toolbar";
-  const heading = document.createElement("span");
-  heading.className = "chart-heading";
-  heading.textContent = block.title || "Reward ledger";
+  toolbar.classList.toggle("titleless", !block.title);
+  if (block.title) {
+    const heading = document.createElement("span");
+    heading.className = "chart-heading";
+    heading.textContent = block.title;
+    toolbar.append(heading);
+  }
   const scopeLabel = document.createElement("label");
   scopeLabel.append("Scope ");
   const scope = document.createElement("select");
@@ -755,7 +759,7 @@ function makeRewardBreakdownBlock(block, definition, services) {
   );
   scope.value = block.scope === "episode" ? "episode" : "step";
   scopeLabel.append(scope);
-  toolbar.append(heading, scopeLabel);
+  toolbar.append(scopeLabel);
 
   const state = document.createElement("div");
   state.className = "reward-analysis-state empty-state";
@@ -781,10 +785,7 @@ function makeRewardBreakdownBlock(block, definition, services) {
   const summary = document.createElement("div");
   summary.className = "reward-ledger-summary";
   content.append(scroll, summary);
-  const foot = appendFoot(
-    section,
-    block.foot || "Signed contribution uses |final reward|; activity share uses absolute per-step impacts, so penalties remain negative and cancellation stays visible.",
-  );
+  const foot = appendFoot(section, block.foot);
   section.prepend(toolbar);
   section.insertBefore(state, foot);
   section.insertBefore(content, foot);
@@ -802,7 +803,7 @@ function makeRewardBreakdownBlock(block, definition, services) {
     const available = presentation.status === "available";
     state.hidden = available;
     content.hidden = !available;
-    foot.classList.toggle(
+    foot?.classList.toggle(
       "warning",
       ["protocol-error", "partial-history"].includes(presentation.status),
     );

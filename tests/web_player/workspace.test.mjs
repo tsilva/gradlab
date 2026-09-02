@@ -73,7 +73,7 @@ test("default workspace is a v7 editable all-panels view without redundant contr
   ]);
   assert.deepEqual(workspace.panels["reward-analysis"].placement, {
     x: 0,
-    y: 37,
+    y: 30,
     w: 12,
     h: 15,
     visible: true,
@@ -85,6 +85,7 @@ test("default workspace is a v7 editable all-panels view without redundant contr
   assert.equal(workspace.panels.attribution.type, "attribution");
   assert.equal(workspace.panels.attribution.placement.visible, true);
   assert.equal(workspace.panels.attribution.enabled, false);
+  assert.equal(workspace.panels.raw.placement.visible, false);
   assert.ok(
     Object.entries(workspace.panels)
       .filter(([id]) => !["attribution", "cnn"].includes(id))
@@ -92,7 +93,7 @@ test("default workspace is a v7 editable all-panels view without redundant contr
   );
   assert.ok(
     Object.entries(workspace.panels)
-      .filter(([id]) => id !== "controls")
+      .filter(([id]) => !["controls", "raw"].includes(id))
       .every(([, panel]) => panel.placement.visible === true),
   );
 });
@@ -152,6 +153,7 @@ test("workspace normalization preserves explicit disabled processing state", () 
 
 test("workspace normalization preserves a saved custom panel arrangement", () => {
   const workspace = createDefaultWorkspace();
+  workspace.panels.raw.placement.visible = true;
   workspace.panels.policy.placement = {
     x: 0,
     y: 30,
@@ -171,6 +173,7 @@ test("workspace normalization preserves a saved custom panel arrangement", () =>
 
   const normalized = normalizeWorkspace(workspace);
 
+  assert.equal(normalized.panels.raw.placement.visible, true);
   assert.deepEqual(normalized.panels.policy.placement, workspace.panels.policy.placement);
   assert.deepEqual(
     normalized.panels.observation.placement,
@@ -254,6 +257,10 @@ test("paired workspace gives every panel in a logical row the same height", () =
     window: "main",
   });
   assert.equal(workspace.panels.controls.placement.visible, false);
+  assert.equal(workspace.panels.raw.placement.visible, false);
+  assert.equal(workspace.panels["reward-analysis"].placement.y, 23);
+  assert.equal(workspace.panels.attribution.placement.y, 38);
+  assert.equal(workspace.panels.cnn.placement.y, 38);
 });
 
 test("non-current workspace data is replaced instead of interpreted", () => {

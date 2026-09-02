@@ -88,10 +88,10 @@ const ALL_PANELS_LAYOUT = Object.freeze({
   "step-reward": { x: 0, y: 23, w: 4, h: 7, visible: true, window: "main" },
   "episode-return": { x: 4, y: 23, w: 4, h: 7, visible: true, window: "main" },
   events: { x: 8, y: 23, w: 4, h: 7, visible: true, window: "main" },
-  raw: { x: 0, y: 30, w: 12, h: 7, visible: true, window: "main" },
-  "reward-analysis": { x: 0, y: 37, w: 12, h: 15, visible: true, window: "main" },
-  attribution: { x: 0, y: 52, w: 4, h: 15, visible: true, window: "main" },
-  cnn: { x: 4, y: 52, w: 8, h: 15, visible: true, window: "main" },
+  raw: { x: 0, y: 30, w: 12, h: 7, visible: false, window: "main" },
+  "reward-analysis": { x: 0, y: 30, w: 12, h: 15, visible: true, window: "main" },
+  attribution: { x: 0, y: 45, w: 4, h: 15, visible: true, window: "main" },
+  cnn: { x: 4, y: 45, w: 8, h: 15, visible: true, window: "main" },
 });
 
 const PAIRED_LAYOUT = Object.freeze({
@@ -104,10 +104,10 @@ const PAIRED_LAYOUT = Object.freeze({
   observation: { x: 0, y: 15, w: 6, h: 8, visible: true, window: "stats" },
   signals: { x: 6, y: 15, w: 3, h: 8, visible: true, window: "stats" },
   events: { x: 9, y: 15, w: 3, h: 8, visible: true, window: "stats" },
-  raw: { x: 0, y: 23, w: 12, h: 7, visible: true, window: "stats" },
-  "reward-analysis": { x: 0, y: 30, w: 12, h: 15, visible: true, window: "stats" },
-  attribution: { x: 0, y: 45, w: 4, h: 15, visible: true, window: "stats" },
-  cnn: { x: 4, y: 45, w: 8, h: 15, visible: true, window: "stats" },
+  raw: { x: 0, y: 23, w: 12, h: 7, visible: false, window: "stats" },
+  "reward-analysis": { x: 0, y: 23, w: 12, h: 15, visible: true, window: "stats" },
+  attribution: { x: 0, y: 38, w: 4, h: 15, visible: true, window: "stats" },
+  cnn: { x: 4, y: 38, w: 8, h: 15, visible: true, window: "stats" },
 });
 
 export const BUILTIN_PANEL_PRESETS = Object.freeze({
