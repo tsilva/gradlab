@@ -18,6 +18,7 @@ from gradlab.goal_catalog import (
 from gradlab.play_catalog import (
     PlayCatalog,
     WandbRunLocation,
+    _projected_run_evaluation_status,
     checkpoint_metric_contract,
     checkpoint_metric_leaders,
     parse_wandb_location,
@@ -46,6 +47,15 @@ from gradlab.run_contracts import (
 
 
 RUN_ID = "gradlab-" + "a" * 32
+
+
+def test_projected_run_evaluation_status_distinguishes_missing_evidence() -> None:
+    assert _projected_run_evaluation_status({}) == "not_evaluated"
+    assert _projected_run_evaluation_status({"evaluation": {"status": "running"}}) == "in_progress"
+    assert (
+        _projected_run_evaluation_status({"evaluation": {"status": "rejected"}}) == "not_accepted"
+    )
+    assert _projected_run_evaluation_status({"evaluation": {"status": "accepted"}}) == "accepted"
 
 
 def goal_catalog_documents(
@@ -969,6 +979,21 @@ def test_repository_catalog_allows_empty_namespace_index(tmp_path: Path) -> None
     )
 
     assert PlayCatalog(repo_root=tmp_path).environments().items == ()
+
+
+def test_environment_search_without_possible_matches_skips_control_enrichment(
+    tmp_path: Path,
+) -> None:
+    write_indexed_goal_catalog(tmp_path)
+
+    class UnexpectedControlRead:
+        @staticmethod
+        def get_json_many_optional(keys: Iterable[str]):
+            raise AssertionError(f"unexpected control-catalog read for {tuple(keys)}")
+
+    catalog = PlayCatalog(repo_root=tmp_path, control_bucket=UnexpectedControlRead())
+
+    assert catalog.environments(query="adfadsf").items == ()
 
 
 def test_indexed_project_listing_does_not_parse_goal_contracts_and_scopes_goal_reads(
