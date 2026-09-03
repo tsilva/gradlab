@@ -767,6 +767,7 @@ class _PlaybackRunnerProtocol:
         self.history: deque[dict[str, Any]] = deque(maxlen=HISTORY_LIMIT)
         self._snapshot_lock = threading.Lock()
         self._latest_snapshot: dict[str, Any] = {}
+        self._snapshot_updates: deque[dict[str, Any]] = deque(maxlen=HISTORY_LIMIT)
         self._stop = threading.Event()
         self.revision = 0
         self.processing_features = PLAYER_PROCESSING_FEATURES
@@ -810,6 +811,12 @@ class _PlaybackRunnerProtocol:
     def snapshot(self) -> dict[str, Any]:
         with self._snapshot_lock:
             return dict(self._latest_snapshot)
+
+    def drain_snapshot_updates(self) -> list[dict[str, Any]]:
+        with self._snapshot_lock:
+            updates = list(self._snapshot_updates)
+            self._snapshot_updates.clear()
+            return updates
 
     def episode_start_payload(
         self,
@@ -1258,6 +1265,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 )
         with self._snapshot_lock:
             self._latest_snapshot = payload
+            self._snapshot_updates.append(payload)
             if transition is None and self.session.step_index == 0:
                 self._episode_start_snapshot = payload
                 self._episode_start_frames = episode_start_frames
@@ -1633,6 +1641,7 @@ class DatasetPlaybackRunner(_PlaybackRunnerProtocol):
         payload = self._snapshot_payload()
         with self._snapshot_lock:
             self._latest_snapshot = payload
+            self._snapshot_updates.append(payload)
             if self.sequence == 0:
                 self._episode_start_snapshot = payload
                 self._episode_start_frames = {
@@ -1978,7 +1987,7 @@ class HumanRecordingRunner(_PlaybackRunnerProtocol):
                 and int(self.history[-1]["sequence"]) == self.sequence
                 else None
             )
-            self._latest_snapshot = {
+            payload = {
                 "type": "snapshot",
                 "protocol": PROTOCOL_VERSION,
                 "mode": "recording",
@@ -2021,6 +2030,8 @@ class HumanRecordingRunner(_PlaybackRunnerProtocol):
                 "transition": self._transition,
                 "history_point": current_history,
             }
+            self._latest_snapshot = payload
+            self._snapshot_updates.append(payload)
 
     def action(self, frame: np.ndarray) -> tuple[Any | None, bool]:
         self.encoder.submit(FRAME_GAME, self.sequence, frame)
@@ -2143,7 +2154,9 @@ class WebClient:
         self.window_id = window_id
         self.reliable: asyncio.Queue[str | bytes] = asyncio.Queue(CLIENT_QUEUE_LIMIT)
         self.event = asyncio.Event()
-        self.latest_snapshot: str | None = None
+        self.pending_snapshots: deque[tuple[tuple[int, int, int, int], str]] = deque(
+            maxlen=HISTORY_LIMIT
+        )
         self.latest_snapshot_key: tuple[int, int, int, int] = (-1, -1, -1, -1)
         self.sent_snapshot_key: tuple[int, int, int, int] = (-1, -1, -1, -1)
         self.latest_frames: dict[int, tuple[int, bytes]] = {}
@@ -2169,10 +2182,17 @@ class WebClient:
             int(payload.get("sequence", 0)),
             int(payload.get("control_epoch", 0)),
         )
-        if key >= self.latest_snapshot_key:
-            self.latest_snapshot_key = key
-            self.latest_snapshot = json.dumps(payload, separators=(",", ":"), allow_nan=False)
-            self.event.set()
+        if key < self.latest_snapshot_key:
+            return
+        rendered = json.dumps(payload, separators=(",", ":"), allow_nan=False)
+        if self.pending_snapshots and key == self.pending_snapshots[-1][0]:
+            self.pending_snapshots[-1] = (key, rendered)
+        elif key > self.latest_snapshot_key:
+            self.pending_snapshots.append((key, rendered))
+        else:
+            return
+        self.latest_snapshot_key = key
+        self.event.set()
 
     def offer_frame(self, kind: int, sequence: int, packet: bytes) -> None:
         if sequence >= self.latest_frames.get(kind, (-1, b""))[0]:
@@ -2180,7 +2200,7 @@ class WebClient:
             self.event.set()
 
     def reset_session(self, epoch: int) -> None:
-        self.latest_snapshot = None
+        self.pending_snapshots.clear()
         self.latest_snapshot_key = (int(epoch), -1, -1, -1)
         self.sent_snapshot_key = (int(epoch), -1, -1, -1)
         self.latest_frames.clear()
@@ -2197,12 +2217,10 @@ class WebClient:
                     await self.socket.send_bytes(value)
                 else:
                     await self.socket.send_str(value)
-            if (
-                self.latest_snapshot is not None
-                and self.latest_snapshot_key > self.sent_snapshot_key
-            ):
-                await self.socket.send_str(self.latest_snapshot)
-                self.sent_snapshot_key = self.latest_snapshot_key
+            while self.pending_snapshots:
+                key, snapshot = self.pending_snapshots.popleft()
+                await self.socket.send_str(snapshot)
+                self.sent_snapshot_key = key
             for kind, (sequence, packet) in tuple(self.latest_frames.items()):
                 if (sequence, packet) != self.sent_frames.get(kind):
                     await self.socket.send_bytes(packet)
@@ -3440,13 +3458,22 @@ class PlaybackWebServer:
                 self._announce_session_change()
                 if self.clients:
                     self._maybe_auto_start(next(iter(self.clients)))
-            snapshot = self.runner.snapshot()
-            key = (
-                int(snapshot.get("session_epoch", 0)),
-                int(snapshot.get("revision", 0)),
-                int(snapshot.get("sequence", 0)),
+            drain_snapshot_updates = getattr(self.runner, "drain_snapshot_updates", None)
+            snapshots = (
+                drain_snapshot_updates()
+                if callable(drain_snapshot_updates)
+                else [self.runner.snapshot()]
             )
-            if key != latest_snapshot_key:
+            if not snapshots:
+                snapshots = [self.runner.snapshot()]
+            for snapshot in snapshots:
+                key = (
+                    int(snapshot.get("session_epoch", 0)),
+                    int(snapshot.get("revision", 0)),
+                    int(snapshot.get("sequence", 0)),
+                )
+                if key == latest_snapshot_key:
+                    continue
                 latest_snapshot_key = key
                 for client in tuple(self.clients.values()):
                     if "telemetry" in client.subscriptions:

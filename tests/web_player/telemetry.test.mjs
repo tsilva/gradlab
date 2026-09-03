@@ -25,6 +25,8 @@ import {
   lineLegendPresentation,
   lineLegendPresentationAtIndex,
   lineBlockFootPresentation,
+  policyDecisionLayoutEnabled,
+  policyDecisionPresentation,
   rewardSummaryCards,
   selectedPoint,
   statsBlockFoot,
@@ -118,6 +120,94 @@ test("policy distributions omit the redundant action summary caption", () => {
   assert.doesNotMatch(
     telemetryPanelSource,
     /executed actions? in the retained episode|setActionComparisonCaption/,
+  );
+});
+
+test("the built-in policy panel uses the decision-first layout only for its canonical blocks", () => {
+  const definition = {
+    id: "policy",
+    config: {
+      blocks: [
+        {
+          kind: "stats",
+          metrics: [
+            "policy/mode",
+            "action/policy",
+            "policy/value",
+            "policy/entropy",
+            "policy/log-probability",
+            "policy/program",
+          ],
+        },
+        { kind: "distribution", metric: "policy/distribution" },
+      ],
+    },
+  };
+
+  assert.equal(policyDecisionLayoutEnabled(definition), true);
+  assert.equal(policyDecisionLayoutEnabled({ ...definition, id: "custom" }), false);
+  assert.equal(policyDecisionLayoutEnabled({
+    ...definition,
+    config: { blocks: definition.config.blocks.slice(1) },
+  }), false);
+});
+
+test("policy decision presentation keeps selection, probability, and episode frequency distinct", () => {
+  const entries = ["noop", "button", "right", "left"].map((label, value) => ({
+    value,
+    semantic_id: label,
+    label,
+  }));
+  const snapshot = {
+    policy: {
+      algorithm_id: "ppo",
+      introspection: [
+        "actor_distribution",
+        "state_value",
+        "entropy",
+        "selected_action_log_probability",
+      ],
+    },
+    transition: {
+      executed_action: 3,
+      decision: {
+        action_selection_mode: "stochastic",
+        selected_action: 3,
+        probabilities: [0.041, 0.165, 0.014, 0.78],
+        value: 3.7437,
+        entropy: 0.6828,
+        log_probability: -0.2486,
+      },
+    },
+    session: {
+      action_contract: {
+        policy: {
+          space: { type: "discrete", n: 4, start: 0 },
+          semantics: { status: "available", encoding: "explicit", entries },
+        },
+      },
+    },
+  };
+  const history = [
+    ...Array.from({ length: 10 }, () => ({ executed_action: 0 })),
+    ...Array.from({ length: 26 }, () => ({ executed_action: 1 })),
+    ...Array.from({ length: 22 }, () => ({ executed_action: 2 })),
+    ...Array.from({ length: 42 }, () => ({ executed_action: 3 })),
+  ];
+
+  const presentation = policyDecisionPresentation(snapshot, history, {});
+
+  assert.equal(presentation.discrete, true);
+  assert.equal(presentation.action, "left");
+  assert.equal(presentation.mode, "stochastic");
+  assert.equal(presentation.stepProbability, 0.78);
+  assert.deepEqual(
+    presentation.rows.map(({ episodeProbability }) => episodeProbability),
+    [0.1, 0.26, 0.22, 0.42],
+  );
+  assert.deepEqual(
+    presentation.stats.map(({ label, value }) => [label, value]),
+    [["V(s)", "3.7437"], ["Entropy", "0.6828"], ["Log p", "-0.2486"]],
   );
 });
 

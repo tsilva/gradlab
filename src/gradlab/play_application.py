@@ -270,6 +270,22 @@ class PlaybackHost:
                 "app": self._app_payload(),
             }
 
+    def drain_snapshot_updates(self) -> list[dict[str, Any]]:
+        with self._lock:
+            if self._active is None or self._phase != "active":
+                return []
+            updates = self._active.runner.drain_snapshot_updates()
+            session_epoch = self._session_epoch
+            app = self._app_payload()
+        return [
+            {
+                **snapshot,
+                "session_epoch": session_epoch,
+                "app": app,
+            }
+            for snapshot in updates
+        ]
+
     def history_payload(self) -> dict[str, Any]:
         with self._lock:
             if self._active is None or self._phase != "active":
