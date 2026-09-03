@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +17,7 @@ from gradlab.recipe_documents import load_goal_contract
 from gradlab.wandb_utils import resolve_wandb_project
 
 
-WORKSPACE_SCHEMA_VERSION = 1
+WORKSPACE_SCHEMA_VERSION = 4
 DEFAULT_WORKSPACE_MANIFEST = Path("experiments/goals/_workspaces.yaml")
 _SAFE_ID = re.compile(r"^[a-z][a-z0-9_-]*$")
 _RUN_SCOPES = frozenset({"current_metrics_schema"})
@@ -29,13 +29,18 @@ _WORKSPACE_GRID_WIDTH = 24
 class WorkspacePanelSpec:
     panel_id: str
     kind: str
-    title: str
     x: str
     y: tuple[str, ...]
     metric_templates: tuple[str, ...]
     width: int
     height: int
     y_title: str | None
+
+    @property
+    def title(self) -> str:
+        """Use the canonical metric selectors as the visible panel title."""
+
+        return " · ".join((*self.y, *self.metric_templates))
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -174,7 +179,7 @@ def _panel_spec(panel_id: str, value: Any, *, label: str) -> WorkspacePanelSpec:
     document = _mapping(value, label=label)
     _reject_unknown(
         document,
-        {"kind", "title", "x", "y", "metric_templates", "width", "height", "y_title"},
+        {"kind", "x", "y", "metric_templates", "width", "height", "y_title"},
         label=label,
     )
     kind = _text(document.get("kind"), label=f"{label}.kind")
@@ -215,7 +220,6 @@ def _panel_spec(panel_id: str, value: Any, *, label: str) -> WorkspacePanelSpec:
     return WorkspacePanelSpec(
         panel_id=_identifier(panel_id, label=f"{label} id"),
         kind=kind,
-        title=_text(document.get("title"), label=f"{label}.title"),
         x=x,
         y=y,
         metric_templates=metric_templates,
@@ -312,6 +316,73 @@ def _profile_spec(
     )
 
 
+def _profile_sections_without_panels(
+    profile: WorkspaceProfileSpec,
+    excluded_panel_ids: Sequence[str],
+    *,
+    label: str,
+) -> tuple[WorkspaceSectionSpec, ...]:
+    excluded = set(excluded_panel_ids)
+    available = {
+        panel.panel_id
+        for section in profile.sections
+        for panel in section.panels
+    }
+    unknown = sorted(excluded - available)
+    if unknown:
+        raise ValueError(f"{label} references unknown panel(s): {', '.join(unknown)}")
+    sections = tuple(
+        replace(
+            section,
+            panels=tuple(
+                panel for panel in section.panels if panel.panel_id not in excluded
+            ),
+        )
+        for section in profile.sections
+    )
+    empty = [section.section_id for section in sections if not section.panels]
+    if empty:
+        raise ValueError(f"{label} leaves empty section(s): {', '.join(empty)}")
+    return sections
+
+
+def _sections_without_metrics(
+    sections: Sequence[WorkspaceSectionSpec],
+    excluded_metric_names: Sequence[str],
+    *,
+    label: str,
+) -> tuple[WorkspaceSectionSpec, ...]:
+    excluded = set(excluded_metric_names)
+    available = {
+        metric
+        for section in sections
+        for panel in section.panels
+        for metric in (*panel.y, *panel.metric_templates)
+    }
+    unknown = sorted(excluded - available)
+    if unknown:
+        raise ValueError(f"{label} references unknown metric(s): {', '.join(unknown)}")
+    filtered_sections: list[WorkspaceSectionSpec] = []
+    for section in sections:
+        filtered_panels: list[WorkspacePanelSpec] = []
+        for panel in section.panels:
+            filtered_panel = replace(
+                panel,
+                y=tuple(metric for metric in panel.y if metric not in excluded),
+                metric_templates=tuple(
+                    metric for metric in panel.metric_templates if metric not in excluded
+                ),
+            )
+            if filtered_panel.y or filtered_panel.metric_templates:
+                filtered_panels.append(filtered_panel)
+        filtered_sections.append(replace(section, panels=tuple(filtered_panels)))
+    result = tuple(filtered_sections)
+    empty = [section.section_id for section in result if not section.panels]
+    if empty:
+        raise ValueError(f"{label} leaves empty section(s): {', '.join(empty)}")
+    return result
+
+
 def discover_wandb_projects(repo_root: Path | str = Path(".")) -> tuple[str, ...]:
     repo_root = Path(repo_root).resolve()
     projects: set[str] = set()
@@ -388,9 +459,19 @@ def load_workspace_declaration(
             + ", ".join(unknown_projects)
         )
     assignments = {project: default_profile for project in discovered_projects}
+    panel_exclusions: dict[str, tuple[str, ...]] = {
+        project: () for project in discovered_projects
+    }
+    metric_exclusions: dict[str, tuple[str, ...]] = {
+        project: () for project in discovered_projects
+    }
     for project, raw_override in project_overrides.items():
         override = _mapping(raw_override, label=f"{path}.projects.{project}")
-        _reject_unknown(override, {"profile"}, label=f"{path}.projects.{project}")
+        _reject_unknown(
+            override,
+            {"profile", "exclude_panels", "exclude_metrics"},
+            label=f"{path}.projects.{project}",
+        )
         profile_id = _identifier(
             override.get("profile"), label=f"{path}.projects.{project}.profile"
         )
@@ -399,6 +480,38 @@ def load_workspace_declaration(
                 f"{path}.projects.{project}.profile references unknown profile {profile_id!r}"
             )
         assignments[project] = profile_id
+        raw_exclusions = override.get("exclude_panels", ())
+        if not isinstance(raw_exclusions, Sequence) or isinstance(
+            raw_exclusions, str | bytes
+        ):
+            raise ValueError(f"{path}.projects.{project}.exclude_panels must be a list")
+        panel_exclusions[project] = tuple(
+            _identifier(
+                panel_id,
+                label=f"{path}.projects.{project}.exclude_panels[{index}]",
+            )
+            for index, panel_id in enumerate(raw_exclusions)
+        )
+        if len(set(panel_exclusions[project])) != len(panel_exclusions[project]):
+            raise ValueError(
+                f"{path}.projects.{project}.exclude_panels must not contain duplicates"
+            )
+        raw_metric_exclusions = override.get("exclude_metrics", ())
+        if not isinstance(raw_metric_exclusions, Sequence) or isinstance(
+            raw_metric_exclusions, str | bytes
+        ):
+            raise ValueError(f"{path}.projects.{project}.exclude_metrics must be a list")
+        metric_exclusions[project] = tuple(
+            _text(
+                metric,
+                label=f"{path}.projects.{project}.exclude_metrics[{index}]",
+            )
+            for index, metric in enumerate(raw_metric_exclusions)
+        )
+        if len(set(metric_exclusions[project])) != len(metric_exclusions[project]):
+            raise ValueError(
+                f"{path}.projects.{project}.exclude_metrics must not contain duplicates"
+            )
 
     used_profiles = set(assignments.values())
     unused_profiles = sorted(set(profiles) - used_profiles)
@@ -426,7 +539,15 @@ def load_workspace_declaration(
             display_name=profiles[assignments[project]].display_name,
             run_scope=profiles[assignments[project]].run_scope,
             max_runs=profiles[assignments[project]].max_runs,
-            sections=profiles[assignments[project]].sections,
+            sections=_sections_without_metrics(
+                _profile_sections_without_panels(
+                    profiles[assignments[project]],
+                    panel_exclusions[project],
+                    label=f"{path}.projects.{project}.exclude_panels",
+                ),
+                metric_exclusions[project],
+                label=f"{path}.projects.{project}.exclude_metrics",
+            ),
         )
         for project in discovered_projects
     )

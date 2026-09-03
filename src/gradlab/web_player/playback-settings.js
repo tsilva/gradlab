@@ -85,14 +85,13 @@ export function mountPlaybackSettings({ services, idPrefix = "playback" }) {
           <option value="evaluation">Published evaluation</option>
           <option value="counterfactual">Counterfactual overrides</option>
         </select>
-        <button data-apply-contract class="quiet button-with-icon" type="button" aria-label="Apply environment contract" title="Apply environment contract and start a new shared session"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-check"></use></svg><span>Apply</span></button>
       </div>
       <p id="${idPrefix}-contract-hint" class="control-hint" data-contract-hint>Training-time policy semantics are the default.</p>
       <fieldset class="termination-settings" data-termination-settings>
         <legend>Episode termination</legend>
         <p class="control-hint" data-termination-source></p>
         <div class="termination-options" data-termination-options></div>
-        <p class="control-hint">Selections apply with Reset or Next episode.</p>
+        <p class="control-hint">Changes apply immediately before an episode starts.</p>
       </fieldset>
     </div>
   `;
@@ -103,7 +102,6 @@ export function mountPlaybackSettings({ services, idPrefix = "playback" }) {
   const samplingHint = element.querySelector("[data-sampling-hint]");
   const contractMode = element.querySelector("[data-contract-mode]");
   const contractSettings = element.querySelector("[data-playback-contract]");
-  const applyContract = element.querySelector("[data-apply-contract]");
   const contractHint = element.querySelector("[data-contract-hint]");
   const terminationSettings = element.querySelector("[data-termination-settings]");
   const terminationOptions = element.querySelector("[data-termination-options]");
@@ -126,9 +124,18 @@ export function mountPlaybackSettings({ services, idPrefix = "playback" }) {
     enabled_termination_conditions: enabledTerminationConditions(),
   });
 
-  applyContract.addEventListener("click", () => services.command("set_contract_mode", {
+  sampling.addEventListener("change", () => services.command("set_action_selection_mode", {
+    mode: sampling.value,
+  }));
+  contractMode.addEventListener("change", () => services.command("set_contract_mode", {
     mode: contractMode.value,
   }));
+  terminationOptions.addEventListener("change", (event) => {
+    if (!event.target.matches('input[type="checkbox"]')) return;
+    services.command("set_termination_conditions", {
+      enabled: enabledTerminationConditions(),
+    });
+  });
   fps.addEventListener("input", () => {
     if (!fps.validity.valid || fps.value.trim() === "") return;
     services.command("set_fps", { fps: Number(fps.value) });
@@ -145,7 +152,6 @@ export function mountPlaybackSettings({ services, idPrefix = "playback" }) {
     seed.disabled = readOnly || recording || dataset;
     sampling.disabled = readOnly || recording || dataset || sampling.options.length <= 1;
     contractMode.disabled = readOnly || recording || dataset;
-    applyContract.disabled = readOnly || recording || dataset;
     const canChangeTermination = (
       !recording
       && !dataset

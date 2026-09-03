@@ -594,6 +594,94 @@ def test_play_does_not_mutate_active_episode_dispatch_settings() -> None:
     assert runner.driver == "policy"
 
 
+def test_action_selection_mode_changes_during_active_episode() -> None:
+    transition = argparse.Namespace(boundary=False, events=())
+    session = argparse.Namespace(
+        config={"game": "Game-v0"},
+        step_index=12,
+        last_transition=None,
+        step=Mock(return_value=transition),
+        reset_episode=Mock(),
+    )
+    runner = WebPlaybackRunner(session, human_args(episodes=0), config_text="")
+    runner._publish = Mock()
+    runner.capture.abort = Mock()
+    runner.run_state = "playing"
+
+    runner._apply(
+        PlaybackCommand(
+            "selection",
+            "client",
+            "set_action_selection_mode",
+            {"mode": "deterministic"},
+            None,
+        )
+    )
+
+    assert runner.sampling_mode == "deterministic"
+    assert runner.run_state == "playing"
+    session.reset_episode.assert_not_called()
+    runner.capture.abort.assert_called_once_with(
+        "action selection changed during the active playback session"
+    )
+
+    runner._step_once()
+
+    session.step.assert_called_once_with(deterministic=True)
+
+
+def test_action_selection_mode_changes_before_first_step_without_reset() -> None:
+    session = argparse.Namespace(
+        config={"game": "Game-v0"},
+        step_index=0,
+        last_transition=None,
+        reset_episode=Mock(),
+    )
+    runner = WebPlaybackRunner(session, human_args(episodes=0), config_text="")
+    runner._publish = Mock()
+    runner._begin_capture = Mock()
+
+    runner._apply(
+        PlaybackCommand(
+            "selection",
+            "client",
+            "set_action_selection_mode",
+            {"mode": "deterministic"},
+            None,
+        )
+    )
+
+    assert runner.sampling_mode == "deterministic"
+    assert runner.run_state == "paused"
+    session.reset_episode.assert_not_called()
+    runner._begin_capture.assert_called_once_with()
+
+
+def test_action_selection_mode_rejects_unsupported_mode() -> None:
+    session = argparse.Namespace(
+        config={"game": "Game-v0"},
+        step_index=0,
+        last_transition=None,
+    )
+    runner = WebPlaybackRunner(session, human_args(episodes=0), config_text="")
+    runner._publish = Mock()
+
+    runner._apply(
+        PlaybackCommand(
+            "selection",
+            "client",
+            "set_action_selection_mode",
+            {"mode": "unsupported"},
+            None,
+        )
+    )
+
+    assert runner.sampling_mode == "stochastic"
+    response = runner.responses.get_nowait().payload
+    assert response["ok"] is False
+    assert "unsupported action-selection mode" in response["error"]
+
+
 def test_termination_conditions_can_change_before_first_step() -> None:
     session = argparse.Namespace(
         config={"game": "Game-v0"},

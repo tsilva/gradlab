@@ -1,4 +1,5 @@
 import { createPanel } from "./shared.js";
+import { eventColor, eventColorFill, eventLabels } from "../event-colors.js";
 
 export function mount({ definition, services }) {
   const element = createPanel({
@@ -35,6 +36,7 @@ export function mount({ definition, services }) {
         return;
       }
       list.replaceChildren(...visible.map((point) => {
+        const labels = eventLabels(point);
         const item = document.createElement("li");
         const isSelected = selected
           && Number(point.sequence) === Number(selected.sequence);
@@ -43,17 +45,25 @@ export function mount({ definition, services }) {
           point.boundary ? "boundary" : "",
           isSelected ? "selected" : "",
         ].filter(Boolean).join(" ");
+        item.style.setProperty("--event-colors", eventColorFill(labels));
         const jump = document.createElement("button");
         jump.type = "button";
         jump.className = "event-jump";
         const label = document.createElement("div");
-        label.textContent = point.events?.length ? point.events.join(" · ") : "episode boundary";
+        label.className = "event-labels";
+        label.append(...labels.map((eventLabel) => {
+          const part = document.createElement("span");
+          part.className = "event-label";
+          part.style.setProperty("--event-color", eventColor(eventLabel));
+          part.textContent = eventLabel;
+          return part;
+        }));
         const meta = document.createElement("div");
         meta.className = "event-meta";
         meta.textContent = `seq ${point.sequence} · ep ${point.episode} · step ${point.step}`;
         jump.setAttribute(
           "aria-label",
-          `Inspect ${label.textContent} at episode ${point.episode}, step ${point.step}`,
+          `Inspect ${labels.join(" · ")} at episode ${point.episode}, step ${point.step}`,
         );
         if (isSelected) jump.setAttribute("aria-current", "step");
         jump.addEventListener("click", () => services.inspectSequence(point.sequence));

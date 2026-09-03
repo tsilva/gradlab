@@ -79,6 +79,13 @@ export function lineLegendPresentationAtIndex(descriptors, history, index) {
   }));
 }
 
+export function lineCursorSequence(history, plot, x, pointCount) {
+  const index = lineCursorIndex(plot, x, pointCount);
+  if (index === null) return null;
+  const sequence = history[index]?.sequence;
+  return sequence === null || sequence === undefined ? null : sequence;
+}
+
 function renderedValue(value, descriptor, snapshot) {
   if (descriptor?.type === "categorical" && value !== null && value !== undefined) {
     return formatActionValue(value, snapshot);
@@ -302,7 +309,7 @@ export function policyDecisionPresentation(snapshot, history, view) {
   };
 }
 
-function makeLineBlock(block) {
+function makeLineBlock(block, services) {
   const section = document.createElement("section");
   section.className = "telemetry-block telemetry-plot";
   const descriptors = block.metrics.map(descriptorFor).filter(Boolean);
@@ -355,6 +362,18 @@ function makeLineBlock(block) {
   canvas.addEventListener("pointerleave", () => {
     hoverX = null;
     renderChart(currentContext);
+  });
+  canvas.addEventListener("click", (event) => {
+    const bounds = canvas.getBoundingClientRect();
+    if (!(bounds.width > 0)) return;
+    const x = (event.clientX - bounds.left) * (canvas.clientWidth / bounds.width);
+    const sequence = lineCursorSequence(
+      currentContext.history,
+      chartGeometry?.plot,
+      x,
+      chartGeometry?.pointCount,
+    );
+    if (sequence !== null) services.inspectSequence?.(sequence);
   });
 
   return {
@@ -1105,7 +1124,7 @@ function makeRewardBreakdownBlock(block, definition, services) {
 
 function makeBlock(block, definition, services) {
   if (block.kind === "stats") return makeStatsBlock(block);
-  if (block.kind === "line") return makeLineBlock(block);
+  if (block.kind === "line") return makeLineBlock(block, services);
   if (block.kind === "histogram") return makeHistogramBlock(block);
   if (block.kind === "distribution") return makeDistributionBlock(block);
   if (block.kind === "reward-breakdown") {

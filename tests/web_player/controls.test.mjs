@@ -327,7 +327,20 @@ test("playback settings distinguish training and active frame skip", () => {
   );
 });
 
-test("episode termination selections flow through Reset and Next episode", () => {
+test("playback settings apply on change", () => {
+  assert.match(
+    settings,
+    /sampling\.addEventListener\("change", \(\) => services\.command\("set_action_selection_mode"/,
+  );
+  assert.match(
+    settings,
+    /contractMode\.addEventListener\("change", \(\) => services\.command\("set_contract_mode"/,
+  );
+  assert.match(
+    settings,
+    /terminationOptions\.addEventListener\("change"[\s\S]*services\.command\("set_termination_conditions"/,
+  );
+  assert.doesNotMatch(settings, /data-apply-contract/);
   assert.match(
     settings,
     /enabled_termination_conditions: enabledTerminationConditions\(\)/,
@@ -340,7 +353,7 @@ test("episode termination selections flow through Reset and Next episode", () =>
     app,
     /command\("reset_episode", \{[\s\S]*seed: options\.seed,[\s\S]*enabled_termination_conditions: options\.enabled_termination_conditions/,
   );
-  assert.match(settings, /Selections apply with Reset or Next episode\./);
+  assert.match(settings, /Changes apply immediately before an episode starts\./);
 });
 
 test("episode termination settings prioritize and color semantic outcomes", () => {

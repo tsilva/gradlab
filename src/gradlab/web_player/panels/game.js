@@ -86,6 +86,11 @@ export function mount({ definition, services }) {
   const pressed = new Set();
   let focused = false;
   let aspect = 256 / 240;
+  let targetSnapshot = null;
+  let targetSequence = null;
+  let frameSequence = null;
+  let bitmapRequest = 0;
+  let mounted = true;
   const mapping = new Map([
     ["ArrowUp", "up"], ["ArrowDown", "down"], ["ArrowLeft", "left"], ["ArrowRight", "right"],
     ["z", "b"], ["Z", "b"], ["x", "a"], ["X", "a"], ["Enter", "start"], ["Shift", "select"],
@@ -139,35 +144,59 @@ export function mount({ definition, services }) {
     if (focused && state.hasControl && state.snapshot?.driver === "human") publish(true);
   }, 50);
 
+  const commitSnapshot = (snapshot) => {
+    const phase = gameFramePhase(snapshot);
+    const detail = gameFrameTerminationDetail(snapshot);
+    const tone = gameFrameTerminationTone(snapshot);
+    element.querySelector("[data-frame-phase]").textContent = phase;
+    const detailElement = element.querySelector("[data-frame-detail]");
+    detailElement.textContent = detail;
+    detailElement.title = detail;
+    detailElement.hidden = !detail;
+    detailElement.classList.toggle("outcome-success", tone === "success");
+    detailElement.classList.toggle("outcome-failure", tone === "failure");
+    detailElement.classList.toggle("outcome-timeout", tone === "timeout");
+    canvas.setAttribute(
+      "aria-label",
+      `${phase}.${detail ? ` ${detail}.` : ""} Focus for human controls: arrows move, Z is B, X is A, Enter is Start, and Shift is Select.`,
+    );
+  };
+
   return {
     element,
-    render(snapshot) {
-      const phase = gameFramePhase(snapshot);
-      const detail = gameFrameTerminationDetail(snapshot);
-      const tone = gameFrameTerminationTone(snapshot);
-      element.querySelector("[data-frame-phase]").textContent = phase;
-      const detailElement = element.querySelector("[data-frame-detail]");
-      detailElement.textContent = detail;
-      detailElement.title = detail;
-      detailElement.hidden = !detail;
-      detailElement.classList.toggle("outcome-success", tone === "success");
-      detailElement.classList.toggle("outcome-failure", tone === "failure");
-      detailElement.classList.toggle("outcome-timeout", tone === "timeout");
-      canvas.setAttribute(
-        "aria-label",
-        `${phase}.${detail ? ` ${detail}.` : ""} Focus for human controls: arrows move, Z is B, X is A, Enter is Start, and Shift is Select.`,
-      );
+    render(nextSnapshot) {
+      targetSnapshot = nextSnapshot;
+      targetSequence = Number(nextSnapshot?.sequence);
+      if (frameSequence === targetSequence) commitSnapshot(nextSnapshot);
     },
-    async renderFrame(kind, blob) {
+    async renderFrame(kind, blob, metadata = {}) {
       if (kind !== FRAME_GAME) return false;
+      const incomingSequence = Number(metadata.sequence);
+      if (incomingSequence !== targetSequence) return true;
+      const frameSnapshot = targetSnapshot;
+      const request = ++bitmapRequest;
       if (!blob) {
+        frameSequence = null;
         canvas.width = 1;
         canvas.height = 1;
         empty.textContent = "No exact post-action game frame was retained for this transition.";
         empty.hidden = false;
+        commitSnapshot(frameSnapshot);
+        return true;
+      }
+      if (incomingSequence === frameSequence) {
+        commitSnapshot(frameSnapshot);
         return true;
       }
       const bitmap = await createImageBitmap(blob);
+      if (
+        !mounted
+        || request !== bitmapRequest
+        || incomingSequence !== targetSequence
+      ) {
+        bitmap.close();
+        return true;
+      }
       aspect = bitmap.width / Math.max(1, bitmap.height);
       fit();
       canvas.width = bitmap.width;
@@ -176,12 +205,16 @@ export function mount({ definition, services }) {
       context.imageSmoothingEnabled = false;
       context.drawImage(bitmap, 0, 0);
       bitmap.close();
+      frameSequence = incomingSequence;
       empty.textContent = "This environment has no RGB renderer.";
       empty.hidden = true;
+      commitSnapshot(frameSnapshot);
       return true;
     },
     resize: fit,
     destroy() {
+      mounted = false;
+      bitmapRequest += 1;
       loseFocus();
       clearInterval(keepalive);
       document.removeEventListener("visibilitychange", visibility);

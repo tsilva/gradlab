@@ -69,11 +69,8 @@ export function mount({ definition }) {
   let cnnBitmap = null;
   let cnnIdentity = null;
   let baseBitmapRequest = 0;
-  let baseBitmapCommittedRequest = 0;
   let attributionBitmapRequest = 0;
-  let attributionBitmapCommittedRequest = 0;
   let cnnBitmapRequest = 0;
-  let cnnBitmapCommittedRequest = 0;
   let mounted = true;
 
   const expectedBaseIdentity = () => observationFrameIdentity(snapshot);
@@ -220,22 +217,23 @@ export function mount({ definition }) {
         const frameSnapshot = targetSnapshot;
         const request = ++baseBitmapRequest;
         if (!blob) {
-          baseBitmapCommittedRequest = request;
           closeBase();
           commitSnapshot(frameSnapshot);
           return true;
         }
         if (sameFrameIdentity(incoming, baseIdentity)) {
-          baseBitmapCommittedRequest = request;
           commitSnapshot(frameSnapshot);
           return true;
         }
         const bitmap = await createImageBitmap(blob);
-        if (!mounted || request < baseBitmapCommittedRequest) {
+        if (
+          !mounted
+          || request !== baseBitmapRequest
+          || !sameFrameIdentity(incoming, targetBaseIdentity())
+        ) {
           bitmap.close();
           return true;
         }
-        baseBitmapCommittedRequest = request;
         closeBase();
         baseBitmap = bitmap;
         baseIdentity = incoming;
@@ -250,18 +248,20 @@ export function mount({ definition }) {
         if (!sameFrameIdentity(incoming, targetAttributionIdentity())) return true;
         const request = ++attributionBitmapRequest;
         if (!blob) {
-          attributionBitmapCommittedRequest = request;
           closeAttribution();
           updateStatus();
           draw();
           return true;
         }
         const bitmap = await createImageBitmap(blob);
-        if (!mounted || request < attributionBitmapCommittedRequest) {
+        if (
+          !mounted
+          || request !== attributionBitmapRequest
+          || !sameFrameIdentity(incoming, targetAttributionIdentity())
+        ) {
           bitmap.close();
           return true;
         }
-        attributionBitmapCommittedRequest = request;
         closeAttribution();
         attributionBitmap = bitmap;
         attributionIdentity = incoming;
@@ -277,18 +277,20 @@ export function mount({ definition }) {
       if (!sameFrameIdentity(incoming, targetCnnIdentity())) return true;
       const request = ++cnnBitmapRequest;
       if (!blob) {
-        cnnBitmapCommittedRequest = request;
         closeCnn();
         updateStatus();
         draw();
         return true;
       }
       const bitmap = await createImageBitmap(blob);
-      if (!mounted || request < cnnBitmapCommittedRequest) {
+      if (
+        !mounted
+        || request !== cnnBitmapRequest
+        || !sameFrameIdentity(incoming, targetCnnIdentity())
+      ) {
         bitmap.close();
         return true;
       }
-      cnnBitmapCommittedRequest = request;
       closeCnn();
       cnnBitmap = bitmap;
       cnnIdentity = incoming;
