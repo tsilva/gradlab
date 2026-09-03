@@ -80,10 +80,10 @@ test("default workspace is a v7 editable all-panels view without redundant contr
     window: "main",
   });
   assert.equal(workspace.panels.cnn.type, "cnn");
-  assert.equal(workspace.panels.cnn.placement.visible, true);
+  assert.equal(workspace.panels.cnn.placement.visible, false);
   assert.equal(workspace.panels.cnn.enabled, false);
   assert.equal(workspace.panels.attribution.type, "attribution");
-  assert.equal(workspace.panels.attribution.placement.visible, true);
+  assert.equal(workspace.panels.attribution.placement.visible, false);
   assert.equal(workspace.panels.attribution.enabled, false);
   assert.equal(workspace.panels.raw.placement.visible, false);
   assert.ok(
@@ -93,7 +93,7 @@ test("default workspace is a v7 editable all-panels view without redundant contr
   );
   assert.ok(
     Object.entries(workspace.panels)
-      .filter(([id]) => !["controls", "raw"].includes(id))
+      .filter(([id]) => !["attribution", "cnn", "controls", "raw"].includes(id))
       .every(([, panel]) => panel.placement.visible === true),
   );
 });
@@ -112,7 +112,7 @@ test("legacy fixed views migrate to all panels without deleting custom panels", 
   assert.equal(normalized.preset, "all");
   assert.equal(normalized.name, "All panels");
   assert.equal(normalized.panels.value.placement.visible, true);
-  assert.equal(normalized.panels.attribution.placement.visible, true);
+  assert.equal(normalized.panels.attribution.placement.visible, false);
   assert.equal(normalized.panels[CUSTOM_ID].placement.visible, false);
 });
 
@@ -191,9 +191,9 @@ test("existing v7 workspaces receive reward analysis hidden on the shelf", () =>
   assert.equal(normalized.panels["reward-analysis"].builtin, true);
 });
 
-test("existing workspaces receive the CNN explorer hidden while new paired workspaces show it", () => {
+test("new and upgraded paired workspaces keep the CNN explorer hidden", () => {
   const workspace = createDefaultWorkspace({ paired: true });
-  assert.equal(workspace.panels.cnn.placement.visible, true);
+  assert.equal(workspace.panels.cnn.placement.visible, false);
   assert.equal(workspace.panels.cnn.enabled, false);
   delete workspace.panels.cnn;
 
@@ -203,9 +203,9 @@ test("existing workspaces receive the CNN explorer hidden while new paired works
   assert.equal(normalized.panels.cnn.builtin, true);
 });
 
-test("existing workspaces receive attribution hidden while new paired workspaces show it", () => {
+test("new and upgraded paired workspaces keep attribution hidden", () => {
   const workspace = createDefaultWorkspace({ paired: true });
-  assert.equal(workspace.panels.attribution.placement.visible, true);
+  assert.equal(workspace.panels.attribution.placement.visible, false);
   assert.equal(workspace.panels.attribution.enabled, false);
   delete workspace.panels.attribution;
 

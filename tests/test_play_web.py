@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import io
+import json
 import threading
 import time
 from contextlib import nullcontext
@@ -32,6 +33,7 @@ from gradlab.play_web import (
     HumanRecordingRunner,
     PlaybackCommand,
     PlaybackWebServer,
+    WebClient,
     WebPlaybackRunner,
     _decision_payload,
     _json_value,
@@ -51,6 +53,47 @@ class FakeHumanSession:
 
     def action_from_labels(self, labels):
         return tuple(sorted(labels))
+
+
+def test_web_client_preserves_intermediate_snapshots_while_a_send_is_blocked() -> None:
+    class SlowSocket:
+        closed = False
+
+        def __init__(self) -> None:
+            self.first_send_started = asyncio.Event()
+            self.release_first_send = asyncio.Event()
+            self.sequences: list[int] = []
+
+        async def send_str(self, value: str) -> None:
+            self.sequences.append(int(json.loads(value)["sequence"]))
+            if len(self.sequences) == 1:
+                self.first_send_started.set()
+                await self.release_first_send.wait()
+
+        async def send_bytes(self, _value: bytes) -> None:
+            return
+
+    async def scenario() -> None:
+        socket = SlowSocket()
+        client = WebClient("client", socket, {"telemetry"}, "workspace", "main")
+        client.offer_snapshot({"session_epoch": 0, "revision": 0, "sequence": 0})
+        writer = asyncio.create_task(client.write())
+        await socket.first_send_started.wait()
+
+        for sequence in range(1, 334):
+            client.offer_snapshot(
+                {"session_epoch": 0, "revision": sequence, "sequence": sequence}
+            )
+        socket.release_first_send.set()
+        while len(socket.sequences) < 334:
+            await asyncio.sleep(0)
+
+        client.closed = True
+        client.event.set()
+        await writer
+        assert socket.sequences == list(range(334))
+
+    asyncio.run(scenario())
 
 
 def human_args(**overrides):
@@ -149,6 +192,15 @@ def test_web_playback_retains_step_zero_snapshot_and_frame() -> None:
         0,
         0,
     )
+    session.sequence = 1
+    session.step_index = 1
+    runner.revision = 1
+    runner._publish(None)
+    session.sequence = 2
+    session.step_index = 2
+    runner.revision = 2
+    runner._publish(None)
+    assert [item["sequence"] for item in runner.drain_snapshot_updates()] == [0, 1, 2]
 
 
 def test_completed_episode_history_gets_discounted_value_targets_and_signed_error() -> None:

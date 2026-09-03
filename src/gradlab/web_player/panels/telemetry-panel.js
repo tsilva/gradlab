@@ -25,6 +25,20 @@ import {
   signedContributionLabel,
 } from "./reward-breakdown.js";
 
+const POLICY_DECISION_STATS = Object.freeze([
+  "policy/mode",
+  "action/policy",
+  "policy/value",
+  "policy/entropy",
+  "policy/log-probability",
+  "policy/program",
+]);
+const POLICY_DECISION_FOOTER_METRICS = Object.freeze([
+  "policy/value",
+  "policy/entropy",
+  "policy/log-probability",
+]);
+
 export function selectedPoint(history, snapshot, view) {
   const sequence = view?.selectedSequence ?? snapshot?.transition?.sequence;
   if (sequence !== null && sequence !== undefined) {
@@ -197,6 +211,77 @@ function makeStatsBlock(block) {
       foot.textContent = statsBlockFoot(block, snapshot);
       foot.hidden = !foot.textContent;
     },
+  };
+}
+
+export function policyDecisionLayoutEnabled(definition) {
+  const blocks = definition?.config?.blocks;
+  if (definition?.id !== "policy" || !Array.isArray(blocks) || blocks.length !== 2) {
+    return false;
+  }
+  const [stats, distribution] = blocks;
+  return stats?.kind === "stats"
+    && Array.isArray(stats.metrics)
+    && stats.metrics.length === POLICY_DECISION_STATS.length
+    && stats.metrics.every((metric, index) => metric === POLICY_DECISION_STATS[index])
+    && distribution?.kind === "distribution"
+    && distribution.metric === "policy/distribution";
+}
+
+function policyDecisionMetric(key, snapshot, point) {
+  const descriptor = descriptorFor(key);
+  const availability = descriptorAvailability(descriptor, { snapshot, point });
+  return {
+    availability,
+    label: descriptor?.shortLabel || key,
+    value: availability.status === "available"
+      ? renderedValue(
+        descriptorValue(descriptor, { snapshot, point }),
+        descriptor,
+        snapshot,
+      )
+      : availability.message,
+  };
+}
+
+export function policyDecisionPresentation(snapshot, history, view) {
+  const point = selectedPoint(history, snapshot, view);
+  const descriptor = descriptorFor("policy/distribution");
+  const availability = descriptorAvailability(descriptor, { snapshot });
+  const decision = availability.status === "available"
+    ? descriptorValue(descriptor, { snapshot })
+    : null;
+  const comparison = actionComparisonPresentation(snapshot, history, decision);
+  if (!comparison) {
+    return { discrete: false, availability };
+  }
+  const selected = comparison.rows.find((row) => row.selected) || null;
+  const actionMetric = policyDecisionMetric("action/policy", snapshot, point);
+  const modeMetric = policyDecisionMetric("policy/mode", snapshot, point);
+  const semantics = snapshot?.session?.action_contract?.policy?.semantics;
+  const footMessages = [];
+  if (semantics?.status === "unavailable") {
+    footMessages.push(`Action semantics unavailable: ${
+      semantics.reason || "the provider did not declare them"
+    }.`);
+  }
+  for (const state of [comparison.history, comparison.step]) {
+    if (state.message) footMessages.push(state.message);
+  }
+  return {
+    discrete: true,
+    action: selected?.name || actionMetric.value,
+    mode: modeMetric.value,
+    stepProbability: selected?.stepProbability ?? null,
+    rows: comparison.rows,
+    stats: POLICY_DECISION_FOOTER_METRICS
+      .map((key) => policyDecisionMetric(key, snapshot, point))
+      .filter(({ availability: metricAvailability }) => (
+        metricAvailability.status !== "unsupported"
+      )),
+    foot: footMessages.join(" "),
+    warning: [comparison.history.status, comparison.step.status]
+      .some((status) => ["contract-incomparable", "protocol-error"].includes(status)),
   };
 }
 
@@ -382,11 +467,9 @@ function formatProbability(value) {
   return value === null ? "—" : `${(value * 100).toFixed(1)}%`;
 }
 
-function actionComparisonBar(name, series, value) {
-  const item = document.createElement("div");
-  item.className = `action-comparison-bar ${series}`;
+function actionComparisonTrack(name, series, value) {
   const track = document.createElement("div");
-  track.className = "action-comparison-track";
+  track.className = `action-comparison-track ${series}`;
   track.setAttribute("role", "progressbar");
   track.setAttribute("aria-label", `${name} ${
     series === "episode" ? "episode action frequency" : "step action probability"
@@ -397,11 +480,18 @@ function actionComparisonBar(name, series, value) {
   fill.className = "action-comparison-fill";
   fill.style.width = `${value === null ? 0 : value * 100}%`;
   track.append(fill);
+  if (value === null) track.setAttribute("aria-valuetext", "Unavailable");
+  else track.setAttribute("aria-valuenow", String(value * 100));
+  return track;
+}
+
+function actionComparisonBar(name, series, value) {
+  const item = document.createElement("div");
+  item.className = `action-comparison-bar ${series}`;
+  const track = actionComparisonTrack(name, series, value);
   const amount = document.createElement("span");
   amount.className = "action-comparison-amount";
   amount.textContent = formatProbability(value);
-  if (value === null) track.setAttribute("aria-valuetext", "Unavailable");
-  else track.setAttribute("aria-valuenow", String(value * 100));
   item.append(track, amount);
   return item;
 }
@@ -425,6 +515,150 @@ function actionComparisonRow(row) {
   );
   item.append(label, bars);
   return item;
+}
+
+function policyDecisionComparisonRow(row) {
+  const item = document.createElement("div");
+  item.className = [
+    "policy-decision-comparison-row",
+    row.selected ? "selected" : "",
+    row.executed ? "executed" : "",
+  ].filter(Boolean).join(" ");
+  item.setAttribute("role", "row");
+  const label = document.createElement("span");
+  label.className = "policy-decision-action-label";
+  label.textContent = row.name;
+  label.title = row.name;
+  label.setAttribute("role", "rowheader");
+  const bars = document.createElement("div");
+  bars.className = "policy-decision-bars";
+  bars.setAttribute("role", "cell");
+  bars.append(
+    actionComparisonTrack(row.name, "step", row.stepProbability),
+    actionComparisonTrack(row.name, "episode", row.episodeProbability),
+  );
+  const step = document.createElement("span");
+  step.className = "policy-decision-amount step";
+  step.textContent = formatProbability(row.stepProbability);
+  step.setAttribute("role", "cell");
+  const episode = document.createElement("span");
+  episode.className = "policy-decision-amount episode";
+  episode.textContent = formatProbability(row.episodeProbability);
+  episode.setAttribute("role", "cell");
+  item.append(label, bars, step, episode);
+  return item;
+}
+
+function makePolicyDecisionBlock(statsBlock, distributionBlock) {
+  const section = document.createElement("section");
+  section.className = "telemetry-block policy-decision-content";
+
+  const discrete = document.createElement("div");
+  discrete.className = "policy-decision-discrete";
+  const hero = document.createElement("div");
+  hero.className = "policy-decision-hero";
+  const heroLine = document.createElement("div");
+  heroLine.className = "policy-decision-hero-line";
+  const action = document.createElement("strong");
+  action.className = "policy-decision-action";
+  const probability = document.createElement("strong");
+  probability.className = "policy-decision-probability";
+  const probabilityLabel = document.createElement("span");
+  probabilityLabel.className = "policy-decision-probability-label";
+  probabilityLabel.textContent = "step probability";
+  heroLine.append(action, probability, probabilityLabel);
+  const mode = document.createElement("span");
+  mode.className = "policy-decision-mode";
+  hero.append(heroLine, mode);
+
+  const legend = document.createElement("div");
+  legend.className = "policy-decision-legend";
+  legend.innerHTML = `
+    <span class="step">This step</span>
+    <span class="episode">Episode frequency</span>
+  `;
+  const comparison = document.createElement("div");
+  comparison.className = "policy-decision-comparison";
+  comparison.setAttribute("role", "table");
+  comparison.setAttribute(
+    "aria-label",
+    "Step action probability compared with retained episode action frequency",
+  );
+  const comparisonHeader = document.createElement("div");
+  comparisonHeader.className = "policy-decision-comparison-header";
+  comparisonHeader.setAttribute("role", "row");
+  for (const [label, className] of [
+    ["Action", "action"],
+    ["", "bars"],
+    ["This step", "step"],
+    ["Episode frequency", "episode"],
+  ]) {
+    const cell = document.createElement("span");
+    cell.className = className;
+    cell.textContent = label;
+    cell.setAttribute("role", "columnheader");
+    comparisonHeader.append(cell);
+  }
+  const comparisonRows = document.createElement("div");
+  comparisonRows.className = "policy-decision-comparison-rows";
+  comparisonRows.setAttribute("role", "rowgroup");
+  comparison.append(comparisonHeader, comparisonRows);
+
+  const footerStats = document.createElement("div");
+  footerStats.className = "policy-decision-stats";
+  const foot = appendFoot(discrete, "", { force: true });
+  discrete.append(hero, legend, comparison, footerStats);
+  discrete.append(foot);
+
+  const fallback = document.createElement("div");
+  fallback.className = "policy-decision-fallback";
+  const fallbackBlocks = [
+    makeStatsBlock(statsBlock),
+    makeDistributionBlock(distributionBlock),
+  ];
+  fallback.append(...fallbackBlocks.map((block) => block.element));
+  section.append(discrete, fallback);
+
+  return {
+    element: section,
+    render(context) {
+      const presentation = policyDecisionPresentation(
+        context.snapshot,
+        context.history,
+        context.view,
+      );
+      discrete.hidden = !presentation.discrete;
+      fallback.hidden = presentation.discrete;
+      if (!presentation.discrete) {
+        delete section.dataset.telemetryStatus;
+        fallbackBlocks.forEach((block) => block.render(context));
+        return;
+      }
+      section.dataset.telemetryStatus = "available";
+      action.textContent = presentation.action;
+      mode.textContent = presentation.mode;
+      probability.textContent = formatProbability(presentation.stepProbability);
+      comparisonRows.replaceChildren(
+        ...presentation.rows.map(policyDecisionComparisonRow),
+      );
+      footerStats.replaceChildren(...presentation.stats.map((stat) => {
+        const item = document.createElement("div");
+        item.className = "policy-decision-stat";
+        const label = document.createElement("span");
+        label.textContent = stat.label;
+        const value = document.createElement("strong");
+        value.textContent = stat.value;
+        item.append(label, value);
+        return item;
+      }));
+      const blockFoot = [statsBlock.foot, distributionBlock.foot, presentation.foot]
+        .filter(Boolean)
+        .join(" ");
+      foot.textContent = blockFoot;
+      foot.hidden = !blockFoot;
+      foot.classList.toggle("warning", presentation.warning);
+    },
+  };
 }
 
 export function histogramSelectedLabel(names, highlightIndex) {
@@ -858,12 +1092,19 @@ export function mount({ definition, services }) {
     id: definition.id,
     label: definition.label,
   });
+  const policyDecision = policyDecisionLayoutEnabled(definition);
+  element.classList.toggle("policy-decision-panel", policyDecision);
   const target = document.createElement("div");
   target.className = "telemetry-blocks";
   element.append(target);
-  const blocks = definition.config.blocks.map(
-    (block) => makeBlock(block, definition, services),
-  );
+  const blocks = policyDecision
+    ? [makePolicyDecisionBlock(
+      definition.config.blocks[0],
+      definition.config.blocks[1],
+    )]
+    : definition.config.blocks.map(
+      (block) => makeBlock(block, definition, services),
+    );
   target.replaceChildren(...blocks.map((block) => block.element));
   let context = { snapshot: null, history: [], view: {} };
 

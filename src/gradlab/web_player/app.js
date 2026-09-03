@@ -24,6 +24,7 @@ import {
   DEFAULT_GRID_CELL_HEIGHT,
   viewportGridCellHeight,
 } from "./panels/layout-sizing.js";
+import { unavailableDiagnosticRows } from "./panels/diagnostic-availability.js";
 import { setSvgUseHref, text, timelineLabel } from "./panels/shared.js";
 import {
   bumpWorkspaceRevision,
@@ -440,6 +441,9 @@ function handleMessage(message) {
     }
     setSourceMode(false, message);
     prepareRetainedEpisode(message);
+    state.snapshots.set(Number(message.sequence), message);
+    pruneRetainedTrace();
+    if (message.history_point) ingestHistoryPoint(message.history_point);
     if (!requiredFramesAvailable(message)) {
       state.pendingSnapshot = message;
     } else {
@@ -1091,34 +1095,18 @@ function renderPlaybackEvidenceStatus(snapshot) {
   status.title = evidenceWarning ? report.disclaimer : "";
 }
 
-function unavailableDiagnosticPresentation(statuses) {
-  if (statuses.includes("protocol-error") || statuses.includes("error")) {
-    return { label: "Protocol error", tone: "error" };
-  }
-  if (statuses.includes("contract-incomparable")) {
-    return { label: "Incomparable", tone: "incomparable" };
-  }
-  if (statuses.includes("unsupported") || statuses.includes("disabled")) {
-    return { label: "Unsupported", tone: "unsupported" };
-  }
-  return { label: "Waiting for data", tone: "waiting" };
-}
-
 function renderUnavailableDiagnostics() {
   const root = $("#unavailable-diagnostics");
-  const rows = [];
-  $$("#dashboard .grid-stack-item").forEach((gridItem) => {
-    if (gridItem.dataset.panel === "game") return;
-    const telemetryStatuses = [...gridItem.querySelectorAll("[data-telemetry-status]")]
-      .map((element) => String(element.dataset.telemetryStatus || ""))
-      .filter(Boolean);
-    if (!telemetryStatuses.length || telemetryStatuses.includes("available")) return;
-    const presentation = unavailableDiagnosticPresentation(telemetryStatuses);
-    rows.push({
-      panel: panelLabel(gridItem.dataset.panel),
-      ...presentation,
-    });
-  });
+  const rows = unavailableDiagnosticRows(
+    $$("#dashboard .grid-stack-item")
+      .filter((gridItem) => gridItem.dataset.panel !== "game")
+      .map((gridItem) => ({
+        panel: panelLabel(gridItem.dataset.panel),
+        statuses: [...gridItem.querySelectorAll("[data-telemetry-status]")]
+          .map((element) => String(element.dataset.telemetryStatus || ""))
+          .filter(Boolean),
+      })),
+  );
   root.hidden = !rows.length;
   if (!root.hidden) {
     root.querySelector("[data-unavailable-diagnostics-title]").textContent = (

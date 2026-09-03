@@ -58,6 +58,8 @@ def _worker_main(
                 value = host.start()
             elif operation == "snapshot":
                 value = host.snapshot()
+            elif operation == "drain_snapshot_updates":
+                value = host.drain_snapshot_updates()
             elif operation == "history_payload":
                 value = host.history_payload()
             elif operation == "episode_start_payload":
@@ -299,6 +301,11 @@ class IsolatedPlaybackHost:
                 },
             }
         return dict(self._rpc("snapshot"))
+
+    def drain_snapshot_updates(self) -> list[dict[str, Any]]:
+        if self._process is None:
+            return []
+        return [dict(snapshot) for snapshot in self._rpc("drain_snapshot_updates")]
 
     def history_payload(self) -> dict[str, Any]:
         return dict(self._rpc("history_payload"))
