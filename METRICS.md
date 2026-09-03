@@ -75,10 +75,12 @@ authority for that decision.
   or its bounded in-browser history, are not emitted metrics, and must not be interpreted as aliases
   for similarly named W&B registry entries. `reward/provider` is the provider output before the
   task program and gradlab-owned reward transform; `reward/shaped` is the final policy-facing reward
-  after task shaping, scaling, and clipping. Playback computes realized return-to-go and `V(s) -
-  G(s)` only for a terminal, stochastic, policy-driven trajectory whose policy environment,
-  reward stream, discount, action sampling, and boundary/bootstrap semantics match training.
-  Otherwise those critic diagnostics are explicitly unavailable rather than numerically compared.
+  after task shaping, scaling, and clipping. Playback computes return-to-go and `V(s) - G(s)` only
+  for a completed, stochastic, policy-driven trajectory whose policy environment, reward stream,
+  discount, action sampling, and boundary/bootstrap semantics match training. True terminations use
+  a zero terminal value; truncations use the checkpoint critic's value of the exact final policy
+  input and display that bootstrap explicitly. Otherwise those critic diagnostics are explicitly
+  unavailable rather than numerically compared.
 
 The active checkpoint protocol is `acceptance`; complete accepted evidence additionally emits the
 `full` metric family. Dimension IDs must be unique and match `[A-Za-z0-9_.-]+`; unsafe IDs are
@@ -135,7 +137,16 @@ metric path. `cumulative` explicitly means all eligible observations seen so far
   absent from the policy observation, visually similar early and late states are aliased for the
   critic, which can amplify the terminal-horizon discrepancy. Learner explained variance uses its
   rollout value targets and is not the same statistic as a single playback trajectory's
-  `V(s) - G(s)`.
+  `V(s) - G(s)`. A true termination closes the return with zero future value. A truncation does not:
+  the unobserved continuation prevents a fully realized Monte Carlo `G(s)`, but a
+  truncation-compatible N-step diagnostic can close the trace with the exact final policy input's
+  critic value: `Ĝ_t = r_t + γ r_{t+1} + … + γ^{T-t} V(s_T)`. That quantity is partly bootstrapped,
+  not a fully realized return or generally the learner's GAE lambda-return, and is valid for critic
+  comparison only when the final observation, preprocessing and conditioning, checkpoint critic,
+  discount, and truncation semantics match the training value contract. Playback labels this
+  bootstrap when it computes the diagnostic and withholds the comparison if the exact final-state
+  critic value is unavailable; treating truncation as termination by substituting a zero bootstrap
+  would fabricate a misleading residual.
 - Mario recipes disable automatic checkpoint evaluation and stop when
   `train/outcome/success/starts/all/rolling/rate/min` first reaches one. For a single start,
   that means 100 consecutive genuine target-origin clears; for multiple starts, every configured
@@ -181,8 +192,11 @@ metric path. `cumulative` explicitly means all eligible observations seen so far
   action-space-only minimum or maximum. The bounds remain a pure policy-space calculation used by
   diagnostics and are not duplicated as W&B metrics.
 - Actor-critic explained variance is `1 - Var(value_target - value_prediction) /
-  Var(value_target)`: one is perfect, zero means the critic explains no more target variance than a
-  constant baseline, and negative values are worse than that baseline. A near-zero value is not by
+  Var(value_target)`: one means the residual variance is zero (perfect up to a constant prediction
+  offset), zero means the critic explains no more target variance than a constant baseline, and
+  negative values are worse than that baseline. Because variance centers the residuals, explained
+  variance alone does not detect constant value bias; pair it with residual bias or calibration
+  measures when absolute accuracy matters. A near-zero value is not by
   itself evidence of exploding value loss. Pair it with value-prediction and advantage dispersion:
   predictions with much less dispersion than the residual advantages indicate a mostly
   state-insensitive baseline, while tiny target variance can make the ratio ill-conditioned.

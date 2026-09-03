@@ -12,6 +12,7 @@ import {
 import { episodeReport } from "./episode-report.js";
 import { eventColorFill, eventLabels } from "./event-colors.js";
 import { mountPlaybackSettings } from "./playback-settings.js";
+import { snapshotActivatesCheckpointSelection } from "./playback-transition.js";
 import {
   playbackSourceTitle,
   statusMessageShouldToast,
@@ -427,11 +428,15 @@ function handleMessage(message) {
       state.sourceMode
       && state.backgroundPlaybackSnapshot
       && message.app?.phase === "active"
+      && !snapshotActivatesCheckpointSelection(state.checkpointLoad, message)
     ) {
       state.backgroundPlaybackSnapshot = message;
       state.hasControl = Boolean(message.control?.has_control);
       state.controlEpoch = Number(message.control_epoch || 0);
       return;
+    }
+    if (snapshotActivatesCheckpointSelection(state.checkpointLoad, message)) {
+      state.backgroundPlaybackSnapshot = null;
     }
     state.applicationSnapshot = message;
     state.hasControl = Boolean(message.control?.has_control);

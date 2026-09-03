@@ -478,6 +478,15 @@ def transition_payload(
         "boundary": transition.boundary,
         "boundary_reasons": boundary_reasons if events_enabled else [],
         "outcome": outcome if events_enabled else "continuing",
+        "return_bootstrap": {
+            "source": (
+                "terminal_state_value"
+                if transition.return_bootstrap_value is not None
+                else None
+            ),
+            "value": transition.return_bootstrap_value,
+            "reason": transition.return_bootstrap_reason,
+        },
         "attribution": {
             "status": transition.attribution_status,
             "mode": transition.attribution_mode,
@@ -537,6 +546,7 @@ def history_point_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         "terminated": bool(payload.get("terminated")),
         "truncated": bool(payload.get("truncated")),
         "boundary_reasons": list(payload.get("boundary_reasons") or []),
+        "return_bootstrap": dict(payload.get("return_bootstrap") or {}),
         "signals": payload["signals"],
         "components": reward["components"],
     }
@@ -573,11 +583,29 @@ def annotate_realized_returns(
         for point in episode_points
     ):
         reasons.append("episode contains non-stochastic policy actions")
+    boundary_point = episode_points[-1] if episode_points else {}
+    bootstrapped = bool(boundary_point.get("truncated"))
+    bootstrap_value = 0.0
+    if bootstrapped:
+        bootstrap = boundary_point.get("return_bootstrap")
+        bootstrap = bootstrap if isinstance(bootstrap, Mapping) else {}
+        candidate = bootstrap.get("value")
+        if (
+            bootstrap.get("source") != "terminal_state_value"
+            or isinstance(candidate, bool)
+            or not isinstance(candidate, int | float | np.number)
+            or not np.isfinite(float(candidate))
+        ):
+            reasons.append(
+                str(bootstrap.get("reason") or "terminal-state critic bootstrap is unavailable")
+            )
+        else:
+            bootstrap_value = float(candidate)
     if reasons:
         for point in episode_points:
             point["value_comparison_reasons"] = reasons
         return
-    realized_return = 0.0
+    realized_return = bootstrap_value
     for point in reversed(episode_points):
         reward = point.get("reward_shaped")
         if isinstance(reward, bool) or not isinstance(reward, int | float | np.number):
@@ -591,6 +619,7 @@ def annotate_realized_returns(
             return
         realized_return = numeric_reward + discount * realized_return
         point["realized_return"] = realized_return
+        point["realized_return_bootstrapped"] = bootstrapped
         point["value_comparison_reasons"] = []
         value = point.get("value")
         if (
@@ -1035,8 +1064,23 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         )
         if active_task != base_task:
             reasons.append("episode-boundary configuration differs from the active contract")
-        if transition is not None and transition.truncated:
-            reasons.append("truncated episodes require the training terminal-value bootstrap")
+        if (
+            transition is not None
+            and transition.truncated
+            and "state_value" in introspection
+            and self.value_contract is not None
+        ):
+            if self.value_contract.get("truncation_bootstrap") != "terminal-value":
+                reasons.append(
+                    "training value contract does not declare terminal-value truncation bootstrap"
+                )
+            elif getattr(transition, "return_bootstrap_value", None) is None:
+                reasons.append(
+                    str(
+                        getattr(transition, "return_bootstrap_reason", None)
+                        or "terminal-state critic bootstrap is unavailable"
+                    )
+                )
         return list(dict.fromkeys(reasons))
 
     def update_input(self, labels: Sequence[str], *, focused: bool) -> None:
@@ -2989,6 +3033,7 @@ class PlaybackWebServer:
                 "next_cursor": None,
                 "metric_columns": metric_columns,
                 "selection_fence": page.selection_fence,
+                "run": dict(page.run) if isinstance(page.run, Mapping) else None,
                 "training_enrichment": "complete" if include_wandb else "pending",
                 "freshness": "partial" if warnings else page.freshness,
                 "warnings": warnings,

@@ -191,6 +191,18 @@ class PolicyRuntime:
             execution_context=execution_context,
         )
 
+    def state_values(self, observation: Any) -> np.ndarray:
+        if STATE_VALUE not in self.capabilities.introspection:
+            raise RuntimeError(
+                f"{self.capabilities.algorithm_id} does not expose a state-value critic"
+            )
+        from gradlab.play_debug import actor_critic_state_values
+
+        values = actor_critic_state_values(self.model, observation)
+        if not np.isfinite(values).all():
+            raise RuntimeError("policy runtime produced a non-finite state value")
+        return values
+
 
 def bind_policy_action_space(
     model: Any,

@@ -40,6 +40,9 @@ import {
   toggleEnvironmentFavorite,
   writeEnvironmentFavorites,
 } from "../../src/gradlab/web_player/sources/browser.js";
+import {
+  snapshotActivatesCheckpointSelection,
+} from "../../src/gradlab/web_player/playback-transition.js";
 
 test("checkpoint navigation reports chronological position and neighbors", () => {
   const checkpoints = [
@@ -146,10 +149,21 @@ test("top checkpoint navigation starts one blocking load state", () => {
   };
   browser.activeCheckpointPendingId = "";
   browser.activeCheckpointItems = () => [
-    { checkpoint_id: "checkpoint-100-a", step: 100 },
-    { checkpoint_id: "checkpoint-200-b", step: 200 },
+    {
+      checkpoint_id: "checkpoint-100-a",
+      manifest_url: "https://models.example/checkpoint-100/manifest.json",
+      run_id: "gradlab-run",
+      step: 100,
+    },
+    {
+      checkpoint_id: "checkpoint-200-b",
+      manifest_url: "https://models.example/checkpoint-200/manifest.json",
+      run_id: "gradlab-run",
+      step: 200,
+    },
   ];
-  browser.selectCheckpoint = () => "load-command";
+  browser.command = () => "load-command";
+  browser.syncUrl = () => {};
   browser.renderActiveCheckpointNavigation = () => {};
   const loads = [];
   browser.beginCheckpointLoad = (load) => loads.push(load);
@@ -162,6 +176,55 @@ test("top checkpoint navigation starts one blocking load state", () => {
   assert.equal(browser.activeCheckpointPendingId, "checkpoint-100-a");
   assert.equal(browser.selectAdjacentCheckpoint("previous"), false);
   assert.equal(loads.length, 1);
+});
+
+test("checkpoint list selection starts one tracked foreground load", () => {
+  const browser = Object.create(SourceBrowser.prototype);
+  browser.route = {
+    level: "runs",
+    run_id: "gradlab-run",
+    checkpoint_id: "",
+  };
+  browser.command = () => "load-command";
+  browser.syncUrl = () => {};
+  const loads = [];
+  browser.beginCheckpointLoad = (load) => loads.push(load);
+
+  assert.equal(browser.selectCheckpoint({
+    checkpoint_id: "checkpoint-200-b",
+    manifest_url: "https://models.example/checkpoint-200/manifest.json",
+    run_id: "gradlab-run",
+  }), "load-command");
+  assert.deepEqual(loads, [{
+    commandId: "load-command",
+    checkpointId: "checkpoint-200-b",
+  }]);
+});
+
+test("only the selected checkpoint leaves background playback", () => {
+  const checkpointLoad = {
+    commandId: "load-command",
+    checkpointId: "checkpoint-200-b",
+  };
+
+  assert.equal(snapshotActivatesCheckpointSelection(checkpointLoad, {
+    app: {
+      phase: "active",
+      route: { checkpoint_id: "checkpoint-100-a" },
+    },
+  }), false);
+  assert.equal(snapshotActivatesCheckpointSelection(checkpointLoad, {
+    app: {
+      phase: "resolving",
+      route: { checkpoint_id: "checkpoint-200-b" },
+    },
+  }), false);
+  assert.equal(snapshotActivatesCheckpointSelection(checkpointLoad, {
+    app: {
+      phase: "active",
+      route: { checkpoint_id: "checkpoint-200-b" },
+    },
+  }), true);
 });
 
 test("adjacent checkpoint prefetch is deduplicated before reaching the worker", () => {
@@ -229,13 +292,41 @@ test("environment favorites persist defensively in browser storage", () => {
     getItem: (key) => values.get(key) ?? null,
     setItem: (key, value) => values.set(key, value),
   };
+  const cookieTarget = { cookie: "" };
 
-  assert.equal(writeEnvironmentFavorites(new Set(["VizDoom", "Acrobot"]), storage), true);
+  assert.equal(
+    writeEnvironmentFavorites(new Set(["VizDoom", "Acrobot"]), storage, cookieTarget),
+    true,
+  );
   assert.deepEqual([...readEnvironmentFavorites(storage)], ["Acrobot", "VizDoom"]);
+  assert.match(
+    cookieTarget.cookie,
+    /^gradlab_playback_favorite_environments_v1=%5B%22Acrobot%22%2C%22VizDoom%22%5D;/,
+  );
 
   storage.setItem("gradlab.playback.favorite-environments.v1", "not-json");
   assert.deepEqual([...readEnvironmentFavorites(storage)], []);
   assert.equal(writeEnvironmentFavorites(new Set(["Mario"]), null), false);
+});
+
+test("environment favorites use a host cookie across ephemeral player ports", () => {
+  const storage = {
+    getItem: () => JSON.stringify(["Stale local favorite"]),
+    setItem: () => {},
+  };
+  const cookie = [
+    "unrelated=value",
+    "gradlab_playback_favorite_environments_v1=%5B%22Mario%22%2C%22VizDoom%22%5D",
+  ].join("; ");
+
+  assert.deepEqual([...readEnvironmentFavorites(storage, cookie)], ["Mario", "VizDoom"]);
+  assert.deepEqual([
+    ...readEnvironmentFavorites(storage, "gradlab_playback_favorite_environments_v1=%5B%5D"),
+  ], []);
+  assert.deepEqual(
+    [...readEnvironmentFavorites(storage, "gradlab_playback_favorite_environments_v1=not-json")],
+    ["Stale local favorite"],
+  );
 });
 
 test("favorite environments sort first and alphabetically", () => {
@@ -782,6 +873,23 @@ test("active-run status icon is available in the shared icon sprite", async () =
   );
 
   assert.match(sprite, /id="ti-activity-heartbeat"/);
+});
+
+test("checkpoint selection shows the authoritative training run state", async () => {
+  const source = await readFile(
+    new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
+    "utf8",
+  );
+  const styles = await readFile(
+    new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
+    "utf8",
+  );
+
+  assert.match(source, /this\.runStatus = payload\.run && typeof payload\.run === "object"/);
+  assert.match(source, /titleBlock\.append\(this\.renderSelectedRunStatus\(\)\);/);
+  assert.match(source, /context\.textContent = "Training run";/);
+  assert.match(source, /label: waiting \? "Loading…" : "Unavailable"/);
+  assert.match(styles, /\.source-run-status\.running,/);
 });
 
 test("playback home is the root environment route", () => {

@@ -507,6 +507,41 @@ def playback_model_observation(
         return np.asarray(policy_obs)
 
 
+def _truncation_bootstrap_value(
+    *,
+    policy_runtime: PolicyRuntime | None,
+    model: object,
+    final_policy_obs: object | None,
+    config: object,
+    active_task_state: str | None,
+    active_info_value: tuple[int | str, ...] | None,
+) -> tuple[float | None, str | None]:
+    if (
+        policy_runtime is None
+        or "state_value" not in policy_runtime.capabilities.introspection
+    ):
+        return None, None
+    if final_policy_obs is None:
+        return None, "exact final policy observation is unavailable"
+    try:
+        final_model_obs = playback_model_observation(
+            model,
+            final_policy_obs,
+            config,
+            active_task_state=active_task_state,
+            active_info_value=active_info_value,
+        )
+        values = np.asarray(policy_runtime.state_values(final_model_obs)).reshape(-1)
+    except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+        return None, f"terminal-state critic bootstrap failed: {exc}"
+    if values.size != 1:
+        return None, "terminal-state critic bootstrap did not return exactly one value"
+    value = float(values[0])
+    if not np.isfinite(value):
+        return None, "terminal-state critic bootstrap is non-finite"
+    return value, None
+
+
 def _observation_shape(value) -> str:
     if isinstance(value, Mapping):
         return (
@@ -545,6 +580,8 @@ class _PlaybackTransition:
     completed: bool
     boundary: bool
     after_frame_role: str = "after_action_observation"
+    return_bootstrap_value: float | None = None
+    return_bootstrap_reason: str | None = None
     attribution_status: str = "off"
     attribution_mode: str = "none"
     attribution_generation: int = 0
@@ -1183,6 +1220,8 @@ class _PlaybackSession:
             processing & {"observation", "raw", "attribution", "cnn-inspection"}
         )
         model_obs = self.model_obs
+        terminal_task_state = getattr(self, "active_task_state", None)
+        terminal_info_value = getattr(self, "active_info_value", None)
         model_obs_snapshot = deepcopy(model_obs) if needs_policy_input else None
         pre_task = deepcopy(self.active_task) if needs_raw else None
         before_frame = (
@@ -1235,6 +1274,18 @@ class _PlaybackSession:
             completed = is_level_complete(final_info)
         boundary = playback_should_end_episode(terminated, truncated, completed)
 
+        return_bootstrap_value = None
+        return_bootstrap_reason = None
+        if truncated and "critic-calibration" in processing:
+            return_bootstrap_value, return_bootstrap_reason = _truncation_bootstrap_value(
+                policy_runtime=self.policy_runtime,
+                model=self.model,
+                final_policy_obs=info.get("terminal_observation"),
+                config=self.config,
+                active_task_state=terminal_task_state,
+                active_info_value=terminal_info_value,
+            )
+
         next_conditioning_info = dict(info.get("reset_info", {})) if boundary else info
         self._update_conditioning(next_conditioning_info)
         next_task = deepcopy(self.active_task) if needs_raw else None
@@ -1284,6 +1335,8 @@ class _PlaybackSession:
             completed=completed,
             boundary=boundary,
             after_frame_role=after_frame_role,
+            return_bootstrap_value=return_bootstrap_value,
+            return_bootstrap_reason=return_bootstrap_reason,
             attribution_status=(
                 "off"
                 if self.attribution_mode == "none"

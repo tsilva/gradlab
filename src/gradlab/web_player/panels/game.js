@@ -10,6 +10,15 @@ export function gameFramePhase(snapshot) {
   return "After-action observation";
 }
 
+export function gameFrameBoundaryKind(snapshot) {
+  const transition = snapshot?.transition;
+  if (!transition?.boundary) return "";
+  return [
+    transition.terminated ? "Terminated" : "",
+    transition.truncated ? "Truncated" : "",
+  ].filter(Boolean).join(" · ");
+}
+
 function displayTerminalFact(value) {
   const label = String(value || "")
     .replaceAll("_", " ")
@@ -69,6 +78,7 @@ export function mount({ definition, services }) {
       <div id="game-empty" class="game-empty empty-state">This environment has no RGB renderer.</div>
       <div class="game-frame-status">
         <div class="game-frame-phase" data-frame-phase>Initial observation</div>
+        <div class="game-frame-boundary" data-frame-boundary hidden></div>
         <div class="game-frame-detail" data-frame-detail hidden></div>
       </div>
       <div class="game-actions panel-actions">
@@ -146,9 +156,13 @@ export function mount({ definition, services }) {
 
   const commitSnapshot = (snapshot) => {
     const phase = gameFramePhase(snapshot);
+    const boundaryKind = gameFrameBoundaryKind(snapshot);
     const detail = gameFrameTerminationDetail(snapshot);
     const tone = gameFrameTerminationTone(snapshot);
     element.querySelector("[data-frame-phase]").textContent = phase;
+    const boundaryElement = element.querySelector("[data-frame-boundary]");
+    boundaryElement.textContent = boundaryKind;
+    boundaryElement.hidden = !boundaryKind;
     const detailElement = element.querySelector("[data-frame-detail]");
     detailElement.textContent = detail;
     detailElement.title = detail;
@@ -158,7 +172,7 @@ export function mount({ definition, services }) {
     detailElement.classList.toggle("outcome-timeout", tone === "timeout");
     canvas.setAttribute(
       "aria-label",
-      `${phase}.${detail ? ` ${detail}.` : ""} Focus for human controls: arrows move, Z is B, X is A, Enter is Start, and Shift is Select.`,
+      `${phase}.${boundaryKind ? ` ${boundaryKind}.` : ""}${detail ? ` ${detail}.` : ""} Focus for human controls: arrows move, Z is B, X is A, Enter is Start, and Shift is Select.`,
     );
   };
 

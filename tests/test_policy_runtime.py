@@ -73,6 +73,23 @@ def test_actor_critic_runtime_skips_critic_and_diagnostics_when_not_requested(
     assert all(decision.sampled is True for decision in result.decisions)
 
 
+def test_actor_critic_runtime_evaluates_state_values_without_sampling(monkeypatch) -> None:
+    runtime, observation = _actor_critic_runtime(gym.spaces.Discrete(3))
+
+    def unexpected_distribution(*_args, **_kwargs):
+        raise AssertionError("terminal-value bootstrap must not sample an action")
+
+    monkeypatch.setattr(runtime.model.policy, "get_distribution", unexpected_distribution)
+    rng_before = np.random.get_state()
+
+    values = runtime.state_values(observation)
+
+    rng_after = np.random.get_state()
+    assert values.shape == (2,)
+    assert np.isfinite(values).all()
+    assert all(np.array_equal(before, after) for before, after in zip(rng_before, rng_after))
+
+
 def test_action_program_runtime_exposes_cursor_without_fabricated_distribution() -> None:
     model = ActionProgramPolicy(
         action_names=("noop", "right"),

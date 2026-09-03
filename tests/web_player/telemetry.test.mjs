@@ -780,6 +780,41 @@ test("line charts omit protocol-error labels without hiding contract warnings", 
       warning: true,
     },
   );
+  assert.deepEqual(
+    lineBlockFootPresentation({}, null, {
+      message: "Truncated episode: G(s) includes the final state's V(s) as a bootstrap.",
+    }),
+    {
+      text: "Truncated episode: G(s) includes the final state's V(s) as a bootstrap.",
+      warning: true,
+    },
+  );
+});
+
+test("bootstrapped truncated returns remain available with an explanatory warning", () => {
+  const descriptors = [
+    descriptorFor("policy/value"),
+    descriptorFor("policy/realized-return"),
+    descriptorFor("policy/value-error"),
+  ];
+  const result = lineBlockAvailability(
+    descriptors,
+    {
+      policy: { introspection: ["state_value"] },
+      transition: { boundary: true },
+      session: { critic_comparison: { reasons: [] } },
+    },
+    [{
+      value: 1.0,
+      realized_return: 2.0,
+      value_error: -1.0,
+      realized_return_bootstrapped: true,
+    }],
+  );
+
+  assert.equal(result.status, "available");
+  assert.equal(result.unavailable, null);
+  assert.match(result.notice.message, /final state's V\(s\)/);
 });
 
 test("the default policy distribution omits its redundant heading", () => {

@@ -219,6 +219,56 @@ def test_completed_episode_history_gets_discounted_value_targets_and_signed_erro
     assert "realized_return" not in points[2]
 
 
+def test_truncated_episode_history_bootstraps_from_the_final_state_value() -> None:
+    points = [
+        {"episode": 1, "reward_shaped": 1.0, "value": 3.0},
+        {
+            "episode": 1,
+            "reward_shaped": 2.0,
+            "value": 1.0,
+            "boundary": True,
+            "truncated": True,
+            "return_bootstrap": {
+                "source": "terminal_state_value",
+                "value": 4.0,
+                "reason": None,
+            },
+        },
+    ]
+
+    annotate_realized_returns(points, episode=1, discount=0.5)
+
+    assert points[0]["realized_return"] == 3.0
+    assert points[0]["value_error"] == 0.0
+    assert points[1]["realized_return"] == 4.0
+    assert points[1]["value_error"] == -3.0
+    assert all(point["realized_return_bootstrapped"] is True for point in points)
+
+
+def test_truncated_episode_history_fails_closed_without_a_final_state_value() -> None:
+    points = [
+        {
+            "episode": 1,
+            "reward_shaped": 2.0,
+            "value": 1.0,
+            "boundary": True,
+            "truncated": True,
+            "return_bootstrap": {
+                "source": None,
+                "value": None,
+                "reason": "exact final policy observation is unavailable",
+            },
+        },
+    ]
+
+    annotate_realized_returns(points, episode=1, discount=0.5)
+
+    assert "realized_return" not in points[0]
+    assert points[0]["value_comparison_reasons"] == [
+        "exact final policy observation is unavailable"
+    ]
+
+
 def test_incomparable_episode_suppresses_realized_value_diagnostics() -> None:
     points = [
         {"episode": 1, "reward_shaped": 1.0, "value": 3.0},
@@ -275,16 +325,28 @@ def test_critic_comparison_requires_stochastic_policy_and_terminal_boundary() ->
         human_args(),
         config_text="",
         contract_details={"comparison_reasons": []},
-        value_contract={"discount": 0.9},
+        value_contract={"discount": 0.9, "truncation_bootstrap": "terminal-value"},
     )
 
     assert runner._critic_comparison_reasons() == []
     runner.sampling_mode = "deterministic"
     assert "deterministic trajectories" in runner._critic_comparison_reasons()[0]
     runner.sampling_mode = "stochastic"
+    truncated = argparse.Namespace(
+        truncated=True,
+        return_bootstrap_value=4.0,
+        return_bootstrap_reason=None,
+    )
+    assert runner._critic_comparison_reasons(truncated) == []
     assert (
-        "truncated episodes"
-        in runner._critic_comparison_reasons(argparse.Namespace(truncated=True))[0]
+        "terminal-state critic bootstrap is unavailable"
+        in runner._critic_comparison_reasons(
+            argparse.Namespace(
+                truncated=True,
+                return_bootstrap_value=None,
+                return_bootstrap_reason=None,
+            )
+        )[0]
     )
 
 
@@ -1509,6 +1571,91 @@ def test_playback_transition_retains_policy_input_for_observation_processing() -
     assert transition.model_obs is not model_obs
 
 
+def test_playback_transition_bootstraps_truncation_from_exact_final_policy_input() -> None:
+    final_observation = np.asarray([9.0, 8.0, 7.0, 6.0], dtype=np.float32)
+    reset_observation = np.zeros((1, 4), dtype=np.float32)
+    observed: list[np.ndarray] = []
+
+    class Env:
+        def step(self, action):
+            self.action = action
+            return (
+                reset_observation,
+                np.asarray([2.0]),
+                np.asarray([True]),
+                [{
+                    "TimeLimit.truncated": True,
+                    "terminal_observation": final_observation,
+                    "reset_info": {},
+                }],
+            )
+
+        @staticmethod
+        def take_step_diagnostics():
+            return None
+
+        @staticmethod
+        def drain_records():
+            return []
+
+    class Runtime:
+        capabilities = argparse.Namespace(introspection=frozenset({"state_value"}))
+
+        @staticmethod
+        def state_values(observation):
+            observed.append(np.asarray(observation).copy())
+            return np.asarray([7.5])
+
+    session = argparse.Namespace(
+        processing_features=frozenset({"critic-calibration", "policy"}),
+        model_obs=np.ones((1, 4), dtype=np.float32),
+        model=argparse.Namespace(
+            observation_space=argparse.Namespace(),
+        ),
+        policy_runtime=Runtime(),
+        active_task=None,
+        active_task_state=None,
+        active_info_value=None,
+        current_frame=None,
+        frames=(),
+        _frame_tuple=_PlaybackSession._frame_tuple,
+        env=Env(),
+        total_reward=0.0,
+        max_x_pos=0,
+        config=argparse.Namespace(env_provider="gymnasium", game="CartPole-v1"),
+        _update_conditioning=lambda _info: None,
+        policy_obs=None,
+        sequence=0,
+        episode=1,
+        step_index=0,
+        active_seed=40_000,
+        attribution_mode="none",
+        attribution_status="off",
+        attribution_error=None,
+        attribution_generation=0,
+        attribution_interval=1,
+        cnn_enabled=False,
+        cnn_status="off",
+        cnn_error=None,
+        cnn_layer_id=None,
+        cnn_generation=0,
+        cnn_interval=1,
+        last_transition=None,
+    )
+
+    transition = _PlaybackSession._advance(
+        session,
+        decision=None,
+        executed_action=0,
+        action_source="policy",
+    )
+
+    assert len(observed) == 1
+    np.testing.assert_array_equal(observed[0], final_observation)
+    assert transition.return_bootstrap_value == 7.5
+    assert transition.return_bootstrap_reason is None
+
+
 def test_reward_accounting_contract_uses_scale_then_clip_from_materialized_config() -> None:
     contract = reward_accounting_contract(
         argparse.Namespace(task={"reward": {"reward_scale": 0.4, "reward_clip": [-1, 1]}})
@@ -2299,6 +2446,11 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                     },
                 ),
                 selection_fence="f" * 64,
+                run={
+                    "run_id": run_id,
+                    "state": "running",
+                    "updated_at": "2026-09-03T10:00:00Z",
+                },
             )
 
     class FakeEvaluationQueue:
@@ -2455,6 +2607,11 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 assert checkpoints.status == 200
                 checkpoint_payload = await checkpoints.json()
                 assert checkpoint_payload["items"][0]["evaluation"]["pass"] is True
+                assert checkpoint_payload["run"] == {
+                    "run_id": "gradlab-" + "a" * 32,
+                    "state": "running",
+                    "updated_at": "2026-09-03T10:00:00Z",
+                }
                 selection_fence = checkpoint_payload["selection_fence"]
                 assert checkpoint_payload["metric_columns"] == [
                     {
