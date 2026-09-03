@@ -43,6 +43,7 @@ from gradlab.metric_names import (
     train_algorithm_metric,
     train_early_stop_metric,
     train_reward_component_metric,
+    train_reward_event_metric,
     validate_metric_name,
 )
 from gradlab.policy_execution import compile_policy_execution_contract
@@ -751,6 +752,7 @@ class RewardStatsAccumulator:
             component for component in active_components if component in self.component_info_keys
         )
         self.components = {component: _BufferedStats() for component in self.active_components}
+        self.event_rewards: dict[str, _BufferedStats] = {}
 
     def consume(self, metrics: Mapping[str, Any], *, reserve: int) -> None:
         if (value := metrics.get("shaped_reward")) is not None:
@@ -762,6 +764,14 @@ class RewardStatsAccumulator:
             value = metrics.get(info_key)
             if value is not None:
                 accumulator.update(value, reserve=reserve)
+        event_prefix = "event_reward_component/"
+        for info_key, value in metrics.items():
+            if not isinstance(info_key, str) or not info_key.startswith(event_prefix):
+                continue
+            event = info_key.removeprefix(event_prefix)
+            train_reward_event_metric(event, "mean")
+            accumulator = self.event_rewards.setdefault(event, _BufferedStats())
+            accumulator.update(value, reserve=reserve)
 
     @staticmethod
     def _distribution(prefix: str, values: np.ndarray, stats: Sequence[str]) -> dict[str, float]:
@@ -805,6 +815,14 @@ class RewardStatsAccumulator:
         for component, abs_sum in abs_sums.items():
             payload[train_reward_component_metric(component, "share")] = (
                 abs_sum / total_abs_sum if total_abs_sum > 0.0 else 0.0
+            )
+        for event, accumulator in self.event_rewards.items():
+            values = accumulator.flush()
+            if values.size == 0:
+                continue
+            payload[train_reward_event_metric(event, "mean")] = float(np.mean(values))
+            payload[train_reward_event_metric(event, "nonzero_rate")] = float(
+                np.mean(values != 0.0)
             )
         return payload
 

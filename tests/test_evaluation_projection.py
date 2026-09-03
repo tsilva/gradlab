@@ -45,13 +45,13 @@ def test_recipe_owned_evaluation_schema_accepts_current_version() -> None:
     )
 
 
-@pytest.mark.parametrize("version", [16, 17, 18, 20])
+@pytest.mark.parametrize("version", [16, 17, 18, 19, 21])
 def test_recipe_owned_evaluation_schema_rejects_unknown_versions(version: int) -> None:
     with pytest.raises(ValueError, match="unsupported metrics schema"):
         metrics_schema_version_from_recipe_document(recipe_document(version))
 
 
-def test_v19_projection_keeps_one_bounded_eval_surface() -> None:
+def test_v20_projection_keeps_one_bounded_eval_surface() -> None:
     projection = evaluation_wandb_projection(
         {
             "eval/full/episode/return/shaped/mean": 4.0,
@@ -78,7 +78,7 @@ def test_v19_projection_keeps_one_bounded_eval_surface() -> None:
     assert "failure_count" not in projection
 
 
-def test_v19_promotion_projects_only_configured_finite_leader_fields() -> None:
+def test_v20_promotion_projects_only_configured_finite_leader_fields() -> None:
     run = SimpleNamespace(summary={})
     publish_promotion_summary(
         run,
@@ -108,7 +108,7 @@ def test_v19_promotion_projects_only_configured_finite_leader_fields() -> None:
     assert "leader/checkpoint/acceptance_pass" not in run.summary
 
 
-def test_v19_promotion_projects_progress_mean_and_max_for_deathmatch_rank() -> None:
+def test_v20_promotion_projects_progress_mean_and_max_for_deathmatch_rank() -> None:
     run = SimpleNamespace(summary={})
     publish_promotion_summary(
         run,

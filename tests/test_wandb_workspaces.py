@@ -65,6 +65,7 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
                 "loop_throughput",
                 "provider_step_throughput",
                 "serve_stall_count",
+                "serve_wait_rate",
             ],
         )
         breakout_metrics = {
@@ -76,6 +77,10 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
         self.assertFalse(any("/a2c/" in metric for metric in breakout_metrics))
         self.assertIn(
             "train/outcome/failure/reason/serve_stall/rolling/count",
+            breakout_metrics,
+        )
+        self.assertIn(
+            "train/reward/event/serve_wait/nonzero/rate",
             breakout_metrics,
         )
         mario = next(spec for spec in first if spec.project == "SuperMarioBros-Nes-v0")
@@ -214,7 +219,7 @@ class WandbWorkspaceRenderingTests(unittest.TestCase):
         self.assertEqual(workspace.settings.max_runs, 25)
         self.assertEqual(
             workspace.runset_settings.filters,
-            "Config('metrics_schema_version') = 19",
+            "Config('metrics_schema_version') = 20",
         )
         self.assertEqual(len(workspace.sections), 1)
         self.assertTrue(workspace.sections[0].pinned)

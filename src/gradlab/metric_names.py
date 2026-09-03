@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 
-METRICS_SCHEMA_VERSION = 19
+METRICS_SCHEMA_VERSION = 20
 EPISODE_METRIC_WINDOW_SIZE = 100
 METRICS_EPISODE_WINDOW_SIZE_CONFIG = "metrics_episode_window_size"
 
@@ -286,6 +286,7 @@ _PLACEHOLDER_PATTERNS = {
     "start": "[A-Za-z0-9_.-]+",
     "component": "[A-Za-z0-9_.-]+",
     "condition": "[A-Za-z0-9_.-]+",
+    "event": "[A-Za-z0-9_.-]+",
     "progress": "[A-Za-z0-9_.-]+",
 }
 
@@ -438,6 +439,13 @@ def train_reward_component_metric(component: object, stat: str) -> str:
     suffix = "nonzero/rate" if stat in {"nonzero_rate", "nonzero/rate"} else stat
     return validate_metric_name(
         f"{TRAIN_REWARD_ROOT}/component/{metric_path_segment(component)}/{suffix}"
+    )
+
+
+def train_reward_event_metric(event: object, stat: str) -> str:
+    suffix = "nonzero/rate" if stat in {"nonzero_rate", "nonzero/rate"} else stat
+    return validate_metric_name(
+        f"{TRAIN_REWARD_ROOT}/event/{metric_path_segment(event)}/{suffix}"
     )
 
 

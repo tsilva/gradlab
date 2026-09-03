@@ -106,8 +106,8 @@ def test_recipe_v4_embeds_verified_goal_and_recipe_bases() -> None:
     )
 
     assert document["format_version"] == 4
-    assert document["recipe"]["train_config"]["metrics_schema_version"] == 19
-    assert document["resolution"]["recipe"]["base"]["train_config"]["metrics_schema_version"] == 19
+    assert document["recipe"]["train_config"]["metrics_schema_version"] == 20
+    assert document["resolution"]["recipe"]["base"]["train_config"]["metrics_schema_version"] == 20
     assert document["resolution"]["goal"]["base"] == resolved.canonical_goal
     assert document["resolution"]["recipe"]["variant_id"].startswith("v-")
     assert (

@@ -33,7 +33,10 @@ def descriptor() -> ProviderDescriptor:
         provider_id="event-reward-test",
         native_observation_space=gym.spaces.Box(0, 255, shape=(1, 8, 8), dtype=np.uint8),
         native_action_space=gym.spaces.Discrete(2),
-        signal_schema={"lives": SignalSpec("lives", np.int64)},
+        signal_schema={
+            "ball_y": SignalSpec("ball_y", np.int64),
+            "lives": SignalSpec("lives", np.int64),
+        },
     )
 
 
@@ -86,6 +89,113 @@ def test_life_loss_event_subtracts_five_without_ending_the_episode() -> None:
     np.testing.assert_array_equal(step.truncated, [False, False])
 
 
+def test_identity_equals_event_rewards_every_matching_transition() -> None:
+    configured = {
+        "id": "identity",
+        "action": {"set": "native"},
+        "signals": {"ball_y": "ball_y"},
+        "events": {
+            "serve_wait": {
+                "signal": "ball_y",
+                "operation": "equals",
+                "value": 0,
+            }
+        },
+        "termination": {},
+        "reward": {
+            "reward_mode": "native",
+            "event_rewards": {"serve_wait": -0.01},
+            "reward_scale": 1.0,
+            "reward_clip": False,
+        },
+    }
+    validate_task_config(configured)
+    base = IdentityTaskDefinition(
+        signals=configured["signals"],
+        events=configured["events"],
+    ).bind(descriptor(), 2)
+    kernel = with_event_rewards(base, configured["reward"]["event_rewards"])
+    kernel.on_reset(
+        np.zeros((2, 1, 8, 8), dtype=np.uint8),
+        {"ball_y": np.asarray([0, 0], dtype=np.int64)},
+        np.ones(2, dtype=np.bool_),
+    )
+    accumulator = RewardStatsAccumulator(active_components=("native", "event"))
+
+    first = kernel.process(
+        np.asarray([1.0, 1.0], dtype=np.float32),
+        np.zeros(2, dtype=np.bool_),
+        np.zeros(2, dtype=np.bool_),
+        {"ball_y": np.asarray([0, 5], dtype=np.int64)},
+    )
+    np.testing.assert_allclose(first.rewards, [0.99, 1.0])
+    assert first.event_bits.tolist() == [1, 0]
+    accumulator.consume(first.metrics, reserve=4)
+
+    second = kernel.process(
+        np.asarray([1.0, 1.0], dtype=np.float32),
+        np.zeros(2, dtype=np.bool_),
+        np.zeros(2, dtype=np.bool_),
+        {"ball_y": np.asarray([0, 0], dtype=np.int64)},
+    )
+
+    np.testing.assert_allclose(second.rewards, [0.99, 0.99])
+    assert second.event_bits.tolist() == [1, 1]
+    accumulator.consume(second.metrics, reserve=4)
+    payload = accumulator.flush()
+    assert payload["train/reward/event/serve_wait/mean"] == pytest.approx(-0.0075)
+    assert payload["train/reward/event/serve_wait/nonzero/rate"] == 0.75
+
+
+def test_equals_reward_and_equals_for_timeout_compose_on_threshold_transition() -> None:
+    events = {
+        "serve_wait": {
+            "signal": "ball_y",
+            "operation": "equals",
+            "value": 0,
+        },
+        "serve_stall": {
+            "signal": "ball_y",
+            "operation": "equals_for",
+            "value": 0,
+            "steps": 2,
+        },
+    }
+    base = IdentityTaskDefinition(
+        signals={"ball_y": "ball_y"},
+        events=events,
+        termination={"timeout": ["serve_stall"]},
+    ).bind(descriptor(), 1)
+    kernel = with_event_rewards(
+        base,
+        {"serve_wait": -0.01, "serve_stall": -5.0},
+    )
+    kernel.on_reset(
+        np.zeros((1, 1, 8, 8), dtype=np.uint8),
+        {"ball_y": np.asarray([0], dtype=np.int64)},
+        np.ones(1, dtype=np.bool_),
+    )
+
+    first = kernel.process(
+        np.asarray([0.0], dtype=np.float32),
+        np.zeros(1, dtype=np.bool_),
+        np.zeros(1, dtype=np.bool_),
+        {"ball_y": np.asarray([0], dtype=np.int64)},
+    )
+    np.testing.assert_allclose(first.rewards, [-0.01])
+    np.testing.assert_array_equal(first.truncated, [False])
+
+    threshold = kernel.process(
+        np.asarray([0.0], dtype=np.float32),
+        np.zeros(1, dtype=np.bool_),
+        np.zeros(1, dtype=np.bool_),
+        {"ball_y": np.asarray([0], dtype=np.int64)},
+    )
+    np.testing.assert_allclose(threshold.rewards, [-5.01])
+    np.testing.assert_array_equal(threshold.truncated, [True])
+    assert threshold.event_bits.tolist() == [3]
+
+
 def test_event_reward_is_included_before_the_global_reward_transform_and_logging() -> None:
     configured = task()
     configured["reward"]["reward_scale"] = 0.5
@@ -110,6 +220,7 @@ def test_event_reward_is_included_before_the_global_reward_transform_and_logging
 
     np.testing.assert_allclose(step.metrics["raw_reward"], [-4.0])
     np.testing.assert_allclose(step.rewards, [-2.0])
+    np.testing.assert_allclose(step.metrics["event_reward_component/life_loss"], [-5.0])
     components = active_reward_components(configured)
     assert components == ("native", "event")
     accumulator = RewardStatsAccumulator(active_components=components)
@@ -117,6 +228,8 @@ def test_event_reward_is_included_before_the_global_reward_transform_and_logging
     payload = accumulator.flush()
     assert payload["train/reward/component/native/mean"] == 1.0
     assert payload["train/reward/component/event/mean"] == -5.0
+    assert payload["train/reward/event/life_loss/mean"] == -5.0
+    assert payload["train/reward/event/life_loss/nonzero/rate"] == 1.0
 
 
 def test_player_reward_accounting_exposes_the_event_component() -> None:
