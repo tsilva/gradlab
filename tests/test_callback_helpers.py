@@ -86,6 +86,8 @@ class RuntimeMetricsHelperTests(unittest.TestCase):
         self.assertEqual(logger.records, {})
         callback._on_rollout_end()
         self.assertEqual(logger.records["train/episode/completed/count"], 2)
+        self.assertEqual(logger.records["train/outcome/failure/reason/life_loss/count"], 1)
+        self.assertEqual(logger.records["train/outcome/failure/reason/stalled/count"], 1)
         self.assertEqual(logger.records["train/outcome/failure/reason/life_loss/rolling/rate"], 0.5)
         self.assertEqual(logger.records["train/outcome/failure/reason/stalled/rolling/rate"], 0.5)
         self.assertFalse(any(name.endswith("/episode/count") for name in logger.records))
@@ -109,6 +111,14 @@ class RuntimeMetricsHelperTests(unittest.TestCase):
         callback._on_records(records)
         callback._on_rollout_end()
 
+        self.assertEqual(
+            logger.records["train/outcome/failure/reason/life_loss/count"],
+            50,
+        )
+        self.assertEqual(
+            logger.records["train/outcome/failure/reason/stalled/count"],
+            50,
+        )
         self.assertEqual(
             logger.records["train/outcome/failure/reason/life_loss/rolling/rate"],
             0.5,

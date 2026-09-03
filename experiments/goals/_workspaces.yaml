@@ -88,6 +88,18 @@ sections:
       x: train/global_step
       y:
       - train/throughput/provider/step/rate
+  breakout_diagnostics:
+    title: Breakout diagnostics
+    pinned: true
+    open: true
+    columns: 2
+    panels:
+    - id: serve_stall_count
+      kind: line
+      y_title: episodes
+      x: train/global_step
+      y:
+      - train/outcome/failure/reason/serve_stall/count
 
 profiles:
   training:
@@ -96,12 +108,19 @@ profiles:
     max_runs: 25
     sections:
     - training_essentials
+  breakout_training:
+    display_name: GradLab Training
+    run_scope: current_metrics_schema
+    max_runs: 25
+    sections:
+    - training_essentials
+    - breakout_diagnostics
 
 # Every W&B project resolved from a checked-in active goal inherits the default profile.
 # Project overrides may select another complete profile or omit panels whose metrics do not apply.
 projects:
   Breakout-Atari2600-v0:
-    profile: training
+    profile: breakout_training
     exclude_panels:
     - task_success_min
     - task_success_mean
