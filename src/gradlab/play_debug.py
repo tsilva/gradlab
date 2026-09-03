@@ -238,6 +238,22 @@ def actor_critic_policy_actions(
     )
 
 
+def actor_critic_state_values(model: Any, model_obs: Any) -> np.ndarray:
+    """Evaluate the critic without constructing or sampling an action distribution."""
+
+    policy = model.policy
+    policy.set_training_mode(False)
+    obs_tensor, _vectorized = policy.obs_to_tensor(model_obs)
+    with torch.no_grad():
+        state_value = getattr(policy, "state_value", None)
+        values = (
+            state_value(obs_tensor)
+            if callable(state_value)
+            else policy.predict_values(obs_tensor)
+        )
+    return _as_numpy(values).reshape(-1)
+
+
 def sample_policy_decision(model: Any, model_obs: Any) -> PolicyDecision:
     """Sample once from an actor-critic policy and describe that same decision."""
 

@@ -13,6 +13,7 @@ This specification applies to the public checkpoint browser and interactive web 
 - Run selection must distinguish checked-in recipes from launch-time overrides without requiring a new recipe.
 - Playback must expose the resolved Research Goal and Run Configuration as YAML.
 - Goal Variants and overridden Run Configurations must show their proven differences from their authoritative bases.
+- A selected Run's Checkpoint list must show its authoritative current Run state and make unavailable state explicit.
 
 ## Evidence and Inspection
 

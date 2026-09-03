@@ -178,6 +178,7 @@ class CheckpointPage:
     selection_fence: str
     freshness: Literal["fresh", "partial"] = "fresh"
     warnings: tuple[Mapping[str, Any], ...] = ()
+    run: Mapping[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -2872,6 +2873,38 @@ class PlayCatalog:
         )
         return goal_id
 
+    def _projected_run_status(self, run_id: str) -> dict[str, Any] | None:
+        if self.control_bucket is None:
+            return None
+        manifest = self.control_bucket.get_json_optional(f"runs/{run_id}/manifest.json")
+        if not isinstance(manifest, Mapping):
+            return None
+        goal_slug = str(manifest.get("goal_slug") or "")
+        if not goal_slug:
+            return None
+        generation = self._control_generation_scope(
+            goal_slug=goal_slug,
+            include_archives=True,
+        )
+        projected = next(
+            (
+                run
+                for run in (generation or {}).get("runs", ())
+                if str(run.get("run_id") or "") == run_id
+            ),
+            None,
+        )
+        if not isinstance(projected, Mapping):
+            return None
+        early_stop = projected.get("early_stop")
+        return {
+            "run_id": run_id,
+            "state": str(projected.get("state") or ""),
+            "stop_reason": str(projected.get("stop_reason") or ""),
+            "early_stop": dict(early_stop) if isinstance(early_stop, Mapping) else None,
+            "updated_at": str(projected.get("updated_at") or ""),
+        }
+
     def public_run_route(self, *, run_id: str) -> dict[str, str]:
         """Return the hierarchical checkpoint-browser route proven by a public run."""
         if RUN_ID_PATTERN.fullmatch(run_id) is None:
@@ -3262,9 +3295,10 @@ class PlayCatalog:
         if RUN_ID_PATTERN.fullmatch(run_id) is None:
             raise ValueError("run id must match gradlab-<32 lowercase hex>")
         url = f"{self.public_models_base_url}/runs/{run_id}/index.json"
-        with ThreadPoolExecutor(max_workers=2) as executor:
+        with ThreadPoolExecutor(max_workers=3) as executor:
             index_future = executor.submit(_public_json, url)
             recipe_future = executor.submit(self._run_recipe_document, run_id)
+            run_status_future = executor.submit(self._projected_run_status, run_id)
             index = index_future.result()
         if int(index.get("schema_version") or 0) != 1:
             raise ValueError("unsupported public run index schema")
@@ -3287,6 +3321,21 @@ class PlayCatalog:
             checkpoints=[manifest.to_dict() for manifest in manifests],
         )
         warnings: list[Mapping[str, Any]] = []
+        try:
+            run_status = run_status_future.result()
+        except Exception as exc:
+            run_status = None
+            warnings.append(
+                {
+                    "code": "run_state_unavailable",
+                    "message": f"Run state is unavailable: {exc}",
+                    "retryable": isinstance(
+                        exc,
+                        (CatalogUnavailable, TimeoutError, URLError, OSError),
+                    ),
+                    "source": "control-catalog",
+                }
+            )
         recipe_document: Mapping[str, Any] | None = None
         metric_contract: CheckpointMetricContract | None = None
         try:
@@ -3417,6 +3466,7 @@ class PlayCatalog:
             selection_fence=selection_fence,
             freshness="partial" if warnings else "fresh",
             warnings=tuple(warnings),
+            run=run_status,
         )
 
 

@@ -137,13 +137,14 @@ export function statsBlockFoot(block, snapshot) {
   return block.foot || "";
 }
 
-export function lineBlockFootPresentation(block, unavailable) {
+export function lineBlockFootPresentation(block, unavailable, notice = null) {
   const visibleUnavailable = unavailable?.status === "protocol-error"
     ? null
     : unavailable;
+  const visibleMessage = visibleUnavailable || notice;
   return {
-    text: visibleUnavailable?.message || block.foot || "",
-    warning: Boolean(visibleUnavailable),
+    text: visibleMessage?.message || block.foot || "",
+    warning: Boolean(visibleMessage),
   };
 }
 
@@ -170,9 +171,18 @@ export function lineBlockAvailability(descriptors, snapshot, history) {
   const observed = descriptors.some((descriptor) => (
     seriesForMetric(descriptor.key, history).some(Number.isFinite)
   ));
+  const notice = (
+    descriptors.some((descriptor) => (
+      ["policy/realized-return", "policy/value-error"].includes(descriptor?.key)
+    ))
+    && history.some((point) => point?.realized_return_bootstrapped === true)
+  )
+    ? { message: "Truncated episode: G(s) includes the final state's V(s) as a bootstrap." }
+    : null;
   return {
     unavailable,
     status: unavailable?.status || (observed ? "available" : "not-yet-observed"),
+    ...(notice ? { notice } : {}),
   };
 }
 
@@ -382,7 +392,11 @@ function makeLineBlock(block, services) {
       currentContext = { snapshot, history, view };
       const availability = lineBlockAvailability(descriptors, snapshot, history);
       if (foot) {
-        const presentation = lineBlockFootPresentation(block, availability.unavailable);
+        const presentation = lineBlockFootPresentation(
+          block,
+          availability.unavailable,
+          availability.notice,
+        );
         foot.textContent = presentation.text;
         foot.hidden = !foot.textContent;
         foot.classList.toggle("warning", presentation.warning);

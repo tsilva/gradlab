@@ -1239,6 +1239,43 @@ def test_catalog_validates_and_orders_public_checkpoints(monkeypatch: pytest.Mon
     assert page.warnings[0]["code"] == "checkpoint_metric_contract_unavailable"
 
 
+def test_projected_run_status_uses_the_authoritative_goal_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ManifestBucket:
+        @staticmethod
+        def get_json_optional(key: str):
+            assert key == f"runs/{RUN_ID}/manifest.json"
+            return {"goal_slug": "Mario/Level1-1"}
+
+    catalog = PlayCatalog(control_bucket=ManifestBucket())
+    monkeypatch.setattr(
+        catalog,
+        "_control_generation_scope",
+        lambda **kwargs: {
+            "runs": [
+                {
+                    "run_id": RUN_ID,
+                    "state": "running",
+                    "stop_reason": "",
+                    "early_stop": None,
+                    "updated_at": "2026-09-03T10:00:00Z",
+                }
+            ]
+        }
+        if kwargs == {"goal_slug": "Mario/Level1-1", "include_archives": True}
+        else None,
+    )
+
+    assert catalog._projected_run_status(RUN_ID) == {
+        "run_id": RUN_ID,
+        "state": "running",
+        "stop_reason": "",
+        "early_stop": None,
+        "updated_at": "2026-09-03T10:00:00Z",
+    }
+
+
 def test_checkpoint_base_inventory_never_waits_for_wandb(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

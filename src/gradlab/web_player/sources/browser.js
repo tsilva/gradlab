@@ -98,31 +98,75 @@ const GOAL_CONFIGURATION_KINDS = {
 
 const SUCCESS_BADGES = ["train/success", "eval/success"];
 const ENVIRONMENT_FAVORITES_STORAGE_KEY = "gradlab.playback.favorite-environments.v1";
+const ENVIRONMENT_FAVORITES_COOKIE_KEY = "gradlab_playback_favorite_environments_v1";
+const ENVIRONMENT_FAVORITES_COOKIE_MAX_AGE_SECONDS = 60 * 60 * 24 * 365 * 10;
 
-export function readEnvironmentFavorites(storage) {
+function normalizedEnvironmentFavorites(value) {
+  if (!Array.isArray(value)) return null;
+  return new Set(value.map((name) => String(name).trim()).filter(Boolean));
+}
+
+function environmentFavoritesFromCookie(cookieHeader) {
+  const prefix = `${ENVIRONMENT_FAVORITES_COOKIE_KEY}=`;
+  const entry = String(cookieHeader || "")
+    .split(";")
+    .map((part) => part.trim())
+    .find((part) => part.startsWith(prefix));
+  if (!entry) return null;
+  try {
+    return normalizedEnvironmentFavorites(
+      JSON.parse(decodeURIComponent(entry.slice(prefix.length))),
+    );
+  } catch {
+    return null;
+  }
+}
+
+export function readEnvironmentFavorites(storage, cookieHeader) {
+  const cookieFavorites = environmentFavoritesFromCookie(
+    cookieHeader === undefined ? globalThis.document?.cookie : cookieHeader,
+  );
+  if (cookieFavorites !== null) return cookieFavorites;
   try {
     const target = storage === undefined ? globalThis.window?.localStorage : storage;
-    const value = JSON.parse(target?.getItem(ENVIRONMENT_FAVORITES_STORAGE_KEY) || "[]");
-    if (!Array.isArray(value)) return new Set();
-    return new Set(value.map((name) => String(name).trim()).filter(Boolean));
+    return normalizedEnvironmentFavorites(
+      JSON.parse(target?.getItem(ENVIRONMENT_FAVORITES_STORAGE_KEY) || "[]"),
+    ) || new Set();
   } catch {
     return new Set();
   }
 }
 
-export function writeEnvironmentFavorites(favorites, storage) {
+export function writeEnvironmentFavorites(favorites, storage, cookieTarget) {
+  const names = [...favorites]
+    .map((name) => String(name).trim())
+    .filter(Boolean)
+    .sort((left, right) => left.localeCompare(right));
+  let wrote = false;
   try {
     const target = storage === undefined ? globalThis.window?.localStorage : storage;
-    if (!target) return false;
-    const names = [...favorites]
-      .map((name) => String(name).trim())
-      .filter(Boolean)
-      .sort((left, right) => left.localeCompare(right));
-    target.setItem(ENVIRONMENT_FAVORITES_STORAGE_KEY, JSON.stringify(names));
-    return true;
+    if (target) {
+      target.setItem(ENVIRONMENT_FAVORITES_STORAGE_KEY, JSON.stringify(names));
+      wrote = true;
+    }
   } catch {
-    return false;
+    // Private browsing and hardened browser settings may reject local storage.
   }
+  try {
+    const target = cookieTarget === undefined ? globalThis.document : cookieTarget;
+    if (target) {
+      target.cookie = [
+        `${ENVIRONMENT_FAVORITES_COOKIE_KEY}=${encodeURIComponent(JSON.stringify(names))}`,
+        "Path=/",
+        `Max-Age=${ENVIRONMENT_FAVORITES_COOKIE_MAX_AGE_SECONDS}`,
+        "SameSite=Strict",
+      ].join("; ");
+      wrote = true;
+    }
+  } catch {
+    // Keep favorites usable for this launch when persistent cookies are unavailable.
+  }
+  return wrote;
 }
 
 export function toggleEnvironmentFavorite(favorites, name) {
@@ -1212,6 +1256,7 @@ export class SourceBrowser {
     this.catalogSource = null;
     this.generatedAt = null;
     this.selectionFence = "";
+    this.runStatus = null;
     this.loading = false;
     this.error = "";
     this.app = { phase: "selecting" };
@@ -1247,6 +1292,7 @@ export class SourceBrowser {
     this.environmentCatalogCache = null;
     this.goalCatalogCache = new Map();
     this.favoriteEnvironments = readEnvironmentFavorites();
+    writeEnvironmentFavorites(this.favoriteEnvironments);
     this.historyEnabled = (
       location.pathname === "/"
       || location.pathname.startsWith("/environments/")
@@ -1317,6 +1363,7 @@ export class SourceBrowser {
       this.catalogSource = null;
       this.generatedAt = null;
       this.selectionFence = "";
+      this.runStatus = null;
       this.checkpointTrainingController?.abort();
       this.checkpointTrainingController = null;
       this.checkpointTrainingSerial += 1;
@@ -1498,12 +1545,6 @@ export class SourceBrowser {
     if (!item || this.activeCheckpointPendingId) return false;
     const commandId = this.selectCheckpoint(item);
     if (!commandId) return false;
-    this.activeCheckpointPendingId = String(item.checkpoint_id || "");
-    this.beginCheckpointLoad?.({
-      commandId,
-      checkpointId: this.activeCheckpointPendingId,
-    });
-    this.renderActiveCheckpointNavigation(this.route);
     return true;
   }
 
@@ -1800,6 +1841,9 @@ export class SourceBrowser {
         this.selectionFence = typeof payload.selection_fence === "string"
           ? payload.selection_fence
           : "";
+        this.runStatus = payload.run && typeof payload.run === "object"
+          ? { ...payload.run }
+          : null;
         if (this.route.level === "goal_variants") {
           this.activityRevision = String(payload.revision || "");
         }
@@ -1911,6 +1955,9 @@ export class SourceBrowser {
       this.selectionFence = typeof payload.selection_fence === "string"
         ? payload.selection_fence
         : this.selectionFence;
+      this.runStatus = payload.run && typeof payload.run === "object"
+        ? { ...payload.run }
+        : this.runStatus;
       this.catalogWarnings = Array.isArray(payload.warnings) ? payload.warnings : [];
       this.freshness = this.catalogWarnings.length ? "partial" : "fresh";
     } catch (error) {
@@ -1953,6 +2000,7 @@ export class SourceBrowser {
     this.catalogSource = null;
     this.generatedAt = null;
     this.selectionFence = "";
+    this.runStatus = null;
     this.loadedKey = "";
     this.error = "";
     this.checkpointTrainingController?.abort();
@@ -2041,6 +2089,12 @@ export class SourceBrowser {
     if (commandId === null) return false;
     this.route = route;
     this.syncUrl(historyMode);
+    this.activeCheckpointPendingId = String(item.checkpoint_id || "");
+    this.beginCheckpointLoad?.({
+      commandId,
+      checkpointId: this.activeCheckpointPendingId,
+    });
+    this.renderActiveCheckpointNavigation(this.route);
     return commandId;
   }
 
@@ -2108,6 +2162,9 @@ export class SourceBrowser {
     const heading = document.createElement("h2");
     heading.textContent = this.heading();
     titleBlock.append(eyebrow, heading);
+    if (this.route.level === "runs" && this.route.run_id) {
+      titleBlock.append(this.renderSelectedRunStatus());
+    }
     head.append(titleBlock);
 
     if (this.app.phase === "selecting") {
@@ -2189,6 +2246,37 @@ export class SourceBrowser {
     }
     if (this.route.level === "goals") return "Choose a goal";
     return "Choose an environment";
+  }
+
+  renderSelectedRunStatus() {
+    const stateAvailable = Boolean(String(this.runStatus?.state || "").trim());
+    const waiting = this.loading && !this.loadedKey && !stateAvailable;
+    const presentation = stateAvailable
+      ? runStatePresentation(this.runStatus)
+      : {
+          iconName: waiting ? "refresh" : "activity-heartbeat",
+          tone: waiting ? "pending" : "unknown",
+          label: waiting ? "Loading…" : "Unavailable",
+        };
+    const status = document.createElement("div");
+    status.className = `source-run-status ${presentation.tone}`;
+    if (waiting) status.classList.add("loading");
+    const context = document.createElement("span");
+    context.textContent = "Training run";
+    const state = document.createElement("strong");
+    state.textContent = presentation.label;
+    status.append(icon(presentation.iconName), context, state);
+    const updatedAt = String(this.runStatus?.updated_at || "").trim();
+    if (updatedAt) {
+      const activity = document.createElement("small");
+      activity.textContent = `Updated ${formatDate(updatedAt)}`;
+      status.append(activity);
+    }
+    status.setAttribute(
+      "aria-label",
+      `Training run state: ${presentation.label}${updatedAt ? `. Updated ${formatDate(updatedAt)}` : ""}`,
+    );
+    return status;
   }
 
   renderBreadcrumbs(nav) {

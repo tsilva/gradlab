@@ -402,6 +402,34 @@ h2 { font-size: var(--font-size-lg); margin: 0; font-weight: var(--font-weight-s
 
 .source-title { display: grid; gap: .3rem; }
 .source-title h2 { font-size: var(--font-size-xl); }
+.source-run-status {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: .34rem;
+  width: max-content;
+  max-width: 100%;
+  margin-top: .18rem;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
+.source-run-status .icon { width: 1rem; height: 1rem; }
+.source-run-status strong { color: var(--color-text); }
+.source-run-status small { color: var(--color-text-muted); }
+.source-run-status small::before { margin-right: .34rem; content: "·"; }
+.source-run-status.finished,
+.source-run-status.finished strong { color: var(--color-evaluation-text); }
+.source-run-status.running,
+.source-run-status.running strong { color: var(--color-interaction-active); }
+.source-run-status.failed,
+.source-run-status.failed strong { color: var(--color-error-text); }
+.source-run-status.pending,
+.source-run-status.pending strong { color: var(--color-training-text); }
+.source-run-status.stopped,
+.source-run-status.stopped strong,
+.source-run-status.unknown,
+.source-run-status.unknown strong { color: var(--color-text-muted); }
+.source-run-status.loading .icon { animation: source-spin .8s linear infinite; }
 
 .source-notice,
 .source-inline-error {
@@ -1480,8 +1508,10 @@ canvas { display: block; max-width: 100%; }
 }
 .game-frame-status { position: absolute; top: .58rem; left: .58rem; z-index: 5; display: grid; justify-items: start; gap: .3rem; max-width: min(28rem, calc(100% - 1.16rem)); pointer-events: none; }
 .game-frame-phase,
+.game-frame-boundary,
 .game-frame-detail { max-width: 100%; padding: .28rem .42rem; overflow-wrap: anywhere; border: 1px solid var(--color-border-translucent); border-radius: .36rem; background: var(--color-inverse-overlay); font-family: var(--font-family-mono); font-size: var(--font-size-xs); font-weight: var(--font-weight-bold); line-height: var(--line-height-tight); letter-spacing: var(--letter-spacing-label); text-transform: uppercase; }
 .game-frame-phase,
+.game-frame-boundary,
 .game-frame-detail { color: var(--color-inverse-text); }
 .game-frame-detail.outcome-success,
 .termination-outcome.outcome-success {
