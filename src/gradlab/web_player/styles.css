@@ -1524,6 +1524,7 @@ select {
 .playback-glance { display: grid; gap: .14rem; padding: .55rem .62rem; border: 1px solid var(--color-border); border-radius: .42rem; background: var(--color-surface-primary); }
 .playback-glance strong { color: var(--color-text); font-size: var(--font-size-sm); }
 .playback-glance span { color: var(--color-text-muted); font-family: var(--font-family-mono); font-size: var(--font-size-xs); }
+.playback-glance [data-playback-frame-skip].contract-mismatch { color: var(--color-series-amber); }
 .advanced-playback-settings { margin-top: .2rem; padding-top: .48rem; border-top: 1px solid var(--color-border); }
 .advanced-playback-settings > summary { color: var(--color-text); font-weight: var(--font-weight-bold); }
 .advanced-playback-body { display: grid; gap: .4rem; margin-top: .55rem; }
@@ -1651,8 +1652,16 @@ select {
   font-variant-numeric: tabular-nums;
 }
 .policy-decision-panel > .panel-header { margin-bottom: .9rem; }
-.policy-decision-content { min-height: 0; }
-.policy-decision-discrete { display: grid; gap: .88rem; }
+.policy-decision-panel > .telemetry-blocks {
+  min-height: calc(100% - 2.8rem);
+}
+.policy-decision-content { min-height: 0; height: 100%; }
+.policy-decision-discrete {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+  gap: .88rem;
+  height: 100%;
+}
 .policy-decision-hero {
   display: grid;
   gap: .16rem;
@@ -1689,6 +1698,18 @@ select {
   color: var(--color-text-muted);
   font-size: var(--font-size-lg);
 }
+.policy-decision-rank {
+  margin-left: auto;
+  padding: .24rem .48rem;
+  border: 1px solid color-mix(in srgb, var(--color-evaluation-text) 48%, transparent);
+  border-radius: var(--radius-control);
+  color: var(--color-evaluation-text);
+  font-family: var(--font-family-mono);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  line-height: 1;
+  white-space: nowrap;
+}
 .policy-decision-mode { font-family: var(--font-family-mono); }
 .policy-decision-legend {
   display: flex;
@@ -1710,12 +1731,17 @@ select {
 .policy-decision-legend .episode::before { background: var(--color-interaction); }
 .policy-decision-comparison {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   min-width: 0;
+}
+.policy-decision-comparison-rows {
+  display: grid;
+  grid-auto-rows: minmax(3.15rem, 1fr);
 }
 .policy-decision-comparison-header,
 .policy-decision-comparison-row {
   display: grid;
-  grid-template-columns: minmax(4.5rem, max-content) minmax(7rem, 1fr) 4.7rem 7.2rem;
+  grid-template-columns: minmax(4.5rem, max-content) minmax(7rem, 1fr) 4.7rem 8.8rem;
   align-items: center;
   gap: .62rem;
   min-width: 0;
@@ -1809,7 +1835,6 @@ select {
 .policy-decision-fallback { display: grid; gap: .85rem; }
 @container (max-width: 31rem) {
   .policy-decision-hero-line { flex-wrap: wrap; row-gap: .32rem; }
-  .policy-decision-probability-label { flex-basis: 100%; }
   .policy-decision-comparison-header,
   .policy-decision-comparison-row {
     grid-template-columns: minmax(3.8rem, max-content) minmax(5rem, 1fr) 4rem 5.2rem;

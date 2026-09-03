@@ -705,6 +705,47 @@ def test_launch_operator_preflight_runs_before_runtime_readiness(
     runtime_release.assert_not_called()
 
 
+def test_launch_rejects_invalid_recipe_override_before_external_preflight() -> None:
+    root = Path.cwd().resolve()
+    goal = (root / "experiments/goals/Breakout-Atari2600-v0/_goal.yaml").resolve()
+    recipe = (goal.parent / "recipes/ppo.yaml").resolve()
+    args = SimpleNamespace(
+        goal_file=None,
+        recipe_file=recipe,
+        seed=12,
+        run_description=None,
+        recipe_overrides=["train.preprocessing.frame_skip=1"],
+        checkpoint_eval_backend="none",
+        compute="local",
+        target="local-gpu",
+        max_price=None,
+        max_cost_usd=None,
+        allow_on_demand=False,
+        max_duration=3600,
+        rom_path=None,
+    )
+
+    with (
+        mock.patch("gradlab.experiment_cli.repository_root", return_value=root),
+        mock.patch("gradlab.experiment_cli.clean_git_source_sha", return_value="a" * 40),
+        mock.patch("gradlab.experiment_cli.current_git_branch", return_value="main"),
+        mock.patch(
+            "gradlab.experiment_cli._tracked_committed_path",
+            side_effect=[recipe, goal],
+        ),
+        mock.patch("gradlab.experiment_cli._operator_preflight") as preflight,
+        mock.patch("gradlab.experiment_cli.runtime_release_from_args") as runtime_release,
+        pytest.raises(
+            ValueError,
+            match=r"unsupported flat field\(s\): preprocessing",
+        ),
+    ):
+        cmd_launch(args)
+
+    preflight.assert_not_called()
+    runtime_release.assert_not_called()
+
+
 def test_operator_configuration_error_is_concise_without_traceback(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

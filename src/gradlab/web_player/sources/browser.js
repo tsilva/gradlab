@@ -1284,7 +1284,6 @@ export class SourceBrowser {
       this.pendingLocationRoute
       && location.pathname !== "/"
       && this.app.phase === "selecting"
-      && !this.app.source
     ) {
       const pending = { ...this.pendingLocationRoute };
       this.pendingLocationRoute = null;

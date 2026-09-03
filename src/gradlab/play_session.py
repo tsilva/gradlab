@@ -1179,12 +1179,11 @@ class _PlaybackSession:
         processing = self.processing_features
         needs_raw = "raw" in processing
         needs_observation = bool(processing & {"observation", "attribution", "cnn-inspection"})
-        model_obs = self.model_obs
-        model_obs_snapshot = (
-            deepcopy(model_obs)
-            if needs_raw or "attribution" in processing or "cnn-inspection" in processing
-            else None
+        needs_policy_input = bool(
+            processing & {"observation", "raw", "attribution", "cnn-inspection"}
         )
+        model_obs = self.model_obs
+        model_obs_snapshot = deepcopy(model_obs) if needs_policy_input else None
         pre_task = deepcopy(self.active_task) if needs_raw else None
         before_frame = (
             None if not needs_raw or self.current_frame is None else self.current_frame.copy()

@@ -84,6 +84,44 @@ class ConfigValidationTests(unittest.TestCase):
                 recipe_overrides=("train.environment.task.reward.reward_scale=100",),
             )
 
+    def test_flat_preprocessing_override_is_rejected_before_normalization(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            r"unsupported flat field\(s\): preprocessing.*"
+            r"train\.environment\.preprocessing\.frame_skip",
+        ):
+            compose_train_document(
+                self.BREAKOUT_GOAL,
+                self.BREAKOUT_RECIPE,
+                recipe_overrides=("train.preprocessing.frame_skip=1",),
+            )
+
+    def test_environment_preprocessing_override_is_resolved_and_recorded(self) -> None:
+        override = "train.environment.preprocessing.frame_skip=1"
+
+        document = compose_train_document(
+            self.BREAKOUT_GOAL,
+            self.BREAKOUT_RECIPE,
+            recipe_overrides=(override,),
+        )
+
+        self.assertEqual(document["train_config"]["frame_skip"], 1)
+        self.assertEqual(document["environment"]["preprocessing"]["frame_skip"], 1)
+        self.assertEqual(document["recipe_overrides"], [override])
+        self.assertEqual(document["effective_recipe_overrides"], [override])
+
+    def test_supported_goal_train_override_remains_available(self) -> None:
+        override = "train.checkpoint_freq=0"
+
+        document = compose_train_document(
+            self.BREAKOUT_GOAL,
+            self.BREAKOUT_RECIPE,
+            recipe_overrides=(override,),
+        )
+
+        self.assertEqual(document["train_config"]["checkpoint_freq"], 0)
+        self.assertEqual(document["recipe_overrides"], [override])
+
     def test_vizdoom_policy_can_select_independent_sb3_feature_extractors(self) -> None:
         document = compose_train_document(
             self.VIZDOOM_BASIC_GOAL,

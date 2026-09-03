@@ -244,6 +244,21 @@ function policyDecisionMetric(key, snapshot, point) {
   };
 }
 
+export function policyDecisionRank(rows, selected) {
+  if (!selected || selected.stepProbability === null) return null;
+  return 1 + rows.filter((row) => (
+    row.stepProbability !== null
+      && row.stepProbability > selected.stepProbability
+  )).length;
+}
+
+export function ordinal(value) {
+  if (!Number.isInteger(value) || value < 1) return "—";
+  const remainder = value % 100;
+  if (remainder >= 11 && remainder <= 13) return `${value}th`;
+  return `${value}${({ 1: "st", 2: "nd", 3: "rd" })[value % 10] || "th"}`;
+}
+
 export function policyDecisionPresentation(snapshot, history, view) {
   const point = selectedPoint(history, snapshot, view);
   const descriptor = descriptorFor("policy/distribution");
@@ -272,6 +287,8 @@ export function policyDecisionPresentation(snapshot, history, view) {
     discrete: true,
     action: selected?.name || actionMetric.value,
     mode: modeMetric.value,
+    rank: policyDecisionRank(comparison.rows, selected),
+    choiceCount: comparison.rows.length,
     stepProbability: selected?.stepProbability ?? null,
     rows: comparison.rows,
     stats: POLICY_DECISION_FOOTER_METRICS
@@ -566,7 +583,9 @@ function makePolicyDecisionBlock(statsBlock, distributionBlock) {
   const probabilityLabel = document.createElement("span");
   probabilityLabel.className = "policy-decision-probability-label";
   probabilityLabel.textContent = "step probability";
-  heroLine.append(action, probability, probabilityLabel);
+  const rank = document.createElement("span");
+  rank.className = "policy-decision-rank";
+  heroLine.append(action, probability, probabilityLabel, rank);
   const mode = document.createElement("span");
   mode.className = "policy-decision-mode";
   hero.append(heroLine, mode);
@@ -638,6 +657,14 @@ function makePolicyDecisionBlock(statsBlock, distributionBlock) {
       action.textContent = presentation.action;
       mode.textContent = presentation.mode;
       probability.textContent = formatProbability(presentation.stepProbability);
+      rank.textContent = presentation.rank === null
+        ? "Rank unavailable"
+        : `${ordinal(presentation.rank)} of ${presentation.choiceCount} choices`;
+      rank.title = presentation.rank === null
+        ? "The selected action cannot be ranked because its probability is unavailable."
+        : `Selected action ranks ${ordinal(presentation.rank)} of ${
+          presentation.choiceCount
+        } by this step's action probabilities.`;
       comparisonRows.replaceChildren(
         ...presentation.rows.map(policyDecisionComparisonRow),
       );

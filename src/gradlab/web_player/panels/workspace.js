@@ -4,7 +4,7 @@ import {
   defaultPanelInstances,
 } from "./catalog.js";
 
-export const WORKSPACE_VERSION = 7;
+export const WORKSPACE_VERSION = 8;
 export const CUSTOM_PANEL_ID = /^panel-[0-9a-f]{8}-[0-9a-f-]{27}$/;
 const BLOCK_KINDS = new Set([
   "stats",
@@ -120,6 +120,30 @@ function normalizePanel(id, value, fallback) {
   };
 }
 
+function migratePanelConfig(id, value, version) {
+  if (version !== 7 || id !== "value") return value;
+  const blocks = value?.config?.blocks;
+  if (!Array.isArray(blocks) || blocks.length !== 1) return value;
+  const [block] = blocks;
+  if (
+    block?.kind !== "line"
+    || !Array.isArray(block.metrics)
+    || block.metrics.length !== 2
+    || block.metrics[0] !== "policy/value"
+    || block.metrics[1] !== "policy/realized-return"
+  ) return value;
+  return {
+    ...value,
+    config: {
+      ...value.config,
+      blocks: [{
+        ...block,
+        metrics: [...block.metrics, "policy/value-error"],
+      }],
+    },
+  };
+}
+
 export function createDefaultWorkspace({ paired = false, writer = "" } = {}) {
   return {
     version: WORKSPACE_VERSION,
@@ -132,15 +156,20 @@ export function createDefaultWorkspace({ paired = false, writer = "" } = {}) {
 
 export function normalizeWorkspace(value, { paired = false, writer = "" } = {}) {
   const fallback = createDefaultWorkspace({ paired, writer });
-  if (!value || typeof value !== "object" || value.version !== WORKSPACE_VERSION) {
+  if (
+    !value
+    || typeof value !== "object"
+    || ![7, WORKSPACE_VERSION].includes(value.version)
+  ) {
     return fallback;
   }
   const panels = {};
   const legacyFixedView = ["watch", "explain", "debug"].includes(value.preset);
   Object.entries(fallback.panels).forEach(([id, panel]) => {
-    const source = legacyFixedView && id !== "controls"
+    const saved = legacyFixedView && id !== "controls"
       ? { ...value.panels?.[id], placement: panel.placement }
       : value.panels?.[id];
+    const source = migratePanelConfig(id, saved, value.version);
     panels[id] = normalizePanel(
       id,
       source,

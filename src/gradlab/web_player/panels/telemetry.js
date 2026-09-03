@@ -58,7 +58,7 @@ const STATIC_DESCRIPTORS = Object.freeze({
   },
   "policy/value-error": {
     label: "Value error V(s) − G(s)",
-    shortLabel: "V − G",
+    shortLabel: "V(s) − G(s)",
     type: "scalar",
     unit: "value",
     phase: "post-episode",

@@ -16,9 +16,9 @@ import {
 
 const CUSTOM_ID = "panel-00000000-0000-4000-8000-000000000000";
 
-test("default workspace is a v7 editable all-panels view without redundant controls", () => {
+test("default workspace is a v8 editable all-panels view without redundant controls", () => {
   const workspace = createDefaultWorkspace({ writer: "main" });
-  assert.equal(workspace.version, 7);
+  assert.equal(workspace.version, 8);
   assert.equal(workspace.version, WORKSPACE_VERSION);
   assert.equal(workspace.preset, "all");
   assert.equal(Object.hasOwn(workspace.panels, "reward"), false);
@@ -35,6 +35,11 @@ test("default workspace is a v7 editable all-panels view without redundant contr
     ),
     ["line", "line", "line"],
   );
+  assert.deepEqual(workspace.panels.value.config.blocks[0].metrics, [
+    "policy/value",
+    "policy/realized-return",
+    "policy/value-error",
+  ]);
   assert.deepEqual(workspace.panels.game.placement, {
     x: 0,
     y: 0,
@@ -181,7 +186,7 @@ test("workspace normalization preserves a saved custom panel arrangement", () =>
   );
 });
 
-test("existing v7 workspaces receive reward analysis hidden on the shelf", () => {
+test("existing v8 workspaces receive reward analysis hidden on the shelf", () => {
   const workspace = createDefaultWorkspace();
   delete workspace.panels["reward-analysis"];
 
@@ -189,6 +194,30 @@ test("existing v7 workspaces receive reward analysis hidden on the shelf", () =>
 
   assert.equal(normalized.panels["reward-analysis"].placement.visible, false);
   assert.equal(normalized.panels["reward-analysis"].builtin, true);
+});
+
+test("v7 workspaces add value error only to the old built-in value configuration", () => {
+  const workspace = createDefaultWorkspace();
+  workspace.version = 7;
+  workspace.panels.value.config.blocks[0].metrics = [
+    "policy/value",
+    "policy/realized-return",
+  ];
+
+  const normalized = normalizeWorkspace(workspace);
+
+  assert.equal(normalized.version, 8);
+  assert.deepEqual(normalized.panels.value.config.blocks[0].metrics, [
+    "policy/value",
+    "policy/realized-return",
+    "policy/value-error",
+  ]);
+
+  workspace.panels.value.config.blocks[0].metrics = ["policy/value"];
+  assert.deepEqual(
+    normalizeWorkspace(workspace).panels.value.config.blocks[0].metrics,
+    ["policy/value"],
+  );
 });
 
 test("new and upgraded paired workspaces keep the CNN explorer hidden", () => {

@@ -25,8 +25,10 @@ import {
   lineLegendPresentation,
   lineLegendPresentationAtIndex,
   lineBlockFootPresentation,
+  ordinal,
   policyDecisionLayoutEnabled,
   policyDecisionPresentation,
+  policyDecisionRank,
   rewardSummaryCards,
   selectedPoint,
   statsBlockFoot,
@@ -200,6 +202,8 @@ test("policy decision presentation keeps selection, probability, and episode fre
   assert.equal(presentation.discrete, true);
   assert.equal(presentation.action, "left");
   assert.equal(presentation.mode, "stochastic");
+  assert.equal(presentation.rank, 1);
+  assert.equal(presentation.choiceCount, 4);
   assert.equal(presentation.stepProbability, 0.78);
   assert.deepEqual(
     presentation.rows.map(({ episodeProbability }) => episodeProbability),
@@ -209,6 +213,23 @@ test("policy decision presentation keeps selection, probability, and episode fre
     presentation.stats.map(({ label, value }) => [label, value]),
     [["V(s)", "3.7437"], ["Entropy", "0.6828"], ["Log p", "-0.2486"]],
   );
+});
+
+test("policy decision rank orders current-step choices and preserves ties", () => {
+  const rows = [
+    { name: "first", stepProbability: 0.5 },
+    { name: "tied", stepProbability: 0.25 },
+    { name: "selected", stepProbability: 0.25 },
+    { name: "last", stepProbability: 0 },
+  ];
+
+  assert.equal(policyDecisionRank(rows, rows[2]), 2);
+  assert.equal(policyDecisionRank(rows, { stepProbability: null }), null);
+  assert.equal(ordinal(1), "1st");
+  assert.equal(ordinal(2), "2nd");
+  assert.equal(ordinal(3), "3rd");
+  assert.equal(ordinal(11), "11th");
+  assert.equal(ordinal(23), "23rd");
 });
 
 test("reward totals show pre-clip and post-clip values without a formula", () => {
@@ -534,6 +555,13 @@ test("step reward legends use native and shaped reward labels", () => {
   );
 });
 
+test("value error legends identify the signed critic error", () => {
+  assert.equal(
+    lineLegendPrefix(descriptorFor("policy/value-error")),
+    "V(s) − G(s) = ",
+  );
+});
+
 test("step zero does not borrow telemetry from a later transition", () => {
   const history = [{ sequence: 1, policy_action: 3 }];
   assert.equal(
@@ -657,15 +685,28 @@ test("line charts recognize retained post-episode diagnostics", () => {
     },
     session: { critic_comparison: { reasons: [] } },
   };
-  const history = [{ value: -14.153, realized_return: -3.5 }];
+  const history = [{
+    value: -14.153,
+    realized_return: -3.5,
+    value_error: -10.653,
+  }];
   const descriptors = [
     descriptorFor("policy/value"),
     descriptorFor("policy/realized-return"),
+    descriptorFor("policy/value-error"),
   ];
 
   assert.deepEqual(
     lineBlockAvailability(descriptors, snapshot, history),
     { unavailable: null, status: "available" },
+  );
+  assert.deepEqual(
+    lineLegendPresentationAtIndex(descriptors, history, 0),
+    [
+      { key: "policy/value", value: "-14.1530" },
+      { key: "policy/realized-return", value: "-3.500" },
+      { key: "policy/value-error", value: "-10.653" },
+    ],
   );
 
   assert.deepEqual(

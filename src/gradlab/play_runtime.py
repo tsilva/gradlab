@@ -293,7 +293,12 @@ class PlaybackLoader:
         if requested_mode not in {"training", "evaluation", "counterfactual"}:
             raise ValueError(f"unsupported playback contract mode {requested_mode!r}")
         base_mode = "evaluation" if requested_mode == "evaluation" else "training"
-        contract = playback_contract(source.bundle.recipe, mode=base_mode)
+        training_contract = playback_contract(source.bundle.recipe, mode="training")
+        contract = (
+            training_contract
+            if base_mode == "training"
+            else playback_contract(source.bundle.recipe, mode=base_mode)
+        )
         recipe = source.bundle.recipe.get("recipe", {})
         value_contract = critic_value_contract(source.bundle.recipe)
         contract_audit = playback_contract_audit(source.bundle.recipe)
@@ -318,6 +323,12 @@ class PlaybackLoader:
         if artifact_config is None:
             raise ValueError("policy bundle recipe has no playback environment")
         artifact_config = resolve_env_config(artifact_config)
+        training_config = env_config_from_config_dict(
+            deepcopy(dict(training_contract["environment"]))
+        )
+        if training_config is None:
+            raise ValueError("policy bundle recipe has no training environment")
+        training_config = resolve_env_config(training_config)
         from gradlab.env_identity import policy_environment_hash
 
         active_hash = policy_environment_hash(env_config_metadata(artifact_config))
@@ -356,6 +367,10 @@ class PlaybackLoader:
             "evaluation_matches_training": evaluation_matches_training,
             "mismatch_paths": list(contract_audit["mismatch_paths"]),
             "requested_policy_override_paths": requested_override_paths,
+            "frame_skip": {
+                "training": int(training_config.frame_skip),
+                "playback": int(artifact_config.frame_skip),
+            },
         }
         termination_source = effective_mode
         if not self.explicit_seed:

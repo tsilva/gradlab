@@ -1,3 +1,115 @@
+# Design QA — Policy decision choice rank
+
+## Comparison target
+
+- Source visual truth: `/var/folders/wz/x29jb7_x5rdc_5dcjr4qnhg00000gn/T/codex-clipboard-d1864944-3d4b-4be7-8bb2-fdea33c8bcfc.png`
+- Browser-rendered implementation: `/Users/tsilva/repos/tsilva/gradlab/logs/policy-decision-rank-final.png`
+- Live-player verification: `/Users/tsilva/repos/tsilva/gradlab/logs/policy-decision-rank-live.png`
+- Normalized side-by-side comparison: `/Users/tsilva/repos/tsilva/gradlab/logs/policy-decision-rank-comparison.png`
+- Source pixels: 1417 × 1110. The source panel was cropped to 1388 × 1084 and normalized to 704 × 555 pixels.
+- Implementation viewport: 800 × 650 CSS pixels at 1× density. The panel measures 704 × 555 CSS pixels and was cropped at native density for comparison.
+- State: discrete stochastic policy with four declared actions; `left` selected at 78.0% step probability and ranked `1st of 4 choices`.
+
+## Findings
+
+No actionable P0, P1, or P2 differences remain.
+
+- Fonts and typography: the rank uses the existing JetBrains Mono role and smallest checked-in type token, keeping it subordinate to the selected action and probability while remaining readable.
+- Spacing and layout rhythm: the rank occupies the open end of the hero line without moving or compressing the action, probability, mode, legend, action comparison, or footer metrics. The 704 × 555 target panel has no overflow.
+- Colors and visual tokens: the rank reuses the evaluation accent, existing control radius, and a token-derived border so it reads as metadata for the selected action.
+- Image quality and asset fidelity: the panel adds no imagery or icon assets. Existing packaged icons remain unchanged.
+- Copy and content: `1st of 4 choices` states the selected decision's competition rank among the current step probabilities. Episode frequency does not affect the rank. Equal probabilities share a rank.
+- Accessibility and behavior: the full explanatory text is available through the rank's tooltip. Missing selected-action probability renders `Rank unavailable` instead of fabricating a position.
+
+## Full-view and focused comparison evidence
+
+The normalized side-by-side file compares the complete source and implementation panels at 704 × 555. The new rank is readable in the full component view, so a second detail crop would not add evidence.
+
+## Comparison history
+
+1. The first compact-width pass found one P2: the rank wrapped onto an unnecessary third hero line and caused 19 pixels of vertical scrolling at a 448 × 555 panel size.
+2. Fix: removed the forced full-width probability-label break and allowed the hero contents to wrap naturally. The post-fix compact panel has no horizontal or vertical overflow, and the rank remains visible.
+
+## Browser verification
+
+- Verified the exact four-action state at 704 × 555 and a compact 448 × 555 panel.
+- Verified the live two-action Bandit policy at a 402 × 470 panel; its selected action rendered as `1st of 2 choices` without overflow.
+- Confirmed the visible label and tooltip both describe the current-step probability rank.
+- Checked browser warnings and errors after rendering: none.
+
+## Implementation checklist
+
+- [x] Rank the selected action against valid current-step probabilities.
+- [x] Preserve tied ranks and correct English ordinals.
+- [x] Show the action count with the rank.
+- [x] Keep rank semantics independent of retained episode frequency.
+- [x] Preserve responsive layout and unavailable-data behavior.
+
+## Follow-up polish
+
+- None required for this change.
+
+final result: passed
+
+---
+
+# Design QA — Policy decision panel redesign
+
+## Comparison target
+
+- Source visual truth: `/var/folders/wz/x29jb7_x5rdc_5dcjr4qnhg00000gn/T/codex-clipboard-d1864944-3d4b-4be7-8bb2-fdea33c8bcfc.png`
+- Browser-rendered implementation: `/Users/tsilva/repos/tsilva/gradlab/logs/policy-decision-implementation-final.png`
+- Normalized side-by-side comparison: `/Users/tsilva/repos/tsilva/gradlab/logs/policy-decision-comparison-final.png`
+- Source pixels: 1417 × 1110. The source panel boundary was cropped to 1388 × 1084 and normalized to 704 × 555 pixels.
+- Implementation viewport: 800 × 650 CSS pixels at 1× density. The policy panel measures 704 × 555 CSS pixels and was cropped at native density for comparison.
+- State: enabled discrete stochastic policy with four declared actions; `left` selected at 78.0% step probability; retained episode frequencies 10.2%, 25.8%, 22.2%, and 41.7%; V(s) 3.7437, entropy 0.6828, and log p −0.2486.
+
+## Findings
+
+No actionable P0, P1, or P2 differences remain.
+
+- Fonts and typography: the implementation uses GradLab's Inter and JetBrains Mono roles and checked-in five-step scale. The selected action, probability, supporting label, column headings, and tabular values preserve the source hierarchy without introducing an ad hoc type size.
+- Spacing and layout rhythm: the hero, legend, four-row comparison, and three-metric footer fill the 704 × 555 panel without horizontal or vertical overflow. Flexible comparison rows retain the source's open rhythm while adapting to shorter action spaces.
+- Colors and visual tokens: panel, border, text, muted text, interaction violet, training peach, and evaluation teal use existing GradLab semantic tokens. The selected row and hero share the same evaluation accent.
+- Image quality and asset fidelity: the panel contains no raster product imagery. Header controls reuse the packaged Tabler sprite; no placeholder imagery, custom SVG, emoji, or decorative asset substitute was introduced.
+- Copy and content: “This step” remains the policy probability for the selected transition, while “Episode frequency” remains the retained executed-action aggregate. Action order, exact percentages, mode, V(s), entropy, and log probability match the source state.
+- Accessibility and behavior: the comparison exposes table/row/header roles, each bar remains a named progressbar with an exact numeric value, full action labels retain tooltips, and unsupported or continuous distributions retain the prior generic fallback.
+
+## Full-view and focused comparison evidence
+
+The normalized side-by-side file compares the complete source panel and the complete browser-rendered panel at the same 704 × 555 component size. Because the artifact is already a focused single-component crop and every label and value is readable at native density, a second detail crop would not add evidence.
+
+## Comparison history
+
+1. Initial live-player pass at 1800 × 900 found one P2: “Episode frequency” wrapped in the wide policy panel, weakening the column scan.
+2. Fix: widened the desktop episode-frequency track while retaining the compact container-query layout. The post-fix live capture shows the header on one line with no overflow.
+3. Exact four-action fixture comparison found one P2: fixed-height action rows compressed the chart into the upper portion of a tall panel.
+4. Fix: made the comparison region and action rows flex into available panel height. The final exact-state comparison shows source-like vertical rhythm, aligned values, and no overflow.
+
+## Primary interactions and runtime verification
+
+- Disabled and re-enabled Policy decision processing; the panel reflected both switch states and resumed rendering.
+- Opened and closed the panel options menu.
+- Checked the live player and exact-state fixture browser logs after rendering and interaction: no warnings or errors.
+- Verified the default two-action bandit policy at 1280 × 720 and 1800 × 900, plus the exact four-action target state at 800 × 650.
+
+## Implementation checklist
+
+- [x] Promote selected action and step probability into a decision-first hero.
+- [x] Separate current-step probability from retained episode frequency through color, legend, bars, and numeric columns.
+- [x] Preserve declared action order and exact action semantics.
+- [x] Move V(s), entropy, and log p into an aligned footer.
+- [x] Preserve generic custom-panel, continuous-policy, unsupported, and missing-data behavior.
+- [x] Verify responsive layout, controls, accessibility semantics, and browser console.
+
+## Follow-up polish
+
+- None required for this change.
+
+final result: passed
+
+---
+
 # Design QA — Goal configuration master-detail screen
 
 ## Comparison target
