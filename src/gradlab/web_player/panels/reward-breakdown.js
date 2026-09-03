@@ -1,6 +1,7 @@
 const COMPONENT_ORDER = Object.freeze([
   "native_reward",
   "cell_novelty_reward",
+  "event_reward",
   "progress_reward",
   "score_reward",
   "completion_reward",
@@ -11,6 +12,7 @@ const COMPONENT_ORDER = Object.freeze([
 const COMPONENT_LABELS = Object.freeze({
   native_reward: "Native reward",
   cell_novelty_reward: "Cell novelty",
+  event_reward: "Event reward",
   progress_reward: "Progress",
   score_reward: "Score",
   completion_reward: "Completion",

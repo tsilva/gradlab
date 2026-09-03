@@ -42,12 +42,14 @@ from gradlab.env_identity import task_config_from_train_config, validate_task_co
 from gradlab.env_registry import environment_spec
 from gradlab.task_kernels import (
     CELL_NOVELTY_REWARD_KEY,
+    EVENT_REWARDS_KEY,
     IdentityTaskDefinition,
     MarioTaskConfig,
     MarioTaskDefinition,
     with_cell_novelty,
     with_deathmatch_reward,
     with_episode_progress_metrics,
+    with_event_rewards,
     with_reward_transform,
 )
 from gradlab.model_inputs import with_model_inputs
@@ -461,6 +463,7 @@ def _bound_task_kernel(
             reward,
         )
     kernel = with_cell_novelty(kernel, reward.get(CELL_NOVELTY_REWARD_KEY))
+    kernel = with_event_rewards(kernel, reward.get(EVENT_REWARDS_KEY))
     kernel = with_reward_transform(kernel, reward)
     kernel = with_episode_progress_metrics(
         kernel,
