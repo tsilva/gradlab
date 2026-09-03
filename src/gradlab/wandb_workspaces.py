@@ -87,6 +87,8 @@ def _section_panels(wr, section):
 
 
 def _run_scope_filter(run_scope: str) -> str:
+    if run_scope == "all":
+        return ""
     if run_scope == "current_metrics_schema":
         return f"Config('metrics_schema_version') = {METRICS_SCHEMA_VERSION}"
     raise AssertionError(f"unhandled workspace run scope: {run_scope}")

@@ -50,6 +50,7 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
         self.assertIn("SuperMarioBros-Nes-v0", {spec.project for spec in first})
         self.assertIn("VizdoomDeathmatch-v1", {spec.project for spec in first})
         breakout = next(spec for spec in first if spec.project == "Breakout-Atari2600-v0")
+        self.assertEqual(breakout.run_scope, "all")
         self.assertEqual(
             [panel.panel_id for section in breakout.sections for panel in section.panels],
             [
@@ -83,6 +84,8 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
             "train/reward/event/serve_wait/nonzero/rate",
             breakout_metrics,
         )
+        breakout_workspace = build_wandb_workspace(breakout, entity="entity")
+        self.assertEqual(breakout_workspace.runset_settings.filters, "")
         mario = next(spec for spec in first if spec.project == "SuperMarioBros-Nes-v0")
         mario_metrics = {
             metric
