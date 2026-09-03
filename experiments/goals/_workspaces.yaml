@@ -96,10 +96,10 @@ sections:
     panels:
     - id: serve_stall_count
       kind: line
-      y_title: episodes
+      y_title: episodes (last 100)
       x: train/global_step
       y:
-      - train/outcome/failure/reason/serve_stall/count
+      - train/outcome/failure/reason/serve_stall/rolling/count
 
 profiles:
   training:

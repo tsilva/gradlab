@@ -74,6 +74,10 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
             for metric in (*panel.y, *panel.metric_templates)
         }
         self.assertFalse(any("/a2c/" in metric for metric in breakout_metrics))
+        self.assertIn(
+            "train/outcome/failure/reason/serve_stall/rolling/count",
+            breakout_metrics,
+        )
         mario = next(spec for spec in first if spec.project == "SuperMarioBros-Nes-v0")
         mario_metrics = {
             metric
