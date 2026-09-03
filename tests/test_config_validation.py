@@ -777,6 +777,17 @@ class ConfigValidationTests(unittest.TestCase):
                 str(recipe),
             )
 
+    def test_breakout_recipes_exclude_a2c(self) -> None:
+        recipes = sorted((self.BREAKOUT_GOAL.parent / "recipes").glob("*.yaml"))
+        self.assertTrue(recipes)
+        for recipe in recipes:
+            document = compose_train_document(self.BREAKOUT_GOAL, recipe)
+            self.assertNotEqual(
+                document["train_config"]["training_backend"]["id"],
+                "sb3.a2c",
+                str(recipe),
+            )
+
     def test_breakout_archive_curriculum_is_fully_opt_in(self) -> None:
         recipe = self.BREAKOUT_GOAL.parent / "recipes" / "ppo-archive-curriculum.yaml"
         document = compose_train_document(self.BREAKOUT_GOAL, recipe)

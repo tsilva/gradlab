@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
@@ -6,6 +7,11 @@ import {
   gameFrameTerminationDetail,
   gameFrameTerminationTone,
 } from "../../src/gradlab/web_player/panels/game.js";
+
+const source = readFileSync(
+  new URL("../../src/gradlab/web_player/panels/game.js", import.meta.url),
+  "utf8",
+);
 
 test("game frame phase distinguishes initial, after-action, and terminal frames", () => {
   assert.equal(gameFramePhase({ transition: null }), "Initial observation");
@@ -74,4 +80,14 @@ test("terminal badge tone follows the canonical success or failure outcome", () 
       outcome: "failure",
     },
   }), "");
+});
+
+test("game frames commit only the latest exact scrub decode", () => {
+  assert.match(source, /targetSnapshot = nextSnapshot/);
+  assert.match(source, /async renderFrame\(kind, blob, metadata = \{\}\)/);
+  assert.match(source, /const incomingSequence = Number\(metadata\.sequence\)/);
+  assert.match(
+    source,
+    /const bitmap = await createImageBitmap\(blob\);\s*if \(\s*!mounted\s*\|\| request !== bitmapRequest\s*\|\| incomingSequence !== targetSequence/,
+  );
 });

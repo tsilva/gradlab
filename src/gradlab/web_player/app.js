@@ -10,6 +10,7 @@ import {
   panelSubscriptions,
 } from "./panels/catalog.js";
 import { episodeReport } from "./episode-report.js";
+import { eventColorFill, eventLabels } from "./event-colors.js";
 import { mountPlaybackSettings } from "./playback-settings.js";
 import {
   playbackSourceTitle,
@@ -74,6 +75,7 @@ const state = {
   inspectionSequence: null,
   replayingInspection: false,
   inspectionReplayTimer: null,
+  inspectionFrameRequestTimer: null,
   inspectionPauseCommandId: null,
   attributionCommand: null,
   attributionPreference: { mode: "gradcam", interval: 1 },
@@ -118,6 +120,7 @@ let syncingGrid = false;
 let panelManager = null;
 let playbackSettings = null;
 const TIMELINE_HIDE_DELAY_MS = 1600;
+const INSPECTION_FRAME_REQUEST_DELAY_MS = 50;
 let timelineHideTimer = null;
 let timelineOverlayEvents = null;
 let youtubeOAuthPopup = null;
@@ -224,6 +227,7 @@ function updateConnection(label, kind = "") {
 }
 
 function resetSession(epoch) {
+  cancelInspectionFrameRequest();
   state.sessionEpoch = Number(epoch) || 0;
   state.retainedEpisode = null;
   state.pendingSnapshot = null;
@@ -1190,22 +1194,42 @@ function frameGeneration(kind, snapshot) {
   return 0;
 }
 
+function frameExpected(kind, snapshot) {
+  if (isGeneratedFrame(kind)) return frameGeneration(kind, snapshot) > 0;
+  if (!snapshot?.transition) return true;
+  if (Number(kind) === FRAME_GAME) {
+    return Boolean(snapshot.transition.after?.game_frame);
+  }
+  if (Number(kind) === FRAME_OBSERVATION) {
+    return Number(snapshot.transition.before?.observation_frames || 0) > 0;
+  }
+  return false;
+}
+
 function exactFrameBlob(kind, sequence, generation = 0) {
   return state.frameBlobs.get(kind)?.get(frameKey(sequence, generation)) || null;
 }
 
 async function showFramesForSequence(sequence) {
   const snapshot = state.snapshots.get(Number(sequence)) || state.snapshot;
+  const retainMissing = (
+    state.inspectionSequence !== null
+    && Number(state.inspectionSequence) === Number(sequence)
+  );
   const kinds = [...new Set(
     enabledPanelDefinitions().flatMap((definition) => definition.frameKinds),
   )];
   const missing = [];
   await Promise.all(kinds.map(async (kind) => {
     const generation = frameGeneration(kind, snapshot);
-    const expected = !isGeneratedFrame(kind) || generation > 0;
+    const expected = frameExpected(kind, snapshot);
     const blob = expected ? exactFrameBlob(kind, sequence, generation) : null;
     if (expected && !blob) missing.push(kind);
-    await panelRuntime.renderFrame(kind, blob, { sequence, generation });
+    if (blob) {
+      await panelRuntime.renderFrame(kind, blob, { sequence, generation });
+    } else if (!expected || !retainMissing) {
+      await panelRuntime.renderFrame(kind, null, { sequence, generation });
+    }
   }));
   return missing;
 }
@@ -1268,6 +1292,21 @@ function requestInspectionFrames(sequence, kinds) {
   });
 }
 
+function cancelInspectionFrameRequest() {
+  clearTimeout(state.inspectionFrameRequestTimer);
+  state.inspectionFrameRequestTimer = null;
+}
+
+function scheduleInspectionFrameRequest(sequence, kinds) {
+  cancelInspectionFrameRequest();
+  if (!kinds.length) return;
+  state.inspectionFrameRequestTimer = window.setTimeout(() => {
+    state.inspectionFrameRequestTimer = null;
+    if (Number(state.inspectionSequence) !== Number(sequence)) return;
+    requestInspectionFrames(sequence, kinds);
+  }, INSPECTION_FRAME_REQUEST_DELAY_MS);
+}
+
 function maybePauseForInspection() {
   if (
     !state.hasControl
@@ -1318,14 +1357,15 @@ function setInspectionCursor(
   state.snapshots.set(numericSequence, snapshot);
   pruneRetainedTrace(numericSequence);
   if (!preserveReplay) stopInspectionReplay({ render: false });
+  cancelInspectionFrameRequest();
   if (announce) maybePauseForInspection();
   state.inspectionSequence = numericSequence;
   state.snapshot = snapshot;
   renderSnapshot();
   renderHistory();
   void showFramesForSequence(numericSequence).then((missing) => {
-    if (!missing.length) return;
-    requestInspectionFrames(numericSequence, missing);
+    if (Number(state.inspectionSequence) !== numericSequence) return;
+    scheduleInspectionFrameRequest(numericSequence, missing);
   });
   if (announce) broadcastInspection(numericSequence);
 }
@@ -1336,6 +1376,7 @@ function inspectSequence(sequence) {
 
 function returnToLive({ announce = true } = {}) {
   stopInspectionReplay({ render: false });
+  cancelInspectionFrameRequest();
   state.inspectionSequence = null;
   state.snapshot = state.liveSnapshot;
   if (state.snapshot) {
@@ -1386,7 +1427,7 @@ function renderTimeline() {
     const marker = document.createElement("span");
     marker.className = "timeline-marker";
     marker.style.left = `${((Number(point.sequence) - minimum) / range) * 100}%`;
-    marker.style.setProperty("--marker-color", point.boundary ? "var(--red)" : "var(--magenta)");
+    marker.style.setProperty("--event-colors", eventColorFill(eventLabels(point)));
     return marker;
   }));
 }

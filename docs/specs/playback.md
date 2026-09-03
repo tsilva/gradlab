@@ -19,6 +19,7 @@ This specification applies to the public checkpoint browser and interactive web 
 - Checkpoint lists must show the exact Goal Variant's Acceptance and ranking measures with applicable Training Success proxies.
 - Training Success proxies must remain visibly distinct from authoritative checkpoint-evaluation evidence.
 - Interactive Playback must provide independently arranged and synchronized views of frames, Policy inputs and decisions, transition facts, and bounded histories.
+- Users must be able to change the active Policy’s supported action-selection mode at any point, taking effect on the next Policy decision without resetting or otherwise altering the existing trajectory.
 - Inspection must not alter the active trajectory or Policy randomness.
 - Playback must expose only actor, critic, action-value, program, attribution, and calibration diagnostics that apply to the selected Policy and recorded contract.
 - Unsupported, missing, and scientifically incomparable diagnostics must remain visibly distinct without fabricated values.

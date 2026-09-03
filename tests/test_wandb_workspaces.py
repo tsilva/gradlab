@@ -46,6 +46,38 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
         self.assertEqual({spec.profile_id for spec in first}, {"training"})
         self.assertIn("SuperMarioBros-Nes-v0", {spec.project for spec in first})
         self.assertIn("VizdoomDeathmatch-v1", {spec.project for spec in first})
+        breakout = next(spec for spec in first if spec.project == "Breakout-Atari2600-v0")
+        self.assertEqual(
+            [panel.panel_id for section in breakout.sections for panel in section.panels],
+            [
+                "target_return_mean",
+                "target_return_max",
+                "episode_length",
+                "completed_episodes",
+                "explained_variance",
+                "value_loss",
+                "policy_entropy",
+                "ppo_approx_kl",
+                "ppo_clip_fraction",
+                "loop_throughput",
+                "provider_step_throughput",
+            ],
+        )
+        breakout_metrics = {
+            metric
+            for section in breakout.sections
+            for panel in section.panels
+            for metric in (*panel.y, *panel.metric_templates)
+        }
+        self.assertFalse(any("/a2c/" in metric for metric in breakout_metrics))
+        mario = next(spec for spec in first if spec.project == "SuperMarioBros-Nes-v0")
+        mario_metrics = {
+            metric
+            for section in mario.sections
+            for panel in section.panels
+            for metric in (*panel.y, *panel.metric_templates)
+        }
+        self.assertTrue(any("/a2c/" in metric for metric in mario_metrics))
 
     def test_every_declared_panel_metric_is_registered_history(self) -> None:
         spec = compile_workspace_specs(ROOT, project="Bandit-v0")[0]
@@ -60,6 +92,28 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
                 for template in panel.metric_templates:
                     definition = next(item for item in METRIC_DEFINITIONS if item.name == template)
                     self.assertEqual(definition.placement, "history")
+
+    def test_panels_separate_distinct_measures(self) -> None:
+        spec = compile_workspace_specs(ROOT, project="Bandit-v0")[0]
+
+        for section in spec.sections:
+            for panel in section.panels:
+                selectors = (*panel.y, *panel.metric_templates)
+                if len(selectors) <= 1:
+                    continue
+                normalized = {
+                    re.sub(
+                        r"^train/algorithm/[^/]+/",
+                        "train/algorithm/{algorithm}/",
+                        selector,
+                    )
+                    for selector in selectors
+                }
+                self.assertEqual(
+                    len(normalized),
+                    1,
+                    f"{panel.panel_id} combines distinct measures: {selectors}",
+                )
 
     def test_project_override_selects_a_complete_profile(self) -> None:
         document = yaml.safe_load(MANIFEST.read_text(encoding="utf-8"))
@@ -88,6 +142,34 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
         )
         self.assertEqual(by_project["Breakout-Atari2600-v0"].profile_id, "training")
 
+    def test_project_override_rejects_unknown_excluded_panel(self) -> None:
+        document = yaml.safe_load(MANIFEST.read_text(encoding="utf-8"))
+        document["projects"]["Breakout-Atari2600-v0"]["exclude_panels"] = ["unknown"]
+
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "_workspaces.yaml"
+            path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "unknown panel.*unknown"):
+                load_workspace_declaration(
+                    path,
+                    projects=("Breakout-Atari2600-v0",),
+                )
+
+    def test_project_override_rejects_unknown_excluded_metric(self) -> None:
+        document = yaml.safe_load(MANIFEST.read_text(encoding="utf-8"))
+        document["projects"]["Breakout-Atari2600-v0"]["exclude_metrics"] = [
+            "train/not_registered"
+        ]
+
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "_workspaces.yaml"
+            path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "unknown metric.*train/not_registered"):
+                load_workspace_declaration(
+                    path,
+                    projects=("Breakout-Atari2600-v0",),
+                )
+
     def test_unknown_panel_metric_is_rejected(self) -> None:
         document = yaml.safe_load(MANIFEST.read_text(encoding="utf-8"))
         document["sections"]["training_essentials"]["panels"][0]["y"][0] = "train/not_registered"
@@ -96,6 +178,16 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
             path = Path(temporary) / "_workspaces.yaml"
             path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "unknown metric name"):
+                load_workspace_declaration(path, projects=("Bandit-v0",))
+
+    def test_authored_panel_title_is_rejected(self) -> None:
+        document = yaml.safe_load(MANIFEST.read_text(encoding="utf-8"))
+        document["sections"]["training_essentials"]["panels"][0]["title"] = "Task success"
+
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "_workspaces.yaml"
+            path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "unknown field.*title"):
                 load_workspace_declaration(path, projects=("Bandit-v0",))
 
 
@@ -117,12 +209,16 @@ class WandbWorkspaceRenderingTests(unittest.TestCase):
         self.assertEqual(len(workspace.sections), 1)
         self.assertTrue(workspace.sections[0].pinned)
         self.assertTrue(workspace.sections[0].is_open)
-        self.assertEqual(len(workspace.sections[0].panels), 9)
+        self.assertEqual(len(workspace.sections[0].panels), 15)
         for panel_spec, panel in zip(
             self.spec.sections[0].panels,
             workspace.sections[0].panels,
             strict=True,
         ):
+            self.assertEqual(
+                panel.title,
+                " · ".join((*panel_spec.y, *panel_spec.metric_templates)),
+            )
             self.assertEqual(panel.y, [])
             for metric in panel_spec.y:
                 self.assertIsNotNone(re.fullmatch(panel.metric_regex, metric))
@@ -144,6 +240,12 @@ class WandbWorkspaceRenderingTests(unittest.TestCase):
                 (0, 24, 12, 8),
                 (12, 24, 12, 8),
                 (0, 32, 12, 8),
+                (12, 32, 12, 8),
+                (0, 40, 12, 8),
+                (12, 40, 12, 8),
+                (0, 48, 12, 8),
+                (12, 48, 12, 8),
+                (0, 56, 12, 8),
             ],
         )
         _adopt_managed_identity(workspace, self.spec, entity="entity")

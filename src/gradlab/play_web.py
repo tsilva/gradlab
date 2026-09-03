@@ -1348,6 +1348,25 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 self.continue_target = None
                 self.clear_input()
                 self._set_state("paused", message="paused at a completed transition")
+            elif command.name == "set_action_selection_mode":
+                mode = str(command.payload.get("mode") or "")
+                if mode not in self.supported_action_selection_modes:
+                    supported = ", ".join(self.supported_action_selection_modes) or "none"
+                    raise ValueError(
+                        f"unsupported action-selection mode {mode!r}; supported: {supported}"
+                    )
+                if mode != self.sampling_mode:
+                    self.sampling_mode = mode
+                    if self.session.step_index == 0 and not self.awaiting_next_episode:
+                        self._begin_capture()
+                    else:
+                        self.capture.abort(
+                            "action selection changed during the active playback session"
+                        )
+                self._set_state(
+                    self.run_state,
+                    message=f"next action selection · {mode}",
+                )
             elif command.name == "play":
                 self._require_active_episode()
                 self._set_state("playing")

@@ -43,9 +43,13 @@ authority for that decision.
   `dstack_coordinator_id`, `dstack_project`, `dstack_task`, and `attempt_id`; these are immutable
   run/attempt dimensions, not scientific metrics.
 - `experiments/goals/_workspaces.yaml` is the presentation source for managed W&B project
-  workspace views. It selects registered metrics without emitting aliases or changing their
-  scientific axes or semantics; every project resolved from an active checked-in goal inherits its
-  default profile unless the declaration assigns a complete project-specific profile.
+  workspace views. It selects registered metrics and derives each panel title from its exact metric
+  selectors without emitting aliases or changing their scientific axes or semantics; every project
+  resolved from an active checked-in goal inherits its default profile unless the declaration
+  assigns a complete project-specific profile. Project overrides omit panels or individual metric
+  selectors that do not apply to that project's active goals and recipes rather than rendering
+  empty placeholders. A managed line panel contains one distinct measure; only mutually exclusive
+  algorithm-specific variants of that same measure share a panel.
 - `goal_contract_sha256` is the semantic SHA-256 of the fully composed, rendered, validated goal
   contract. Generated goal reports use it with `goal_slug` to keep current-contract leaderboards
   comparable; noncurrent contracts are not queried or rendered.
@@ -205,6 +209,14 @@ metric path. `cumulative` explicitly means all eligible observations seen so far
   evaluation performance. A threshold condition with `progress_baseline` additionally emits
   `train/early_stop/{condition}/target/progress` as the current metric's clamped fraction from that
   baseline to its threshold. Only goal-owned checkpoint evaluation may establish acceptance.
+- `train/episode/length/origin/all/rolling/mean` counts policy transitions, so one step represents
+  four native frames in the current Breakout contract. It combines target- and archive-origin
+  episodes and is therefore not a clean survival comparison when archive curricula differ. Within
+  identical start, frame-skip, reset, and termination contracts, increasing length can indicate
+  better ball defense when target return or progress also improves and failure-reason rates do not;
+  it can instead reflect delayed serving, low-progress play, or the episode cap, while faster wall
+  completion can shorten a successful episode. Treat it as a diagnostic, not a monotonic success or
+  acceptance measure.
 - Training episode reduction aggregates return, length, outcome, success, the explicitly supported
   target-origin cell-novelty statistic, and goal-declared numeric episode progress fields.
   Progress field names refer to task-semantic signals and must be populated independently of the
@@ -364,7 +376,7 @@ unevaluated for future explicit user action. dstack process exit alone is never 
 |---|---|---|---|---|---|---|
 | `train/episode/return/shaped/origin/target/rolling/mean` | Recent target return mean | Mean shaped return over the most recent genuine target-origin episodes, including warm-up before the configured window is full. | return | rollout | history | last |
 | `train/episode/return/shaped/origin/target/rolling/max` | Recent target return max | Maximum shaped return over the same recent target-origin episodes as the rolling mean. | return | rollout | history | last |
-| `train/episode/length/origin/all/rolling/mean` | Recent episode length mean | Mean length over the most recent genuine completed episodes across target and archive origins. | steps | rollout | history | last |
+| `train/episode/length/origin/all/rolling/mean` | Recent episode length mean | Mean policy-transition count over the most recent genuine completed episodes across target and archive origins. | steps | rollout | history | last |
 | `train/exploration/cell/unique/origin/target/rolling/mean` | Recent target unique cells mean | Mean episodic unique-cell count over recent target-origin episodes when cell-novelty shaping is active; the reset cell is included. | cells | rollout | history | last |
 | `train/progress/{progress}/origin/target/rolling/mean` | Recent target {progress} mean | Mean of a goal-declared finite numeric progress field over recent genuine target-origin episodes. | value | rollout | history | last |
 | `train/episode/completed/count` | Completed episodes | Cumulative genuine completed training episodes across origins. | episodes | rollout | history | last |

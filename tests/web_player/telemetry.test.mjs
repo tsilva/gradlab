@@ -24,6 +24,7 @@ import {
   lineLegendPrefix,
   lineLegendPresentation,
   lineLegendPresentationAtIndex,
+  lineCursorSequence,
   lineBlockFootPresentation,
   ordinal,
   policyDecisionLayoutEnabled,
@@ -269,6 +270,9 @@ test("namespace telemetry tables use the panel as their only scroll container", 
 
 test("action labels fit one content-sized column and retain their full tooltip", () => {
   const rule = styles.match(/\.action-comparison-label \{([^}]*)\}/)?.[1] || "";
+  const policyRule = styles.match(/\.policy-decision-action-label \{([^}]*)\}/)?.[1] || "";
+  assert.match(rule, /margin-left: \.3rem;/);
+  assert.match(policyRule, /margin-left: \.3rem;/);
   assert.match(rule, /white-space: nowrap;/);
   assert.doesNotMatch(rule, /overflow: hidden;/);
   assert.doesNotMatch(rule, /text-overflow: ellipsis;/);
@@ -606,6 +610,30 @@ test("line-chart pointer positions select the nearest sample", () => {
   assert.equal(lineCursorIndex(plot, 110, 5), 2);
   assert.equal(lineCursorIndex(plot, 200, 5), 4);
   assert.equal(lineCursorIndex(plot, 500, 5), 4);
+});
+
+test("line-chart pointer positions resolve to retained playback sequences", () => {
+  const history = [
+    { sequence: 40 },
+    { sequence: 44 },
+    { sequence: 51 },
+  ];
+  const plot = { left: 20, right: 200 };
+  assert.equal(lineCursorSequence(history, plot, 20, history.length), 40);
+  assert.equal(lineCursorSequence(history, plot, 110, history.length), 44);
+  assert.equal(lineCursorSequence(history, plot, 200, history.length), 51);
+  assert.equal(lineCursorSequence(history, null, 110, history.length), null);
+});
+
+test("clicking a line chart inspects its nearest retained playback sequence", () => {
+  assert.match(
+    telemetryPanelSource,
+    /canvas\.addEventListener\("click", \(event\) => \{[\s\S]*?lineCursorSequence\([\s\S]*?services\.inspectSequence\?\.\(sequence\);/,
+  );
+  assert.match(
+    telemetryPanelSource,
+    /if \(block\.kind === "line"\) return makeLineBlock\(block, services\);/,
+  );
 });
 
 test("the timeline shows the displayed episode and step across a boundary", () => {

@@ -197,10 +197,51 @@ test("observation commits an exact decoded frame and its metadata without blanki
   const renderSource = source.slice(renderStart, frameStart);
   assert.match(renderSource, /targetSnapshot = nextSnapshot/);
   assert.doesNotMatch(renderSource, /closeBase\(\)/);
-  assert.match(source, /request < baseBitmapCommittedRequest/);
+  assert.match(source, /request !== baseBitmapRequest/);
   assert.match(source, /commitSnapshot\(frameSnapshot\)/);
   assert.match(source, /baseCanvas\.hidden = true/);
   assert.doesNotMatch(source, /baseCanvas\.width = 1/);
+});
+
+test("scrubbing retains displayed frames while exact target blobs are requested", () => {
+  const start = appSource.indexOf("async function showFramesForSequence");
+  const end = appSource.indexOf("\nfunction inspectionFrames", start);
+  const showFrames = appSource.slice(start, end);
+  assert.match(
+    showFrames,
+    /if \(blob\) \{\s*await panelRuntime\.renderFrame\(kind, blob, \{ sequence, generation \}\);/,
+  );
+  assert.match(
+    showFrames,
+    /else if \(!expected \|\| !retainMissing\) \{\s*await panelRuntime\.renderFrame\(kind, null, \{ sequence, generation \}\);/,
+  );
+});
+
+test("rapid scrubbing coalesces missing-frame requests to the latest position", () => {
+  assert.match(appSource, /const INSPECTION_FRAME_REQUEST_DELAY_MS = 50;/);
+  assert.match(appSource, /function scheduleInspectionFrameRequest\(sequence, kinds\)/);
+  assert.match(appSource, /clearTimeout\(state\.inspectionFrameRequestTimer\)/);
+  assert.match(
+    appSource,
+    /Number\(state\.inspectionSequence\) !== numericSequence\) return;/,
+  );
+  assert.match(appSource, /scheduleInspectionFrameRequest\(numericSequence, missing\)/);
+});
+
+test("late observation decodes cannot repaint an older scrub position", () => {
+  for (const [targetIdentity, request] of [
+    ["targetBaseIdentity", "baseBitmapRequest"],
+    ["targetAttributionIdentity", "attributionBitmapRequest"],
+    ["targetCnnIdentity", "cnnBitmapRequest"],
+  ]) {
+    assert.match(
+      source,
+      new RegExp(
+        `const bitmap = await createImageBitmap\\(blob\\);\\s*if \\(\\s*!mounted\\s*\\|\\| request !== ${request}\\s*\\|\\| !sameFrameIdentity\\(incoming, ${targetIdentity}\\(\\)\\)`,
+      ),
+      `${targetIdentity} must be rechecked after decoding`,
+    );
+  }
 });
 
 test("observation omits the frame stage when no exact frame exists", () => {

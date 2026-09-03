@@ -1,4 +1,4 @@
-schema_version: 1
+schema_version: 4
 view_id: training
 default_profile: training
 
@@ -9,68 +9,84 @@ sections:
     open: true
     columns: 2
     panels:
-    - id: task_success
+    - id: task_success_min
       kind: line
-      title: Task success
       x: train/global_step
       y:
       - train/outcome/success/starts/all/rolling/rate/min
-      - train/outcome/success/starts/all/rolling/rate/mean
-    - id: target_return
+    - id: task_success_mean
       kind: line
-      title: Target-origin return
+      x: train/global_step
+      y:
+      - train/outcome/success/starts/all/rolling/rate/mean
+    - id: target_return_mean
+      kind: line
       x: train/global_step
       y:
       - train/episode/return/shaped/origin/target/rolling/mean
+    - id: target_return_max
+      kind: line
+      x: train/global_step
+      y:
       - train/episode/return/shaped/origin/target/rolling/max
+    - id: episode_length
+      kind: line
+      x: train/global_step
+      y:
+      - train/episode/length/origin/all/rolling/mean
     - id: completed_episodes
       kind: line
-      title: Completed episodes
       x: train/global_step
       y:
       - train/episode/completed/count
-    - id: early_stop_progress
+    - id: early_stop_target_progress
       kind: line
-      title: Early-stop progress
       x: train/global_step
       metric_templates:
       - train/early_stop/{condition}/target/progress
+    - id: early_stop_patience_progress
+      kind: line
+      x: train/global_step
+      metric_templates:
       - train/early_stop/{condition}/patience/progress
     - id: explained_variance
       kind: line
-      title: Explained variance
       x: train/global_step
       y:
       - train/algorithm/ppo/value/explained_variance
       - train/algorithm/a2c/value/explained_variance
     - id: value_loss
       kind: line
-      title: Value loss
       x: train/global_step
       y:
       - train/algorithm/ppo/update/value_loss
       - train/algorithm/a2c/update/value_loss
     - id: policy_entropy
       kind: line
-      title: Policy entropy
       y_title: nats
       x: train/global_step
       y:
       - train/algorithm/ppo/policy/entropy
       - train/algorithm/a2c/policy/entropy
-    - id: ppo_update_constraints
+    - id: ppo_approx_kl
       kind: line
-      title: PPO update constraints
       x: train/global_step
       y:
       - train/algorithm/ppo/update/approx_kl
-      - train/algorithm/ppo/update/clip_fraction
-    - id: throughput
+    - id: ppo_clip_fraction
       kind: line
-      title: Training throughput
+      x: train/global_step
+      y:
+      - train/algorithm/ppo/update/clip_fraction
+    - id: loop_throughput
+      kind: line
       x: train/global_step
       y:
       - train/throughput/loop/rate
+    - id: provider_step_throughput
+      kind: line
+      x: train/global_step
+      y:
       - train/throughput/provider/step/rate
 
 profiles:
@@ -82,5 +98,16 @@ profiles:
     - training_essentials
 
 # Every W&B project resolved from a checked-in active goal inherits the default profile.
-# Assign a project to another complete profile here if its workspace later needs to differ.
-projects: {}
+# Project overrides may select another complete profile or omit panels whose metrics do not apply.
+projects:
+  Breakout-Atari2600-v0:
+    profile: training
+    exclude_panels:
+    - task_success_min
+    - task_success_mean
+    - early_stop_target_progress
+    - early_stop_patience_progress
+    exclude_metrics:
+    - train/algorithm/a2c/value/explained_variance
+    - train/algorithm/a2c/update/value_loss
+    - train/algorithm/a2c/policy/entropy
