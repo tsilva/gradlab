@@ -698,7 +698,7 @@ class ConfigValidationTests(unittest.TestCase):
                 "reward_mode": "native",
                 "reward_scale": 1.0,
                 "reward_clip": False,
-                "event_rewards": {"life_loss": -5.0},
+                "event_rewards": {"life_loss": -5.0, "serve_stall": -5.0},
             },
         )
         self.assertNotIn("env_threads", train_config)
