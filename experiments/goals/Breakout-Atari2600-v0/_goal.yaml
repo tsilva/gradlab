@@ -82,3 +82,5 @@ train:
         reward_mode: native
         reward_scale: 1.0
         reward_clip: false
+        event_rewards:
+          serve_stall: -5.0
