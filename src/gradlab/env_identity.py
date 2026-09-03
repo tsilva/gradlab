@@ -28,8 +28,10 @@ from gradlab.reward_transform import (
 from gradlab.rom_assets import manifest_from_train_config, portable_rom_asset_identity
 from gradlab.task_kernels import (
     CELL_NOVELTY_REWARD_KEY,
+    EVENT_REWARDS_KEY,
     default_task_document,
     normalize_cell_novelty_config,
+    normalize_event_rewards,
     normalize_identity_outcome_precedence,
 )
 
@@ -37,7 +39,10 @@ from gradlab.task_kernels import (
 ENVIRONMENT_HASH_ALGORITHM = "gradlab.environment.v5"
 ENVIRONMENT_SCHEMA_VERSION = 5
 
-IDENTITY_REWARD_KEYS = frozenset({"reward_mode", CELL_NOVELTY_REWARD_KEY}) | COMMON_REWARD_KEYS
+IDENTITY_REWARD_KEYS = (
+    frozenset({"reward_mode", CELL_NOVELTY_REWARD_KEY, EVENT_REWARDS_KEY})
+    | COMMON_REWARD_KEYS
+)
 
 
 def _normalize_preprocessing(identity: dict[str, Any]) -> None:
@@ -98,6 +103,12 @@ def task_config_from_train_config(
         normalized["reward"][CELL_NOVELTY_REWARD_KEY] = normalize_cell_novelty_config(
             cell_novelty,
             label=f"task.reward.{CELL_NOVELTY_REWARD_KEY}",
+        )
+    event_rewards = normalized["reward"].get(EVENT_REWARDS_KEY)
+    if event_rewards is not None:
+        normalized["reward"][EVENT_REWARDS_KEY] = normalize_event_rewards(
+            event_rewards,
+            label=f"task.reward.{EVENT_REWARDS_KEY}",
         )
     return normalized
 
@@ -326,6 +337,18 @@ def validate_task_config(task: Mapping[str, Any], *, label: str = "task") -> Non
             raise ValueError(
                 f"{label}.reward.reward_mode='sample-factory-v0' requires declared task "
                 f"signal(s): {', '.join(missing_signals)}"
+            )
+    event_rewards = reward.get(EVENT_REWARDS_KEY)
+    if event_rewards is not None:
+        normalized_event_rewards = normalize_event_rewards(
+            event_rewards,
+            label=f"{label}.reward.{EVENT_REWARDS_KEY}",
+        )
+        missing_events = sorted(set(normalized_event_rewards) - set(events))
+        if missing_events:
+            raise ValueError(
+                f"{label}.reward.{EVENT_REWARDS_KEY} references unknown events: "
+                + ", ".join(missing_events)
             )
     cell_novelty = reward.get(CELL_NOVELTY_REWARD_KEY)
     if cell_novelty is not None:

@@ -227,7 +227,9 @@ metric path. `cumulative` explicitly means all eligible observations seen so far
 - Reward components are emitted only when active. Each component has mean, nonzero rate, and share;
   raw reward appears only when it differs from shaped reward. Mario's `progress` component includes
   both its base new-progress reward and any configured additional new-progress reward above
-  `progress_reward_boost_start_x`. ViZDoom Deathmatch's optional `sample-factory-v0` shape exposes
+  `progress_reward_boost_start_x`. An identity task's `event` component is the sum of its declared
+  signed `event_rewards` for events firing on that transition. ViZDoom Deathmatch's optional
+  `sample-factory-v0` shape exposes
   `kill`, `death`, `hit`, `damage`, `health`, `armor`, `weapon`, `ammo`, and `weapon_hold`
   components; their sum is the pre-transform task reward and excludes the replaced provider reward.
 - The player's protocol-v8 Reward analysis ledger is local playback telemetry, not a W&B metric.
@@ -261,9 +263,11 @@ metric path. `cumulative` explicitly means all eligible observations seen so far
 - Episode-return means are neither a best-episode metric nor the score of a currently visible lane:
   they reduce the configured recent episode window across all applicable vector lanes. W&B chart
   smoothing, when enabled, is applied on top of that already-rolling value. Under the root Breakout
-  contract (`reward_mode: native`, unclipped), shaped episode return is the sum of Atari row-score
-  deltas, so individual 400-plus games can coexist with a much lower mean when other lanes finish
-  with lower scores.
+  goal contract (`reward_mode: native`, unclipped), shaped episode return is the sum of Atari
+  row-score deltas unless a recipe declares additional shaping. The checked-in Breakout `ppo`
+  recipe subtracts five through its `event` reward component whenever `lives` decreases, so its
+  shaped episode return is native score minus five per life lost. Individual 400-plus games can
+  coexist with a much lower mean when other lanes finish with lower scores.
 - Episode returns, success rates, failure reasons, policy entropy, and optimizer diagnostics
   describe performance or mechanism; no one of them should be treated as a generic stall-stop
   signal. A configured plateau condition may watch any registered numeric training metric, with

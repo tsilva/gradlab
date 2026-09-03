@@ -187,6 +187,7 @@ class ConfigValidationTests(unittest.TestCase):
                 "ball_x": "ball_x",
                 "ball_y": "ball_y",
                 "bricks_remaining": "bricks_remaining",
+                "lives": "lives",
                 "paddle_x": "paddle_x",
                 "score": "score",
                 "walls_cleared": "walls_cleared",
@@ -200,7 +201,8 @@ class ConfigValidationTests(unittest.TestCase):
                     "operation": "equals_for",
                     "value": 0,
                     "steps": 256,
-                }
+                },
+                "life_loss": {"signal": "lives", "operation": "decrease"},
             },
         )
         self.assertEqual(
@@ -658,6 +660,7 @@ class ConfigValidationTests(unittest.TestCase):
                 "reward_mode": "native",
                 "reward_scale": 1.0,
                 "reward_clip": False,
+                "event_rewards": {"life_loss": -5.0},
             },
         )
         self.assertNotIn("env_threads", train_config)
@@ -679,6 +682,7 @@ class ConfigValidationTests(unittest.TestCase):
                 "ball_x": "ball_x",
                 "ball_y": "ball_y",
                 "bricks_remaining": "bricks_remaining",
+                "lives": "lives",
                 "paddle_x": "paddle_x",
                 "score": "score",
                 "walls_cleared": "walls_cleared",
@@ -701,7 +705,8 @@ class ConfigValidationTests(unittest.TestCase):
                     "operation": "equals_for",
                     "value": 0,
                     "steps": 256,
-                }
+                },
+                "life_loss": {"signal": "lives", "operation": "decrease"},
             },
         )
         self.assertEqual(

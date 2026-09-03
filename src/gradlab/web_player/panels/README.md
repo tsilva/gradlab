@@ -44,7 +44,7 @@ telemetry. `session.reward_accounting` declares availability, the unit-interval
 `reward_scale`, and optional `clip_bounds`; each transition supplies
 `reward.raw`, `reward.components`, and `reward.accounting_error`, with matching
 `reward_raw` and `reward_accounting_error` history fields. Components use the
-explicit player wire IDs `native_reward`, `cell_novelty_reward`,
+explicit player wire IDs `native_reward`, `cell_novelty_reward`, `event_reward`,
 `progress_reward`, `score_reward`, `completion_reward`, `death_penalty`, and
 `time_penalty`. Other task signals are not inferred as reward components.
 

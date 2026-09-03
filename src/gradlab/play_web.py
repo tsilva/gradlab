@@ -108,6 +108,7 @@ def unavailable_cnn_inspection(reason: str) -> dict[str, Any]:
 REWARD_COMPONENT_INFO_KEYS = {
     "native_reward_component": "native_reward",
     "cell_novelty_reward_component": "cell_novelty_reward",
+    "event_reward_component": "event_reward",
     "progress_reward_component": "progress_reward",
     "score_reward_component": "score_reward",
     "completion_reward_component": "completion_reward",

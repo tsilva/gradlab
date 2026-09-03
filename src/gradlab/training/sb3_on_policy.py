@@ -173,6 +173,9 @@ def active_reward_components(task: Mapping[str, object]) -> tuple[str, ...]:
         components.append("native")
     if isinstance(reward.get("cell_novelty"), Mapping):
         components.append("cell_novelty")
+    event_rewards = reward.get("event_rewards")
+    if isinstance(event_rewards, Mapping):
+        components.append("event")
     if (
         float(reward.get("progress_reward_scale") or 0.0) != 0.0
         or float(reward.get("progress_reward_boost_scale") or 0.0) != 0.0

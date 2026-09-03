@@ -2,4 +2,16 @@ defaults:
 - ../../../recipes/_presets/breakout-high-throughput-ppo@_global_
 - _self_
 recipe_id: ppo
-description: High-throughput PPO for {{ goal_id }} with learning-rate and entropy decay.
+description: High-throughput PPO for {{ goal_id }} with learning-rate and entropy decay plus a five-point life-loss penalty.
+train:
+  environment:
+    task:
+      signals:
+        lives: lives
+      events:
+        life_loss:
+          signal: lives
+          operation: decrease
+      reward:
+        event_rewards:
+          life_loss: -5.0

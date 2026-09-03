@@ -669,6 +669,33 @@ class TaskStep:
 
 
 CELL_NOVELTY_REWARD_KEY = "cell_novelty"
+EVENT_REWARDS_KEY = "event_rewards"
+
+
+def normalize_event_rewards(
+    value: Mapping[str, Any],
+    *,
+    label: str = "task.reward.event_rewards",
+) -> dict[str, float]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{label} must be an object")
+    if not value:
+        raise ValueError(f"{label} must not be empty")
+    normalized: dict[str, float] = {}
+    for name, coefficient in value.items():
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"{label} keys must be non-empty event names")
+        if (
+            not isinstance(coefficient, int | float)
+            or isinstance(coefficient, bool)
+            or not math.isfinite(float(coefficient))
+            or float(coefficient) == 0.0
+        ):
+            raise ValueError(f"{label}.{name} must be a finite non-zero number")
+        normalized[name] = float(coefficient)
+    return normalized
+
+
 CELL_NOVELTY_EPISODE_UNIQUE_CELLS = "cell_novelty_episode_unique_cells"
 _CELL_NOVELTY_KEYS = frozenset({"cell", "first_visit_bonus", "episode_bonus_cap"})
 
@@ -2405,6 +2432,134 @@ class IdentityTaskKernel:
                 self._event_consecutive_steps[index][lane_index] = int(consecutive[index])
                 self._event_previous_values[index][lane_index] = previous[index]
                 self._event_previous_valid[index][lane_index] = bool(valid[index])
+
+
+class EventRewardTaskKernel:
+    """Add signed rewards when declared identity-task events fire."""
+
+    def __init__(
+        self,
+        kernel: BoundTaskKernel,
+        event_rewards: Mapping[str, Any],
+    ) -> None:
+        self.kernel = kernel
+        self.num_envs = int(kernel.num_envs)
+        normalized = normalize_event_rewards(event_rewards)
+        event_indices = {name: index for index, name in enumerate(kernel.event_names)}
+        missing = sorted(set(normalized) - set(event_indices))
+        if missing:
+            raise ValueError(
+                "task.reward.event_rewards references unknown events: " + ", ".join(missing)
+            )
+        self._configured = tuple(
+            (name, event_indices[name], coefficient)
+            for name, coefficient in normalized.items()
+        )
+        self._native_reward_component = np.empty(self.num_envs, dtype=np.float32)
+        self._event_reward_total = np.zeros(self.num_envs, dtype=np.float32)
+        self._rewards = np.empty(self.num_envs, dtype=np.float32)
+        self._metrics: dict[str, np.ndarray] | None = None
+        self._task_step: TaskStep | None = None
+
+    def __getattr__(self, name: str) -> Any:
+        if name == "kernel":
+            raise AttributeError(name)
+        return getattr(self.kernel, name)
+
+    def map_actions(self, actions: Any) -> Any:
+        return self.kernel.map_actions(actions)
+
+    def encode_observations(self, observations: Any) -> Any:
+        return self.kernel.encode_observations(observations)
+
+    def process(
+        self,
+        native_rewards: np.ndarray,
+        provider_terminated: np.ndarray,
+        provider_truncated: np.ndarray,
+        signals: Mapping[str, Any],
+    ) -> TaskStep:
+        task_step = self.kernel.process(
+            native_rewards,
+            provider_terminated,
+            provider_truncated,
+            signals,
+        )
+        np.copyto(
+            self._native_reward_component,
+            np.asarray(task_step.rewards, dtype=np.float32),
+        )
+        self._event_reward_total.fill(0.0)
+        event_bits = np.asarray(task_step.event_bits, dtype=np.uint64)
+        for _name, index, coefficient in self._configured:
+            active = (event_bits & np.uint64(1 << index)) != 0
+            self._event_reward_total[active] += coefficient
+        np.add(
+            self._native_reward_component,
+            self._event_reward_total,
+            out=self._rewards,
+        )
+
+        if self._metrics is None:
+            self._metrics = dict(task_step.metrics)
+            self._metrics.setdefault(
+                "native_reward_component",
+                self._native_reward_component,
+            )
+            self._metrics["event_reward_component"] = self._event_reward_total
+            self._metrics["raw_reward"] = self._rewards
+            self._metrics["shaped_reward"] = self._rewards
+            self._task_step = TaskStep(
+                self._rewards,
+                task_step.terminated,
+                task_step.truncated,
+                task_step.outcomes,
+                task_step.event_bits,
+                self._metrics,
+                task_step.event_transitions,
+            )
+        assert self._task_step is not None
+        return self._task_step
+
+    def on_reset(
+        self,
+        reset_observations: Any,
+        reset_signals: Mapping[str, Any],
+        mask: np.ndarray,
+    ) -> Any:
+        return self.kernel.on_reset(reset_observations, reset_signals, mask)
+
+    def validate_archive_signal(self, semantic_name: str) -> None:
+        return self.kernel.validate_archive_signal(semantic_name)
+
+    def archive_signal_values(
+        self,
+        semantic_name: str,
+        signals: Mapping[str, Any],
+        *,
+        mask: np.ndarray,
+    ) -> np.ndarray:
+        return self.kernel.archive_signal_values(semantic_name, signals, mask=mask)
+
+    def capture_lane_states(
+        self,
+        mask: np.ndarray,
+    ) -> tuple[TaskLaneState | None, ...]:
+        return self.kernel.capture_lane_states(mask)
+
+    def restore_lane_states(
+        self,
+        states: Sequence[TaskLaneState | None],
+        mask: np.ndarray,
+    ) -> None:
+        self.kernel.restore_lane_states(states, mask)
+
+
+def with_event_rewards(
+    kernel: BoundTaskKernel,
+    value: Mapping[str, Any] | None,
+) -> BoundTaskKernel:
+    return kernel if value is None else EventRewardTaskKernel(kernel, value)
 
 
 @dataclass(frozen=True)
