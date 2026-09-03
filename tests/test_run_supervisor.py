@@ -876,7 +876,7 @@ class RunSupervisorTests(unittest.TestCase):
             777,
         )
 
-    def test_health_publication_keeps_only_the_v19_operational_surface(self) -> None:
+    def test_health_publication_keeps_only_the_v20_operational_surface(self) -> None:
         supervisor = self.supervisor()
         supervisor.store.init()
 

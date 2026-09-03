@@ -1,4 +1,4 @@
-# Metrics schema v19
+# Metrics schema v20
 
 This file is the source of truth for gradlab telemetry. The Python registry loads the table below
 and requires every emitted metric to match an exact registry entry or a bounded template.
@@ -35,7 +35,7 @@ authority for that decision.
   `checkpoint_eval_contract`; the catalog must validate that expected absence against the immutable
   recipe and W&B run dimensions without suppressing otherwise compatible training-proxy history.
   Full-evaluation columns remain unavailable until verified checkpoint-evaluation evidence exists.
-- W&B config contains run-defining dimensions: `metrics_schema_version: 19`,
+- W&B config contains run-defining dimensions: `metrics_schema_version: 20`,
   `metrics_episode_window_size: 100`, `training_backend_id`,
   `training_backend_config_hash`, `algorithm_id`, goal,
   environment, starts, seed, frame skip, environment count, hyperparameters, eval protocol, and
@@ -114,7 +114,7 @@ Asynchronous evaluations may arrive after later training rows without changing t
 X-axis. Each producer writes only its applicable scientific axis; durable delivery order uses
 `orchestration/event/sequence`.
 
-Current runs declare schema v19, and the supervisor validates and emits only v19 names. GradLab
+Current runs declare schema v20, and the supervisor validates and emits only v20 names. GradLab
 does not read, project, or preserve noncurrent W&B or R2 schemas.
 
 All metrics whose path contains `rolling` use the run-configured
@@ -240,9 +240,11 @@ metric path. `cumulative` explicitly means all eligible observations seen so far
   raw reward appears only when it differs from shaped reward. Mario's `progress` component includes
   both its base new-progress reward and any configured additional new-progress reward above
   `progress_reward_boost_start_x`. An identity task's `event` component is the sum of its declared
-  signed `event_rewards` for events firing on that transition. ViZDoom Deathmatch's optional
-  `sample-factory-v0` shape exposes
-  `kill`, `death`, `hit`, `damage`, `health`, `armor`, `weapon`, `ammo`, and `weapon_hold`
+  signed `event_rewards` for events firing on that transition. Its per-event reward metrics split
+  that sum by declared event. An identity `equals` event contributes on every policy transition
+  whose post-transition signal matches; `equals_for` contributes only when the consecutive-match
+  counter first reaches its threshold. ViZDoom Deathmatch's optional `sample-factory-v0` shape
+  exposes `kill`, `death`, `hit`, `damage`, `health`, `armor`, `weapon`, `ammo`, and `weapon_hold`
   components; their sum is the pre-transform task reward and excludes the replaced provider reward.
 - The player's protocol-v8 Reward analysis ledger is local playback telemetry, not a W&B metric.
   It shows raw component values, multiplies each impact by the unit-interval reward scale,
@@ -399,6 +401,8 @@ unevaluated for future explicit user action. dstack process exit alone is never 
 | `train/reward/component/{component}/mean` | Reward {component} mean | Mean active reward-component contribution in pre-transform task-reward units. | scalar | rollout | history | last |
 | `train/reward/component/{component}/nonzero/rate` | Reward {component} activity rate | Fraction of active reward-component values that are nonzero. | fraction | rollout | history | last |
 | `train/reward/component/{component}/share` | Reward {component} share | Absolute contribution share computed from components in pre-transform task-reward units. | fraction | rollout | history | last |
+| `train/reward/event/{event}/mean` | Reward event {event} mean | Mean contribution from one declared event reward in pre-transform task-reward units. | scalar | rollout | history | last |
+| `train/reward/event/{event}/nonzero/rate` | Reward event {event} activity rate | Fraction of policy transitions on which one declared event reward contributes a nonzero value. | fraction | rollout | history | last |
 | `train/algorithm/ppo/update/approx_kl` | PPO approximate KL | Approximate KL divergence for the PPO update. | scalar | rollout | history | last |
 | `train/algorithm/ppo/update/clip_fraction` | PPO clip fraction | Fraction of sampled policy ratios outside PPO's clipping interval. | fraction | rollout | history | last |
 | `train/algorithm/jerk/retained/count` | JERK retained sequences | Distinct action sequences retained by JERK search. | sequences | rollout | history | last |

@@ -233,6 +233,35 @@ def _identity_apply_event_outcome(
 
 
 @njit(cache=True, nogil=True)
+def _identity_equals_event_kernel(
+    values,
+    expected_value,
+    event_bit,
+    event_outcome,
+    event_bootstrap,
+    outcome_priorities,
+    terminated,
+    truncated,
+    outcomes,
+    event_bits,
+):
+    for lane in range(values.shape[0]):
+        if values[lane] != expected_value:
+            continue
+
+        event_bits[lane] |= event_bit
+        _identity_apply_event_outcome(
+            event_outcome,
+            event_bootstrap,
+            outcome_priorities,
+            lane,
+            terminated,
+            truncated,
+            outcomes,
+        )
+
+
+@njit(cache=True, nogil=True)
 def _identity_equals_for_event_kernel(
     values,
     expected_value,
@@ -1999,16 +2028,17 @@ class IdentityTaskDefinition:
         compiled_events: list[IdentityEvent] = []
         for name, rule in raw_events.items():
             operation = str(rule.get("operation", ""))
-            if operation not in {"decrease", "increase", "equals_for"}:
+            if operation not in {"decrease", "increase", "equals", "equals_for"}:
                 raise ValueError(
                     f"identity event {name!r} supports only operations "
-                    "'decrease', 'increase', and 'equals_for'"
+                    "'decrease', 'increase', 'equals', and 'equals_for'"
                 )
-            if operation == "equals_for":
+            if operation in {"equals", "equals_for"}:
                 value = rule.get("value")
-                steps = rule.get("steps")
                 if not isinstance(value, int | float) or isinstance(value, bool):
-                    raise ValueError(f"identity equals_for event {name!r} requires a numeric value")
+                    raise ValueError(f"identity {operation} event {name!r} requires a numeric value")
+            if operation == "equals_for":
+                steps = rule.get("steps")
                 if not isinstance(steps, int) or isinstance(steps, bool) or steps <= 0:
                     raise ValueError(f"identity equals_for event {name!r} requires positive steps")
             compiled_events.append(
@@ -2279,6 +2309,19 @@ class IdentityTaskKernel:
                         self._outcomes,
                         self._events,
                     )
+                elif event.operation == "equals":
+                    _identity_equals_event_kernel(
+                        values,
+                        event.value,
+                        np.uint64(1 << index),
+                        int(event.outcome),
+                        bool(event.bootstrap),
+                        self._outcome_priorities,
+                        self._terminated,
+                        self._truncated,
+                        self._outcomes,
+                        self._events,
+                    )
                 elif event.operation == "decrease":
                     _identity_decrease_event_kernel(
                         values,
@@ -2455,6 +2498,9 @@ class EventRewardTaskKernel:
             (name, event_indices[name], coefficient)
             for name, coefficient in normalized.items()
         )
+        self._event_reward_components = {
+            name: np.zeros(self.num_envs, dtype=np.float32) for name in normalized
+        }
         self._native_reward_component = np.empty(self.num_envs, dtype=np.float32)
         self._event_reward_total = np.zeros(self.num_envs, dtype=np.float32)
         self._rewards = np.empty(self.num_envs, dtype=np.float32)
@@ -2491,9 +2537,12 @@ class EventRewardTaskKernel:
         )
         self._event_reward_total.fill(0.0)
         event_bits = np.asarray(task_step.event_bits, dtype=np.uint64)
-        for _name, index, coefficient in self._configured:
+        for name, index, coefficient in self._configured:
             active = (event_bits & np.uint64(1 << index)) != 0
-            self._event_reward_total[active] += coefficient
+            component = self._event_reward_components[name]
+            component.fill(0.0)
+            component[active] = coefficient
+            self._event_reward_total += component
         np.add(
             self._native_reward_component,
             self._event_reward_total,
@@ -2507,6 +2556,8 @@ class EventRewardTaskKernel:
                 self._native_reward_component,
             )
             self._metrics["event_reward_component"] = self._event_reward_total
+            for name, component in self._event_reward_components.items():
+                self._metrics[f"event_reward_component/{name}"] = component
             self._metrics["raw_reward"] = self._rewards
             self._metrics["shaped_reward"] = self._rewards
             self._task_step = TaskStep(

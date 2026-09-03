@@ -241,6 +241,11 @@ class ConfigValidationTests(unittest.TestCase):
                     "steps": 256,
                 },
                 "life_loss": {"signal": "lives", "operation": "decrease"},
+                "serve_wait": {
+                    "signal": "ball_y",
+                    "operation": "equals",
+                    "value": 0,
+                },
             },
         )
         self.assertEqual(
@@ -520,7 +525,7 @@ class ConfigValidationTests(unittest.TestCase):
                     },
                 )
 
-        self.assertEqual(actor_critic_recipes, 54)
+        self.assertEqual(actor_critic_recipes, 55)
 
     def test_every_mario_recipe_disables_eval_and_stops_at_perfect_clear_window(self) -> None:
         mario_root = Path("experiments/goals/SuperMarioBros-Nes-v0")
@@ -636,7 +641,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(report.counts["json_files"], 0)
         self.assertGreaterEqual(report.counts["yaml_files"], 15)
         self.assertGreaterEqual(report.counts["goals"], 1)
-        self.assertEqual(report.counts["train_recipes"], 57)
+        self.assertEqual(report.counts["train_recipes"], 58)
         self.assertGreaterEqual(report.counts["env_configs"], 0)
         self.assertEqual(report.counts["benchmark_profiles"], 5)
         self.assertEqual(report.counts["workspace_manifests"], 1)
@@ -698,7 +703,11 @@ class ConfigValidationTests(unittest.TestCase):
                 "reward_mode": "native",
                 "reward_scale": 1.0,
                 "reward_clip": False,
-                "event_rewards": {"life_loss": -5.0, "serve_stall": -5.0},
+                "event_rewards": {
+                    "life_loss": -5.0,
+                    "serve_stall": -5.0,
+                    "serve_wait": -0.01,
+                },
             },
         )
         self.assertNotIn("env_threads", train_config)
@@ -745,6 +754,11 @@ class ConfigValidationTests(unittest.TestCase):
                     "steps": 256,
                 },
                 "life_loss": {"signal": "lives", "operation": "decrease"},
+                "serve_wait": {
+                    "signal": "ball_y",
+                    "operation": "equals",
+                    "value": 0,
+                },
             },
         )
         self.assertEqual(

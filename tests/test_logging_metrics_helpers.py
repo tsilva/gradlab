@@ -247,6 +247,7 @@ class MetricsDocumentationTests(unittest.TestCase):
             "component": ["progress"],
             "progress": ["x"],
             "condition": ["return_plateau"],
+            "event": ["serve_wait"],
         }
         scalar_names: set[str] = set()
         for definition in metric_names.METRIC_DEFINITIONS:
@@ -259,8 +260,8 @@ class MetricsDocumentationTests(unittest.TestCase):
                     name = name.replace(f"{{{placeholder}}}", replacement, 1)
                 scalar_names.add(name)
 
-        self.assertEqual(len(metric_names.METRIC_DEFINITIONS), 98)
-        self.assertEqual(len(scalar_names), 109)
+        self.assertEqual(len(metric_names.METRIC_DEFINITIONS), 100)
+        self.assertEqual(len(scalar_names), 111)
         self.assertEqual(
             len(
                 {

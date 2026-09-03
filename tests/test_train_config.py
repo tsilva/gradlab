@@ -157,17 +157,17 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must be one of modal, none"):
             validate_and_normalize_train_config({"checkpoint_eval_backend": "local"})
 
-    def test_metrics_schema_version_accepts_only_active_v19(self) -> None:
+    def test_metrics_schema_version_accepts_only_active_v20(self) -> None:
         self.assertEqual(
-            validate_and_normalize_train_config({"metrics_schema_version": 19})[
+            validate_and_normalize_train_config({"metrics_schema_version": 20})[
                 "metrics_schema_version"
             ],
-            19,
+            20,
         )
-        with self.assertRaisesRegex(ValueError, "must be >= 19"):
-            validate_and_normalize_train_config({"metrics_schema_version": 18})
-        with self.assertRaisesRegex(ValueError, "must be <= 19"):
-            validate_and_normalize_train_config({"metrics_schema_version": 20})
+        with self.assertRaisesRegex(ValueError, "must be >= 20"):
+            validate_and_normalize_train_config({"metrics_schema_version": 19})
+        with self.assertRaisesRegex(ValueError, "must be <= 20"):
+            validate_and_normalize_train_config({"metrics_schema_version": 21})
 
     def test_episode_progress_fields_must_reference_task_signals(self) -> None:
         normalized = validate_and_normalize_train_config(
