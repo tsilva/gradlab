@@ -259,8 +259,8 @@ class MetricsDocumentationTests(unittest.TestCase):
                     name = name.replace(f"{{{placeholder}}}", replacement, 1)
                 scalar_names.add(name)
 
-        self.assertEqual(len(metric_names.METRIC_DEFINITIONS), 96)
-        self.assertEqual(len(scalar_names), 99)
+        self.assertEqual(len(metric_names.METRIC_DEFINITIONS), 97)
+        self.assertEqual(len(scalar_names), 104)
         self.assertEqual(
             len(
                 {

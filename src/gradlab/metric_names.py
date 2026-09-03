@@ -396,6 +396,12 @@ def train_outcome_reason_rolling_rate_metric(reason: object) -> str:
     )
 
 
+def train_outcome_reason_count_metric(reason: object) -> str:
+    return validate_metric_name(
+        f"train/outcome/failure/reason/{metric_path_segment(reason)}/count"
+    )
+
+
 def train_progress_origin_target_rolling_mean_metric(progress: object) -> str:
     return validate_metric_name(
         f"train/progress/{metric_path_segment(progress)}/origin/target/rolling/mean"

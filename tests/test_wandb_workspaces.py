@@ -43,7 +43,10 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
             [spec.to_json() for spec in second],
         )
         self.assertEqual(len(first), 26)
-        self.assertEqual({spec.profile_id for spec in first}, {"training"})
+        self.assertEqual(
+            {spec.profile_id for spec in first},
+            {"training", "breakout_training"},
+        )
         self.assertIn("SuperMarioBros-Nes-v0", {spec.project for spec in first})
         self.assertIn("VizdoomDeathmatch-v1", {spec.project for spec in first})
         breakout = next(spec for spec in first if spec.project == "Breakout-Atari2600-v0")
@@ -61,6 +64,7 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
                 "ppo_clip_fraction",
                 "loop_throughput",
                 "provider_step_throughput",
+                "serve_stall_count",
             ],
         )
         breakout_metrics = {
@@ -117,6 +121,8 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
 
     def test_project_override_selects_a_complete_profile(self) -> None:
         document = yaml.safe_load(MANIFEST.read_text(encoding="utf-8"))
+        document["profiles"].pop("breakout_training")
+        document["sections"].pop("breakout_diagnostics")
         document["profiles"]["compact"] = {
             "display_name": "GradLab Compact",
             "run_scope": "current_metrics_schema",
@@ -152,7 +158,7 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "unknown panel.*unknown"):
                 load_workspace_declaration(
                     path,
-                    projects=("Breakout-Atari2600-v0",),
+                    projects=("Bandit-v0", "Breakout-Atari2600-v0"),
                 )
 
     def test_project_override_rejects_unknown_excluded_metric(self) -> None:
@@ -167,7 +173,7 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "unknown metric.*train/not_registered"):
                 load_workspace_declaration(
                     path,
-                    projects=("Breakout-Atari2600-v0",),
+                    projects=("Bandit-v0", "Breakout-Atari2600-v0"),
                 )
 
     def test_unknown_panel_metric_is_rejected(self) -> None:
