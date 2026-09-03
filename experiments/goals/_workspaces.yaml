@@ -116,7 +116,7 @@ profiles:
     - training_essentials
   breakout_training:
     display_name: GradLab Training
-    run_scope: current_metrics_schema
+    run_scope: all
     max_runs: 25
     sections:
     - training_essentials

@@ -20,7 +20,7 @@ from gradlab.wandb_utils import resolve_wandb_project
 WORKSPACE_SCHEMA_VERSION = 4
 DEFAULT_WORKSPACE_MANIFEST = Path("experiments/goals/_workspaces.yaml")
 _SAFE_ID = re.compile(r"^[a-z][a-z0-9_-]*$")
-_RUN_SCOPES = frozenset({"current_metrics_schema"})
+_RUN_SCOPES = frozenset({"all", "current_metrics_schema"})
 _PANEL_KINDS = frozenset({"line"})
 _WORKSPACE_GRID_WIDTH = 24
 
