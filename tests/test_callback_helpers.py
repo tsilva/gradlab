@@ -88,6 +88,12 @@ class RuntimeMetricsHelperTests(unittest.TestCase):
         self.assertEqual(logger.records["train/episode/completed/count"], 2)
         self.assertEqual(logger.records["train/outcome/failure/reason/life_loss/count"], 1)
         self.assertEqual(logger.records["train/outcome/failure/reason/stalled/count"], 1)
+        self.assertEqual(
+            logger.records["train/outcome/failure/reason/life_loss/rolling/count"], 1
+        )
+        self.assertEqual(
+            logger.records["train/outcome/failure/reason/stalled/rolling/count"], 1
+        )
         self.assertEqual(logger.records["train/outcome/failure/reason/life_loss/rolling/rate"], 0.5)
         self.assertEqual(logger.records["train/outcome/failure/reason/stalled/rolling/rate"], 0.5)
         self.assertFalse(any(name.endswith("/episode/count") for name in logger.records))
@@ -120,12 +126,42 @@ class RuntimeMetricsHelperTests(unittest.TestCase):
             50,
         )
         self.assertEqual(
+            logger.records["train/outcome/failure/reason/life_loss/rolling/count"],
+            50,
+        )
+        self.assertEqual(
+            logger.records["train/outcome/failure/reason/stalled/rolling/count"],
+            50,
+        )
+        self.assertEqual(
             logger.records["train/outcome/failure/reason/life_loss/rolling/rate"],
             0.5,
         )
         self.assertEqual(
             logger.records["train/outcome/failure/reason/stalled/rolling/rate"],
             0.5,
+        )
+
+        callback._on_records(
+            [
+                SimpleNamespace(
+                    episode_return=0.0,
+                    events=("life_loss",),
+                    start_id="Level1-1",
+                    truncated=False,
+                )
+                for _ in range(75)
+            ]
+        )
+        callback._on_rollout_end()
+
+        self.assertEqual(
+            logger.records["train/outcome/failure/reason/life_loss/rolling/count"],
+            75,
+        )
+        self.assertEqual(
+            logger.records["train/outcome/failure/reason/stalled/rolling/count"],
+            25,
         )
 
 

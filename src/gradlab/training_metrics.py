@@ -25,6 +25,7 @@ from gradlab.metric_names import (
     TRAIN_THROUGHPUT_ROLLOUT_OVERHEAD_SECONDS,
     metric_value_segment,
     train_outcome_reason_count_metric,
+    train_outcome_reason_rolling_count_metric,
     train_outcome_reason_rolling_rate_metric,
     train_progress_origin_target_rolling_mean_metric,
     train_success_count_metric,
@@ -258,6 +259,7 @@ class EpisodeMetricsReducer:
                 )
         for reason, window in sorted(self.reason_windows.items()):
             payload[train_outcome_reason_count_metric(reason)] = self.reason_counts[reason]
+            payload[train_outcome_reason_rolling_count_metric(reason)] = sum(window)
             payload[train_outcome_reason_rolling_rate_metric(reason)] = (
                 sum(window) / len(window) if window else 0.0
             )
