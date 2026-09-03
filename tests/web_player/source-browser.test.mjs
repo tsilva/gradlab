@@ -1872,6 +1872,73 @@ test("run and checkpoint routes preserve goal variant identity", () => {
   }), "/environments/Mario/goals/Level1-1");
 });
 
+test("initial checkpoint deep links override a failed default run source", (context) => {
+  const originalLocation = globalThis.location;
+  const originalWindow = globalThis.window;
+  const originalHistory = globalThis.history;
+  const variant = "goal-variant-0123456789abcdef01234567";
+  const run = `gradlab-${"a".repeat(32)}`;
+  const checkpoint = `checkpoint-12-${"b".repeat(16)}`;
+  globalThis.location = {
+    pathname: (
+      `/environments/Mario/goals/Level1-1/variants/${variant}`
+      + `/runs/${run}/checkpoints/${checkpoint}`
+    ),
+    search: "",
+    hash: "#token=test-token",
+  };
+  globalThis.window = { addEventListener() {} };
+  globalThis.history = { replaceState() {}, pushState() {} };
+  context.after(() => {
+    if (originalLocation === undefined) delete globalThis.location;
+    else globalThis.location = originalLocation;
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+    if (originalHistory === undefined) delete globalThis.history;
+    else globalThis.history = originalHistory;
+  });
+
+  const commands = [];
+  const browser = new SourceBrowser(
+    {},
+    { replaceChildren() {}, hidden: false },
+    {
+      token: "test-token",
+      command: (name, payload) => commands.push({ name, payload }),
+      getState: () => ({ hasControl: true }),
+      showToast() {},
+    },
+  );
+  browser.renderView = () => {};
+  browser.ensureLoaded = () => {};
+  browser.hydrateInitialEnvironments = () => false;
+
+  browser.render({
+    app: {
+      phase: "selecting",
+      route: {
+        level: "runs",
+        environment_id: "Mario",
+        goal_id: "Level1-1",
+        goal_variant_id: variant,
+        run_id: run,
+        checkpoint_id: "",
+      },
+      source: {
+        kind: "public_run",
+        value: run,
+        run_id: run,
+        checkpoint_id: "",
+      },
+    },
+  });
+
+  assert.equal(browser.route.checkpoint_id, checkpoint);
+  assert.equal(commands.length, 1);
+  assert.equal(commands[0].name, "browse_sources");
+  assert.equal(commands[0].payload.route.checkpoint_id, checkpoint);
+});
+
 test("stalled catalog requests time out with a recoverable error", async (context) => {
   const originalLocation = globalThis.location;
   const originalFetch = globalThis.fetch;

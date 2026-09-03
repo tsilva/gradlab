@@ -1316,6 +1316,111 @@ def test_transition_payload_skips_disabled_panel_processors() -> None:
     assert payload["info"] == {}
 
 
+def test_transition_payload_includes_policy_input_for_observation_processing() -> None:
+    transition = _PlaybackTransition(
+        sequence=3,
+        episode=1,
+        step=3,
+        seed=40_000,
+        start_id="Level1-1",
+        model_obs=np.asarray([[1, 2]], dtype=np.uint8),
+        decision=None,
+        action_source="policy",
+        executed_action=1,
+        diagnostics=None,
+        info={},
+        before_frame=None,
+        after_frame=None,
+        before_frames=(),
+        after_frames=(),
+        attribution=None,
+        pre_task=None,
+        next_task=None,
+        reward=0.0,
+        total_reward=0.0,
+        max_x_pos=0,
+        terminated=False,
+        truncated=False,
+        completed=False,
+        boundary=False,
+    )
+
+    payload = transition_payload(transition, processing={"observation"})
+
+    assert payload["before"]["model_input"] == [
+        "observation: shape=(1, 2) dtype=uint8 values=[[1,2]]"
+    ]
+
+
+def test_playback_transition_retains_policy_input_for_observation_processing() -> None:
+    class Env:
+        def step(self, action):
+            self.action = action
+            return (
+                np.full((1, 4, 2, 2), 7, dtype=np.uint8),
+                np.asarray([0.0]),
+                np.asarray([False]),
+                [{}],
+            )
+
+        @staticmethod
+        def take_step_diagnostics():
+            return None
+
+        @staticmethod
+        def drain_records():
+            return []
+
+        @staticmethod
+        def get_images():
+            return [np.zeros((2, 2, 3), dtype=np.uint8)]
+
+    model_obs = np.arange(16, dtype=np.uint8).reshape(1, 4, 2, 2)
+    session = argparse.Namespace(
+        processing_features=frozenset({"observation"}),
+        model_obs=model_obs,
+        active_task=None,
+        current_frame=np.zeros((2, 2, 3), dtype=np.uint8),
+        frames=tuple(model_obs[0, index, ..., None] for index in range(4)),
+        _frame_tuple=_PlaybackSession._frame_tuple,
+        env=Env(),
+        total_reward=0.0,
+        max_x_pos=0,
+        config=argparse.Namespace(
+            env_provider="env-stableretro-turbo",
+            game="SuperMarioBros-Nes-v0",
+        ),
+        _update_conditioning=lambda _info: None,
+        policy_obs=None,
+        sequence=0,
+        episode=1,
+        step_index=0,
+        active_seed=40_000,
+        attribution_mode="none",
+        attribution_status="off",
+        attribution_error=None,
+        attribution_generation=0,
+        attribution_interval=1,
+        cnn_enabled=False,
+        cnn_status="off",
+        cnn_error=None,
+        cnn_layer_id=None,
+        cnn_generation=0,
+        cnn_interval=1,
+        last_transition=None,
+    )
+
+    transition = _PlaybackSession._advance(
+        session,
+        decision=None,
+        executed_action=0,
+        action_source="policy",
+    )
+
+    assert np.array_equal(transition.model_obs, model_obs)
+    assert transition.model_obs is not model_obs
+
+
 def test_reward_accounting_contract_uses_scale_then_clip_from_materialized_config() -> None:
     contract = reward_accounting_contract(
         argparse.Namespace(task={"reward": {"reward_scale": 0.4, "reward_clip": [-1, 1]}})
@@ -2585,9 +2690,9 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert 'fps.addEventListener("input"' in playback_settings
     assert 'services.command("set_fps", { fps: Number(fps.value) })' in playback_settings
     assert "mountPlaybackSettings" in controls
-    assert "WORKSPACE_VERSION = 7" in workspace
+    assert "WORKSPACE_VERSION = 8" in workspace
     assert "createTelemetryInstance" in workspace
-    assert "value.version !== WORKSPACE_VERSION" in workspace
+    assert "![7, WORKSPACE_VERSION].includes(value.version)" in workspace
     assert "compareWorkspaceRevisions" in workspace
     assert "class PanelManager" in manager
     assert "compatibleMetricKeys" in manager

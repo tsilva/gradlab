@@ -33,6 +33,25 @@ export function terminationOutcomeClass(outcome) {
   return TERMINATION_OUTCOME_ORDER.has(normalized) ? `outcome-${normalized}` : "";
 }
 
+export function frameSkipPresentation(playbackContract) {
+  const values = playbackContract?.frame_skip;
+  if (!values || typeof values !== "object") return null;
+  const training = Number(values.training);
+  const playback = Number(values.playback);
+  if (
+    !Number.isInteger(training)
+    || training < 1
+    || !Number.isInteger(playback)
+    || playback < 1
+  ) return null;
+  return {
+    training,
+    playback,
+    differs: training !== playback,
+    label: `Frame skip · training ${training} · playback ${playback}`,
+  };
+}
+
 export function mountPlaybackSettings({ services, idPrefix = "playback" }) {
   const element = document.createElement("div");
   element.className = "control-components playback-settings-form";
@@ -40,6 +59,7 @@ export function mountPlaybackSettings({ services, idPrefix = "playback" }) {
     <div class="playback-glance" aria-live="polite">
       <strong data-playback-glance-contract>Training contract</strong>
       <span data-playback-glance-detail>Stochastic · seed —</span>
+      <span data-playback-frame-skip hidden></span>
     </div>
     <div class="advanced-playback-body">
       <div class="playback-field playback-fps">
@@ -90,6 +110,7 @@ export function mountPlaybackSettings({ services, idPrefix = "playback" }) {
   const terminationSource = element.querySelector("[data-termination-source]");
   const glanceContract = element.querySelector("[data-playback-glance-contract]");
   const glanceDetail = element.querySelector("[data-playback-glance-detail]");
+  const frameSkip = element.querySelector("[data-playback-frame-skip]");
   let wasAwaitingNextEpisode = false;
 
   const enabledTerminationConditions = () => {
@@ -176,6 +197,17 @@ export function mountPlaybackSettings({ services, idPrefix = "playback" }) {
       const recording = snapshot.mode === "recording";
       const dataset = snapshot.mode === "dataset";
       const playbackContract = session.playback_contract || {};
+      const frameSkipDetails = frameSkipPresentation(playbackContract);
+      frameSkip.hidden = frameSkipDetails === null;
+      frameSkip.classList.toggle("contract-mismatch", Boolean(frameSkipDetails?.differs));
+      frameSkip.textContent = frameSkipDetails?.label || "";
+      frameSkip.title = frameSkipDetails
+        ? `Training repeated each selected action for ${
+          frameSkipDetails.training
+        } environment frame${frameSkipDetails.training === 1 ? "" : "s"}. This playback repeats each selected action for ${
+          frameSkipDetails.playback
+        } environment frame${frameSkipDetails.playback === 1 ? "" : "s"}.`
+        : "";
       const availableContractModes = Array.isArray(playbackContract.available_modes)
         ? playbackContract.available_modes
         : ["training"];

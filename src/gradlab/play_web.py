@@ -440,7 +440,11 @@ def transition_payload(
         "decision": decision,
         "before": {
             "task": _json_value(transition.pre_task) if detailed else None,
-            "model_input": model_input_lines(transition.model_obs) if detailed else [],
+            "model_input": (
+                model_input_lines(transition.model_obs)
+                if features & {"observation", "raw"} and transition.model_obs is not None
+                else []
+            ),
             "game_frame": "game" in features and transition.before_frame is not None,
             "observation_frames": (
                 len(transition.before_frames) if "observation" in features else 0

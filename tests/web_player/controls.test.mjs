@@ -11,6 +11,7 @@ import {
 } from "../../src/gradlab/web_player/player-presentation.js";
 import { setSvgUseHref } from "../../src/gradlab/web_player/panels/shared.js";
 import {
+  frameSkipPresentation,
   orderedTerminationConditions,
   terminationOutcomeClass,
 } from "../../src/gradlab/web_player/playback-settings.js";
@@ -305,6 +306,25 @@ test("playback tuning is one reusable on-demand settings form", () => {
   }
   assert.match(settings, /data-termination-settings/);
   assert.match(styles, /\.playback-settings-menu \{/);
+});
+
+test("playback settings distinguish training and active frame skip", () => {
+  assert.deepEqual(
+    frameSkipPresentation({ frame_skip: { training: 4, playback: 2 } }),
+    {
+      training: 4,
+      playback: 2,
+      differs: true,
+      label: "Frame skip · training 4 · playback 2",
+    },
+  );
+  assert.equal(frameSkipPresentation({ frame_skip: { training: 4 } }), null);
+  assert.match(settings, /data-playback-frame-skip hidden/);
+  assert.match(settings, /frameSkip\.classList\.toggle\("contract-mismatch"/);
+  assert.match(
+    styles,
+    /\[data-playback-frame-skip\]\.contract-mismatch \{[^}]*var\(--color-series-amber\)/,
+  );
 });
 
 test("episode termination selections flow through Reset and Next episode", () => {

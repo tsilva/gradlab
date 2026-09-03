@@ -584,6 +584,7 @@ def validate_source_recipe_shape(
     *,
     label: str,
     preset: bool = False,
+    allow_goal_train_fields: bool = False,
 ) -> None:
     allowed_fields = SOURCE_PRESET_FIELDS if preset else SOURCE_RECIPE_FIELDS
     unknown = sorted(str(key) for key in set(document) - allowed_fields)
@@ -597,12 +598,15 @@ def validate_source_recipe_shape(
         if not isinstance(train, Mapping):
             raise ValueError(f"{label}.train must be an object")
         allowed = TRAIN_NESTED_SECTION_KEYS | COMMON_TRAIN_CONFIG_KEYS
+        if allow_goal_train_fields:
+            allowed |= GOAL_TRAIN_CONFIG_KEYS
         unexpected = sorted(set(train) - allowed)
         if unexpected:
             raise ValueError(
                 f"{label}.train uses unsupported flat field(s): {', '.join(unexpected)}; "
-                "put common fields directly under train and backend options under "
-                "train.backend.config"
+                "put environment fields under train.environment (for example "
+                "train.environment.preprocessing.frame_skip), common fields directly "
+                "under train, and backend options under train.backend.config"
             )
     if not preset:
         recipe_id = train_recipe_id(document)
@@ -718,6 +722,11 @@ def compose_train_document(
         recipe_composition.document,
         [*source_overrides, *source_policy_overrides],
         label=f"recipe overrides for {recipe_path}",
+    )
+    validate_source_recipe_shape(
+        source_document,
+        label=f"composed recipe file {recipe_path} after overrides",
+        allow_goal_train_fields=True,
     )
     action_selector_value = source_document.pop("action_profile", None)
     action_selector = None

@@ -149,7 +149,11 @@ export const BUILTIN_PANEL_PRESETS = Object.freeze({
         {
           kind: "line",
           title: "Value estimate vs realized return-to-go",
-          metrics: ["policy/value", "policy/realized-return"],
+          metrics: [
+            "policy/value",
+            "policy/realized-return",
+            "policy/value-error",
+          ],
         },
       ],
     },
