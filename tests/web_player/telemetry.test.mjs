@@ -231,7 +231,7 @@ test("policy decision table omits the redundant standalone series legend", () =>
   assert.doesNotMatch(styles, /\.policy-decision-legend/);
   assert.match(
     telemetryPanelSource,
-    /\["This step", "step"\],\s*\["Episode frequency", "episode"\]/,
+    /\["STEP", "step"\],\s*\["EPISODE", "episode"\]/,
   );
 });
 
