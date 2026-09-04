@@ -652,8 +652,8 @@ function makePolicyDecisionBlock(statsBlock, distributionBlock) {
   for (const [label, className] of [
     ["Action", "action"],
     ["", "bars"],
-    ["This step", "step"],
-    ["Episode frequency", "episode"],
+    ["STEP", "step"],
+    ["EPISODE", "episode"],
   ]) {
     const cell = document.createElement("span");
     cell.className = className;
