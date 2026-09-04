@@ -231,6 +231,12 @@ metric path. `cumulative` explicitly means all eligible observations seen so far
   it can instead reflect delayed serving, low-progress play, or the episode cap, while faster wall
   completion can shorten a successful episode. Treat it as a diagnostic, not a monotonic success or
   acceptance measure.
+- Breakout declares `score` as reward-independent episode progress.
+  `train/progress/score/origin/target/rolling/mean` is the mean terminal provider-native Atari
+  score over the most recent target-origin episodes, including warm-up before the 100-episode
+  window is full. GradLab-owned life-loss and serve-stall penalties do not change it. Atari score
+  weights brick rows differently, so this metric is not a brick count; it remains an online
+  behavior-policy training proxy rather than frozen-checkpoint evaluation evidence.
 - Training episode reduction aggregates return, length, outcome, success, the explicitly supported
   target-origin cell-novelty statistic, and goal-declared numeric episode progress fields.
   Progress field names refer to task-semantic signals and must be populated independently of the
@@ -250,7 +256,9 @@ metric path. `cumulative` explicitly means all eligible observations seen so far
   between-rollout time includes optimizer updates, callbacks, and logging, so it is deliberately
   not named optimization time. The corresponding rates are
   `train/throughput/loop/rate` and `train/throughput/provider/step/rate`.
-- Reward components are emitted only when active. Each component has mean, nonzero rate, and share;
+- Reward components are emitted only when configured. Each component mean includes every policy
+  transition in the rollout, including zero-valued transitions; nonzero rate separately reports
+  the fraction on which the component contributed. Each component also has an absolute share;
   raw reward appears only when it differs from shaped reward. Mario's `progress` component includes
   both its base new-progress reward and any configured additional new-progress reward above
   `progress_reward_boost_start_x`. An identity task's `event` component is the sum of its declared
@@ -414,7 +422,7 @@ unevaluated for future explicit user action. dstack process exit alone is never 
 | `train/reward/shaped/nonzero/rate` | Shaped nonzero reward rate | Fraction of learner-facing per-step rewards that are nonzero after scaling and clipping. | fraction | rollout | history | last |
 | `train/reward/raw/mean` | Raw reward mean | Mean completed task reward immediately before gradlab-owned scaling and clipping, emitted when distinct from shaped reward. | scalar | rollout | history | last |
 | `train/reward/raw/std` | Raw reward std | Standard deviation of completed task reward immediately before gradlab-owned scaling and clipping, emitted when distinct from shaped reward. | scalar | rollout | history | last |
-| `train/reward/component/{component}/mean` | Reward {component} mean | Mean active reward-component contribution in pre-transform task-reward units. | scalar | rollout | history | last |
+| `train/reward/component/{component}/mean` | Reward {component} mean | Mean configured reward-component contribution over every policy transition in the rollout, including zero-valued transitions, in pre-transform task-reward units. | scalar | rollout | history | last |
 | `train/reward/component/{component}/nonzero/rate` | Reward {component} activity rate | Fraction of active reward-component values that are nonzero. | fraction | rollout | history | last |
 | `train/reward/component/{component}/share` | Reward {component} share | Absolute contribution share computed from components in pre-transform task-reward units. | fraction | rollout | history | last |
 | `train/reward/event/{event}/mean` | Reward event {event} mean | Mean contribution from one declared event reward in pre-transform task-reward units. | scalar | rollout | history | last |

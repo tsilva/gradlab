@@ -212,6 +212,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(train_config["env_provider"], "env-breakoutatari2600-turbo-native")
         self.assertEqual(train_config["game"], "Breakout-Atari2600-v0")
         self.assertEqual(train_config["state"], "Start")
+        self.assertEqual(train_config["episode_progress_fields"], ["score"])
         self.assertEqual(train_config["task"]["action"]["set"], "native")
         self.assertFalse(train_config["max_pool_frames"])
 
