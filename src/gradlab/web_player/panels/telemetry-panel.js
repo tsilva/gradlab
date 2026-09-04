@@ -307,6 +307,7 @@ export function policyDecisionPresentation(snapshot, history, view) {
     rank: policyDecisionRank(comparison.rows, selected),
     choiceCount: comparison.rows.length,
     stepProbability: selected?.stepProbability ?? null,
+    selectedIsHighest: selected?.highest ?? null,
     rows: comparison.rows,
     stats: POLICY_DECISION_FOOTER_METRICS
       .map((key) => policyDecisionMetric(key, snapshot, point))
@@ -459,6 +460,9 @@ export function actionComparisonPresentation(snapshot, history, decision) {
   const names = discreteActionLabels(snapshot, count);
   const stepProbabilities = decision.probabilities.map(probabilityValue);
   const invalidStepValues = stepProbabilities.filter((value) => value === null).length;
+  const highestStepProbability = count && !invalidStepValues
+    ? Math.max(...stepProbabilities)
+    : null;
   const executedActions = (history || [])
     .map((point) => point?.executed_action)
     .filter((value) => value !== null && value !== undefined);
@@ -508,6 +512,9 @@ export function actionComparisonPresentation(snapshot, history, decision) {
       episodeProbability: episodeProbabilities[index],
       stepProbability: stepProbabilities[index],
       selected: index === selectedIndex,
+      highest: highestStepProbability === null
+        ? null
+        : stepProbabilities[index] === highestStepProbability,
       executed: index === executedIndex,
     })),
   };
@@ -572,13 +579,22 @@ function policyDecisionComparisonRow(row) {
   item.className = [
     "policy-decision-comparison-row",
     row.selected ? "selected" : "",
+    row.highest ? "highest" : "",
     row.executed ? "executed" : "",
   ].filter(Boolean).join(" ");
   item.setAttribute("role", "row");
   const label = document.createElement("span");
   label.className = "policy-decision-action-label";
   label.textContent = row.name;
-  label.title = row.name;
+  const states = [
+    row.selected ? "selected action" : "",
+    row.highest ? "highest step probability" : "",
+  ].filter(Boolean);
+  const accessibleLabel = states.length
+    ? `${row.name} — ${states.join("; ")}`
+    : row.name;
+  label.title = accessibleLabel;
+  label.setAttribute("aria-label", accessibleLabel);
   label.setAttribute("role", "rowheader");
   const bars = document.createElement("div");
   bars.className = "policy-decision-bars";
@@ -684,6 +700,16 @@ function makePolicyDecisionBlock(statsBlock, distributionBlock) {
       action.textContent = presentation.action;
       mode.textContent = presentation.mode;
       probability.textContent = formatProbability(presentation.stepProbability);
+      for (const target of [hero, action, rank]) {
+        target.classList.toggle(
+          "selected-is-highest",
+          presentation.selectedIsHighest === true,
+        );
+        target.classList.toggle(
+          "selected-below-highest",
+          presentation.selectedIsHighest === false,
+        );
+      }
       rank.textContent = presentation.rank === null
         ? "Rank unavailable"
         : `${ordinal(presentation.rank)} of ${presentation.choiceCount} choices`;

@@ -1,3 +1,56 @@
+# Design QA — Policy decision selected and highest-probability colors
+
+## Comparison target
+
+- Source visual truth: `/Users/tsilva/repos/tsilva/gradlab/logs/design-audits/action-decision-color-system/01-current-action-decision.png`
+- Browser-rendered implementation: native in-app Browser captures for matching, divergent, and tied states, emitted inline during this QA run from the deterministic `qa-policy-color.html` harness.
+- Full-view comparison evidence: one native in-app Browser capture placed the source image and rendered matching-state panel side by side in the same page and screenshot.
+- Source pixels: 1252 × 968.
+- Implementation viewport: 800 × 650 CSS pixels; deterministic panel: 704 × 555 CSS pixels. The combined comparison page measured 1472 × 650 CSS pixels and was captured full-page by the in-app Browser.
+- Matching state: `right` selected at 80.9% and highest; the row renders adjacent teal and amber stripes, while the hero action and rank are teal.
+- Divergent state: `button` selected at 8.6% while `right` is highest at 80.9%; the selected row and hero are amber, and the highest row is teal.
+- Tied state: `right` selected at 40.5% while `right` and `left` share the maximum; both maximum rows are teal, and the selected maximum also has the amber stripe.
+
+## Findings
+
+No actionable P0, P1, or P2 differences remain for the requested color-state scope.
+
+- Fonts and typography: the existing Inter and JetBrains Mono roles, sizes, weights, wrapping, and tabular probability alignment remain unchanged.
+- Spacing and layout rhythm: the dual stripe uses two adjacent inset layers inside the existing row edge and does not change row width, padding, grid tracks, panel height, or responsive behavior.
+- Colors and visual tokens: highest probability uses existing evaluation teal `#8DF5E4`; selected action uses existing series amber `#F3A35B`; matching states preserve both colors rather than blending them. Both colors meet the checked-in normal-text contrast target on the panel surface.
+- Image quality and asset fidelity: no image or icon assets changed. The temporary deterministic harness omitted the processing toggle and did not serve the production font/icon aliases; it was used only to verify state colors and geometry. The live Bandit player verified the packaged fonts, icons, header, and controls.
+- Copy and content: probabilities, episode frequencies, selected-action rank, and footer metrics are unchanged. Row-header accessible names now identify `selected action` and `highest step probability` independently.
+
+## Comparison history
+
+The first combined source/implementation comparison found no P0, P1, or P2 issue. No visual fix iteration was required.
+
+## Primary interactions and runtime verification
+
+- Advanced a real local Bandit policy in the native in-app Browser and verified the selected maximum received the two stripe colors and teal hero treatment.
+- Rendered deterministic matching, divergent, and tied states at the target 704 × 555 panel size.
+- Confirmed computed classes, hero colors, row inset colors, accessible row labels, and tie handling for all states.
+- Checked the live production browser tab for warnings and errors; none were present. The temporary deterministic harness logged expected missing font/icon requests from its minimal server, which did not affect the color-state verification and is not part of the implementation.
+- JavaScript web-player suite: 229 passed.
+- Focused Python web-player suite: 62 passed and 1 unrelated existing assertion failed because `app.js` does not contain `sourceBrowser.activeBreadcrumbRoute = ""`; this change does not touch `app.js`.
+
+## Implementation checklist
+
+- [x] Mark every valid current-step probability maximum, including ties.
+- [x] Mark the selected action independently.
+- [x] Render teal and amber stripes together when the selected action is a maximum.
+- [x] Color the hero teal for a selected maximum and amber for a lower-probability selection.
+- [x] Preserve a neutral state when probabilities are invalid and no maximum can be established.
+- [x] Preserve non-color rank text and add accessible row-state names.
+
+## Follow-up polish
+
+None required for this change.
+
+final result: passed
+
+---
+
 # Design QA — Policy decision choice rank
 
 ## Comparison target
