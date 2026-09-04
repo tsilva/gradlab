@@ -75,6 +75,25 @@ def test_breakout_base_recipe_penalizes_life_loss_and_serve_stall() -> None:
     config = document["train_config"]
 
     assert document["recipe_id"] == "ppo"
+    assert config["env_args"]["use_restricted_actions"] == [
+        ["BUTTON"],
+        ["RIGHT"],
+        ["LEFT"],
+    ]
+    assert config["task"]["action"] == {
+        "set": "native",
+        "conditional_overrides": [
+            {
+                "id": "auto_serve",
+                "when": {
+                    "signal": "ball_y",
+                    "operation": "equals",
+                    "value": 0,
+                },
+                "replace_with": {"semantic_id": "button"},
+            }
+        ],
+    }
     assert "serve_wait" not in config["task"]["events"]
     assert config["task"]["events"]["serve_stall"]["steps"] == 256
     assert config["task"]["reward"]["event_rewards"] == {
