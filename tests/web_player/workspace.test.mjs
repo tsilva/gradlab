@@ -103,6 +103,19 @@ test("default workspace is a v8 editable all-panels view without redundant contr
   );
 });
 
+test("workspace normalization migrates legacy built-in panel titles", () => {
+  const workspace = createDefaultWorkspace();
+  workspace.panels.observation.title = "Observation";
+  workspace.panels.policy.title = "Policy decision";
+  workspace.panels.value.title = "Critic history";
+
+  const normalized = normalizeWorkspace(workspace);
+
+  assert.equal(normalized.panels.observation.title, "Input");
+  assert.equal(normalized.panels.policy.title, "Action decision");
+  assert.equal(normalized.panels.value.title, "Critic history");
+});
+
 test("legacy fixed views migrate to all panels without deleting custom panels", () => {
   const workspace = createDefaultWorkspace();
   workspace.panels[CUSTOM_ID] = createTelemetryInstance({ id: CUSTOM_ID, title: "Mine" });

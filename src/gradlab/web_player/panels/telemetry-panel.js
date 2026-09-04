@@ -613,22 +613,16 @@ function makePolicyDecisionBlock(statsBlock, distributionBlock) {
   action.className = "policy-decision-action";
   const probability = document.createElement("strong");
   probability.className = "policy-decision-probability";
-  const probabilityLabel = document.createElement("span");
-  probabilityLabel.className = "policy-decision-probability-label";
-  probabilityLabel.textContent = "step probability";
   const rank = document.createElement("span");
   rank.className = "policy-decision-rank";
-  heroLine.append(action, probability, probabilityLabel, rank);
+  heroLine.append(action, probability);
+  const modeLine = document.createElement("div");
+  modeLine.className = "policy-decision-mode-line";
   const mode = document.createElement("span");
   mode.className = "policy-decision-mode";
-  hero.append(heroLine, mode);
+  modeLine.append(mode, rank);
+  hero.append(heroLine, modeLine);
 
-  const legend = document.createElement("div");
-  legend.className = "policy-decision-legend";
-  legend.innerHTML = `
-    <span class="step">This step</span>
-    <span class="episode">Episode frequency</span>
-  `;
   const comparison = document.createElement("div");
   comparison.className = "policy-decision-comparison";
   comparison.setAttribute("role", "table");
@@ -659,7 +653,7 @@ function makePolicyDecisionBlock(statsBlock, distributionBlock) {
   const footerStats = document.createElement("div");
   footerStats.className = "policy-decision-stats";
   const foot = appendFoot(discrete, "", { force: true });
-  discrete.append(hero, legend, comparison, footerStats);
+  discrete.append(hero, comparison, footerStats);
   discrete.append(foot);
 
   const fallback = document.createElement("div");

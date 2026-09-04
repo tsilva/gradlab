@@ -147,6 +147,65 @@ def test_identity_equals_event_rewards_every_matching_transition() -> None:
     assert payload["train/reward/event/serve_wait/nonzero/rate"] == 0.75
 
 
+def test_previous_equals_attributes_serve_wait_to_the_transition_after_life_loss() -> None:
+    configured = {
+        "id": "identity",
+        "action": {"set": "native"},
+        "signals": {"ball_y": "ball_y", "lives": "lives"},
+        "events": {
+            "life_loss": {
+                "signal": "lives",
+                "operation": "decrease",
+            },
+            "serve_wait": {
+                "signal": "ball_y",
+                "operation": "previous_equals",
+                "value": 0,
+            },
+        },
+        "termination": {},
+        "reward": {
+            "reward_mode": "native",
+            "event_rewards": {"life_loss": -5.0, "serve_wait": -0.01},
+            "reward_scale": 1.0,
+            "reward_clip": False,
+        },
+    }
+    validate_task_config(configured)
+    base = IdentityTaskDefinition(
+        signals=configured["signals"],
+        events=configured["events"],
+    ).bind(descriptor(), 1)
+    kernel = with_event_rewards(base, configured["reward"]["event_rewards"])
+    kernel.on_reset(
+        np.zeros((1, 1, 8, 8), dtype=np.uint8),
+        {"ball_y": np.asarray([208]), "lives": np.asarray([5])},
+        np.ones(1, dtype=np.bool_),
+    )
+
+    life_loss = kernel.process(
+        np.asarray([0.0], dtype=np.float32),
+        np.zeros(1, dtype=np.bool_),
+        np.zeros(1, dtype=np.bool_),
+        {"ball_y": np.asarray([0]), "lives": np.asarray([4])},
+    )
+
+    assert life_loss.event_bits.tolist() == [1]
+    np.testing.assert_allclose(life_loss.rewards, [-5.0])
+
+    auto_serve = kernel.process(
+        np.asarray([0.0], dtype=np.float32),
+        np.zeros(1, dtype=np.bool_),
+        np.zeros(1, dtype=np.bool_),
+        {"ball_y": np.asarray([116]), "lives": np.asarray([4])},
+    )
+
+    assert auto_serve.event_bits.tolist() == [2]
+    np.testing.assert_allclose(auto_serve.rewards, [-0.01])
+    assert auto_serve.event_transitions["serve_wait"][0].tolist() == [0]
+    assert auto_serve.event_transitions["serve_wait"][1].tolist() == [116]
+
+
 def test_equals_reward_and_equals_for_timeout_compose_on_threshold_transition() -> None:
     events = {
         "serve_wait": {

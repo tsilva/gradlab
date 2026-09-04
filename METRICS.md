@@ -256,8 +256,10 @@ metric path. `cumulative` explicitly means all eligible observations seen so far
   `progress_reward_boost_start_x`. An identity task's `event` component is the sum of its declared
   signed `event_rewards` for events firing on that transition. Its per-event reward metrics split
   that sum by declared event. An identity `equals` event contributes on every policy transition
-  whose post-transition signal matches; `equals_for` contributes only when the consecutive-match
-  counter first reaches its threshold. ViZDoom Deathmatch's optional `sample-factory-v0` shape
+  whose post-transition signal matches; `previous_equals` contributes when the signal at the start
+  of the transition matches, using the reset signal on the first transition when available;
+  `equals_for` contributes only when the consecutive-match counter first reaches its threshold.
+  ViZDoom Deathmatch's optional `sample-factory-v0` shape
   exposes `kill`, `death`, `hit`, `damage`, `health`, `armor`, `weapon`, `ammo`, and `weapon_hold`
   components; their sum is the pre-transform task reward and excludes the replaced provider reward.
 - The player's protocol-v8 Reward analysis ledger is local playback telemetry, not a W&B metric.

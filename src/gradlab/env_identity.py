@@ -198,18 +198,25 @@ def validate_task_config(task: Mapping[str, Any], *, label: str = "task") -> Non
             "unchanged_for",
             "equals_for",
             "equals",
+            "previous_equals",
         }:
             raise ValueError(f"{label}.events.{name}.operation is unsupported: {operation!r}")
         if operation in {"unchanged_for", "equals_for"}:
             steps = raw_rule.get("steps")
             if not isinstance(steps, int) or isinstance(steps, bool) or steps <= 0:
                 raise ValueError(f"{label}.events.{name}.steps must be a positive integer")
-        if operation in {"equals", "equals_for"}:
+        if operation in {"equals", "equals_for", "previous_equals"}:
             value = raw_rule.get("value")
             if not isinstance(value, int | float) or isinstance(value, bool):
                 raise ValueError(f"{label}.events.{name}.value must be a number")
     if task_id == "identity":
-        supported_operations = {"decrease", "increase", "equals", "equals_for"}
+        supported_operations = {
+            "decrease",
+            "increase",
+            "equals",
+            "equals_for",
+            "previous_equals",
+        }
         unsupported_events = sorted(
             name
             for name, rule in events.items()
@@ -218,7 +225,7 @@ def validate_task_config(task: Mapping[str, Any], *, label: str = "task") -> Non
         if unsupported_events:
             raise ValueError(
                 f"{label} identity events support only operations "
-                "'decrease', 'increase', 'equals', and 'equals_for': "
+                "'decrease', 'increase', 'equals', 'equals_for', and 'previous_equals': "
                 + ", ".join(unsupported_events)
             )
     if task_id == "mario":

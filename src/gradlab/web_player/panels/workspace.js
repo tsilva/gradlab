@@ -14,6 +14,10 @@ const BLOCK_KINDS = new Set([
   "namespace-explorer",
   "reward-breakdown",
 ]);
+const LEGACY_BUILTIN_TITLES = Object.freeze({
+  observation: "Observation",
+  policy: "Policy decision",
+});
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -106,9 +110,12 @@ function normalizePanel(id, value, fallback) {
     visible: true,
     window: "main",
   };
+  const requestedTitle = cleanTitle(value.title, fallback?.title || "Telemetry");
   return {
     type: requestedType,
-    title: cleanTitle(value.title, fallback?.title || "Telemetry"),
+    title: builtin && requestedTitle === LEGACY_BUILTIN_TITLES[id]
+      ? fallback.title
+      : requestedTitle,
     enabled: value.enabled === undefined
       ? fallback?.enabled !== false
       : Boolean(value.enabled),

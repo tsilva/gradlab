@@ -1128,8 +1128,8 @@ function renderUnavailableDiagnostics() {
         name.textContent = row.panel;
         const status = document.createElement("span");
         status.className = `unavailable-diagnostics-status ${row.tone}`;
-        status.textContent = row.panel === "Policy decision" && row.tone === "waiting"
-          ? "Waiting for first policy decision"
+        status.textContent = row.panel === "Action decision" && row.tone === "waiting"
+          ? "Waiting for first action decision"
           : row.label;
         item.append(name, status);
         return item;

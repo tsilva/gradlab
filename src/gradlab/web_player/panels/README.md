@@ -62,20 +62,20 @@ The built-in Reward analysis panel is visible in newly created workspaces.
 Normalization adds it hidden on the shelf when an existing v6 workspace does
 not contain it, preserving the existing layout without a schema-version reset.
 
-The built-in Observation panel owns the one canonical policy-input viewport and
+The built-in Input panel owns the one canonical model-input viewport and
 requests only base-observation processing. Enabling the standalone Attribution
 or CNN feature explorer panel changes that viewport with its exact-transition
 overlay; the most recently enabled diagnostic wins while both remain active.
-Observation subscribes to both generated frame kinds without requesting their
-processing, so neither overlay is computed merely because Observation is open.
+Input subscribes to both generated frame kinds without requesting their
+processing, so neither overlay is computed merely because Input is open.
 Base observations and generated overlays must match the selected transition
 sequence, and generated overlays must also match its generation.
 
 The built-in Attribution panel is an opt-in specialized control panel for live
 policy attribution. Its standardized Enabled switch controls attribution
-processing and whether the resulting overlay changes Observation. Its shared
+processing and whether the resulting overlay changes Input. Its shared
 controls select Grad-CAM or occlusion and their capture cadence. It does not own
-an observation viewport.
+an input viewport.
 
 The built-in CNN feature explorer is an opt-in specialized panel for a live
 policy's actor image encoder. It is disabled by default. Its standardized
@@ -85,7 +85,7 @@ count. Each exact transition ranks filters by peak raw positive post-activation
 response. The generation-tagged binary atlas holds a categorical winner map, a
 signed per-group-input-channel kernel mosaic, and a per-filter activation map.
 The explorer renders the kernel, activation, response, and receptive-field
-details; Observation renders the spatial winner map over the policy input.
+details; Input renders the spatial winner map over the model input.
 Winner colors compare only the displayed filters and describe activation, not
 selected-action attribution.
 

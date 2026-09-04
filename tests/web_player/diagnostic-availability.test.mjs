@@ -7,11 +7,11 @@ import {
 
 test("initial observation does not become an unavailable-diagnostics banner", () => {
   const initialObservation = [
-    { panel: "Policy decision", statuses: ["not-yet-observed"] },
+    { panel: "Action decision", statuses: ["not-yet-observed"] },
     { panel: "Reward analysis", statuses: ["not-yet-observed"] },
   ];
   const firstDecision = [
-    { panel: "Policy decision", statuses: ["available"] },
+    { panel: "Action decision", statuses: ["available"] },
     { panel: "Reward analysis", statuses: ["available"] },
   ];
 
@@ -23,12 +23,12 @@ test("initial observation does not become an unavailable-diagnostics banner", ()
 test("unsupported, incomparable, and erroneous diagnostics remain visible", () => {
   assert.deepEqual(
     unavailableDiagnosticRows([
-      { panel: "Policy decision", statuses: ["unsupported"] },
+      { panel: "Action decision", statuses: ["unsupported"] },
       { panel: "Value estimate", statuses: ["contract-incomparable"] },
       { panel: "Reward analysis", statuses: ["protocol-error"] },
     ]),
     [
-      { panel: "Policy decision", label: "Unsupported", tone: "unsupported" },
+      { panel: "Action decision", label: "Unsupported", tone: "unsupported" },
       { panel: "Value estimate", label: "Incomparable", tone: "incomparable" },
       { panel: "Reward analysis", label: "Protocol error", tone: "error" },
     ],

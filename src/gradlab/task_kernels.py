@@ -262,6 +262,45 @@ def _identity_equals_event_kernel(
 
 
 @njit(cache=True, nogil=True)
+def _identity_previous_equals_event_kernel(
+    values,
+    expected_value,
+    previous_values,
+    previous_valid,
+    transition_sources,
+    transition_targets,
+    event_bit,
+    event_outcome,
+    event_bootstrap,
+    outcome_priorities,
+    terminated,
+    truncated,
+    outcomes,
+    event_bits,
+):
+    for lane in range(values.shape[0]):
+        current_value = values[lane]
+        transition_sources[lane] = previous_values[lane] if previous_valid[lane] else current_value
+        transition_targets[lane] = current_value
+        matched = previous_valid[lane] and previous_values[lane] == expected_value
+        previous_values[lane] = current_value
+        previous_valid[lane] = True
+        if not matched:
+            continue
+
+        event_bits[lane] |= event_bit
+        _identity_apply_event_outcome(
+            event_outcome,
+            event_bootstrap,
+            outcome_priorities,
+            lane,
+            terminated,
+            truncated,
+            outcomes,
+        )
+
+
+@njit(cache=True, nogil=True)
 def _identity_equals_for_event_kernel(
     values,
     expected_value,
@@ -2028,15 +2067,23 @@ class IdentityTaskDefinition:
         compiled_events: list[IdentityEvent] = []
         for name, rule in raw_events.items():
             operation = str(rule.get("operation", ""))
-            if operation not in {"decrease", "increase", "equals", "equals_for"}:
+            if operation not in {
+                "decrease",
+                "increase",
+                "equals",
+                "equals_for",
+                "previous_equals",
+            }:
                 raise ValueError(
                     f"identity event {name!r} supports only operations "
-                    "'decrease', 'increase', 'equals', and 'equals_for'"
+                    "'decrease', 'increase', 'equals', 'equals_for', and 'previous_equals'"
                 )
-            if operation in {"equals", "equals_for"}:
+            if operation in {"equals", "equals_for", "previous_equals"}:
                 value = rule.get("value")
                 if not isinstance(value, int | float) or isinstance(value, bool):
-                    raise ValueError(f"identity {operation} event {name!r} requires a numeric value")
+                    raise ValueError(
+                        f"identity {operation} event {name!r} requires a numeric value"
+                    )
             if operation == "equals_for":
                 steps = rule.get("steps")
                 if not isinstance(steps, int) or isinstance(steps, bool) or steps <= 0:
@@ -2204,7 +2251,7 @@ class IdentityTaskKernel:
                 self._event_transition_targets[index],
             )
             for index, event in enumerate(self._event_configs)
-            if event.operation in {"decrease", "increase"}
+            if event.operation in {"decrease", "increase", "previous_equals"}
         }
         self._observation_mask = observation_mask
         self._observation_mask_fill = int(observation_mask_fill)
@@ -2322,6 +2369,23 @@ class IdentityTaskKernel:
                         self._outcomes,
                         self._events,
                     )
+                elif event.operation == "previous_equals":
+                    _identity_previous_equals_event_kernel(
+                        values,
+                        event.value,
+                        self._event_previous_values[index],
+                        self._event_previous_valid[index],
+                        self._event_transition_sources[index],
+                        self._event_transition_targets[index],
+                        np.uint64(1 << index),
+                        int(event.outcome),
+                        bool(event.bootstrap),
+                        self._outcome_priorities,
+                        self._terminated,
+                        self._truncated,
+                        self._outcomes,
+                        self._events,
+                    )
                 elif event.operation == "decrease":
                     _identity_decrease_event_kernel(
                         values,
@@ -2387,7 +2451,7 @@ class IdentityTaskKernel:
                     else None
                 )
                 consecutive_steps[mask] = 0
-                if event.operation in {"decrease", "increase"}:
+                if event.operation in {"decrease", "increase", "previous_equals"}:
                     if reset_values is None:
                         self._event_previous_valid[index][mask] = False
                     else:
