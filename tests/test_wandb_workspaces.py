@@ -54,6 +54,9 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
         self.assertEqual(
             [panel.panel_id for section in breakout.sections for panel in section.panels],
             [
+                "target_score_mean",
+                "serve_stall_count",
+                "serve_wait_rate",
                 "target_return_mean",
                 "target_return_max",
                 "episode_length",
@@ -65,8 +68,6 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
                 "ppo_clip_fraction",
                 "loop_throughput",
                 "provider_step_throughput",
-                "serve_stall_count",
-                "serve_wait_rate",
             ],
         )
         breakout_metrics = {
@@ -76,6 +77,10 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
             for metric in (*panel.y, *panel.metric_templates)
         }
         self.assertFalse(any("/a2c/" in metric for metric in breakout_metrics))
+        self.assertIn(
+            "train/progress/score/origin/target/rolling/mean",
+            breakout_metrics,
+        )
         self.assertIn(
             "train/outcome/failure/reason/serve_stall/rolling/count",
             breakout_metrics,

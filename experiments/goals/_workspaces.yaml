@@ -89,11 +89,17 @@ sections:
       y:
       - train/throughput/provider/step/rate
   breakout_diagnostics:
-    title: Breakout diagnostics
+    title: Breakout essentials
     pinned: true
     open: true
     columns: 2
     panels:
+    - id: target_score_mean
+      kind: line
+      y_title: score (last 100 episodes)
+      x: train/global_step
+      y:
+      - train/progress/score/origin/target/rolling/mean
     - id: serve_stall_count
       kind: line
       y_title: episodes (last 100)
@@ -119,8 +125,8 @@ profiles:
     run_scope: all
     max_runs: 25
     sections:
-    - training_essentials
     - breakout_diagnostics
+    - training_essentials
 
 # Every W&B project resolved from a checked-in active goal inherits the default profile.
 # Project overrides may select another complete profile or omit panels whose metrics do not apply.

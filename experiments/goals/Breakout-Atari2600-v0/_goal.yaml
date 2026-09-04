@@ -13,6 +13,8 @@ objective:
   - min(train/global_step)
 train:
   checkpoint_freq: 500000
+  episode_progress_fields:
+  - score
   environment:
     # Breakout Turbo is the default ROM-free implementation. The complete contract is
     # intentionally accepted by Stable Retro Turbo so only env_provider needs to change.
