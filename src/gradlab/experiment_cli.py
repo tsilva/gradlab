@@ -43,6 +43,7 @@ from gradlab.goal_variants import (
 from gradlab.goal_catalog import GOAL_CATALOG_ROOT
 from gradlab.json_utils import canonical_json_text, json_safe
 from gradlab.metric_names import METRICS_SCHEMA_VERSION
+from gradlab.model_sources import public_checkpoint_manifest
 from gradlab.modal_eval_config import load_modal_eval_config
 from gradlab.operator_credentials import (
     DstackCoordinatorProfile,
@@ -743,6 +744,18 @@ def cmd_launch(args: argparse.Namespace) -> int:
         requested=args.run_description,
     )
     recipe_overrides = tuple(str(value) for value in args.recipe_overrides)
+    resume_checkpoint_url = str(getattr(args, "resume_checkpoint", "") or "").strip()
+    resume_checkpoint = (
+        public_checkpoint_manifest(resume_checkpoint_url) if resume_checkpoint_url else None
+    )
+    if resume_checkpoint is not None:
+        expected_manifest_url = (
+            f"{resume_checkpoint.public_url.removesuffix('/model.zip')}/manifest.json"
+        )
+        if resume_checkpoint_url != expected_manifest_url:
+            raise ValueError(
+                "resume checkpoint manifest URL does not match its checkpoint public URL"
+            )
     requested_checkpoint_eval_backend = args.checkpoint_eval_backend
     resolved_documents = compose_resolved_train_documents(
         goal_path,
@@ -862,6 +875,8 @@ def cmd_launch(args: argparse.Namespace) -> int:
         "runtime_build_source_sha": release.runtime_build_source_sha,
         "submission_key": str(args.submission_key or ""),
     }
+    if resume_checkpoint is not None:
+        manifest_compute["resume_checkpoint"] = resume_checkpoint.to_dict()
     liveness = default_liveness_policy()
     if fault_fixture:
         if fault_fixture not in {
@@ -942,6 +957,17 @@ def cmd_launch(args: argparse.Namespace) -> int:
         "seed": seed,
         "run_description": run_description,
         "submission_key": str(args.submission_key or ""),
+        "resume_checkpoint": (
+            None
+            if resume_checkpoint is None
+            else {
+                "run_id": resume_checkpoint.run_id,
+                "checkpoint_id": resume_checkpoint.checkpoint_id,
+                "step": resume_checkpoint.step,
+                "sha256": resume_checkpoint.sha256,
+                "manifest_url": resume_checkpoint_url,
+            }
+        ),
         "checkpoint_eval_backend": checkpoint_eval_backend,
         "wandb_url": wandb["url"],
         "public_run_index_url": authority.models.public_url(f"runs/{run_id}/index.json"),
@@ -2042,6 +2068,14 @@ def build_parser() -> argparse.ArgumentParser:
     launch.add_argument(
         "--submission-key",
         help="Optional research-wave identity recorded in launch output.",
+    )
+    launch.add_argument(
+        "--resume-checkpoint",
+        metavar="MANIFEST_URL",
+        help=(
+            "Warm-start this new run from an immutable public checkpoint manifest; "
+            "the source is bound as operational provenance, not a recipe override."
+        ),
     )
     launch.add_argument(
         "--compute",

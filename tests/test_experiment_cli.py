@@ -279,6 +279,10 @@ def test_launch_parser_exposes_bounded_compute_and_hash_bound_overrides() -> Non
             "123",
             "--run-description",
             "one isolated learning-rate ablation",
+            "--resume-checkpoint",
+            "https://models.example/runs/gradlab-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/"
+            "checkpoints/1-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/"
+            "manifest.json",
             "--set",
             "train.backend.config.learning_rate=0.0002",
             "--compute",
@@ -295,6 +299,7 @@ def test_launch_parser_exposes_bounded_compute_and_hash_bound_overrides() -> Non
     )
 
     assert args.recipe_overrides == ["train.backend.config.learning_rate=0.0002"]
+    assert args.resume_checkpoint.endswith("/manifest.json")
     assert args.checkpoint_eval_backend is None
     assert args.follow is False
     compute = _compute(args)

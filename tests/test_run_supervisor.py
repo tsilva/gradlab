@@ -223,6 +223,101 @@ class RunSupervisorTests(unittest.TestCase):
             work_root=root / "work",
         )
 
+    def resume_checkpoint(self) -> CheckpointManifest:
+        source_run_id = new_run_id()
+        digest = "c" * 64
+        prefix = f"https://models.example/runs/{source_run_id}/checkpoints/123-{digest}"
+        return CheckpointManifest(
+            run_id=source_run_id,
+            checkpoint_id=f"checkpoint-123-{digest[:16]}",
+            step=123,
+            purpose="periodic",
+            sha256=digest,
+            size_bytes=10,
+            public_url=f"{prefix}/model.zip",
+            model_document_url=f"{prefix}/model.json",
+            model_document_sha256="d" * 64,
+            recipe_document_url=f"{prefix}/recipe.json",
+            recipe_document_sha256="e" * 64,
+            goal_sha256=self.manifest.goal_sha256,
+            recipe_sha256="f" * 64,
+            environment_sha256=self.manifest.environment_sha256,
+            evaluation_contract_sha256="1" * 64,
+            recovery_sidecar_key=f"runs/{source_run_id}/recovery.json",
+            created_at=utc_now(),
+        )
+
+    def test_configure_resume_uses_run_bound_checkpoint_for_new_run(self) -> None:
+        checkpoint = self.resume_checkpoint()
+        supervisor = self.supervisor()
+        supervisor.manifest = replace(
+            supervisor.manifest,
+            compute={
+                **supervisor.manifest.compute,
+                "resume_checkpoint": checkpoint.to_dict(),
+            },
+        )
+        supervisor.manifest.validate()
+        config = {"training_backend": {"id": "sb3.ppo", "config": {"device": "cuda"}}}
+        staged_entry = MagicMock()
+        staged_entry.as_dict.return_value = {
+            "relative_path": "model.zip",
+            "sha256": checkpoint.sha256,
+            "size_bytes": checkpoint.size_bytes,
+        }
+        staged = MagicMock(
+            manifest_hash="2" * 64,
+            manifest=[staged_entry],
+        )
+        resolved = MagicMock(
+            model_path=Path(self.temporary.name) / "model.zip",
+            run_config={"checkpoint_manifest": checkpoint.to_dict()},
+        )
+
+        with (
+            patch(
+                "gradlab.run_supervisor.download_public_checkpoint_manifest_source",
+                return_value=resolved,
+            ) as download,
+            patch("gradlab.run_supervisor.stage_model_input", return_value=staged),
+        ):
+            supervisor._configure_resume(config)
+
+        expected_url = checkpoint.public_url.removesuffix("/model.zip") + "/manifest.json"
+        download.assert_called_once_with(
+            expected_url,
+            root=supervisor.output_root / ".resume-source",
+        )
+        backend_config = config["training_backend"]["config"]
+        self.assertEqual(backend_config["device"], "cuda")
+        self.assertEqual(backend_config["resume"], expected_url)
+        self.assertEqual(backend_config["resume_approval_hash"], "2" * 64)
+        self.assertEqual(backend_config["resume_manifest"], [staged_entry.as_dict.return_value])
+        staged.cleanup.assert_called_once_with()
+
+    def test_configure_resume_rejects_changed_run_bound_manifest(self) -> None:
+        checkpoint = self.resume_checkpoint()
+        supervisor = self.supervisor()
+        supervisor.manifest = replace(
+            supervisor.manifest,
+            compute={
+                **supervisor.manifest.compute,
+                "resume_checkpoint": checkpoint.to_dict(),
+            },
+        )
+        changed = {**checkpoint.to_dict(), "size_bytes": checkpoint.size_bytes + 1}
+        resolved = MagicMock(
+            model_path=Path(self.temporary.name) / "model.zip",
+            run_config={"checkpoint_manifest": changed},
+        )
+
+        with patch(
+            "gradlab.run_supervisor.download_public_checkpoint_manifest_source",
+            return_value=resolved,
+        ):
+            with self.assertRaisesRegex(ValueError, "run-bound manifest"):
+                supervisor._configure_resume({"training_backend": {"id": "sb3.ppo", "config": {}}})
+
     def learner_result(
         self,
         *,

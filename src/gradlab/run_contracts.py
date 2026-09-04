@@ -266,6 +266,9 @@ class RunManifest(_CurrentContract):
             duration = value.get("max_duration_seconds")
             if isinstance(duration, bool) or not isinstance(duration, int) or duration <= 0:
                 raise ValueError(f"compute.{label}.max_duration_seconds must be positive")
+        resume_checkpoint = self.compute.get("resume_checkpoint")
+        if resume_checkpoint is not None:
+            CheckpointManifest.from_dict(resume_checkpoint)
         validate_liveness_policy(
             self.liveness,
             max_duration_seconds=int(selected["max_duration_seconds"]),

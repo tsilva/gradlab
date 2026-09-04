@@ -690,21 +690,38 @@ class RunSupervisor:
         checkpoints = [
             dict(row) for row in (index or {}).get("checkpoints") or [] if isinstance(row, Mapping)
         ]
-        if not checkpoints:
+        bound_resume_document = self.manifest.compute.get("resume_checkpoint")
+        bound_resume = (
+            CheckpointManifest.from_dict(bound_resume_document)
+            if bound_resume_document is not None
+            else None
+        )
+        if not checkpoints and bound_resume is None:
             return
         if self.recovery_mode == "drain-only" and any(
             str(row.get("purpose") or "") == "final" for row in checkpoints
         ):
             return
-        checkpoint = max(
-            checkpoints,
-            key=lambda row: (int(row["step"]), str(row["sha256"])),
-        )
+        if checkpoints:
+            checkpoint = max(
+                checkpoints,
+                key=lambda row: (int(row["step"]), str(row["sha256"])),
+            )
+        else:
+            assert bound_resume is not None
+            checkpoint = bound_resume.to_dict()
         manifest_url = self._checkpoint_manifest_url(checkpoint)
         resolved = download_public_checkpoint_manifest_source(
             manifest_url,
             root=self.output_root / ".resume-source",
         )
+        if not checkpoints:
+            assert bound_resume is not None
+            observed_manifest = resolved.run_config.get("checkpoint_manifest")
+            if observed_manifest != bound_resume.to_dict():
+                raise ValueError(
+                    "downloaded resume checkpoint does not match the run-bound manifest"
+                )
         staged = stage_model_input(
             resolved.model_path,
             source_identity=manifest_url,
