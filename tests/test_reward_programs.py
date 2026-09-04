@@ -14,7 +14,6 @@ MARIO_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml")
 MARIO_RECIPE = MARIO_GOAL.parent / "recipes/ppo.yaml"
 BREAKOUT_GOAL = Path("experiments/goals/Breakout-Atari2600-v0/_goal.yaml")
 BREAKOUT_RECIPE = BREAKOUT_GOAL.parent / "recipes/ppo.yaml"
-BREAKOUT_SERVE_WAIT_RECIPE = BREAKOUT_GOAL.parent / "recipes/ppo-serve-wait-20m.yaml"
 VIZDOOM_GOAL = Path("experiments/goals/VizdoomBasic-v1/_goal.yaml")
 VIZDOOM_RECIPE = VIZDOOM_GOAL.parent / "recipes/ppo.yaml"
 DEATHMATCH_GOAL = Path("experiments/goals/VizdoomDeathmatch-v1/_goal.yaml")
@@ -71,40 +70,16 @@ def test_all_mario_recipes_select_the_speedrun_default() -> None:
         ), recipe
 
 
-def test_breakout_serve_wait_recipe_penalizes_every_pre_serve_transition() -> None:
-    document = compose_train_document(BREAKOUT_GOAL, BREAKOUT_SERVE_WAIT_RECIPE)
-    config = document["train_config"]
-
-    assert document["recipe_id"] == "ppo-serve-wait-20m"
-    assert config["timesteps"] == 20_000_000
-    assert config["task"]["events"]["serve_wait"] == {
-        "signal": "ball_y",
-        "operation": "previous_equals",
-        "value": 0,
-    }
-    assert config["task"]["events"]["serve_stall"]["steps"] == 256
-    assert config["task"]["reward"]["event_rewards"] == {
-        "life_loss": -5.0,
-        "serve_stall": -5.0,
-        "serve_wait": -0.01,
-    }
-
-
-def test_breakout_base_recipe_penalizes_every_pre_serve_transition() -> None:
+def test_breakout_base_recipe_penalizes_life_loss_and_serve_stall() -> None:
     document = compose_train_document(BREAKOUT_GOAL, BREAKOUT_RECIPE)
     config = document["train_config"]
 
     assert document["recipe_id"] == "ppo"
-    assert config["task"]["events"]["serve_wait"] == {
-        "signal": "ball_y",
-        "operation": "previous_equals",
-        "value": 0,
-    }
+    assert "serve_wait" not in config["task"]["events"]
     assert config["task"]["events"]["serve_stall"]["steps"] == 256
     assert config["task"]["reward"]["event_rewards"] == {
         "life_loss": -5.0,
         "serve_stall": -5.0,
-        "serve_wait": -0.01,
     }
 
 

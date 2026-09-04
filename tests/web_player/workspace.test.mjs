@@ -66,19 +66,34 @@ test("default workspace is a v8 editable all-panels view without redundant contr
   });
   assert.equal(workspace.panels.controls.placement.visible, false);
   assert.deepEqual(workspace.panels["step-reward"].placement, {
-    x: 0,
-    y: 23,
+    x: 4,
+    y: 15,
     w: 4,
     h: 7,
     visible: true,
     window: "main",
   });
+  assert.deepEqual(
+    ["observation", "step-reward", "episode-return", "value", "events", "signals"]
+      .map((id) => {
+        const { x, y } = workspace.panels[id].placement;
+        return [id, x, y];
+      }),
+    [
+      ["observation", 0, 15],
+      ["step-reward", 4, 15],
+      ["episode-return", 8, 15],
+      ["value", 0, 23],
+      ["events", 4, 22],
+      ["signals", 8, 22],
+    ],
+  );
   assert.deepEqual(workspace.panels["reward-analysis"].config.blocks, [
     { kind: "reward-breakdown", scope: "step" },
   ]);
   assert.deepEqual(workspace.panels["reward-analysis"].placement, {
     x: 0,
-    y: 30,
+    y: 31,
     w: 12,
     h: 15,
     visible: true,

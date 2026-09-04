@@ -2,7 +2,7 @@ defaults:
 - ../../../recipes/_presets/breakout-high-throughput-ppo@_global_
 - _self_
 recipe_id: ppo
-description: High-throughput PPO for {{ goal_id }} with learning-rate and entropy decay, five-point life-loss and serve-stall penalties, and a 0.01 penalty on every pre-serve transition.
+description: High-throughput PPO for {{ goal_id }} with learning-rate and entropy decay plus five-point life-loss and serve-stall penalties.
 train:
   environment:
     task:
@@ -12,11 +12,6 @@ train:
         life_loss:
           signal: lives
           operation: decrease
-        serve_wait:
-          signal: ball_y
-          operation: previous_equals
-          value: 0
       reward:
         event_rewards:
           life_loss: -5.0
-          serve_wait: -0.01
