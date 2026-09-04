@@ -206,6 +206,16 @@ test("policy decision presentation keeps selection, probability, and episode fre
   assert.equal(presentation.rank, 1);
   assert.equal(presentation.choiceCount, 4);
   assert.equal(presentation.stepProbability, 0.78);
+  assert.equal(presentation.selectedIsHighest, true);
+  assert.deepEqual(
+    presentation.rows.map(({ selected, highest }) => ({ selected, highest })),
+    [
+      { selected: false, highest: false },
+      { selected: false, highest: false },
+      { selected: false, highest: false },
+      { selected: true, highest: true },
+    ],
+  );
   assert.deepEqual(
     presentation.rows.map(({ episodeProbability }) => episodeProbability),
     [0.1, 0.26, 0.22, 0.42],
@@ -262,6 +272,113 @@ test("policy decision rank orders current-step choices and preserves ties", () =
   assert.equal(ordinal(3), "3rd");
   assert.equal(ordinal(11), "11th");
   assert.equal(ordinal(23), "23rd");
+});
+
+test("policy decision colors selected and highest-probability actions independently", () => {
+  const snapshot = {
+    policy: {
+      introspection: ["actor_distribution"],
+    },
+    transition: {
+      decision: {
+        action_selection_mode: "stochastic",
+        selected_action: 2,
+        probabilities: [0.1, 0.7, 0.2],
+      },
+    },
+    session: {
+      action_contract: {
+        policy: {
+          space: { type: "discrete", n: 3, start: 0 },
+        },
+      },
+    },
+  };
+
+  const presentation = policyDecisionPresentation(snapshot, [], {});
+
+  assert.equal(presentation.selectedIsHighest, false);
+  assert.deepEqual(
+    presentation.rows.map(({ selected, highest }) => ({ selected, highest })),
+    [
+      { selected: false, highest: false },
+      { selected: false, highest: true },
+      { selected: true, highest: false },
+    ],
+  );
+});
+
+test("policy decision marks every tied probability maximum", () => {
+  const snapshot = {
+    policy: {
+      introspection: ["actor_distribution"],
+    },
+    transition: {
+      decision: {
+        action_selection_mode: "stochastic",
+        selected_action: 1,
+        probabilities: [0.5, 0.5, 0],
+      },
+    },
+    session: {
+      action_contract: {
+        policy: {
+          space: { type: "discrete", n: 3, start: 0 },
+        },
+      },
+    },
+  };
+
+  const presentation = policyDecisionPresentation(snapshot, [], {});
+
+  assert.equal(presentation.selectedIsHighest, true);
+  assert.deepEqual(
+    presentation.rows.map(({ selected, highest }) => ({ selected, highest })),
+    [
+      { selected: false, highest: true },
+      { selected: true, highest: true },
+      { selected: false, highest: false },
+    ],
+  );
+});
+
+test("policy decision does not fabricate a maximum for invalid probabilities", () => {
+  const snapshot = {
+    transition: { executed_action: 0 },
+    session: {
+      action_contract: {
+        policy: {
+          space: { type: "discrete", n: 3, start: 0 },
+        },
+      },
+    },
+  };
+  const presentation = actionComparisonPresentation(snapshot, [], {
+    selected_action: 0,
+    probabilities: [0.5, 1.5, 0.5],
+  });
+
+  assert.equal(presentation.step.status, "protocol-error");
+  assert.deepEqual(presentation.rows.map(({ highest }) => highest), [null, null, null]);
+});
+
+test("policy decision color system renders separate selected and highest stripes", () => {
+  assert.match(
+    telemetryPanelSource,
+    /row\.highest \? "highest" : ""/,
+  );
+  assert.match(
+    telemetryPanelSource,
+    /target\.classList\.toggle\(\s*"selected-is-highest"/,
+  );
+  assert.match(
+    telemetryPanelSource,
+    /target\.classList\.toggle\(\s*"selected-below-highest"/,
+  );
+  assert.match(
+    styles,
+    /\.policy-decision-comparison-row\.selected\.highest \{[^}]*inset 3px 0 var\(--color-evaluation-text\)[^}]*inset 6px 0 var\(--color-series-amber\)/,
+  );
 });
 
 test("reward totals show pre-clip and post-clip values without a formula", () => {

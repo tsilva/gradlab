@@ -1691,7 +1691,12 @@ select {
   gap: .16rem;
   padding: .34rem 0 1rem .9rem;
   border-bottom: 1px solid var(--color-border);
+}
+.policy-decision-hero.selected-is-highest {
   box-shadow: inset 3px 0 var(--color-evaluation-text);
+}
+.policy-decision-hero.selected-below-highest {
+  box-shadow: inset 3px 0 var(--color-series-amber);
 }
 .policy-decision-hero-line {
   display: flex;
@@ -1707,7 +1712,7 @@ select {
 }
 .policy-decision-action {
   min-width: 0;
-  color: var(--color-evaluation-text);
+  color: var(--color-text);
   font-family: var(--font-family-mono);
   font-size: var(--font-size-xl);
   font-weight: var(--font-weight-bold);
@@ -1715,6 +1720,8 @@ select {
   text-transform: uppercase;
   overflow-wrap: anywhere;
 }
+.policy-decision-action.selected-is-highest { color: var(--color-evaluation-text); }
+.policy-decision-action.selected-below-highest { color: var(--color-series-amber); }
 .policy-decision-probability {
   color: var(--color-text);
   font-family: var(--font-family-mono);
@@ -1729,14 +1736,22 @@ select {
 }
 .policy-decision-rank {
   padding: .24rem .48rem;
-  border: 1px solid color-mix(in srgb, var(--color-evaluation-text) 48%, transparent);
+  border: 1px solid var(--color-border);
   border-radius: var(--radius-control);
-  color: var(--color-evaluation-text);
+  color: var(--color-text-muted);
   font-family: var(--font-family-mono);
   font-size: var(--font-size-xs);
   font-weight: var(--font-weight-semibold);
   line-height: 1;
   white-space: nowrap;
+}
+.policy-decision-rank.selected-is-highest {
+  border-color: color-mix(in srgb, var(--color-evaluation-text) 48%, transparent);
+  color: var(--color-evaluation-text);
+}
+.policy-decision-rank.selected-below-highest {
+  border-color: color-mix(in srgb, var(--color-series-amber) 48%, transparent);
+  color: var(--color-series-amber);
 }
 .policy-decision-mode { font-family: var(--font-family-mono); }
 .policy-decision-comparison {
@@ -1780,8 +1795,16 @@ select {
   border-top: 1px solid var(--color-border);
 }
 .policy-decision-comparison-row:first-child { border-top-color: transparent; }
+.policy-decision-comparison-row.highest {
+  box-shadow: inset 3px 0 var(--color-evaluation-text);
+}
 .policy-decision-comparison-row.selected {
-  box-shadow: inset 2px 0 var(--color-evaluation-text);
+  box-shadow: inset 3px 0 var(--color-series-amber);
+}
+.policy-decision-comparison-row.selected.highest {
+  box-shadow:
+    inset 3px 0 var(--color-evaluation-text),
+    inset 6px 0 var(--color-series-amber);
 }
 .policy-decision-action-label {
   margin-left: .3rem;
@@ -1789,8 +1812,12 @@ select {
   font-size: var(--font-size-sm);
   white-space: nowrap;
 }
-.policy-decision-comparison-row.selected .policy-decision-action-label {
+.policy-decision-comparison-row.highest .policy-decision-action-label {
   color: var(--color-evaluation-text);
+  font-weight: var(--font-weight-bold);
+}
+.policy-decision-comparison-row.selected:not(.highest) .policy-decision-action-label {
+  color: var(--color-series-amber);
   font-weight: var(--font-weight-bold);
 }
 .policy-decision-bars {
