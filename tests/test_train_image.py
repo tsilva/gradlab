@@ -336,7 +336,7 @@ class TrainImageTests(unittest.TestCase):
         self.assertFalse(gpu_lines & dependency_lines)
         self.assertEqual(
             train_plan_sha256(root),
-            "8a0239e46f1aec678acee7c8e07d924ef7e54ebf31c99ef6fb9202a5bbb1590a",
+            "ea0e07e4cfe186c3c70e537a7a704f5284e7741d4621eb3fc5cda29f302441d8",
         )
         for line in gpu.splitlines():
             name = line.split("==", maxsplit=1)[0]

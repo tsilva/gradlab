@@ -265,6 +265,13 @@ export function mount({ definition, services }) {
       if (incomingSequence === targetSequence) commitPrepared(frameSnapshot);
       return true;
     },
+    resetFrames() {
+      bitmapRequest += 1;
+      clearPrepared();
+      targetSnapshot = null;
+      targetSequence = null;
+      frameSequence = null;
+    },
     resize: fit,
     destroy() {
       mounted = false;

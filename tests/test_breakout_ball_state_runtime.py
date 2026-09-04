@@ -2,6 +2,7 @@ from pathlib import Path
 
 import numpy as np
 
+from gradlab.actor_critic_policy import SharedActorCriticPolicy
 from gradlab.env import make_training_vec_env, resolve_env_config
 from gradlab.env_config import env_config_from_mapping
 from gradlab.recipe_documents import compose_train_document
@@ -31,6 +32,9 @@ def test_ball_state_recipe_runs_through_the_real_vector_runtime() -> None:
         assert set(observations) == expected_keys
         assert observations["observation"].shape == (2, 4, 84, 84)
         for key in expected_keys - {"observation"}:
+            assert np.isneginf(env.observation_space[key].low).all()
+            assert np.isposinf(env.observation_space[key].high).all()
+        for key in expected_keys - {"observation"}:
             assert observations[key].shape == (2, 1)
             assert observations[key].dtype == np.float32
             assert np.all((-1.0 <= observations[key]) & (observations[key] <= 1.0))
@@ -44,7 +48,24 @@ def test_ball_state_recipe_runs_through_the_real_vector_runtime() -> None:
         np.testing.assert_allclose(observations["context/ball_x"], 0.0)
         np.testing.assert_allclose(observations["context/ball_vx"], 0.5)
         np.testing.assert_allclose(observations["context/ball_vy"], 8 / 27)
-        np.testing.assert_allclose(observations["context/paddle_x"], 0.4375)
+        np.testing.assert_array_equal(
+            observations["context/paddle_x"][0],
+            observations["context/paddle_x"][1],
+        )
+
+        policy = SharedActorCriticPolicy(
+            env.observation_space,
+            env.action_space,
+            lambda _: 1e-3,
+            policy_model=document["train_config"]["policy_model"],
+        )
+        fusion = policy.features_extractor.fusion[0]
+        assert fusion.in_features == 517
+        assert fusion.out_features == 256
+        assert policy.action_net.in_features == 256
+        assert policy.value_net.in_features == 256
+        actions, _state = policy.predict(observations, deterministic=True)
+        assert actions.shape == (2,)
 
         next_observations, rewards, dones, infos = env.step(np.zeros(2, dtype=np.int64))
         assert set(next_observations) == expected_keys

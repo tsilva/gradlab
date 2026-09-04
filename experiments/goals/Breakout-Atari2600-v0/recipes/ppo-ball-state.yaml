@@ -16,8 +16,9 @@ train:
               kind: continuous
               scale: 2.0
               offset: -1.0
-              low: -1.0
-              high: 1.0
+              # Provider ratios deliberately preserve off-viewport values.
+              low: null
+              high: null
               clip: false
           ball_y:
             signal: policy_ball_y
@@ -26,8 +27,8 @@ train:
               kind: continuous
               scale: 2.0
               offset: -1.0
-              low: -1.0
-              high: 1.0
+              low: null
+              high: null
               clip: false
           ball_vx:
             signal: policy_ball_vx
@@ -36,8 +37,8 @@ train:
               kind: continuous
               scale: 1.0
               offset: 0.0
-              low: -1.0
-              high: 1.0
+              low: null
+              high: null
               clip: false
           ball_vy:
             signal: policy_ball_vy
@@ -46,8 +47,8 @@ train:
               kind: continuous
               scale: 1.0
               offset: 0.0
-              low: -1.0
-              high: 1.0
+              low: null
+              high: null
               clip: false
           paddle_x:
             signal: policy_paddle_x
@@ -56,6 +57,6 @@ train:
               kind: continuous
               scale: 2.0
               offset: -1.0
-              low: -1.0
-              high: 1.0
+              low: null
+              high: null
               clip: false

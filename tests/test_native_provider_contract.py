@@ -9,7 +9,7 @@ from unittest import mock
 import gymnasium as gym
 import numpy as np
 import env_stableretro_turbo as retro
-from env_breakoutatari2600_turbo_native import POLICY_INFO_KEYS
+from env_breakoutatari2600_turbo_native import FIXED_POINT_ONE, POLICY_INFO_KEYS, RAW_WIDTH
 
 from gradlab.action_contract import MARIO_ACTION_TABLES
 from gradlab.env import EnvConfig, _bound_task_kernel, make_vec_envs
@@ -492,6 +492,13 @@ class BreakoutTurboProviderTests(unittest.TestCase):
                 env,
                 state_weight_mapping=lambda _config: {},
             )
+            expected_ranges = {
+                "ball_x_normalized": (0.0, 1.0),
+                "ball_y_normalized": (0.0, 1.0),
+                "ball_vx_normalized": (-1.0, 1.0),
+                "ball_vy_normalized": (-1.0, 1.0),
+                "paddle_x_normalized": (0.0, 1.0),
+            }
             for key in normalized_keys:
                 with self.subTest(key=key):
                     spec = descriptor.signal_schema[key]
@@ -499,6 +506,10 @@ class BreakoutTurboProviderTests(unittest.TestCase):
                     self.assertTrue(spec.available_on_reset)
                     self.assertTrue(spec.available_on_step)
                     self.assertEqual(env.signal_metadata[key]["units"], "ratio")
+                    self.assertEqual(
+                        env.signal_metadata[key]["nominal_range"],
+                        expected_ranges[key],
+                    )
                     self.assertIn("not clipped", env.signal_metadata[key]["normalization"])
 
             _observations, reset_infos = env.reset(seed=[1, 2])
@@ -514,7 +525,7 @@ class BreakoutTurboProviderTests(unittest.TestCase):
 
             np.testing.assert_allclose(
                 reset_infos["ball_x_normalized"],
-                reset_infos["ball_x"] / (160 * 65536),
+                reset_infos["ball_x"] / (RAW_WIDTH * FIXED_POINT_ONE),
             )
             np.testing.assert_allclose(
                 reset_infos["ball_y_normalized"],
@@ -522,15 +533,15 @@ class BreakoutTurboProviderTests(unittest.TestCase):
             )
             np.testing.assert_allclose(
                 reset_infos["ball_vx_normalized"],
-                reset_infos["ball_vx"] / (2 * 65536),
+                reset_infos["ball_vx"] / (2 * FIXED_POINT_ONE),
             )
             np.testing.assert_allclose(
                 reset_infos["ball_vy_normalized"],
-                reset_infos["ball_vy"] / (27 * 65536 / 8),
+                reset_infos["ball_vy"] / (27 * FIXED_POINT_ONE / 8),
             )
             np.testing.assert_allclose(
                 reset_infos["paddle_x_normalized"],
-                reset_infos["paddle_x"] / (160 * 65536),
+                reset_infos["paddle_x"] / (RAW_WIDTH * FIXED_POINT_ONE),
             )
         finally:
             env.close()

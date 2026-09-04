@@ -13,6 +13,7 @@ import { episodeReport } from "./episode-report.js";
 import { eventColorFill, eventLabels } from "./event-colors.js";
 import { mountPlaybackSettings } from "./playback-settings.js";
 import { snapshotActivatesCheckpointSelection } from "./playback-transition.js";
+import { SynchronizedPresentation } from "./synchronized-presentation.js";
 import {
   playbackSourceTitle,
   statusMessageShouldToast,
@@ -94,7 +95,6 @@ const state = {
   frameSequence: new Map(),
   receivedFrameSequence: new Map(),
   retainedEpisode: null,
-  pendingSnapshot: null,
   mode: null,
   lastStatus: null,
   actionNamesKey: "",
@@ -231,7 +231,6 @@ function resetSession(epoch) {
   cancelInspectionFrameRequest();
   state.sessionEpoch = Number(epoch) || 0;
   state.retainedEpisode = null;
-  state.pendingSnapshot = null;
   state.inspectionSequence = null;
   state.inspectionPauseCommandId = null;
   state.attributionCommand = null;
@@ -453,11 +452,7 @@ function handleMessage(message) {
     state.snapshots.set(Number(message.sequence), message);
     pruneRetainedTrace();
     if (message.history_point) ingestHistoryPoint(message.history_point);
-    if (!requiredFramesAvailable(message)) {
-      state.pendingSnapshot = message;
-    } else {
-      applySnapshot(message);
-    }
+    void livePresentation.offer(message).catch(reportPresentationError);
     return;
   }
   if (message.type === "command_result") {
@@ -711,7 +706,7 @@ async function handleFrame(buffer) {
     await panelRuntime.renderFrame(kind, blob, { sequence, generation });
   }
   state.frameSequence.set(kind, sequence);
-  flushPendingSnapshot();
+  await livePresentation.notifyReady().catch(reportPresentationError);
 }
 
 function requiredFrameKinds(snapshot) {
@@ -814,6 +809,8 @@ function pruneRetainedTrace(preserveSequence = null) {
 }
 
 function clearRetainedEpisode() {
+  livePresentation.reset();
+  panelRuntime?.resetFrames();
   state.snapshots.clear();
   state.frameBlobs.forEach((frames) => frames.clear());
   state.frameSequence.clear();
@@ -840,7 +837,6 @@ function hideGoExploreValuePanel(snapshot) {
 }
 
 function applySnapshot(snapshot) {
-  state.pendingSnapshot = null;
   const previousEnvironmentId = state.liveSnapshot?.session?.env_id;
   const previousEpisode = episodeForSnapshot(state.liveSnapshot);
   const nextEpisode = episodeForSnapshot(snapshot);
@@ -882,11 +878,27 @@ function applySnapshot(snapshot) {
   syncCnnCaptureToPanel();
 }
 
-function flushPendingSnapshot() {
-  const snapshot = state.pendingSnapshot;
-  if (!snapshot) return;
-  if (requiredFramesAvailable(snapshot)) applySnapshot(snapshot);
+async function prepareSnapshotFrames(snapshot) {
+  const sequence = Number(snapshot.sequence);
+  await Promise.all(requiredFrameKinds(snapshot).map((kind) => (
+    panelRuntime.prepareFrame(
+      kind,
+      exactFrameBlob(kind, sequence),
+      { sequence, generation: 0 },
+    )
+  )));
 }
+
+function reportPresentationError(error) {
+  console.error("Synchronized playback presentation failed", error);
+  showToast("A synchronized playback frame could not be displayed.", true);
+}
+
+const livePresentation = new SynchronizedPresentation({
+  isReady: requiredFramesAvailable,
+  prepare: prepareSnapshotFrames,
+  present: applySnapshot,
+});
 
 function send(value) {
   if (state.socket?.readyState === WebSocket.OPEN) state.socket.send(JSON.stringify(value));

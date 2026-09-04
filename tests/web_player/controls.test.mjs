@@ -184,8 +184,11 @@ test("the scrubber retains snapshots before waiting for their frames", () => {
     app.indexOf('if (message.type === "command_result")'),
   );
   const retainPosition = snapshotMessage.indexOf("state.snapshots.set");
-  const frameWaitPosition = snapshotMessage.indexOf("requiredFramesAvailable");
+  const frameWaitPosition = snapshotMessage.indexOf("livePresentation.offer");
   assert.ok(retainPosition >= 0 && retainPosition < frameWaitPosition);
+  assert.match(app, /isReady: requiredFramesAvailable/);
+  assert.match(app, /prepare: prepareSnapshotFrames/);
+  assert.match(app, /present: applySnapshot/);
 });
 
 test("the player has no view selector", () => {

@@ -347,8 +347,8 @@ class ConfigValidationTests(unittest.TestCase):
                             "kind": "continuous",
                             "scale": 1.0,
                             "offset": 0.0,
-                            "low": -1.0,
-                            "high": 1.0,
+                            "low": None,
+                            "high": None,
                         },
                     },
                     "ball_vy": {
@@ -358,8 +358,8 @@ class ConfigValidationTests(unittest.TestCase):
                             "kind": "continuous",
                             "scale": 1.0,
                             "offset": 0.0,
-                            "low": -1.0,
-                            "high": 1.0,
+                            "low": None,
+                            "high": None,
                         },
                     },
                     "ball_x": {
@@ -369,8 +369,8 @@ class ConfigValidationTests(unittest.TestCase):
                             "kind": "continuous",
                             "scale": 2.0,
                             "offset": -1.0,
-                            "low": -1.0,
-                            "high": 1.0,
+                            "low": None,
+                            "high": None,
                         },
                     },
                     "ball_y": {
@@ -380,8 +380,8 @@ class ConfigValidationTests(unittest.TestCase):
                             "kind": "continuous",
                             "scale": 2.0,
                             "offset": -1.0,
-                            "low": -1.0,
-                            "high": 1.0,
+                            "low": None,
+                            "high": None,
                         },
                     },
                     "paddle_x": {
@@ -391,8 +391,8 @@ class ConfigValidationTests(unittest.TestCase):
                             "kind": "continuous",
                             "scale": 2.0,
                             "offset": -1.0,
-                            "low": -1.0,
-                            "high": 1.0,
+                            "low": None,
+                            "high": None,
                         },
                     },
                 },
@@ -653,7 +653,7 @@ class ConfigValidationTests(unittest.TestCase):
                     },
                 )
 
-        self.assertEqual(actor_critic_recipes, 57)
+        self.assertEqual(actor_critic_recipes, 56)
 
     def test_every_mario_recipe_disables_eval_and_stops_at_perfect_clear_window(self) -> None:
         mario_root = Path("experiments/goals/SuperMarioBros-Nes-v0")
@@ -769,7 +769,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(report.counts["json_files"], 0)
         self.assertGreaterEqual(report.counts["yaml_files"], 15)
         self.assertGreaterEqual(report.counts["goals"], 1)
-        self.assertEqual(report.counts["train_recipes"], 60)
+        self.assertEqual(report.counts["train_recipes"], 59)
         self.assertGreaterEqual(report.counts["env_configs"], 0)
         self.assertEqual(report.counts["benchmark_profiles"], 5)
         self.assertEqual(report.counts["workspace_manifests"], 1)
@@ -803,7 +803,7 @@ class ConfigValidationTests(unittest.TestCase):
             {
                 "scenario": "scenario",
                 "info": "data",
-                "use_restricted_actions": "simple",
+                "use_restricted_actions": [["BUTTON"], ["RIGHT"], ["LEFT"]],
                 "record": False,
                 "players": 1,
                 "inttype": "stable",
