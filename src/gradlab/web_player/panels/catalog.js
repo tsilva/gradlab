@@ -123,7 +123,7 @@ export const BUILTIN_PANEL_PRESETS = Object.freeze({
   },
   policy: {
     type: "telemetry",
-    title: "Policy decision",
+    title: "Action decision",
     config: {
       blocks: [
         {
@@ -195,7 +195,7 @@ export const BUILTIN_PANEL_PRESETS = Object.freeze({
   },
   observation: {
     type: "observation",
-    title: "Observation",
+    title: "Input",
     config: {},
   },
   attribution: {

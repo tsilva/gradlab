@@ -49,8 +49,8 @@ export function mount({ definition, services }) {
       </div>
       <div class="cnn-explanation">
         <strong>Shared spatial view</strong>
-        <span>The Observation panel displays the selected layer's winner map over the exact policy input.</span>
-        <span>Peak regions below use the layer's exact stride and receptive field in policy-input pixels.</span>
+        <span>The Input panel displays the selected layer's winner map over the exact model input.</span>
+        <span>Peak regions below use the layer's exact stride and receptive field in input pixels.</span>
       </div>
       <div class="cnn-filter-grid" data-cnn-filters></div>
       <p class="panel-foot">Kernel tiles show every learned input-channel plane within the filter's convolution group: amber is positive, cyan is negative. Activation tiles are normalized within each filter; ranking and winner colors use unnormalized responses. These views explain the representation, not why the policy selected its action.</p>

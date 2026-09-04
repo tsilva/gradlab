@@ -243,7 +243,7 @@ class ConfigValidationTests(unittest.TestCase):
                 "life_loss": {"signal": "lives", "operation": "decrease"},
                 "serve_wait": {
                     "signal": "ball_y",
-                    "operation": "equals",
+                    "operation": "previous_equals",
                     "value": 0,
                 },
             },
@@ -769,7 +769,7 @@ class ConfigValidationTests(unittest.TestCase):
                 "life_loss": {"signal": "lives", "operation": "decrease"},
                 "serve_wait": {
                     "signal": "ball_y",
-                    "operation": "equals",
+                    "operation": "previous_equals",
                     "value": 0,
                 },
             },

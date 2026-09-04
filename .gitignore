@@ -3,6 +3,10 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+output/
+tmp/
+docs/research/
+
 # Virtual environments and local package managers
 .venv/
 .venv*/

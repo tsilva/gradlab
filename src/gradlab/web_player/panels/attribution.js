@@ -31,7 +31,7 @@ export function mount({ definition, services }) {
       </div>
       <div class="attribution-explanation">
         <strong>Shared spatial view</strong>
-        <span>The Observation panel overlays the selected method on the exact policy input while this panel is enabled.</span>
+        <span>The Input panel overlays the selected method on the exact model input while this panel is enabled.</span>
         <span>Attribution associates input regions with the selected policy action without changing the shared trajectory.</span>
       </div>
       <p class="panel-foot">Grad-CAM is fast and convolution-specific. Occlusion is slower, but directly measures the selected action score after masking input regions.</p>

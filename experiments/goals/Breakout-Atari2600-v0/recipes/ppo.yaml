@@ -14,7 +14,7 @@ train:
           operation: decrease
         serve_wait:
           signal: ball_y
-          operation: equals
+          operation: previous_equals
           value: 0
       reward:
         event_rewards:

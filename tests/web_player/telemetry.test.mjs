@@ -216,6 +216,37 @@ test("policy decision presentation keeps selection, probability, and episode fre
   );
 });
 
+test("policy decision table omits the redundant standalone series legend", () => {
+  assert.doesNotMatch(telemetryPanelSource, /policy-decision-legend/);
+  assert.doesNotMatch(styles, /\.policy-decision-legend/);
+  assert.match(
+    telemetryPanelSource,
+    /\["This step", "step"\],\s*\["Episode frequency", "episode"\]/,
+  );
+});
+
+test("policy decision rank follows the action-selection mode", () => {
+  assert.match(
+    telemetryPanelSource,
+    /modeLine\.append\(mode, rank\);\s*hero\.append\(heroLine, modeLine\);/,
+  );
+  assert.match(
+    styles,
+    /\.policy-decision-mode-line \{[^}]*display: flex;[^}]*gap: \.6rem;/,
+  );
+  assert.doesNotMatch(
+    styles.match(/\.policy-decision-rank \{([^}]*)\}/)?.[1] || "",
+    /margin-left: auto;/,
+  );
+});
+
+test("policy decision hero omits the redundant step probability label", () => {
+  assert.doesNotMatch(telemetryPanelSource, /policy-decision-probability-label/);
+  assert.doesNotMatch(telemetryPanelSource, /probabilityLabel/);
+  assert.doesNotMatch(styles, /\.policy-decision-probability-label/);
+  assert.match(telemetryPanelSource, /heroLine\.append\(action, probability\);/);
+});
+
 test("policy decision rank orders current-step choices and preserves ties", () => {
   const rows = [
     { name: "first", stepProbability: 0.5 },

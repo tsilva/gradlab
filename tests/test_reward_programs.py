@@ -79,7 +79,7 @@ def test_breakout_serve_wait_recipe_penalizes_every_pre_serve_transition() -> No
     assert config["timesteps"] == 20_000_000
     assert config["task"]["events"]["serve_wait"] == {
         "signal": "ball_y",
-        "operation": "equals",
+        "operation": "previous_equals",
         "value": 0,
     }
     assert config["task"]["events"]["serve_stall"]["steps"] == 256
@@ -97,7 +97,7 @@ def test_breakout_base_recipe_penalizes_every_pre_serve_transition() -> None:
     assert document["recipe_id"] == "ppo"
     assert config["task"]["events"]["serve_wait"] == {
         "signal": "ball_y",
-        "operation": "equals",
+        "operation": "previous_equals",
         "value": 0,
     }
     assert config["task"]["events"]["serve_stall"]["steps"] == 256

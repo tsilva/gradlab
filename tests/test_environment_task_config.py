@@ -215,7 +215,7 @@ class EnvironmentTaskConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unexpected keys"):
             validate_task_config(invalid)
 
-    def test_identity_task_accepts_equals_for_decrease_and_increase_events(self) -> None:
+    def test_identity_task_accepts_temporal_events(self) -> None:
         task = {
             "id": "identity",
             "action": {"set": "native"},
@@ -230,6 +230,11 @@ class EnvironmentTaskConfigTests(unittest.TestCase):
                 "life_loss": {
                     "signal": "lives",
                     "operation": "decrease",
+                },
+                "serve_wait": {
+                    "signal": "ball_y",
+                    "operation": "previous_equals",
+                    "value": 0,
                 },
                 "monster_killed": {
                     "signal": "kills",
