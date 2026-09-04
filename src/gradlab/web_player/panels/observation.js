@@ -64,6 +64,8 @@ export function mount({ definition }) {
   let selectedOverlay = OVERLAY_NONE;
   let baseBitmap = null;
   let baseIdentity = null;
+  let preparedBaseBitmap = null;
+  let preparedBaseIdentity = null;
   let attributionBitmap = null;
   let attributionIdentity = null;
   let cnnBitmap = null;
@@ -90,6 +92,11 @@ export function mount({ definition }) {
     baseBitmap?.close();
     baseBitmap = null;
     baseIdentity = null;
+  };
+  const closePreparedBase = () => {
+    preparedBaseBitmap?.close();
+    preparedBaseBitmap = null;
+    preparedBaseIdentity = null;
   };
   const closeAttribution = () => {
     attributionBitmap?.close();
@@ -201,23 +208,53 @@ export function mount({ definition }) {
     updateContext();
     draw();
   };
+  const promotePreparedBase = () => {
+    if (!sameFrameIdentity(preparedBaseIdentity, targetBaseIdentity())) return false;
+    closeBase();
+    baseBitmap = preparedBaseBitmap;
+    baseIdentity = preparedBaseIdentity;
+    preparedBaseBitmap = null;
+    preparedBaseIdentity = null;
+    return true;
+  };
+  const prepareFrame = async (kind, blob, metadata = {}) => {
+    if (kind !== FRAME_OBSERVATION || !blob) return false;
+    const incoming = { sequence: Number(metadata.sequence) };
+    if (
+      sameFrameIdentity(incoming, baseIdentity)
+      || sameFrameIdentity(incoming, preparedBaseIdentity)
+    ) return true;
+    const request = ++baseBitmapRequest;
+    const bitmap = await createImageBitmap(blob);
+    if (!mounted || request !== baseBitmapRequest) {
+      bitmap.close();
+      return true;
+    }
+    closePreparedBase();
+    preparedBaseBitmap = bitmap;
+    preparedBaseIdentity = incoming;
+    return true;
+  };
 
   return {
     element,
     render(nextSnapshot) {
       targetSnapshot = nextSnapshot;
+      promotePreparedBase();
       if (sameFrameIdentity(baseIdentity, targetBaseIdentity())) {
         commitSnapshot(nextSnapshot);
       }
     },
+    prepareFrame,
     async renderFrame(kind, blob, metadata = {}) {
       if (kind === FRAME_OBSERVATION) {
         const incoming = { sequence: Number(metadata.sequence) };
         if (!sameFrameIdentity(incoming, targetBaseIdentity())) return true;
         const frameSnapshot = targetSnapshot;
-        const request = ++baseBitmapRequest;
         if (!blob) {
+          baseBitmapRequest += 1;
           closeBase();
+          closePreparedBase();
           commitSnapshot(frameSnapshot);
           return true;
         }
@@ -225,19 +262,11 @@ export function mount({ definition }) {
           commitSnapshot(frameSnapshot);
           return true;
         }
-        const bitmap = await createImageBitmap(blob);
+        await prepareFrame(kind, blob, metadata);
         if (
-          !mounted
-          || request !== baseBitmapRequest
-          || !sameFrameIdentity(incoming, targetBaseIdentity())
-        ) {
-          bitmap.close();
-          return true;
-        }
-        closeBase();
-        baseBitmap = bitmap;
-        baseIdentity = incoming;
-        commitSnapshot(frameSnapshot);
+          sameFrameIdentity(incoming, targetBaseIdentity())
+          && promotePreparedBase()
+        ) commitSnapshot(frameSnapshot);
         return true;
       }
       if (kind === FRAME_ATTRIBUTION) {
@@ -299,12 +328,24 @@ export function mount({ definition }) {
       draw();
       return true;
     },
+    resetFrames() {
+      baseBitmapRequest += 1;
+      attributionBitmapRequest += 1;
+      cnnBitmapRequest += 1;
+      snapshot = null;
+      targetSnapshot = null;
+      closeBase();
+      closePreparedBase();
+      closeAttribution();
+      closeCnn();
+    },
     destroy() {
       mounted = false;
       baseBitmapRequest += 1;
       attributionBitmapRequest += 1;
       cnnBitmapRequest += 1;
       closeBase();
+      closePreparedBase();
       closeAttribution();
       closeCnn();
     },

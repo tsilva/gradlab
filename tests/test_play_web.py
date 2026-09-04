@@ -2824,6 +2824,7 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
         root / "oauth_complete.js",
         root / "playback-settings.js",
         root / "player-presentation.js",
+        root / "synchronized-presentation.js",
         root / "favicon.svg",
         root / "styles.css",
         root / "tabler-icons.svg",

@@ -174,8 +174,9 @@ test("observation receives CNN frames without demanding CNN processing", () => {
   assert.deepEqual(PANEL_TYPES.observation.frameKinds, [2, 3, 4]);
   assert.match(source, /baseIdentity/);
   assert.match(source, /sameFrameIdentity\(baseIdentity, expectedBaseIdentity\(\)\)/);
+  assert.match(source, /const prepareFrame = async \(kind, blob, metadata = \{\}\)/);
+  assert.match(source, /sameFrameIdentity\(incoming, preparedBaseIdentity\)/);
   for (const [identity, request] of [
-    ["targetBaseIdentity", "baseBitmapRequest"],
     ["targetAttributionIdentity", "attributionBitmapRequest"],
     ["targetCnnIdentity", "cnnBitmapRequest"],
   ]) {
@@ -229,8 +230,15 @@ test("rapid scrubbing coalesces missing-frame requests to the latest position", 
 });
 
 test("late observation decodes cannot repaint an older scrub position", () => {
+  assert.match(
+    source,
+    /if \(!sameFrameIdentity\(preparedBaseIdentity, targetBaseIdentity\(\)\)\) return false;/,
+  );
+  assert.match(
+    source,
+    /const bitmap = await createImageBitmap\(blob\);\s*if \(!mounted \|\| request !== baseBitmapRequest\)/,
+  );
   for (const [targetIdentity, request] of [
-    ["targetBaseIdentity", "baseBitmapRequest"],
     ["targetAttributionIdentity", "attributionBitmapRequest"],
     ["targetCnnIdentity", "cnnBitmapRequest"],
   ]) {

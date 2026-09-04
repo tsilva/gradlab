@@ -204,6 +204,12 @@ export class PanelRuntime {
     return results.some(Boolean);
   }
 
+  resetFrames() {
+    this.instances.forEach((instance, id) => {
+      this.safeCall(id, "resetFrames");
+    });
+  }
+
   invoke(id, method, ...args) {
     return this.safeCall(id, method, ...args);
   }
