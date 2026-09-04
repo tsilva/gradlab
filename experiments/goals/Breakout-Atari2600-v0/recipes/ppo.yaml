@@ -2,9 +2,18 @@ defaults:
 - ../../../recipes/_presets/breakout-high-throughput-ppo@_global_
 - _self_
 recipe_id: ppo
-description: High-throughput PPO for {{ goal_id }} with learning-rate and entropy decay plus five-point life-loss and serve-stall penalties.
+description: High-throughput three-action PPO for {{ goal_id }} with learning-rate and entropy decay plus five-point life-loss and serve-stall penalties.
 train:
   environment:
+    env_config:
+      env_args:
+        # Both Breakout providers compile this table to the same three-action
+        # semantic contract: BUTTON/FIRE, RIGHT, LEFT. NOOP remains available
+        # only to the reset randomizer, outside the policy action space.
+        use_restricted_actions:
+        - [BUTTON]
+        - [RIGHT]
+        - [LEFT]
     task:
       signals:
         lives: lives
