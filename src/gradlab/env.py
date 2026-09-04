@@ -14,6 +14,7 @@ import env_stableretro_turbo as retro
 
 from gradlab import env_providers as provider_runtime
 from gradlab.action_contract import compile_runtime_action_contract
+from gradlab.action_overrides import with_conditional_action_overrides
 from gradlab.batch_runtime import BatchRuntime, ProviderDescriptor
 from gradlab.env_providers import (
     DEFAULT_RETRO_VEC_ENV as RetroVecEnv,
@@ -60,6 +61,7 @@ from gradlab.validation import (
 from gradlab.rom_runtime import RomRuntimeBinding
 
 configure_matplotlib_cache()
+
 
 def validate_obs_crop_mode(value: str) -> str:
     if value not in {"remove", "mask"}:
@@ -370,6 +372,12 @@ def bind_native_provider(
             kernel.action_space,
             policy_action_values=action_values,
             policy_action_codec=task_action_codec(config),
+        )
+        kernel = with_conditional_action_overrides(
+            kernel,
+            descriptor,
+            config.task.get("signals", {}),
+            action_contract,
         )
         runtime = BatchRuntime(
             native_env,

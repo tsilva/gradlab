@@ -437,6 +437,21 @@ def transition_payload(
         "executed_action": (
             _json_value(transition.executed_action) if features & {"actions", "raw"} else None
         ),
+        "effective_action": (
+            _json_value(getattr(diagnostics, "effective_policy_action", transition.executed_action))
+            if diagnostics is not None and features & {"actions", "raw"}
+            else None
+        ),
+        "native_action": (
+            _json_value(getattr(diagnostics, "native_action", transition.executed_action))
+            if diagnostics is not None and features & {"actions", "raw"}
+            else None
+        ),
+        "action_override_rule_id": (
+            getattr(diagnostics, "action_override_rule_id", None)
+            if diagnostics is not None and features & {"actions", "raw"}
+            else None
+        ),
         "decision": decision,
         "before": {
             "task": _json_value(transition.pre_task) if detailed else None,
@@ -480,9 +495,7 @@ def transition_payload(
         "outcome": outcome if events_enabled else "continuing",
         "return_bootstrap": {
             "source": (
-                "terminal_state_value"
-                if transition.return_bootstrap_value is not None
-                else None
+                "terminal_state_value" if transition.return_bootstrap_value is not None else None
             ),
             "value": transition.return_bootstrap_value,
             "reason": transition.return_bootstrap_reason,
@@ -529,6 +542,9 @@ def history_point_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         "step": payload["step"],
         "policy_action": decision.get("selected_action"),
         "executed_action": payload.get("executed_action"),
+        "effective_action": payload.get("effective_action"),
+        "native_action": payload.get("native_action"),
+        "action_override_rule_id": payload.get("action_override_rule_id"),
         "action_source": payload.get("action_source"),
         "policy_sampled": decision.get("sampled"),
         "reward_provider": reward["provider"],

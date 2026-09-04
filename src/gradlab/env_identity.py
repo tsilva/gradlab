@@ -6,6 +6,10 @@ from copy import deepcopy
 from typing import Any
 
 from gradlab.action_codecs import validate_task_action_codec
+from gradlab.action_overrides import (
+    CONDITIONAL_ACTION_OVERRIDE_KEY,
+    normalize_conditional_action_overrides,
+)
 from gradlab.env_registry import environment_spec, policy_environment_compatibility_id
 from gradlab.environment_fields import (
     PREPROCESSING_FIELD_NAMES as PREPROCESSING_KEYS,
@@ -40,8 +44,7 @@ ENVIRONMENT_HASH_ALGORITHM = "gradlab.environment.v5"
 ENVIRONMENT_SCHEMA_VERSION = 5
 
 IDENTITY_REWARD_KEYS = (
-    frozenset({"reward_mode", CELL_NOVELTY_REWARD_KEY, EVENT_REWARDS_KEY})
-    | COMMON_REWARD_KEYS
+    frozenset({"reward_mode", CELL_NOVELTY_REWARD_KEY, EVENT_REWARDS_KEY}) | COMMON_REWARD_KEYS
 )
 
 
@@ -94,6 +97,16 @@ def task_config_from_train_config(
     if isinstance(task, Mapping) and task:
         canonical = deepcopy(dict(task))
     validate_task_config(canonical)
+    action = dict(canonical["action"])
+    conditional_overrides = normalize_conditional_action_overrides(
+        action,
+        canonical["signals"],
+    )
+    if conditional_overrides:
+        action[CONDITIONAL_ACTION_OVERRIDE_KEY] = conditional_overrides
+    else:
+        action.pop(CONDITIONAL_ACTION_OVERRIDE_KEY, None)
+    canonical["action"] = action
     from gradlab.model_inputs import normalize_task_model_inputs
 
     canonical = normalize_task_model_inputs(canonical)
@@ -142,7 +155,7 @@ def validate_task_config(task: Mapping[str, Any], *, label: str = "task") -> Non
         raise ValueError(f"{label}.action.set must be a non-empty string")
     if task_id == "mario" and action_set != "native":
         raise ValueError(f"{label}.action.set must be 'native'")
-    extra_action_keys = sorted(set(action) - {"set", "codec"})
+    extra_action_keys = sorted(set(action) - {"set", "codec", CONDITIONAL_ACTION_OVERRIDE_KEY})
     if extra_action_keys:
         raise ValueError(f"{label}.action has unexpected keys: {extra_action_keys}")
     codec = action.get("codec")
@@ -166,6 +179,7 @@ def validate_task_config(task: Mapping[str, Any], *, label: str = "task") -> Non
         ):
             continue
         raise ValueError(f"{label}.signals.{name} must be a signal name or non-empty list")
+    normalize_conditional_action_overrides(action, signals, label=f"{label}.action")
     events = task["events"]
     if len(events) > 64:
         raise ValueError(f"{label}.events supports at most 64 events")

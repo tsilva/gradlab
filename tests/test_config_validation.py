@@ -719,7 +719,20 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(train_config["task"]["termination"]["max_episode_steps"], 54000)
         self.assertEqual(
             train_config["task"]["action"],
-            {"set": "native"},
+            {
+                "set": "native",
+                "conditional_overrides": [
+                    {
+                        "id": "auto_serve",
+                        "when": {
+                            "signal": "ball_y",
+                            "operation": "equals",
+                            "value": 0,
+                        },
+                        "replace_with": {"semantic_id": "button"},
+                    }
+                ],
+            },
         )
         self.assertEqual(
             train_config["task"]["signals"],
@@ -933,7 +946,10 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(train_config["obs_crop_mode"], "mask")
         self.assertEqual(train_config["obs_crop_fill"], 0)
         self.assertEqual(train_config["task"]["action"], {"set": "native"})
-        self.assertEqual(train_config["task"]["action"], breakout["train_config"]["task"]["action"])
+        self.assertNotEqual(
+            train_config["task"]["action"],
+            breakout["train_config"]["task"]["action"],
+        )
         self.assertEqual(
             {key: train_config["task"]["reward"][key] for key in ("reward_mode", "reward_scale")},
             {
@@ -1272,20 +1288,14 @@ class ConfigValidationTests(unittest.TestCase):
             self.BREAKOUT_GOAL.parent,
         )
         recipes = sorted(
-            recipe
-            for root in recipe_roots
-            for recipe in root.glob("**/recipes/*.yaml")
+            recipe for root in recipe_roots for recipe in root.glob("**/recipes/*.yaml")
         )
         self.assertTrue(recipes)
 
         for recipe in recipes:
             goal = recipe.parent.parent / "_goal.yaml"
             document = compose_train_document(goal, recipe)
-            event = (
-                "serve_stall"
-                if goal.parent.name == "Breakout-Atari2600-v0"
-                else "stalled"
-            )
+            event = "serve_stall" if goal.parent.name == "Breakout-Atari2600-v0" else "stalled"
             tasks = [("train", document["train_config"]["task"])]
             evaluation = document["goal"].get("eval")
             if evaluation is not None:
