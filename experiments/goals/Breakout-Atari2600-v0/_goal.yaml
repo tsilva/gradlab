@@ -56,6 +56,16 @@ train:
       action:
         # GradLab normalizes both providers to 0=NOOP, 1=FIRE, 2=RIGHT, 3=LEFT.
         set: native
+        conditional_overrides:
+        - id: auto_serve
+          when:
+            signal: ball_y
+            operation: equals
+            value: 0
+          replace_with:
+            # Stable Retro names the Atari controller trigger BUTTON; in Breakout
+            # this is the FIRE action that launches the waiting ball.
+            semantic_id: button
       signals:
         ball_y: ball_y
         walls_cleared: walls_cleared

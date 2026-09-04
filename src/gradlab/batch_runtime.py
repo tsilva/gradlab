@@ -243,7 +243,9 @@ class StepDiagnostics:
     episode_seed: int | None
     start_id: str | None
     policy_action: Any
+    effective_policy_action: Any
     native_action: Any
+    action_override_rule_id: str | None
     provider_reward: float
     provider_terminated: bool
     provider_truncated: bool
@@ -922,9 +924,7 @@ class BatchRuntime:
                 label="policy.cell_detector",
             )
             if config.sources:
-                raise ValueError(
-                    "executable policy cell detectors require semantic signals"
-                )
+                raise ValueError("executable policy cell detectors require semantic signals")
             for signal in config.signals:
                 self.kernel.validate_archive_signal(signal)
             detector = ArchiveCellDetector(config)
@@ -1505,12 +1505,22 @@ class BatchRuntime:
                 if bool(dones[lane])
                 else None
             )
+            effective_action = getattr(self.kernel, "effective_action", None)
+            override_rule_id = getattr(self.kernel, "action_override_rule_id", None)
             diagnostics = StepDiagnostics(
                 episode_index=int(self._episode_indices[lane]),
                 episode_seed=self._episode_seeds[lane],
                 start_id=self._start_ids[lane],
                 policy_action=_copy_tree_lane(actions, lane),
+                effective_policy_action=(
+                    effective_action(lane)
+                    if callable(effective_action)
+                    else _copy_tree_lane(actions, lane)
+                ),
                 native_action=_copy_tree_lane(native_actions, lane),
+                action_override_rule_id=(
+                    override_rule_id(lane) if callable(override_rule_id) else None
+                ),
                 provider_reward=float(native_rewards[lane]),
                 provider_terminated=bool(provider_terminated[lane]),
                 provider_truncated=bool(provider_truncated[lane]),

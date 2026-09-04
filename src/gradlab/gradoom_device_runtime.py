@@ -146,9 +146,7 @@ class _GraDoomTorchContractAdapter:
             active = env.active_state_indices
         except AttributeError as exc:
             raise TypeError("GraDOOM provider must declare active_state_indices") from exc
-        self._active_state_indices = (
-            active if callable(active) else (lambda: active)
-        )
+        self._active_state_indices = active if callable(active) else (lambda: active)
 
     @property
     def device(self) -> Any:
@@ -216,6 +214,7 @@ class GraDoomDeviceRuntime:
         *,
         action_contract: Mapping[str, Any],
         run_seed: int,
+        action_resolver: Any | None = None,
     ) -> None:
         self.provider = env
         self.descriptor = descriptor
@@ -225,6 +224,18 @@ class GraDoomDeviceRuntime:
         self.observation_space = kernel.observation_space
         self.action_space = kernel.action_space
         self.action_contract = MappingProxyType(dict(action_contract))
+        if action_resolver is None:
+            from gradlab.action_overrides import DeviceConditionalActionResolver
+
+            action_resolver = DeviceConditionalActionResolver(
+                action_space=kernel.action_space,
+                signals={},
+                action_contract={"policy": {"conditional_overrides": []}},
+                device_signal_names=env.device_signal_names,
+                num_envs=self.num_envs,
+                device=self.device,
+            )
+        self._action_resolver = action_resolver
         self.global_lane_ids = tuple(range(self.num_envs))
         self.capture_step_diagnostics = False
         self.state_archive = None
@@ -263,6 +274,7 @@ class GraDoomDeviceRuntime:
         self._record_batches.clear()
         mask = torch.ones(self.num_envs, device=self.device, dtype=torch.bool)
         observations, signals = self.provider.reset_device(mask, self._seeds())
+        self._action_resolver.observe(signals)
         info_histories = (
             self.provider.device_info_histories() if self._encoder.uses_histories else None
         )
@@ -271,13 +283,14 @@ class GraDoomDeviceRuntime:
     def step(self, actions: torch.Tensor) -> GraDoomDeviceBatchStep:
         if self._closed:
             raise RuntimeError("GraDOOM device runtime is closed")
-        action_indices = actions.to(device=self.device, dtype=torch.int64).reshape(self.num_envs)
+        action_indices = self._action_resolver.resolve(actions)
         next_episode_index = self._episode_index + 1
         reset_seeds = torch.bitwise_and(
             self._run_seed + self._lane * 0x85EBCA6B + next_episode_index * 0x9E3779B1,
             (1 << 32) - 1,
         )
         transition = self.provider.step_and_reset_device(action_indices, reset_seeds)
+        self._action_resolver.observe(transition.signals)
         done = transition.terminated | transition.truncated
         self._episode_returns.add_(transition.rewards)
         self._episode_lengths.add_(1)
@@ -422,6 +435,7 @@ def make_gradoom_device_vec_env(
     if state_archive is not None:
         raise ValueError("GraDOOM device runtime does not support state archives")
     from gradlab.action_contract import compile_runtime_action_contract
+    from gradlab.action_overrides import DeviceConditionalActionResolver
     from gradlab.env import (
         _bound_task_kernel,
         native_obs_crop,
@@ -470,11 +484,20 @@ def make_gradoom_device_vec_env(
             policy_action_values=task_action_values(config),
             policy_action_codec=task_action_codec(config),
         )
+        action_resolver = DeviceConditionalActionResolver(
+            action_space=kernel.action_space,
+            signals=config.task.get("signals", {}),
+            action_contract=action_contract,
+            device_signal_names=env.device_signal_names,
+            num_envs=n_envs,
+            device=env.device,
+        )
         runtime = GraDoomDeviceRuntime(
             env,
             descriptor,
             kernel,
             action_contract=action_contract,
+            action_resolver=action_resolver,
             run_seed=seed,
         )
         return GraDoomDeviceVecEnv(runtime)

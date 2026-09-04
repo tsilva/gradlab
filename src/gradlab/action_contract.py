@@ -24,11 +24,16 @@ from gradlab.action_codecs import (
     vizdoom_shared_multidiscrete_codec_document,
     vizdoom_shared_multidiscrete_semantics,
 )
+from gradlab.action_overrides import (
+    CONDITIONAL_ACTION_OVERRIDE_KEY,
+    normalize_conditional_action_overrides,
+)
 
 
 MARIO_PROVIDERS = frozenset({"env-stableretro-turbo", "env-supermariobrosnes-turbo-emu"})
 BUILTIN_ACTION_MODES = frozenset({"all", "filtered", "discrete", "multi_discrete"})
-ACTION_CONTRACT_SCHEMA_VERSION = 1
+ACTION_CONTRACT_SCHEMA_VERSION = 2
+SUPPORTED_ACTION_CONTRACT_SCHEMA_VERSIONS = frozenset({1, 2})
 MARIO_ACTION_TABLES = {
     "basic": (
         (),
@@ -819,15 +824,16 @@ def action_contract_entry(contract: Mapping[str, Any], value: Any) -> dict[str, 
     semantics = policy.get("semantics")
     if not isinstance(semantics, Mapping) or semantics.get("status") != "available":
         return None
-    if space.get("type") == "multi_discrete" and isinstance(
-        semantics.get("legal_entries"), list
-    ):
+    if space.get("type") == "multi_discrete" and isinstance(semantics.get("legal_entries"), list):
         try:
             selected = tuple(int(item) for item in np.asarray(value).reshape(-1))
         except TypeError, ValueError:
             return None
         for entry in semantics["legal_entries"]:
-            if isinstance(entry, Mapping) and tuple(int(item) for item in entry["value"]) == selected:
+            if (
+                isinstance(entry, Mapping)
+                and tuple(int(item) for item in entry["value"]) == selected
+            ):
                 return dict(entry)
         return None
     try:
@@ -934,9 +940,7 @@ def action_value_for_controls(
         if not isinstance(controls, list) or len(controls) != 1:
             continue
         inputs = {
-            _semantic_id(label)
-            for label in controls[0].get("inputs", ())
-            if _semantic_id(label)
+            _semantic_id(label) for label in controls[0].get("inputs", ()) if _semantic_id(label)
         }
         if inputs == requested:
             matches.append(tuple(int(value) for value in entry["value"]))
@@ -1163,6 +1167,27 @@ def compile_runtime_action_contract(
     else:
         raise ValueError(f"unsupported policy action codec {configured_codec_type!r}")
 
+    task = config.get("task", {}) if isinstance(config, Mapping) else getattr(config, "task", {})
+    action = task.get("action", {}) if isinstance(task, Mapping) else {}
+    signals = task.get("signals", {}) if isinstance(task, Mapping) else {}
+    overrides = normalize_conditional_action_overrides(action, signals)
+    compiled_overrides = []
+    for rule in overrides:
+        semantic_id = str(rule["replace_with"]["semantic_id"])
+        target_value = action_value_for_semantic(
+            {"policy": {"space": policy_space, "semantics": policy_semantics}},
+            semantic_id,
+        )
+        compiled_overrides.append(
+            {
+                **deepcopy(rule),
+                "replace_with": {
+                    "semantic_id": semantic_id,
+                    "value": _json_action_value(target_value),
+                },
+            }
+        )
+
     requested = declared_action_contract(config)
     base = {
         "schema_version": ACTION_CONTRACT_SCHEMA_VERSION,
@@ -1172,6 +1197,7 @@ def compile_runtime_action_contract(
             "space": policy_space,
             "codec": codec,
             "semantics": policy_semantics,
+            CONDITIONAL_ACTION_OVERRIDE_KEY: compiled_overrides,
         },
     }
     execution_payload = {
@@ -1185,6 +1211,8 @@ def compile_runtime_action_contract(
             "codec": codec,
         },
     }
+    if compiled_overrides:
+        execution_payload["policy"][CONDITIONAL_ACTION_OVERRIDE_KEY] = compiled_overrides
     semantic_payload = {
         "provider": provider_semantics,
         "policy": policy_semantics,
@@ -1202,7 +1230,8 @@ def compile_runtime_action_contract(
 def validate_runtime_action_contract(contract: Mapping[str, Any]) -> None:
     """Fail closed on malformed or internally inconsistent runtime contracts."""
 
-    if int(contract.get("schema_version", -1)) != ACTION_CONTRACT_SCHEMA_VERSION:
+    schema_version = int(contract.get("schema_version", -1))
+    if schema_version not in SUPPORTED_ACTION_CONTRACT_SCHEMA_VERSIONS:
         raise ValueError("unsupported runtime action contract schema_version")
     provider = contract.get("provider")
     policy = contract.get("policy")
@@ -1231,6 +1260,17 @@ def validate_runtime_action_contract(contract: Mapping[str, Any]) -> None:
             "codec": policy.get("codec"),
         },
     }
+    conditional_overrides = policy.get(CONDITIONAL_ACTION_OVERRIDE_KEY, ())
+    if schema_version == 1:
+        if conditional_overrides:
+            raise ValueError(
+                "runtime action contract schema v1 cannot contain conditional overrides"
+            )
+    else:
+        if not isinstance(conditional_overrides, list):
+            raise ValueError("runtime action contract conditional overrides must be a list")
+        if conditional_overrides:
+            execution_payload["policy"][CONDITIONAL_ACTION_OVERRIDE_KEY] = conditional_overrides
     if _payload_hash(execution_payload) != contract["execution_hash"]:
         raise ValueError("runtime action execution hash does not match its content")
     semantic_payload = {
@@ -1244,6 +1284,33 @@ def validate_runtime_action_contract(contract: Mapping[str, Any]) -> None:
     space = policy.get("space")
     if not isinstance(semantics, Mapping):
         raise ValueError("runtime action contract policy semantics must be an object")
+    if schema_version == 2:
+        seen_override_ids: set[str] = set()
+        for index, rule in enumerate(conditional_overrides):
+            if not isinstance(rule, Mapping):
+                raise ValueError(f"runtime conditional override {index} must be an object")
+            rule_id = rule.get("id")
+            if not isinstance(rule_id, str) or not rule_id or rule_id in seen_override_ids:
+                raise ValueError(
+                    "runtime conditional override IDs must be unique non-empty strings"
+                )
+            seen_override_ids.add(rule_id)
+            condition = rule.get("when")
+            replacement = rule.get("replace_with")
+            if not isinstance(condition, Mapping) or not isinstance(replacement, Mapping):
+                raise ValueError("runtime conditional overrides require when and replace_with")
+            if condition.get("operation") != "equals":
+                raise ValueError("runtime conditional override operation is unsupported")
+            if not isinstance(condition.get("signal"), str):
+                raise ValueError("runtime conditional override signal must be a string")
+            semantic_id = replacement.get("semantic_id")
+            if not isinstance(semantic_id, str) or not semantic_id:
+                raise ValueError("runtime conditional override semantic_id must be a string")
+            expected_value = _json_action_value(action_value_for_semantic(contract, semantic_id))
+            if replacement.get("value") != expected_value:
+                raise ValueError(
+                    "runtime conditional override target does not match policy semantics"
+                )
     if (
         semantics.get("status") == "available"
         and space.get("type") == "discrete"
@@ -1304,8 +1371,12 @@ def validate_runtime_action_contract(contract: Mapping[str, Any]) -> None:
                 raise ValueError("constrained MultiDiscrete distribution contract is unsupported")
             legal_entries = semantics.get("legal_entries")
             if not isinstance(legal_entries, list) or len(legal_entries) != len(normalized):
-                raise ValueError("constrained MultiDiscrete semantics require one legal entry per tuple")
-            entry_values = [tuple(int(value) for value in entry["value"]) for entry in legal_entries]
+                raise ValueError(
+                    "constrained MultiDiscrete semantics require one legal entry per tuple"
+                )
+            entry_values = [
+                tuple(int(value) for value in entry["value"]) for entry in legal_entries
+            ]
             if entry_values != normalized:
                 raise ValueError("constrained MultiDiscrete legal entries are out of order")
             ids = [str(entry.get("semantic_id", "")) for entry in legal_entries]

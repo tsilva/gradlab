@@ -258,6 +258,35 @@ class EnvironmentTaskConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "support only operations.*equals_for"):
             validate_task_config(invalid)
 
+    def test_task_accepts_semantic_conditional_action_overrides(self) -> None:
+        task = {
+            "id": "identity",
+            "action": {
+                "set": "native",
+                "conditional_overrides": [
+                    {
+                        "id": "auto_serve",
+                        "when": {
+                            "signal": "ball_y",
+                            "operation": "equals",
+                            "value": 0,
+                        },
+                        "replace_with": {"semantic_id": "button"},
+                    }
+                ],
+            },
+            "signals": {"ball_y": "ball_y"},
+            "events": {},
+            "termination": {},
+            "reward": {"reward_mode": "native"},
+        }
+
+        validate_task_config(task)
+        invalid = deepcopy(task)
+        invalid["action"]["conditional_overrides"][0]["when"]["signal"] = "awaiting_fire"
+        with self.assertRaisesRegex(ValueError, "references unknown signal"):
+            validate_task_config(invalid)
+
     def test_identity_task_validates_terminal_outcome_precedence(self) -> None:
         task = {
             "id": "identity",
