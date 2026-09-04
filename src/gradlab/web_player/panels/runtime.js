@@ -188,6 +188,22 @@ export class PanelRuntime {
     return results.some(Boolean);
   }
 
+  async prepareFrame(kind, blob, metadata = {}) {
+    const tasks = [...this.instances.entries()]
+      .filter(([, instance]) => (
+        instance.definition.enabled
+        && instance.definition.frameKinds.includes(kind)
+        && typeof instance.prepareFrame === "function"
+      ))
+      .map(([id]) => Promise.resolve(this.safeCall(id, "prepareFrame", kind, blob, metadata))
+        .catch((error) => {
+          this.onError?.(id, error);
+          return false;
+        }));
+    const results = await Promise.all(tasks);
+    return results.some(Boolean);
+  }
+
   invoke(id, method, ...args) {
     return this.safeCall(id, method, ...args);
   }

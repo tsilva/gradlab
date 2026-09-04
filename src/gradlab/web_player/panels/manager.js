@@ -32,7 +32,7 @@ export function defaultBlockForKind(kind) {
   if (kind === "namespace-explorer") {
     return { kind, namespace: "signal", metric: "" };
   }
-  if (kind === "reward-breakdown") return { kind, scope: "step" };
+  if (kind === "reward-breakdown") return { kind, scope: "episode" };
   return {
     kind,
     metric: kind === "distribution" ? "policy/distribution" : "action/executed",
@@ -248,8 +248,8 @@ export class PanelManager {
       scopeLabel.textContent = "Scope";
       const scope = document.createElement("select");
       scope.append(
-        option("step", "Selected step", block.scope !== "episode"),
-        option("episode", "Episode to cursor", block.scope === "episode"),
+        option("step", "Selected step", block.scope === "step"),
+        option("episode", "Episode to cursor", block.scope !== "step"),
       );
       scope.addEventListener("change", () => {
         this.draftBlocks[index].scope = scope.value;

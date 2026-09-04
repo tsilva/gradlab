@@ -1,0 +1,53 @@
+defaults:
+- breakout-high-throughput-ppo@_global_
+- _self_
+
+train:
+  # Give both ablation arms the same post-CNN fusion capacity. The candidate
+  # differs from its control only by whether the five state values enter it.
+  policy_model:
+    fusion: {hidden_sizes: [256], activation: tanh}
+  environment:
+    # The normalized state contract is native to Breakout Turbo 0.5.10. Keep
+    # this pair native-only instead of silently substituting RAM definitions.
+    env_provider: env-breakoutatari2600-turbo-native
+    env_config:
+      env_args:
+        # Both arms pay the same provider-side signal projection cost.
+        info_filter:
+          mode: all
+          keys:
+          - ball_x
+          - ball_x_normalized
+          - ball_y
+          - ball_y_normalized
+          - ball_vx
+          - ball_vx_normalized
+          - ball_vy
+          - ball_vy_normalized
+          - paddle_x
+          - paddle_x_normalized
+          - score
+          - lives
+          - bricks_remaining
+          - walls_cleared
+        # Exclude NOOP from the learned policy while retaining reset noops.
+        use_restricted_actions:
+        - [BUTTON]
+        - [RIGHT]
+        - [LEFT]
+    task:
+      signals:
+        lives: lives
+        policy_ball_x: ball_x_normalized
+        policy_ball_y: ball_y_normalized
+        policy_ball_vx: ball_vx_normalized
+        policy_ball_vy: ball_vy_normalized
+        policy_paddle_x: paddle_x_normalized
+      events:
+        life_loss:
+          signal: lives
+          operation: decrease
+      reward:
+        event_rewards:
+          life_loss: -5.0

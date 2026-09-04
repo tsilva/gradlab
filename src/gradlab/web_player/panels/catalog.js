@@ -189,7 +189,7 @@ export const BUILTIN_PANEL_PRESETS = Object.freeze({
     title: "Reward analysis",
     config: {
       blocks: [
-        { kind: "reward-breakdown", scope: "step" },
+        { kind: "reward-breakdown", scope: "episode" },
       ],
     },
   },
@@ -257,7 +257,7 @@ export function telemetryPanelProcessing(config) {
     }
     if (block.kind === "reward-breakdown") {
       processing.add("reward-accounting");
-      if (block.scope === "episode") processing.add("history");
+      if (block.scope !== "step") processing.add("history");
     }
     if (block.kind === "namespace-explorer") {
       processing.add(block.namespace === "reward-component" ? "reward-accounting" : "signals");

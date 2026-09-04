@@ -1,0 +1,61 @@
+defaults:
+- ../../../recipes/_presets/breakout-ball-state-ablation-ppo@_global_
+- _self_
+recipe_id: ppo-ball-state
+description: Native Breakout PPO with centered ball position, velocity, and paddle position fused after the visual encoder.
+train:
+  environment:
+    task:
+      model_inputs:
+        schema_version: 1
+        context:
+          ball_x:
+            signal: policy_ball_x
+            update: transition
+            encoding:
+              kind: continuous
+              scale: 2.0
+              offset: -1.0
+              low: -1.0
+              high: 1.0
+              clip: false
+          ball_y:
+            signal: policy_ball_y
+            update: transition
+            encoding:
+              kind: continuous
+              scale: 2.0
+              offset: -1.0
+              low: -1.0
+              high: 1.0
+              clip: false
+          ball_vx:
+            signal: policy_ball_vx
+            update: transition
+            encoding:
+              kind: continuous
+              scale: 1.0
+              offset: 0.0
+              low: -1.0
+              high: 1.0
+              clip: false
+          ball_vy:
+            signal: policy_ball_vy
+            update: transition
+            encoding:
+              kind: continuous
+              scale: 1.0
+              offset: 0.0
+              low: -1.0
+              high: 1.0
+              clip: false
+          paddle_x:
+            signal: policy_paddle_x
+            update: transition
+            encoding:
+              kind: continuous
+              scale: 2.0
+              offset: -1.0
+              low: -1.0
+              high: 1.0
+              clip: false

@@ -226,9 +226,9 @@ export function rewardBreakdownPresentation({
   snapshot,
   history = [],
   view = {},
-  scope = "step",
+  scope = "episode",
 } = {}) {
-  const normalizedScope = scope === "episode" ? "episode" : "step";
+  const normalizedScope = scope === "step" ? "step" : "episode";
   const contract = snapshot?.session?.reward_accounting;
   if (contract?.status === "unavailable") {
     return {

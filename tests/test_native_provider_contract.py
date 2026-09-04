@@ -9,6 +9,7 @@ from unittest import mock
 import gymnasium as gym
 import numpy as np
 import env_stableretro_turbo as retro
+from env_breakoutatari2600_turbo_native import POLICY_INFO_KEYS
 
 from gradlab.action_contract import MARIO_ACTION_TABLES
 from gradlab.env import EnvConfig, _bound_task_kernel, make_vec_envs
@@ -456,7 +457,83 @@ class BreakoutTurboProviderTests(unittest.TestCase):
 
     def test_runtime_matches_turbo_api_v2_release(self) -> None:
         installed = Version(importlib.metadata.version("env-breakoutatari2600-turbo-native"))
-        self.assertEqual(installed, Version("0.5.9"))
+        self.assertEqual(installed, Version("0.5.10"))
+
+    def test_policy_info_keys_expose_typed_normalized_state_on_every_boundary(self) -> None:
+        raw_keys = ("ball_x", "ball_y", "ball_vx", "ball_vy", "paddle_x")
+        normalized_keys = tuple(f"{key}_normalized" for key in raw_keys)
+        self.assertTrue(set(raw_keys + normalized_keys).issubset(POLICY_INFO_KEYS))
+
+        config = self.config(
+            env_args={
+                **self.config().env_args,
+                "info_filter": {"mode": "all", "keys": list(raw_keys + normalized_keys)},
+                "use_restricted_actions": BREAKOUT_NO_NOOP_ACTIONS,
+            },
+            task={
+                "id": "identity",
+                "action": {"set": "native"},
+                "signals": {key: key for key in raw_keys + normalized_keys},
+                "events": {},
+                "termination": {},
+                "reward": {"reward_mode": "native"},
+            },
+        )
+        kwargs = provider_native_vec_kwargs(
+            config,
+            n_envs=2,
+            native_obs_crop=lambda value: value.obs_crop,
+            state_weight_mapping=lambda _config: {},
+        )
+        env = make_provider_vec_env(config, native_kwargs=kwargs)
+        try:
+            descriptor = provider_descriptor(
+                config,
+                env,
+                state_weight_mapping=lambda _config: {},
+            )
+            for key in normalized_keys:
+                with self.subTest(key=key):
+                    spec = descriptor.signal_schema[key]
+                    self.assertEqual(spec.dtype, np.dtype(np.float32))
+                    self.assertTrue(spec.available_on_reset)
+                    self.assertTrue(spec.available_on_step)
+                    self.assertEqual(env.signal_metadata[key]["units"], "ratio")
+                    self.assertIn("not clipped", env.signal_metadata[key]["normalization"])
+
+            _observations, reset_infos = env.reset(seed=[1, 2])
+            _observations, _rewards, _terminated, _truncated, step_infos = env.step(
+                np.zeros(2, dtype=np.int64)
+            )
+            for infos in (reset_infos, step_infos):
+                for key in normalized_keys:
+                    with self.subTest(boundary="reset" if infos is reset_infos else "step", key=key):
+                        self.assertEqual(infos[key].dtype, np.float32)
+                        self.assertEqual(infos[f"_{key}"].dtype, np.bool_)
+                        self.assertTrue(infos[f"_{key}"].all())
+
+            np.testing.assert_allclose(
+                reset_infos["ball_x_normalized"],
+                reset_infos["ball_x"] / (160 * 65536),
+            )
+            np.testing.assert_allclose(
+                reset_infos["ball_y_normalized"],
+                reset_infos["ball_y"] / 255,
+            )
+            np.testing.assert_allclose(
+                reset_infos["ball_vx_normalized"],
+                reset_infos["ball_vx"] / (2 * 65536),
+            )
+            np.testing.assert_allclose(
+                reset_infos["ball_vy_normalized"],
+                reset_infos["ball_vy"] / (27 * 65536 / 8),
+            )
+            np.testing.assert_allclose(
+                reset_infos["paddle_x_normalized"],
+                reset_infos["paddle_x"] / (160 * 65536),
+            )
+        finally:
+            env.close()
 
     def test_player_boundary_renders_canonical_stella_rgb(self) -> None:
         env = make_vec_envs(self.config(), 1, 17)

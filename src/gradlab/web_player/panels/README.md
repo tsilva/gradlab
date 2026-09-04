@@ -32,7 +32,7 @@ Telemetry configuration is a list of visualization blocks:
   components.
 - `reward-breakdown`: a signed, reconciling reward ledger at the selected step
   or from episode step 1 through the selected cursor. It has a persisted `scope`
-  (`step` or `episode`) and no metric selector.
+  (`step` or `episode`), defaults to episode-to-cursor, and has no metric selector.
 
 `telemetry.js` is the descriptor registry for the live playback protocol. These
 keys are local visualization descriptors, not W&B metric names. A descriptor

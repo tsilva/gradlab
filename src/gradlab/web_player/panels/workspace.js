@@ -64,7 +64,7 @@ function normalizeBlock(value) {
     block.namespace = namespace;
     block.metric = cleanMetric(value.metric) || "";
   } else {
-    block.scope = value.scope === "episode" ? "episode" : "step";
+    block.scope = value.scope === "step" ? "step" : "episode";
   }
   return block;
 }

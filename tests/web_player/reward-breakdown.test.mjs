@@ -170,6 +170,22 @@ test("episode activity sums absolute per-transition impacts through cancellation
   assert.equal(rowById(result, "progress_reward").magnitudeShare, 100);
 });
 
+test("episode-to-cursor is the default reward breakdown scope", () => {
+  const history = [
+    point({ sequence: 1, raw: 1, final: 1, total: 1 }),
+    point({ sequence: 2, raw: 2, final: 2, total: 3 }),
+  ];
+  const result = rewardBreakdownPresentation({
+    snapshot: snapshot(),
+    history,
+    view: { selectedSequence: 2 },
+  });
+
+  assert.equal(result.scope, "episode");
+  assert.equal(result.count, 2);
+  assert.equal(result.final, 3);
+});
+
 test("episode clipping is accounted per transition rather than on the aggregate", () => {
   const history = [
     point({ sequence: 1, raw: 4, final: 1, total: 1 }),
