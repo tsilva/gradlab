@@ -26,6 +26,8 @@ from gradlab.recipe_schema import validate_materialized_train_recipe
 class ConfigValidationTests(unittest.TestCase):
     BREAKOUT_GOAL = Path("experiments/goals/Breakout-Atari2600-v0/_goal.yaml")
     BREAKOUT_RECIPE = BREAKOUT_GOAL.parent / "recipes/ppo.yaml"
+    BREAKOUT_FUSION_CONTROL_RECIPE = BREAKOUT_GOAL.parent / "recipes/ppo-fusion-256.yaml"
+    BREAKOUT_BALL_STATE_RECIPE = BREAKOUT_GOAL.parent / "recipes/ppo-ball-state.yaml"
     MARIO_L11_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml")
     MARIO_L12_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-2/_goal.yaml")
     MARIO_L13_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-3/_goal.yaml")
@@ -241,11 +243,6 @@ class ConfigValidationTests(unittest.TestCase):
                     "steps": 256,
                 },
                 "life_loss": {"signal": "lives", "operation": "decrease"},
-                "serve_wait": {
-                    "signal": "ball_y",
-                    "operation": "previous_equals",
-                    "value": 0,
-                },
             },
         )
         self.assertEqual(
@@ -277,6 +274,137 @@ class ConfigValidationTests(unittest.TestCase):
             self.assertEqual(train_config[key], stable_train[key])
         self.assertEqual(document["goal"]["objective"], stable_retro["goal"]["objective"])
         self.assertNotIn("eval", stable_retro["goal"])
+
+    def test_breakout_ball_state_recipe_is_matched_to_fusion_control(self) -> None:
+        control = compose_train_document(
+            self.BREAKOUT_GOAL,
+            self.BREAKOUT_FUSION_CONTROL_RECIPE,
+            env_provider="env-stableretro-turbo",
+        )
+        candidate = compose_train_document(
+            self.BREAKOUT_GOAL,
+            self.BREAKOUT_BALL_STATE_RECIPE,
+            env_provider="env-stableretro-turbo",
+        )
+        control_train = control["train_config"]
+        candidate_train = candidate["train_config"]
+
+        self.assertEqual(control["recipe_id"], "ppo-fusion-256")
+        self.assertEqual(candidate["recipe_id"], "ppo-ball-state")
+        self.assertEqual(
+            control_train["env_provider"],
+            "env-breakoutatari2600-turbo-native",
+        )
+        self.assertEqual(candidate_train["env_provider"], control_train["env_provider"])
+        self.assertEqual(
+            control_train["policy_model"]["fusion"],
+            {"hidden_sizes": [256], "activation": "tanh"},
+        )
+        self.assertEqual(candidate_train["policy_model"], control_train["policy_model"])
+        self.assertEqual(candidate_train["training_backend"], control_train["training_backend"])
+        self.assertEqual(candidate_train["timesteps"], control_train["timesteps"])
+        self.assertEqual(candidate_train["env_args"], control_train["env_args"])
+        self.assertEqual(
+            candidate_train["env_args"]["info_filter"],
+            {
+                "mode": "all",
+                "keys": [
+                    "ball_x",
+                    "ball_x_normalized",
+                    "ball_y",
+                    "ball_y_normalized",
+                    "ball_vx",
+                    "ball_vx_normalized",
+                    "ball_vy",
+                    "ball_vy_normalized",
+                    "paddle_x",
+                    "paddle_x_normalized",
+                    "score",
+                    "lives",
+                    "bricks_remaining",
+                    "walls_cleared",
+                ],
+            },
+        )
+        self.assertEqual(
+            candidate_train["env_args"]["use_restricted_actions"],
+            [["BUTTON"], ["RIGHT"], ["LEFT"]],
+        )
+
+        candidate_task = deepcopy(candidate_train["task"])
+        model_inputs = candidate_task.pop("model_inputs")
+        self.assertEqual(candidate_task, control_train["task"])
+        self.assertNotIn("model_inputs", control_train["task"])
+        self.assertEqual(
+            model_inputs,
+            {
+                "schema_version": 1,
+                "context": {
+                    "ball_vx": {
+                        "signal": "policy_ball_vx",
+                        "update": "transition",
+                        "encoding": {
+                            "kind": "continuous",
+                            "scale": 1.0,
+                            "offset": 0.0,
+                            "low": -1.0,
+                            "high": 1.0,
+                        },
+                    },
+                    "ball_vy": {
+                        "signal": "policy_ball_vy",
+                        "update": "transition",
+                        "encoding": {
+                            "kind": "continuous",
+                            "scale": 1.0,
+                            "offset": 0.0,
+                            "low": -1.0,
+                            "high": 1.0,
+                        },
+                    },
+                    "ball_x": {
+                        "signal": "policy_ball_x",
+                        "update": "transition",
+                        "encoding": {
+                            "kind": "continuous",
+                            "scale": 2.0,
+                            "offset": -1.0,
+                            "low": -1.0,
+                            "high": 1.0,
+                        },
+                    },
+                    "ball_y": {
+                        "signal": "policy_ball_y",
+                        "update": "transition",
+                        "encoding": {
+                            "kind": "continuous",
+                            "scale": 2.0,
+                            "offset": -1.0,
+                            "low": -1.0,
+                            "high": 1.0,
+                        },
+                    },
+                    "paddle_x": {
+                        "signal": "policy_paddle_x",
+                        "update": "transition",
+                        "encoding": {
+                            "kind": "continuous",
+                            "scale": 2.0,
+                            "offset": -1.0,
+                            "low": -1.0,
+                            "high": 1.0,
+                        },
+                    },
+                },
+            },
+        )
+
+        baseline = compose_train_document(self.BREAKOUT_GOAL, self.BREAKOUT_RECIPE)
+        self.assertEqual(
+            baseline["train_config"]["policy_model"]["fusion"]["hidden_sizes"],
+            [],
+        )
+        self.assertNotIn("model_inputs", baseline["train_config"]["task"])
 
     def test_vizdoom_basic_ppo_recipe_has_evaluated_first_shot_contract(self) -> None:
         document = compose_train_document(
@@ -525,7 +653,7 @@ class ConfigValidationTests(unittest.TestCase):
                     },
                 )
 
-        self.assertEqual(actor_critic_recipes, 55)
+        self.assertEqual(actor_critic_recipes, 57)
 
     def test_every_mario_recipe_disables_eval_and_stops_at_perfect_clear_window(self) -> None:
         mario_root = Path("experiments/goals/SuperMarioBros-Nes-v0")
@@ -641,7 +769,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(report.counts["json_files"], 0)
         self.assertGreaterEqual(report.counts["yaml_files"], 15)
         self.assertGreaterEqual(report.counts["goals"], 1)
-        self.assertEqual(report.counts["train_recipes"], 58)
+        self.assertEqual(report.counts["train_recipes"], 60)
         self.assertGreaterEqual(report.counts["env_configs"], 0)
         self.assertEqual(report.counts["benchmark_profiles"], 5)
         self.assertEqual(report.counts["workspace_manifests"], 1)
@@ -706,7 +834,6 @@ class ConfigValidationTests(unittest.TestCase):
                 "event_rewards": {
                     "life_loss": -5.0,
                     "serve_stall": -5.0,
-                    "serve_wait": -0.01,
                 },
             },
         )
@@ -767,11 +894,6 @@ class ConfigValidationTests(unittest.TestCase):
                     "steps": 256,
                 },
                 "life_loss": {"signal": "lives", "operation": "decrease"},
-                "serve_wait": {
-                    "signal": "ball_y",
-                    "operation": "previous_equals",
-                    "value": 0,
-                },
             },
         )
         self.assertEqual(

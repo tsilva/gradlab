@@ -1,0 +1,5 @@
+defaults:
+- ../../../recipes/_presets/breakout-ball-state-ablation-ppo@_global_
+- _self_
+recipe_id: ppo-fusion-256
+description: Architecture-matched native Breakout PPO control with a 256-unit post-CNN fusion layer but no privileged state inputs.

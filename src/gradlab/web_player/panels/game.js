@@ -99,6 +99,9 @@ export function mount({ definition, services }) {
   let targetSnapshot = null;
   let targetSequence = null;
   let frameSequence = null;
+  let preparedBitmap = null;
+  let preparedSequence = null;
+  let preparedHasFrame = false;
   let bitmapRequest = 0;
   let mounted = true;
   const mapping = new Map([
@@ -175,6 +178,70 @@ export function mount({ definition, services }) {
       `${phase}.${boundaryKind ? ` ${boundaryKind}.` : ""}${detail ? ` ${detail}.` : ""} Focus for human controls: arrows move, Z is B, X is A, Enter is Start, and Shift is Select.`,
     );
   };
+  const clearPrepared = () => {
+    preparedBitmap?.close();
+    preparedBitmap = null;
+    preparedSequence = null;
+    preparedHasFrame = false;
+  };
+  const commitPrepared = (snapshot) => {
+    if (preparedSequence !== targetSequence) return false;
+    if (!preparedHasFrame) {
+      frameSequence = null;
+      canvas.width = 1;
+      canvas.height = 1;
+      empty.textContent = "No exact post-action game frame was retained for this transition.";
+      empty.hidden = false;
+      preparedSequence = null;
+      commitSnapshot(snapshot);
+      return true;
+    }
+    if (preparedBitmap) {
+      aspect = preparedBitmap.width / Math.max(1, preparedBitmap.height);
+      fit();
+      canvas.width = preparedBitmap.width;
+      canvas.height = preparedBitmap.height;
+      const context = canvas.getContext("2d", { alpha: false });
+      context.imageSmoothingEnabled = false;
+      context.drawImage(preparedBitmap, 0, 0);
+      preparedBitmap.close();
+      preparedBitmap = null;
+    }
+    frameSequence = preparedSequence;
+    preparedSequence = null;
+    preparedHasFrame = false;
+    empty.textContent = "This environment has no RGB renderer.";
+    empty.hidden = true;
+    commitSnapshot(snapshot);
+    return true;
+  };
+
+  const prepareFrame = async (kind, blob, metadata = {}) => {
+    if (kind !== FRAME_GAME) return false;
+    const incomingSequence = Number(metadata.sequence);
+    if (incomingSequence === frameSequence) {
+      clearPrepared();
+      preparedSequence = incomingSequence;
+      preparedHasFrame = true;
+      return true;
+    }
+    const request = ++bitmapRequest;
+    if (!blob) {
+      clearPrepared();
+      preparedSequence = incomingSequence;
+      return true;
+    }
+    const bitmap = await createImageBitmap(blob);
+    if (!mounted || request !== bitmapRequest) {
+      bitmap.close();
+      return true;
+    }
+    clearPrepared();
+    preparedBitmap = bitmap;
+    preparedSequence = incomingSequence;
+    preparedHasFrame = true;
+    return true;
+  };
 
   return {
     element,
@@ -182,53 +249,27 @@ export function mount({ definition, services }) {
       targetSnapshot = nextSnapshot;
       targetSequence = Number(nextSnapshot?.sequence);
       if (frameSequence === targetSequence) commitSnapshot(nextSnapshot);
+      else commitPrepared(nextSnapshot);
     },
+    prepareFrame,
     async renderFrame(kind, blob, metadata = {}) {
       if (kind !== FRAME_GAME) return false;
       const incomingSequence = Number(metadata.sequence);
       if (incomingSequence !== targetSequence) return true;
       const frameSnapshot = targetSnapshot;
-      const request = ++bitmapRequest;
-      if (!blob) {
-        frameSequence = null;
-        canvas.width = 1;
-        canvas.height = 1;
-        empty.textContent = "No exact post-action game frame was retained for this transition.";
-        empty.hidden = false;
-        commitSnapshot(frameSnapshot);
-        return true;
-      }
       if (incomingSequence === frameSequence) {
         commitSnapshot(frameSnapshot);
         return true;
       }
-      const bitmap = await createImageBitmap(blob);
-      if (
-        !mounted
-        || request !== bitmapRequest
-        || incomingSequence !== targetSequence
-      ) {
-        bitmap.close();
-        return true;
-      }
-      aspect = bitmap.width / Math.max(1, bitmap.height);
-      fit();
-      canvas.width = bitmap.width;
-      canvas.height = bitmap.height;
-      const context = canvas.getContext("2d", { alpha: false });
-      context.imageSmoothingEnabled = false;
-      context.drawImage(bitmap, 0, 0);
-      bitmap.close();
-      frameSequence = incomingSequence;
-      empty.textContent = "This environment has no RGB renderer.";
-      empty.hidden = true;
-      commitSnapshot(frameSnapshot);
+      await prepareFrame(kind, blob, metadata);
+      if (incomingSequence === targetSequence) commitPrepared(frameSnapshot);
       return true;
     },
     resize: fit,
     destroy() {
       mounted = false;
       bitmapRequest += 1;
+      clearPrepared();
       loseFocus();
       clearInterval(keepalive);
       document.removeEventListener("visibilitychange", visibility);

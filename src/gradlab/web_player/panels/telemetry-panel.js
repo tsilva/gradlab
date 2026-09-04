@@ -1071,7 +1071,7 @@ function makeRewardBreakdownBlock(block, definition, services) {
     Object.assign(document.createElement("option"), { value: "step", textContent: "Selected step" }),
     Object.assign(document.createElement("option"), { value: "episode", textContent: "Episode to cursor" }),
   );
-  scope.value = block.scope === "episode" ? "episode" : "step";
+  scope.value = block.scope === "step" ? "step" : "episode";
   scopeLabel.append(scope);
   toolbar.append(scopeLabel);
 

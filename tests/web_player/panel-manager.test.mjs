@@ -18,7 +18,7 @@ test("built-in model flow panels use architecture-neutral labels", () => {
 test("reward breakdown editor exposes scope without a metric selector", () => {
   const block = defaultBlockForKind("reward-breakdown");
 
-  assert.deepEqual(block, { kind: "reward-breakdown", scope: "step" });
+  assert.deepEqual(block, { kind: "reward-breakdown", scope: "episode" });
   assert.deepEqual(editorFieldsForBlock(block), {
     metric: false,
     namespace: false,

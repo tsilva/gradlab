@@ -89,7 +89,7 @@ test("default workspace is a v8 editable all-panels view without redundant contr
     ],
   );
   assert.deepEqual(workspace.panels["reward-analysis"].config.blocks, [
-    { kind: "reward-breakdown", scope: "step" },
+    { kind: "reward-breakdown", scope: "episode" },
   ]);
   assert.deepEqual(workspace.panels["reward-analysis"].placement, {
     x: 0,
@@ -170,6 +170,12 @@ test("panel processing demand excludes disabled panels and follows telemetry met
       ],
     })),
     new Set(["signals", "actions", "reward-accounting", "history"]),
+  );
+  assert.deepEqual(
+    new Set(telemetryPanelProcessing({
+      blocks: [{ kind: "reward-breakdown" }],
+    })),
+    new Set(["reward-accounting", "history"]),
   );
 });
 
@@ -274,7 +280,19 @@ test("new and upgraded paired workspaces keep attribution hidden", () => {
 
 test("reward breakdown scope persists through workspace normalization", () => {
   const workspace = createDefaultWorkspace();
-  workspace.panels["reward-analysis"].config.blocks[0].scope = "episode";
+  workspace.panels["reward-analysis"].config.blocks[0].scope = "step";
+
+  const normalized = normalizeWorkspace(workspace);
+
+  assert.equal(
+    normalized.panels["reward-analysis"].config.blocks[0].scope,
+    "step",
+  );
+});
+
+test("reward breakdown defaults missing scope to episode-to-cursor", () => {
+  const workspace = createDefaultWorkspace();
+  delete workspace.panels["reward-analysis"].config.blocks[0].scope;
 
   const normalized = normalizeWorkspace(workspace);
 
