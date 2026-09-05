@@ -11,6 +11,26 @@ from gradlab.recipe_documents import compose_train_document
 BREAKOUT_ROOT = Path("experiments/goals/Breakout-Atari2600-v0")
 
 
+def test_plain_ppo_recipe_exposes_brick_progress_through_the_real_vector_runtime() -> None:
+    document = compose_train_document(
+        BREAKOUT_ROOT / "_goal.yaml",
+        BREAKOUT_ROOT / "recipes/ppo.yaml",
+    )
+    config = resolve_env_config(env_config_from_mapping(document["train_config"]))
+    env = make_training_vec_env(config, n_envs=2, seed=1701)
+
+    try:
+        assert "bricks_destroyed" in env.signal_schema
+        assert "bricks_destroyed_normalized" in env.signal_schema
+        env.reset()
+        _observations, rewards, dones, infos = env.step(np.zeros(2, dtype=np.int64))
+        assert rewards.shape == (2,)
+        assert dones.shape == (2,)
+        assert len(infos) == 2
+    finally:
+        env.close()
+
+
 def test_ball_state_recipe_runs_through_the_real_vector_runtime() -> None:
     document = compose_train_document(
         BREAKOUT_ROOT / "_goal.yaml",

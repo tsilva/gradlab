@@ -459,6 +459,54 @@ class BreakoutTurboProviderTests(unittest.TestCase):
         installed = Version(importlib.metadata.version("env-breakoutatari2600-turbo-native"))
         self.assertEqual(installed, Version("0.5.11"))
 
+    def test_string_all_info_filter_selects_every_configured_task_signal(self) -> None:
+        task = self.config().task
+        task["signals"].update(
+            {
+                "bricks_destroyed": "bricks_destroyed",
+                "bricks_destroyed_normalized": "bricks_destroyed_normalized",
+            }
+        )
+        config = self.config(task=task)
+
+        kwargs = provider_native_vec_kwargs(
+            config,
+            n_envs=2,
+            native_obs_crop=lambda value: value.obs_crop,
+            state_weight_mapping=lambda _config: {},
+        )
+
+        self.assertEqual(kwargs["info_filter"]["mode"], "all")
+        self.assertEqual(
+            kwargs["info_filter"]["keys"],
+            (
+                "bricks_remaining",
+                "lives",
+                "bricks_destroyed",
+                "bricks_destroyed_normalized",
+            ),
+        )
+
+    def test_explicit_info_filter_keeps_existing_keys_and_adds_task_signals(self) -> None:
+        config = self.config(
+            env_args={
+                **self.config().env_args,
+                "info_filter": {"mode": "all", "keys": ["ball_x"]},
+            }
+        )
+
+        kwargs = provider_native_vec_kwargs(
+            config,
+            n_envs=2,
+            native_obs_crop=lambda value: value.obs_crop,
+            state_weight_mapping=lambda _config: {},
+        )
+
+        self.assertEqual(
+            kwargs["info_filter"]["keys"],
+            ("ball_x", "bricks_remaining", "lives"),
+        )
+
     def test_policy_info_keys_expose_typed_normalized_state_on_every_boundary(self) -> None:
         raw_keys = (
             "ball_x",
