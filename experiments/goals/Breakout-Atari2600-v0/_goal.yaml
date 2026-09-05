@@ -15,6 +15,8 @@ train:
   checkpoint_freq: 500000
   episode_progress_fields:
   - score
+  - bricks_destroyed
+  - bricks_destroyed_normalized
   environment:
     # Breakout Turbo is the default ROM-free implementation. The complete contract is
     # intentionally accepted by Stable Retro Turbo so only env_provider needs to change.
@@ -78,6 +80,8 @@ train:
         ball_vy: ball_vy
         # The live-state curriculum groups reachable Breakout states by score stage.
         score: score
+        bricks_destroyed: bricks_destroyed
+        bricks_destroyed_normalized: bricks_destroyed_normalized
       events:
         serve_stall:
           signal: ball_y

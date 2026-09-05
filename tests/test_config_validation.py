@@ -212,7 +212,10 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(train_config["env_provider"], "env-breakoutatari2600-turbo-native")
         self.assertEqual(train_config["game"], "Breakout-Atari2600-v0")
         self.assertEqual(train_config["state"], "Start")
-        self.assertEqual(train_config["episode_progress_fields"], ["score"])
+        self.assertEqual(
+            train_config["episode_progress_fields"],
+            ["score", "bricks_destroyed", "bricks_destroyed_normalized"],
+        )
         self.assertEqual(train_config["task"]["action"]["set"], "native")
         self.assertFalse(train_config["max_pool_frames"])
 
@@ -227,6 +230,8 @@ class ConfigValidationTests(unittest.TestCase):
                 "ball_vy": "ball_vy",
                 "ball_x": "ball_x",
                 "ball_y": "ball_y",
+                "bricks_destroyed": "bricks_destroyed",
+                "bricks_destroyed_normalized": "bricks_destroyed_normalized",
                 "bricks_remaining": "bricks_remaining",
                 "lives": "lives",
                 "paddle_x": "paddle_x",
@@ -869,6 +874,8 @@ class ConfigValidationTests(unittest.TestCase):
                 "ball_vy": "ball_vy",
                 "ball_x": "ball_x",
                 "ball_y": "ball_y",
+                "bricks_destroyed": "bricks_destroyed",
+                "bricks_destroyed_normalized": "bricks_destroyed_normalized",
                 "bricks_remaining": "bricks_remaining",
                 "lives": "lives",
                 "paddle_x": "paddle_x",

@@ -8,7 +8,7 @@ train:
   policy_model:
     fusion: {hidden_sizes: [256], activation: tanh}
   environment:
-    # The normalized state contract is native to Breakout Turbo 0.5.10. Keep
+    # The normalized state contract is native to Breakout Turbo 0.5.11. Keep
     # this pair native-only instead of silently substituting RAM definitions.
     env_provider: env-breakoutatari2600-turbo-native
     env_config:
