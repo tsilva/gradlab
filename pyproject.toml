@@ -126,7 +126,7 @@ modal-deploy = [
     "pydantic>=2.13,<3",
 ]
 train-image-build = [
-    "packaging>=25,<26",
+    "packaging>=25,<27",
 ]
 train-runtime = [
     "env-stableretro-turbo==1.0.1.post48; sys_platform == 'linux' and platform_machine == 'x86_64'",
