@@ -457,10 +457,17 @@ class BreakoutTurboProviderTests(unittest.TestCase):
 
     def test_runtime_matches_turbo_api_v2_release(self) -> None:
         installed = Version(importlib.metadata.version("env-breakoutatari2600-turbo-native"))
-        self.assertEqual(installed, Version("0.5.10"))
+        self.assertEqual(installed, Version("0.5.11"))
 
     def test_policy_info_keys_expose_typed_normalized_state_on_every_boundary(self) -> None:
-        raw_keys = ("ball_x", "ball_y", "ball_vx", "ball_vy", "paddle_x")
+        raw_keys = (
+            "ball_x",
+            "ball_y",
+            "ball_vx",
+            "ball_vy",
+            "paddle_x",
+            "bricks_destroyed",
+        )
         normalized_keys = tuple(f"{key}_normalized" for key in raw_keys)
         self.assertTrue(set(raw_keys + normalized_keys).issubset(POLICY_INFO_KEYS))
 
@@ -498,6 +505,7 @@ class BreakoutTurboProviderTests(unittest.TestCase):
                 "ball_vx_normalized": (-1.0, 1.0),
                 "ball_vy_normalized": (-1.0, 1.0),
                 "paddle_x_normalized": (0.0, 1.0),
+                "bricks_destroyed_normalized": (0.0, 1.0),
             }
             for key in normalized_keys:
                 with self.subTest(key=key):
@@ -542,6 +550,10 @@ class BreakoutTurboProviderTests(unittest.TestCase):
             np.testing.assert_allclose(
                 reset_infos["paddle_x_normalized"],
                 reset_infos["paddle_x"] / (RAW_WIDTH * FIXED_POINT_ONE),
+            )
+            np.testing.assert_allclose(
+                reset_infos["bricks_destroyed_normalized"],
+                reset_infos["bricks_destroyed"] / 216,
             )
         finally:
             env.close()

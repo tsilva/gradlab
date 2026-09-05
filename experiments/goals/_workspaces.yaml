@@ -89,11 +89,23 @@ sections:
       y:
       - train/throughput/provider/step/rate
   breakout_diagnostics:
-    title: Breakout essentials
+    title: Breakout top metrics
     pinned: true
     open: true
     columns: 2
     panels:
+    - id: target_bricks_destroyed_mean
+      kind: line
+      y_title: bricks (last 100 episodes)
+      x: train/global_step
+      y:
+      - train/progress/bricks_destroyed/origin/target/rolling/mean
+    - id: target_bricks_destroyed_normalized_mean
+      kind: line
+      y_title: fraction (last 100 episodes)
+      x: train/global_step
+      y:
+      - train/progress/bricks_destroyed_normalized/origin/target/rolling/mean
     - id: target_score_mean
       kind: line
       y_title: score (last 100 episodes)

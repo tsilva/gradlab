@@ -549,16 +549,16 @@ wheels = [
 
 [[package]]
 name = "env-breakoutatari2600-turbo-native"
-version = "0.5.10"
+version = "0.5.11"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "gymnasium", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
     { name = "numpy", marker = "(platform_machine == 'arm64' and sys_platform == 'darwin') or (platform_machine == 'x86_64' and sys_platform == 'linux')" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3a/3d/7ea31b28815c4058d45a33310aac3324e2e9eb82470c4f255e037d371f19/env_breakoutatari2600_turbo_native-0.5.10.tar.gz", hash = "sha256:6709e3ceff7f4133b3d5231d40a5d0e9d5b6512080837afab36f7516e2378a68", size = 21137165, upload-time = "2026-09-04T14:53:16.629Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f9/a5/5411af83e136c0f79ebcd5b98e2d7767e551695a7a92222e05e4bb3c5391/env_breakoutatari2600_turbo_native-0.5.11.tar.gz", hash = "sha256:6e374b2e532d7ba932ff6c7fe16bb07de0d6d1d30a7fe5edb42335c33dfc3535", size = 21138284, upload-time = "2026-09-05T08:13:15.887Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/7d/13/fa4bcee1608c802df22ea3377289b42cd0e3c4a7d339035e720bb1681ca2/env_breakoutatari2600_turbo_native-0.5.10-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:c58ba0fe67b04e03fd2667429c7c2113e86401e8face5a813429bf8fb8786210", size = 294865, upload-time = "2026-09-04T14:53:13.157Z" },
-    { url = "https://files.pythonhosted.org/packages/1e/90/6bbf85348a0afd39009b6b378ba6ae7fff59c06a5cc713b85f12ee007238/env_breakoutatari2600_turbo_native-0.5.10-cp311-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:50aa7d88c571f082621a2f08d43d458fa8ee92e8faf368e9b7c0441fb114204b", size = 333410, upload-time = "2026-09-04T14:53:14.671Z" },
+    { url = "https://files.pythonhosted.org/packages/c1/4a/bf478d82714a8457c3d0cc353b2c8eaec9dadb6e77f49639b59d394d71b6/env_breakoutatari2600_turbo_native-0.5.11-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:330a4ebcf5eb1087a99c44dfa5ba79a83c31bfe02d1bce128868ebe0063f89dd", size = 295276, upload-time = "2026-09-05T08:13:12.582Z" },
+    { url = "https://files.pythonhosted.org/packages/02/eb/b08acf5978f2f690067972ba5b81c5f688737d25e2e5a041d0eb0dfd0f64/env_breakoutatari2600_turbo_native-0.5.11-cp311-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:1286a00c3f12039188a4682b45fc22285121dff113fa5708cf1be3d0605bf186", size = 334101, upload-time = "2026-09-05T08:13:14.115Z" },
 ]
 
 [[package]]
@@ -845,8 +845,8 @@ requires-dist = [
     { name = "certifi", specifier = ">=2026.5.20" },
     { name = "datasets", marker = "extra == 'dataset'", specifier = ">=5,<6" },
     { name = "datasets", marker = "extra == 'dataset-minari'", specifier = ">=5,<6" },
-    { name = "env-breakoutatari2600-turbo-native", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = "==0.5.10" },
-    { name = "env-breakoutatari2600-turbo-native", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==0.5.10" },
+    { name = "env-breakoutatari2600-turbo-native", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = "==0.5.11" },
+    { name = "env-breakoutatari2600-turbo-native", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==0.5.11" },
     { name = "env-gradoom-turbo-torch", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = "==0.2.1" },
     { name = "env-gradoom-turbo-torch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==0.2.1" },
     { name = "env-stableretro-turbo", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = "==1.0.1.post48" },
@@ -900,7 +900,7 @@ train-runtime = [
     { name = "box2d-py", specifier = "==2.3.5" },
     { name = "captum", specifier = ">=0.9,<1" },
     { name = "certifi", specifier = ">=2026.5.20" },
-    { name = "env-breakoutatari2600-turbo-native", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==0.5.10" },
+    { name = "env-breakoutatari2600-turbo-native", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==0.5.11" },
     { name = "env-gradoom-turbo-torch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==0.2.1" },
     { name = "env-stableretro-turbo", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==1.0.1.post48" },
     { name = "env-supermariobrosnes-turbo-emu", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==0.7.3" },

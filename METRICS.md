@@ -237,6 +237,12 @@ metric path. `cumulative` explicitly means all eligible observations seen so far
   window is full. GradLab-owned life-loss and serve-stall penalties do not change it. Atari score
   weights brick rows differently, so this metric is not a brick count; it remains an online
   behavior-policy training proxy rather than frozen-checkpoint evaluation evidence.
+- Breakout also declares `bricks_destroyed` and `bricks_destroyed_normalized` as
+  reward-independent episode progress. Their `train/progress/{progress}/origin/target/rolling/mean`
+  metrics average the terminal cumulative brick count and its `0.0..1.0` two-wall completion
+  fraction over the most recent 100 target-origin episodes, including warm-up before the window is
+  full. They are online behavior-policy training proxies rather than frozen-checkpoint evaluation
+  evidence.
 - Training episode reduction aggregates return, length, outcome, success, the explicitly supported
   target-origin cell-novelty statistic, and goal-declared numeric episode progress fields.
   Progress field names refer to task-semantic signals and must be populated independently of the
