@@ -263,7 +263,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(
             train_config["selection_rank"],
             [
-                "max(train/progress/bricks_destroyed/origin/target/rolling/max)",
+                "max(train/progress/bricks_destroyed/origin/target/rolling/mean)",
                 "min(train/global_step)",
             ],
         )
@@ -800,7 +800,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(
             train_config["selection_rank"],
             [
-                "max(train/progress/bricks_destroyed/origin/target/rolling/max)",
+                "max(train/progress/bricks_destroyed/origin/target/rolling/mean)",
                 "min(train/global_step)",
             ],
         )
@@ -838,7 +838,7 @@ class ConfigValidationTests(unittest.TestCase):
                 "reward_scale": 1.0,
                 "reward_clip": False,
                 "event_rewards": {
-                    "life_loss": -5.0,
+                    "life_loss": -0.1,
                     "serve_stall": -5.0,
                 },
             },

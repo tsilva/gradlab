@@ -243,7 +243,7 @@ metric path. `cumulative` explicitly means all eligible observations seen so far
   while `train/progress/{progress}/origin/target/rolling/max` reports the maximum over that same
   window. The normalized value is the `0.0..1.0` two-wall completion fraction. Both statistics
   include warm-up before the window is full and are online behavior-policy training proxies rather
-  than frozen-checkpoint evaluation evidence. Breakout ranks runs first by the rolling maximum
+  than frozen-checkpoint evaluation evidence. Breakout ranks runs first by the rolling mean
   terminal `bricks_destroyed` count, then by the earliest training step.
 - Training episode reduction aggregates return, length, outcome, success, the explicitly supported
   target-origin cell-novelty statistic, and goal-declared numeric episode progress fields.
