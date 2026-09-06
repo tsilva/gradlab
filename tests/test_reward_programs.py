@@ -97,7 +97,7 @@ def test_breakout_base_recipe_penalizes_life_loss_and_serve_stall() -> None:
     assert "serve_wait" not in config["task"]["events"]
     assert config["task"]["events"]["serve_stall"]["steps"] == 256
     assert config["task"]["reward"]["event_rewards"] == {
-        "life_loss": -5.0,
+        "life_loss": -0.1,
         "serve_stall": -5.0,
     }
 
