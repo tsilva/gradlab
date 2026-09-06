@@ -2958,7 +2958,7 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert "hideGoExploreValuePanel(snapshot)" in script
     assert 'features.add("rewards")' in script
     assert "state.backgroundPlaybackSnapshot = message" in script
-    assert 'sourceBrowser.activeBreadcrumbRoute = ""' in script
+    assert 'this.activeBreadcrumbRoute = ""' in source_browser
     assert 'type: "inspection_frames"' in script
     assert "sequence < (state.receivedFrameSequence" not in script
 

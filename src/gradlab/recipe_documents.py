@@ -141,8 +141,14 @@ def _partition_policy_environment_overrides(
 
     source_overrides: list[str] = []
     by_path: dict[str, dict[str, tuple[str, Any]]] = {}
+    catalog = goal_document.get("reward_shapes")
     for item in overrides:
         path, raw_value, parsed_value = _override_parts(item, label=label)
+        if isinstance(catalog, Mapping) and path.startswith(("train.task.reward", "eval.task.reward")):
+            raise ValueError(
+                "catalog goals reject raw reward overrides; select or override a named "
+                f"reward_shape instead: {path}"
+            )
         phase_path = _phase_environment_override(path)
         if phase_path is None:
             source_overrides.append(item)
@@ -168,7 +174,6 @@ def _partition_policy_environment_overrides(
     has_eval = isinstance(goal_document.get("eval"), Mapping)
     goal_overrides: list[str] = []
     effective_overrides: list[str] = []
-    catalog = goal_document.get("reward_shapes")
     for relative, phases in sorted(by_path.items()):
         training = phases.get("train")
         evaluation = phases.get("eval")
