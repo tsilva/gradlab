@@ -94,18 +94,30 @@ sections:
     open: true
     columns: 2
     panels:
-    - id: target_bricks_destroyed_mean
+    - id: target_bricks_destroyed_max
       kind: line
       y_title: bricks (last 100 episodes)
       x: train/global_step
       y:
-      - train/progress/bricks_destroyed/origin/target/rolling/mean
+      - train/progress/bricks_destroyed/origin/target/rolling/max
     - id: target_bricks_destroyed_normalized_mean
       kind: line
       y_title: fraction (last 100 episodes)
       x: train/global_step
       y:
       - train/progress/bricks_destroyed_normalized/origin/target/rolling/mean
+    - id: top_target_return_mean
+      kind: line
+      y_title: return (last 100 episodes)
+      x: train/global_step
+      y:
+      - train/episode/return/shaped/origin/target/rolling/mean
+    - id: top_episode_length
+      kind: line
+      y_title: steps (last 100 episodes)
+      x: train/global_step
+      y:
+      - train/episode/length/origin/all/rolling/mean
     - id: target_score_mean
       kind: line
       y_title: score (last 100 episodes)
@@ -148,6 +160,8 @@ projects:
     exclude_panels:
     - task_success_min
     - task_success_mean
+    - target_return_mean
+    - episode_length
     - early_stop_target_progress
     - early_stop_patience_progress
     exclude_metrics:

@@ -54,14 +54,14 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
         self.assertEqual(
             [panel.panel_id for section in breakout.sections for panel in section.panels],
             [
-                "target_bricks_destroyed_mean",
+                "target_bricks_destroyed_max",
                 "target_bricks_destroyed_normalized_mean",
+                "top_target_return_mean",
+                "top_episode_length",
                 "target_score_mean",
                 "serve_stall_count",
                 "serve_wait_rate",
-                "target_return_mean",
                 "target_return_max",
-                "episode_length",
                 "completed_episodes",
                 "explained_variance",
                 "value_loss",
@@ -84,7 +84,7 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
             breakout_metrics,
         )
         self.assertIn(
-            "train/progress/bricks_destroyed/origin/target/rolling/mean",
+            "train/progress/bricks_destroyed/origin/target/rolling/max",
             breakout_metrics,
         )
         self.assertIn(

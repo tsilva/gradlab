@@ -1424,6 +1424,10 @@ test("run metrics use compact labels and values", () => {
     "Recent target kills mean",
   );
   assert.equal(
+    metricLabel("train/progress/bricks_destroyed/origin/target/rolling/max"),
+    "Recent target bricks destroyed max",
+  );
+  assert.equal(
     formatMetricValue("eval/full/outcome/success/starts/rate/min", 0.875),
     "87.5%",
   );

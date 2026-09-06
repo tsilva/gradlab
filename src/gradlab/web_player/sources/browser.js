@@ -576,10 +576,10 @@ export function metricLabel(metric) {
     return `${humanizeMetricPart(progress[1])} ${progress[2]}`;
   }
   const trainingProgress = name.match(
-    /^train\/progress\/([^/]+)\/origin\/target\/rolling\/mean$/,
+    /^train\/progress\/([^/]+)\/origin\/target\/rolling\/(mean|max)$/,
   );
   if (trainingProgress) {
-    return `Recent target ${humanizeMetricPart(trainingProgress[1]).toLowerCase()} mean`;
+    return `Recent target ${humanizeMetricPart(trainingProgress[1]).toLowerCase()} ${trainingProgress[2]}`;
   }
   return name
     .replace(/^(eval\/full|leader|train)\//, "")

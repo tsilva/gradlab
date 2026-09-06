@@ -7,6 +7,7 @@ from gradlab.metric_names import (
     TRAIN_EXPLORATION_CELL_UNIQUE_ORIGIN_TARGET_ROLLING_MEAN,
     TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN,
     TRAIN_PROGRESS_KILLS_ORIGIN_TARGET_ROLLING_MEAN,
+    train_progress_origin_target_rolling_max_metric,
     validate_metric_name,
 )
 from gradlab.training_metrics import EpisodeMetricsReducer
@@ -87,15 +88,22 @@ def test_configured_frag_mean_rolls_over_latest_100_target_episodes() -> None:
 
     partial = reducer.consume(_episode(1.0, kills=1) for _ in range(99))
     assert partial[TRAIN_PROGRESS_KILLS_ORIGIN_TARGET_ROLLING_MEAN] == 1.0
+    assert partial[train_progress_origin_target_rolling_max_metric("kills")] == 1.0
 
     mature = reducer.consume((_episode(3.0, kills=3),))
     assert mature[TRAIN_PROGRESS_KILLS_ORIGIN_TARGET_ROLLING_MEAN] == pytest.approx(1.02)
+    assert mature[train_progress_origin_target_rolling_max_metric("kills")] == 3.0
 
     archive_only = reducer.consume((_episode(1000.0, origin="curriculum", kills=1000),))
     assert archive_only[TRAIN_PROGRESS_KILLS_ORIGIN_TARGET_ROLLING_MEAN] == pytest.approx(1.02)
+    assert archive_only[train_progress_origin_target_rolling_max_metric("kills")] == 3.0
 
     rolled = reducer.consume((_episode(-1.0, kills=-1),))
     assert rolled[TRAIN_PROGRESS_KILLS_ORIGIN_TARGET_ROLLING_MEAN] == 1.0
+    assert rolled[train_progress_origin_target_rolling_max_metric("kills")] == 3.0
+
+    expired = reducer.consume(_episode(0.0, kills=0) for _ in range(100))
+    assert expired[train_progress_origin_target_rolling_max_metric("kills")] == 0.0
     assert (
         validate_metric_name(TRAIN_PROGRESS_KILLS_ORIGIN_TARGET_ROLLING_MEAN)
         == TRAIN_PROGRESS_KILLS_ORIGIN_TARGET_ROLLING_MEAN
