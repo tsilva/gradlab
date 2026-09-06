@@ -330,7 +330,7 @@ def build_checkpoint_eval_contract(
     if str(seed_protocol) != SEED_PROTOCOL:
         raise ValueError(f"unsupported checkpoint eval seed protocol: {seed_protocol!r}")
     action_sampling = str(action_sampling).strip()
-    if action_sampling not in {"stochastic", "epsilon_greedy", "program"}:
+    if action_sampling not in {"stochastic", "epsilon_greedy", "program", "route"}:
         raise ValueError(f"unsupported checkpoint eval action selection: {action_sampling!r}")
     rules = normalize_metric_threshold_rules(acceptance, label="goal.eval.acceptance")
     if not rules:
@@ -438,9 +438,7 @@ def acceptance_aggregates(
     if len(rows) == int(contract["episodes"]):
         if rates:
             result[EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MIN] = min(rates.values())
-            result[EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MEAN] = sum(rates.values()) / len(
-                rates
-            )
+            result[EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MEAN] = sum(rates.values()) / len(rates)
         returns = [float(row["return"]) for row in rows if row.get("return") is not None]
         if len(returns) == len(rows) and returns:
             if not all(math.isfinite(value) for value in returns):

@@ -585,6 +585,7 @@ class BatchRuntime:
                     "live snapshot continuation"
                 )
         self.reset_infos: list[dict[str, Any]] = [{} for _ in range(self.num_envs)]
+        self._reset_info_dtypes: dict[str, np.dtype[Any]] = {}
         self._episode_returns = np.zeros(self.num_envs, dtype=np.float64)
         self._episode_lengths = np.zeros(self.num_envs, dtype=np.int64)
         self._episode_indices = np.zeros(self.num_envs, dtype=np.int64)
@@ -748,6 +749,7 @@ class BatchRuntime:
         observations, infos = self.provider.reset(seed=normalized_seeds, options=options)
         if not isinstance(infos, Mapping):
             raise TypeError("native provider reset infos must be a columnar mapping")
+        self._remember_reset_info_dtypes(infos)
         self.kernel.on_reset(observations, infos, mask)
         encoded = self.kernel.encode_observations(observations)
         if self._reuse_provider_observations:
@@ -942,28 +944,32 @@ class BatchRuntime:
     ) -> tuple[bytes, ...]:
         if any(not info for info in self.reset_infos):
             raise RuntimeError("policy reset cell keys require an initialized runtime")
-        keys = set().union(*(info.keys() for info in self.reset_infos))
-        infos = {
-            key: np.asarray([info.get(key) for info in self.reset_infos])
-            for key in keys
-            if not key.startswith("_")
-        }
         return self.policy_cell_keys(
             cell_config,
-            infos,
+            self._columnar_reset_infos(),
             source="reset",
         )
 
     def state_archive_reset_cell_keys(self) -> tuple[bytes, ...]:
         if any(not info for info in self.reset_infos):
             raise RuntimeError("state archive reset cell keys require an initialized runtime")
+        return self.state_archive_cell_keys(self._columnar_reset_infos(), source="reset")
+
+    def _remember_reset_info_dtypes(self, infos: Mapping[str, Any]) -> None:
+        for key, value in infos.items():
+            if isinstance(key, str) and not key.startswith("_") and isinstance(value, np.ndarray):
+                self._reset_info_dtypes[key] = value.dtype
+
+    def _columnar_reset_infos(self) -> dict[str, np.ndarray]:
         keys = set().union(*(info.keys() for info in self.reset_infos))
-        infos = {
-            key: np.asarray([info.get(key) for info in self.reset_infos])
+        return {
+            key: np.asarray(
+                [info.get(key) for info in self.reset_infos],
+                dtype=self._reset_info_dtypes.get(key),
+            )
             for key in keys
             if not key.startswith("_")
         }
-        return self.state_archive_cell_keys(infos, source="reset")
 
     def _set_curriculum_reset_baselines(
         self,
@@ -1669,6 +1675,7 @@ class BatchRuntime:
             reset_seconds = time.perf_counter() - reset_started_at
             if not isinstance(reset_infos, Mapping):
                 raise TypeError("native provider reset infos must be a columnar mapping")
+            self._remember_reset_info_dtypes(reset_infos)
             if curriculum is not None and archive_selections:
                 curriculum.note_reset(
                     len(archive_selections),
