@@ -117,7 +117,7 @@ dev = [
     "ruff>=0.15,<0.16",
 ]
 release = [
-    "twine>=6,<7",
+    "twine>=7,<8",
 ]
 modal-deploy = [
     "jinja2>=3.1,<4",
@@ -126,7 +126,7 @@ modal-deploy = [
     "pydantic>=2.13,<3",
 ]
 train-image-build = [
-    "packaging>=25,<26",
+    "packaging>=26.1,<27",
 ]
 train-runtime = [
     "env-stableretro-turbo==1.0.1.post48; sys_platform == 'linux' and platform_machine == 'x86_64'",
