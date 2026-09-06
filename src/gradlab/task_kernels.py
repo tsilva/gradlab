@@ -2053,11 +2053,9 @@ class IdentityTaskDefinition:
             raise ValueError(
                 "identity task termination.bootstrap references unknown events: "
                 + ", ".join(unknown_bootstrap_events)
-        )
+            )
         non_success_bootstrap_events = sorted(
-            name
-            for name in bootstrap_events
-            if event_outcomes.get(name) != Outcome.SUCCESS
+            name for name in bootstrap_events if event_outcomes.get(name) != Outcome.SUCCESS
         )
         if non_success_bootstrap_events:
             raise ValueError(
@@ -2467,7 +2465,7 @@ class IdentityTaskKernel:
         if len(dtypes) != 1:
             raise ValueError(f"archive signal {semantic_name!r} must be scalar")
         dtype = dtypes[0]
-        if not np.issubdtype(dtype, np.number) or np.issubdtype(dtype, np.bool_):
+        if not (np.issubdtype(dtype, np.number) or np.issubdtype(dtype, np.bool_)):
             raise ValueError(f"archive signal {semantic_name!r} must be numeric")
 
     def archive_signal_values(
@@ -2559,8 +2557,7 @@ class EventRewardTaskKernel:
                 "task.reward.event_rewards references unknown events: " + ", ".join(missing)
             )
         self._configured = tuple(
-            (name, event_indices[name], coefficient)
-            for name, coefficient in normalized.items()
+            (name, event_indices[name], coefficient) for name, coefficient in normalized.items()
         )
         self._event_reward_components = {
             name: np.zeros(self.num_envs, dtype=np.float32) for name in normalized
@@ -2684,6 +2681,7 @@ class MarioTaskConfig:
     lives: SignalSource = "lives"
     level: SignalSource = ("levelHi", "levelLo")
     game_mode: SignalSource | None = None
+    declared_signals: tuple[tuple[str, SignalSource], ...] = ()
     action_masks: np.ndarray | None = None
     reward_mode: str = "baseline"
     use_native_reward: bool = False
@@ -2814,6 +2812,14 @@ class MarioTaskConfig:
             value = signals.get(name, default)
             return value if isinstance(value, str) else tuple(value)
 
+        declared_signals = tuple(
+            (
+                str(name),
+                source if isinstance(source, str) else tuple(source),
+            )
+            for name, source in signals.items()
+        )
+
         reward_mode = str(reward_value("reward_mode", "baseline"))
         if reward_mode not in {"native", "bounded", "baseline", "score", "additive"}:
             raise ValueError(f"unsupported Mario reward mode {reward_mode!r}")
@@ -2824,6 +2830,7 @@ class MarioTaskConfig:
             lives=signal_value("lives", cls.lives),
             level=signal_value("level", cls.level),
             game_mode=game_mode_source if game_complete_rule else None,
+            declared_signals=declared_signals,
             action_masks=None,
             reward_mode=reward_mode,
             use_native_reward=reward.get("use_native_reward", False),
@@ -2881,12 +2888,15 @@ class MarioTaskKernel:
         self.num_envs = int(num_envs)
         self._native_observation_space = descriptor.native_observation_space
         self.observation_space = _policy_observation_space(self._native_observation_space)
-        signal_sources: dict[str, SignalSource] = {
-            "x": config.x,
-            "score": config.score,
-            "lives": config.lives,
-            "level": config.level,
-        }
+        signal_sources: dict[str, SignalSource] = dict(config.declared_signals)
+        signal_sources.update(
+            {
+                "x": config.x,
+                "score": config.score,
+                "lives": config.lives,
+                "level": config.level,
+            }
+        )
         if config.game_mode is not None:
             signal_sources["game_mode"] = config.game_mode
         self.bindings = SignalBindings(descriptor, signal_sources, self.num_envs)
@@ -3252,7 +3262,7 @@ class MarioTaskKernel:
         elif len(dtypes) != 1:
             raise ValueError(f"archive signal {semantic_name!r} must be scalar")
         if any(
-            not np.issubdtype(dtype, np.number) or np.issubdtype(dtype, np.bool_)
+            not (np.issubdtype(dtype, np.number) or np.issubdtype(dtype, np.bool_))
             for dtype in dtypes
         ):
             raise ValueError(f"archive signal {semantic_name!r} must be numeric")

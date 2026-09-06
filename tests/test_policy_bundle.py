@@ -35,6 +35,7 @@ from gradlab.eval_runner import normalized_evaluation_request
 from gradlab.recipe_documents import (
     compose_resolved_train_documents,
     compose_train_document,
+    prepare_checkpoint_eval_mode,
 )
 from gradlab.train_config import validate_and_normalize_train_config
 from gradlab.training_backend import training_backend_config, training_backend_config_hash
@@ -42,6 +43,7 @@ from gradlab.training_backend import training_backend_config, training_backend_c
 
 GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml")
 RECIPE = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/recipes/ppo.yaml")
+GO_EXPLORE_RECIPE = GOAL.parent / "recipes/go-explore-20m.yaml"
 LEVEL1_3_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-3/_goal.yaml")
 LEVEL1_3_TRAIN_CLEAR_RECIPE = LEVEL1_3_GOAL.parent / "recipes/ppo-train-clear-100.yaml"
 RUNTIME = "docker:ghcr.io/tsilva/gradlab/gradlab-train@sha256:" + "b" * 64
@@ -591,6 +593,36 @@ def test_evaluated_goal_preserves_manual_eval_when_automatic_eval_is_disabled() 
     contract = evaluation_contract(document)
     assert contract["episodes"] == 100
     assert contract["acceptance"] == resolved.effective["goal"]["eval"]["acceptance"]
+
+
+def test_evaluated_go_explore_goal_preserves_route_eval_when_automatic_eval_is_disabled() -> None:
+    resolved = compose_resolved_train_documents(
+        GOAL,
+        GO_EXPLORE_RECIPE,
+        prepare_materialized=lambda document: prepare_checkpoint_eval_mode(
+            document,
+            checkpoint_eval_backend="none",
+        ),
+        source_sha="a" * 40,
+    )
+    bind_mario_asset(resolved)
+
+    document = build_recipe_document(
+        resolved.effective,
+        repo_root=Path.cwd(),
+        source_commit="a" * 40,
+        run_description="local Go-Explore regression",
+        seed=123,
+        runtime_image_ref=RUNTIME,
+        base_materialized_recipe=resolved.base,
+        canonical_goal=resolved.canonical_goal,
+    )
+
+    recipe = document["recipe"]
+    assert recipe["train_config"]["checkpoint_eval_backend"] == "none"
+    assert "eval" not in recipe
+    assert "playback" in recipe
+    assert evaluation_contract(document)["action_sampling"] == "route"
 
 
 def test_recipe_materializes_the_backend_config_executed_by_the_learner() -> None:
