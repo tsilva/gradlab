@@ -239,10 +239,12 @@ metric path. `cumulative` explicitly means all eligible observations seen so far
   behavior-policy training proxy rather than frozen-checkpoint evaluation evidence.
 - Breakout also declares `bricks_destroyed` and `bricks_destroyed_normalized` as
   reward-independent episode progress. Their `train/progress/{progress}/origin/target/rolling/mean`
-  metrics average the terminal cumulative brick count and its `0.0..1.0` two-wall completion
-  fraction over the most recent 100 target-origin episodes, including warm-up before the window is
-  full. They are online behavior-policy training proxies rather than frozen-checkpoint evaluation
-  evidence.
+  metrics average the terminal cumulative values over the most recent 100 target-origin episodes,
+  while `train/progress/{progress}/origin/target/rolling/max` reports the maximum over that same
+  window. The normalized value is the `0.0..1.0` two-wall completion fraction. Both statistics
+  include warm-up before the window is full and are online behavior-policy training proxies rather
+  than frozen-checkpoint evaluation evidence. Breakout ranks runs first by the rolling maximum
+  terminal `bricks_destroyed` count, then by the earliest training step.
 - Training episode reduction aggregates return, length, outcome, success, the explicitly supported
   target-origin cell-novelty statistic, and goal-declared numeric episode progress fields.
   Progress field names refer to task-semantic signals and must be populated independently of the
@@ -411,6 +413,7 @@ unevaluated for future explicit user action. dstack process exit alone is never 
 | `train/episode/length/origin/all/rolling/mean` | Recent episode length mean | Mean policy-transition count over the most recent genuine completed episodes across target and archive origins. | steps | rollout | history | last |
 | `train/exploration/cell/unique/origin/target/rolling/mean` | Recent target unique cells mean | Mean episodic unique-cell count over recent target-origin episodes when cell-novelty shaping is active; the reset cell is included. | cells | rollout | history | last |
 | `train/progress/{progress}/origin/target/rolling/mean` | Recent target {progress} mean | Mean of a goal-declared finite numeric progress field over recent genuine target-origin episodes. | value | rollout | history | last |
+| `train/progress/{progress}/origin/target/rolling/max` | Recent target {progress} max | Maximum of a goal-declared finite numeric progress field over recent genuine target-origin episodes. | value | rollout | history | last |
 | `train/episode/completed/count` | Completed episodes | Cumulative genuine completed training episodes across origins. | episodes | rollout | history | last |
 | `train/outcome/failure/reason/{reason}/count` | Failure {reason} count | Cumulative unsuccessful completed episodes containing the reason; reason presence is counted at most once per episode. | episodes | rollout | history | last |
 | `train/outcome/failure/reason/{reason}/rolling/count` | Recent failure {reason} count | Unsuccessful completed episodes containing the reason among the most recent 100 genuine completed episodes, including warm-up before the window is full; reason presence is counted at most once per episode. | episodes | rollout | history | last |

@@ -263,7 +263,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(
             train_config["selection_rank"],
             [
-                "max(train/episode/return/shaped/origin/target/rolling/mean)",
+                "max(train/progress/bricks_destroyed/origin/target/rolling/max)",
                 "min(train/global_step)",
             ],
         )
@@ -800,7 +800,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(
             train_config["selection_rank"],
             [
-                "max(train/episode/return/shaped/origin/target/rolling/mean)",
+                "max(train/progress/bricks_destroyed/origin/target/rolling/max)",
                 "min(train/global_step)",
             ],
         )
