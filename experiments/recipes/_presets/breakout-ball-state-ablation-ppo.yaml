@@ -11,6 +11,8 @@ train:
     # The normalized state contract is native to Breakout Turbo 0.5.11. Keep
     # this pair native-only instead of silently substituting RAM definitions.
     env_provider: env-breakoutatari2600-turbo-native
+    preprocessing:
+      frame_skip: 2
     env_config:
       env_args:
         # Both arms pay the same provider-side signal projection cost.
@@ -50,4 +52,4 @@ train:
           operation: decrease
       reward:
         event_rewards:
-          life_loss: -5.0
+          life_loss: -0.1
