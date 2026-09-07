@@ -4,7 +4,7 @@ defaults:
 
 train:
   # Give both ablation arms the same post-CNN fusion capacity. The candidate
-  # differs from its control only by whether the five state values enter it.
+  # differs from its control only by whether the seven state values enter it.
   policy_model:
     fusion: {hidden_sizes: [256], activation: tanh}
   environment:
@@ -29,6 +29,10 @@ train:
           - ball_vy_normalized
           - paddle_x
           - paddle_x_normalized
+          - paddle_width
+          - paddle_width_normalized
+          - ball_paddle_offset
+          - ball_paddle_offset_normalized
           - score
           - lives
           - bricks_remaining
@@ -46,6 +50,8 @@ train:
         policy_ball_vx: ball_vx_normalized
         policy_ball_vy: ball_vy_normalized
         policy_paddle_x: paddle_x_normalized
+        policy_paddle_width: paddle_width_normalized
+        policy_ball_paddle_offset: ball_paddle_offset_normalized
       events:
         life_loss:
           signal: lives

@@ -48,6 +48,8 @@ def test_ball_state_recipe_runs_through_the_real_vector_runtime() -> None:
             "context/ball_vx",
             "context/ball_vy",
             "context/paddle_x",
+            "context/paddle_width",
+            "context/ball_paddle_offset",
         }
         assert set(observations) == expected_keys
         assert observations["observation"].shape == (2, 4, 84, 84)
@@ -72,6 +74,7 @@ def test_ball_state_recipe_runs_through_the_real_vector_runtime() -> None:
             observations["context/paddle_x"][0],
             observations["context/paddle_x"][1],
         )
+        np.testing.assert_allclose(observations["context/paddle_width"], 1.0)
 
         policy = SharedActorCriticPolicy(
             env.observation_space,
@@ -80,7 +83,7 @@ def test_ball_state_recipe_runs_through_the_real_vector_runtime() -> None:
             policy_model=document["train_config"]["policy_model"],
         )
         fusion = policy.features_extractor.fusion[0]
-        assert fusion.in_features == 517
+        assert fusion.in_features == 519
         assert fusion.out_features == 256
         assert policy.action_net.in_features == 256
         assert policy.value_net.in_features == 256
