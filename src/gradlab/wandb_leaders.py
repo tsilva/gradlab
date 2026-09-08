@@ -21,7 +21,7 @@ from gradlab.metric_names import (
     TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN,
     leader_metric_for_rank_metric,
     require_current_metrics_schema,
-    summary_value,
+    summary_metric_value,
 )
 from gradlab.ranking import parse_objective_rank, rank_score
 from gradlab.wandb_utils import DEFAULT_WANDB_PROJECT_PATH, load_wandb_env
@@ -96,7 +96,7 @@ class CheckpointLeader:
 
 def _mapping_value(mapping: Mapping[str, Any], key: str) -> Any:
     try:
-        return summary_value(mapping.get(key))
+        return summary_metric_value(mapping, key)
     except AttributeError:
         return None
 
