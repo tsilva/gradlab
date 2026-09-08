@@ -127,6 +127,14 @@ has filled the window. The window size lives once in config rather than being du
 metric path. `lifetime` and `total` explicitly mean all eligible observations seen so far. Boundary-event
 paths retain `rolling` to distinguish window counts from lifetime counts.
 
+A checkpoint continuation preserves the learner's cumulative step counter but creates fresh
+episode metric windows and fresh environment episodes. Its initial mean progress and length
+therefore describe only newly completed episodes, not the preceding run's last window. Short
+episodes can finish first after the reset, transiently biasing the initial window toward shorter,
+lower-progress outcomes. A boundary dip alone does not establish lost policy weights; compare
+mature windows and the actual optimizer diagnostics. A later plateau also does not identify
+resuming as its cause without a matched uninterrupted continuation.
+
 ## Research interpretation
 
 - Playback `V(s)` is the critic's expectation of discounted future policy-facing return under the
