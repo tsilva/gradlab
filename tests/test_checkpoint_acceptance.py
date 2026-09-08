@@ -39,7 +39,7 @@ def contract(
         acceptance=acceptance
         or [
             {
-                "metric": "eval/full/outcome/success/starts/rate/min",
+                "metric": "eval/success/start_rate_min",
                 "operator": ">=",
                 "threshold": 1.0,
             }
@@ -113,7 +113,7 @@ def test_rejection_is_valid_partial_evidence_only_through_first_failure() -> Non
     assert aggregates["episodes_planned"] == 4
     assert aggregates["episodes_completed"] == 2
     assert aggregates["failure_count"] == 1
-    assert not any(name.startswith("eval/full/") for name in aggregates)
+    assert not any(name.startswith("eval/") for name in aggregates)
 
     with pytest.raises(ValueError, match="after its first failure"):
         validate_episode_rows([*rows, row(entries[2])], contract=value)
@@ -135,7 +135,7 @@ def test_mean_return_acceptance_requires_and_uses_every_episode(
         n_envs=2,
         acceptance=[
             {
-                "metric": "eval/full/episode/return/shaped/mean",
+                "metric": "eval/return_mean",
                 "operator": ">=",
                 "threshold": 2.5,
             }
@@ -154,7 +154,7 @@ def test_mean_return_acceptance_requires_and_uses_every_episode(
 
     assert aggregates["episodes_completed"] == 4
     assert aggregates["failure_count"] == 2
-    assert aggregates["eval/full/episode/return/shaped/mean"] == sum(returns) / 4
+    assert aggregates["eval/return_mean"] == sum(returns) / 4
     accepted, _observed = evaluate_acceptance(aggregates, contract=value)
     assert accepted is (verdict == "accepted")
 
@@ -169,7 +169,7 @@ def test_vizdoom_basic_perfect_success_acceptance_requires_every_episode() -> No
         seed_protocol="vector-lane-v1",
         acceptance=[
             {
-                "metric": "eval/full/outcome/success/starts/rate/min",
+                "metric": "eval/success/start_rate_min",
                 "operator": ">=",
                 "threshold": 1.0,
             }
@@ -187,7 +187,7 @@ def test_vizdoom_basic_perfect_success_acceptance_requires_every_episode() -> No
 
     assert aggregates["episodes_completed"] == 4
     assert aggregates["failure_count"] == 1
-    assert aggregates["eval/full/outcome/success/starts/rate/min"] == 0.75
+    assert aggregates["eval/success/start_rate_min"] == 0.75
     accepted, _observed = evaluate_acceptance(aggregates, contract=value)
     assert accepted is False
 
@@ -206,7 +206,7 @@ def test_vizdoom_deathmatch_acceptance_aggregates_raw_kills() -> None:
         seed_protocol="vector-lane-v1",
         acceptance=[
             {
-                "metric": "eval/full/progress/kills/mean",
+                "metric": "eval/progress/kills/mean",
                 "operator": ">=",
                 "threshold": 10.0,
             }
@@ -219,11 +219,11 @@ def test_vizdoom_deathmatch_acceptance_aggregates_raw_kills() -> None:
 
     aggregates = acceptance_aggregates(rows, contract=value)
 
-    assert aggregates["eval/full/progress/kills/mean"] == 12.5
-    assert aggregates["eval/full/progress/kills/max"] == 20.0
+    assert aggregates["eval/progress/kills/mean"] == 12.5
+    assert aggregates["eval/progress/kills/max"] == 20.0
     accepted, observed = evaluate_acceptance(aggregates, contract=value)
     assert accepted is True
-    assert observed["eval/full/progress/kills/mean"] == 12.5
+    assert observed["eval/progress/kills/mean"] == 12.5
 
 
 def test_modal_protocol_accepts_complete_mean_return_rejection() -> None:
@@ -232,7 +232,7 @@ def test_modal_protocol_accepts_complete_mean_return_rejection() -> None:
         n_envs=1,
         acceptance=[
             {
-                "metric": "eval/full/episode/return/shaped/mean",
+                "metric": "eval/return_mean",
                 "operator": ">=",
                 "threshold": 1.0,
             }

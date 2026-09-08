@@ -164,8 +164,8 @@ def current_goal_document(*, goal_id: str, title: str) -> str:
             f"title: {title}",
             "objective:",
             "  rank:",
-            "  - min(leader/checkpoint/step)",
-            "  - max(eval/full/episode/return/shaped/mean)",
+            "  - min(leader/step)",
+            "  - max(eval/return_mean)",
             "train:",
             "  checkpoint_freq: 128",
             "  environment:",
@@ -308,13 +308,13 @@ def deathmatch_checkpoint_train_config() -> dict[str, object]:
         "metrics_schema_version": METRICS_SCHEMA_VERSION,
         "checkpoint_eval_backend": "modal",
         "selection_rank": [
-            "max(eval/full/progress/kills/mean)",
-            "max(eval/full/progress/kills/max)",
-            "min(leader/checkpoint/step)",
+            "max(eval/progress/kills/mean)",
+            "max(eval/progress/kills/max)",
+            "min(leader/step)",
         ],
         "checkpoint_eval_acceptance": [
             {
-                "metric": "eval/full/progress/kills/mean",
+                "metric": "eval/progress/kills/mean",
                 "operator": ">=",
                 "threshold": 10.0,
             }
@@ -328,13 +328,13 @@ def mario_checkpoint_train_config() -> dict[str, object]:
         "metrics_schema_version": METRICS_SCHEMA_VERSION,
         "checkpoint_eval_backend": "modal",
         "selection_rank": [
-            "max(eval/full/outcome/success/starts/rate/mean)",
-            "max(eval/full/episode/return/shaped/mean)",
-            "min(leader/checkpoint/step)",
+            "max(eval/success/start_rate_mean)",
+            "max(eval/return_mean)",
+            "min(leader/step)",
         ],
         "checkpoint_eval_acceptance": [
             {
-                "metric": "eval/full/outcome/success/starts/rate/min",
+                "metric": "eval/success/start_rate_min",
                 "operator": ">=",
                 "threshold": 1.0,
             }
@@ -746,8 +746,8 @@ def test_run_catalog_uses_lifecycle_owned_variant_index_without_wandb(
         "updated_at": "2026-01-03T00:00:00Z",
         "url": f"https://wandb.ai/research/Mario/runs/{RUN_ID}",
         "metrics": {
-            "leader/checkpoint/step": 1_500_000,
-            "eval/full/episode/return/shaped/mean": 321.25,
+            "leader/step": 1_500_000,
+            "eval/return_mean": 321.25,
         },
     }
     generation, pointer = goal_catalog_documents(descriptor, [run_record])
@@ -775,7 +775,7 @@ def test_run_catalog_uses_lifecycle_owned_variant_index_without_wandb(
     assert page.items[0]["description"] == "lifecycle projection"
     assert page.items[0]["stop_reason"] == "eval_acceptance"
     assert page.items[0]["final_step"] == 1_750_000
-    assert page.items[0]["metrics"]["leader/checkpoint/step"] == 1_500_000.0
+    assert page.items[0]["metrics"]["leader/step"] == 1_500_000.0
     searched = catalog.runs(
         environment_id="Mario",
         goal_id="Level1-1",
@@ -1331,7 +1331,7 @@ def test_deathmatch_checkpoint_metric_contract_prioritizes_frag_evidence() -> No
 
     assert contract.columns == (
         {
-            "metric": "eval/full/progress/kills/mean",
+            "metric": "eval/progress/kills/mean",
             "direction": "max",
             "label": "Full-eval kills mean",
             "evidence": "evaluation",
@@ -1339,22 +1339,22 @@ def test_deathmatch_checkpoint_metric_contract_prioritizes_frag_evidence() -> No
             "rank_index": 0,
             "acceptance": [
                 {
-                    "metric": "eval/full/progress/kills/mean",
+                    "metric": "eval/progress/kills/mean",
                     "operator": ">=",
                     "threshold": 10.0,
                 }
             ],
         },
         {
-            "metric": "train/progress/kills/origin/target/rolling/mean",
+            "metric": "train/target/progress/kills/mean",
             "direction": "max",
             "label": "Recent target kills mean",
             "evidence": "training",
             "roles": ["training_proxy"],
-            "proxy_for": "eval/full/progress/kills/mean",
+            "proxy_for": "eval/progress/kills/mean",
         },
         {
-            "metric": "eval/full/progress/kills/max",
+            "metric": "eval/progress/kills/max",
             "direction": "max",
             "label": "Full-eval kills max",
             "evidence": "evaluation",
@@ -1362,7 +1362,7 @@ def test_deathmatch_checkpoint_metric_contract_prioritizes_frag_evidence() -> No
             "rank_index": 1,
         },
         {
-            "metric": "train/episode/return/shaped/origin/target/rolling/mean",
+            "metric": "train/target/return_mean",
             "direction": "max",
             "label": "Recent target return mean",
             "evidence": "training",
@@ -1372,10 +1372,10 @@ def test_deathmatch_checkpoint_metric_contract_prioritizes_frag_evidence() -> No
 
 
 def test_checkpoint_metric_leaders_marks_each_best_value_and_ties() -> None:
-    train_success = "train/outcome/success/starts/all/rolling/rate/mean"
-    train_return = "train/episode/return/shaped/origin/target/rolling/mean"
-    eval_success = "eval/full/outcome/success/starts/rate/mean"
-    eval_return = "eval/full/episode/return/shaped/mean"
+    train_success = "train/target/success/start_rate_mean"
+    train_return = "train/target/return_mean"
+    eval_success = "eval/success/start_rate_mean"
+    eval_return = "eval/return_mean"
 
     columns = tuple(
         {"metric": metric, "direction": "max"}
@@ -1468,30 +1468,30 @@ def test_catalog_attaches_latest_training_metrics_at_each_checkpoint(
             assert page_size == 10_000
             if keys == [
                 "train/global_step",
-                "train/progress/kills/origin/target/rolling/mean",
+                "train/target/progress/kills/mean",
             ]:
                 return [
                     {
                         "train/global_step": 200_000,
-                        "train/progress/kills/origin/target/rolling/mean": 2.5,
+                        "train/target/progress/kills/mean": 2.5,
                     },
                     {
                         "train/global_step": 490_000,
-                        "train/progress/kills/origin/target/rolling/mean": 9.0,
+                        "train/target/progress/kills/mean": 9.0,
                     },
                 ]
             if keys == [
                 "train/global_step",
-                "train/episode/return/shaped/origin/target/rolling/mean",
+                "train/target/return_mean",
             ]:
                 return [
                     {
                         "train/global_step": 220_000,
-                        "train/episode/return/shaped/origin/target/rolling/mean": 11.5,
+                        "train/target/return_mean": 11.5,
                     },
                     {
                         "train/global_step": 480_000,
-                        "train/episode/return/shaped/origin/target/rolling/mean": 22.0,
+                        "train/target/return_mean": 22.0,
                     },
                 ]
             assert "across_origins" not in " ".join(keys)
@@ -1514,20 +1514,20 @@ def test_catalog_attaches_latest_training_metrics_at_each_checkpoint(
     final_row, periodic_row = page.items
 
     assert periodic_row["metrics"] == {
-        "eval/full/progress/kills/mean": None,
-        "train/progress/kills/origin/target/rolling/mean": 2.5,
-        "eval/full/progress/kills/max": None,
-        "train/episode/return/shaped/origin/target/rolling/mean": 11.5,
+        "eval/progress/kills/mean": None,
+        "train/target/progress/kills/mean": 2.5,
+        "eval/progress/kills/max": None,
+        "train/target/return_mean": 11.5,
     }
     assert final_row["metrics"] == {
-        "eval/full/progress/kills/mean": None,
-        "train/progress/kills/origin/target/rolling/mean": 9.0,
-        "eval/full/progress/kills/max": None,
-        "train/episode/return/shaped/origin/target/rolling/mean": 22.0,
+        "eval/progress/kills/mean": None,
+        "train/target/progress/kills/mean": 9.0,
+        "eval/progress/kills/max": None,
+        "train/target/return_mean": 22.0,
     }
     assert final_row["best_metrics"] == [
-        "train/progress/kills/origin/target/rolling/mean",
-        "train/episode/return/shaped/origin/target/rolling/mean",
+        "train/target/progress/kills/mean",
+        "train/target/return_mean",
     ]
     assert periodic_row["best_metrics"] == []
     filtered = catalog.checkpoints(
@@ -1590,22 +1590,22 @@ def test_catalog_attaches_training_metrics_when_checkpoint_evaluation_is_disable
             assert page_size == 10_000
             if keys == [
                 "train/global_step",
-                "train/outcome/success/starts/all/rolling/rate/min",
+                "train/target/success/start_rate_min",
             ]:
                 return [
                     {
                         "train/global_step": 490_000,
-                        "train/outcome/success/starts/all/rolling/rate/min": 1.0,
+                        "train/target/success/start_rate_min": 1.0,
                     }
                 ]
             if keys == [
                 "train/global_step",
-                "train/episode/return/shaped/origin/target/rolling/mean",
+                "train/target/return_mean",
             ]:
                 return [
                     {
                         "train/global_step": 480_000,
-                        "train/episode/return/shaped/origin/target/rolling/mean": 22.0,
+                        "train/target/return_mean": 22.0,
                     }
                 ]
             return []
@@ -1629,12 +1629,12 @@ def test_catalog_attaches_training_metrics_when_checkpoint_evaluation_is_disable
     assert page.warnings == ()
     assert row["evaluation"] is None
     assert row["metrics"] == {
-        "eval/full/outcome/success/starts/rate/mean": None,
-        "train/outcome/success/starts/all/rolling/rate/mean": None,
-        "eval/full/episode/return/shaped/mean": None,
-        "train/episode/return/shaped/origin/target/rolling/mean": 22.0,
-        "eval/full/outcome/success/starts/rate/min": None,
-        "train/outcome/success/starts/all/rolling/rate/min": 1.0,
+        "eval/success/start_rate_mean": None,
+        "train/target/success/start_rate_mean": None,
+        "eval/return_mean": None,
+        "train/target/return_mean": 22.0,
+        "eval/success/start_rate_min": None,
+        "train/target/success/start_rate_min": 1.0,
     }
 
 
@@ -1652,7 +1652,7 @@ def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
             "promotion": {"checkpoint_id": periodic["checkpoint_id"]},
         },
     )
-    required_metric = "eval/full/outcome/success/starts/rate/min"
+    required_metric = "eval/success/start_rate_min"
 
     repo_root = Path.cwd()
     goal_path = repo_root / "experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml"
@@ -1692,8 +1692,8 @@ def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
             ],
             "metrics": {
                 required_metric: 1.0,
-                "eval/full/outcome/success/starts/rate/mean": 1.0,
-                "eval/full/episode/return/shaped/mean": 1.0,
+                "eval/success/start_rate_mean": 1.0,
+                "eval/return_mean": 1.0,
             },
         },
         final["checkpoint_id"]: {
@@ -1778,15 +1778,15 @@ def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
     assert accepted_row["playback_seed_source"] == "evaluation"
     assert accepted["metrics"] == {
         required_metric: 1.0,
-        "eval/full/outcome/success/starts/rate/mean": 1.0,
-        "eval/full/episode/return/shaped/mean": 1.0,
-        "leader/checkpoint/step": 250_000.0,
+        "eval/success/start_rate_mean": 1.0,
+        "eval/return_mean": 1.0,
+        "leader/step": 250_000.0,
     }
-    assert accepted_row["metrics"]["eval/full/outcome/success/starts/rate/mean"] == 1.0
-    assert accepted_row["metrics"]["eval/full/episode/return/shaped/mean"] == 1.0
+    assert accepted_row["metrics"]["eval/success/start_rate_mean"] == 1.0
+    assert accepted_row["metrics"]["eval/return_mean"] == 1.0
     assert accepted_row["best_metrics"] == [
-        "eval/full/outcome/success/starts/rate/mean",
-        "eval/full/episode/return/shaped/mean",
+        "eval/success/start_rate_mean",
+        "eval/return_mean",
         required_metric,
     ]
     rejected = rejected_row["evaluation"]

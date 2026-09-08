@@ -620,7 +620,7 @@ def normalize_publication_evaluation(
         _first_present(
             evaluation,
             "checkpoint_artifact",
-            "eval/full/checkpoint/artifact",
+            "eval/checkpoint/artifact",
         ),
         label="evaluation checkpoint_artifact",
     )

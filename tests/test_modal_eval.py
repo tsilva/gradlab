@@ -217,7 +217,7 @@ def test_modal_child_wire_result_omits_metrics_and_claimed_aggregates(
         "watchdog_steps": 10,
         "seed": 10_000,
         "asset": None,
-        "acceptance": [{"metric": "eval/full/episode/return/shaped/mean"}],
+        "acceptance": [{"metric": "eval/return_mean"}],
     }
     input_path = tmp_path / "input.json"
     output_path = tmp_path / "output.json"
@@ -249,7 +249,7 @@ def test_modal_child_wire_result_omits_metrics_and_claimed_aggregates(
         "gradlab.eval_runner.evaluate_policy_bundle",
         lambda *_args, **_kwargs: (
             {
-                "eval/full/episode/return/shaped/mean": 1.0,
+                "eval/return_mean": 1.0,
                 "episode_results": [{"episode_id": "episode-1"}],
                 "evaluation_evidence": {"manifest": "verified"},
                 "acceptance_verdict": "accepted",

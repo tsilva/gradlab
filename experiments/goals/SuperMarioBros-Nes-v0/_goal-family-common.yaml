@@ -13,8 +13,8 @@ title: Sample-efficient SuperMarioBros-NES {{ goal_id }} completion
 objective:
   # Ordered ranking signals; compare each metric in sequence until a candidate wins.
   rank:
-  - min(leader/checkpoint/step)
-  - max(eval/full/episode/return/shaped/mean)
+  - min(leader/step)
+  - max(eval/return_mean)
 # Training contract for this goal family.
 train:
   # Shared checkpoint cadence for Mario training jobs.
@@ -22,7 +22,7 @@ train:
   early_stop:
     conditions:
       clear_100:
-        metric: train/outcome/success/starts/all/rolling/rate/min
+        metric: train/target/success/start_rate_min
         trigger: threshold
         operator: '>='
         progress_baseline: 0.0
@@ -113,7 +113,7 @@ train:
 eval:
   episodes: 100
   acceptance:
-  - metric: eval/full/outcome/success/starts/rate/min
+  - metric: eval/success/start_rate_min
     operator: '>='
     threshold: 1.0
   environment:

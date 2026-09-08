@@ -51,20 +51,14 @@ from gradlab.metric_names import (
     EVAL_ACCEPTANCE_EPISODE_COMPLETED_COUNT,
     EVAL_ACCEPTANCE_EPISODE_PLANNED_COUNT,
     EVAL_CHECKPOINT_STEP,
-    EVAL_FULL_EPISODE_RETURN_SHAPED_MAX,
-    EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
-    EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MIN,
-    EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MEAN,
     LEADER_CHECKPOINT_STEP,
-    TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MAX,
     TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN,
     TRAIN_GLOBAL_STEP,
     TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN,
-    TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MEAN,
     metric_display_label,
+    training_proxy_metric,
     metric_path_segment,
     require_current_metrics_schema,
-    train_progress_origin_target_rolling_mean_metric,
 )
 from gradlab.model_sources import DEFAULT_PUBLIC_MODELS_BASE_URL, _public_json
 from gradlab.policy_bundle import canonical_json_sha256, validate_recipe_document
@@ -119,9 +113,9 @@ CHECKPOINT_STRUCTURAL_METRICS = frozenset({LEADER_CHECKPOINT_STEP, TRAIN_GLOBAL_
 CHECKPOINT_COLUMN_ROLES = frozenset(
     {"objective", "tie_breaker", "acceptance", "training_proxy", "optimization"}
 )
-_EVAL_PROGRESS_METRIC_RE = re.compile(r"^eval/full/progress/([A-Za-z0-9_.-]+)/(mean|max)$")
+_EVAL_PROGRESS_METRIC_RE = re.compile(r"^eval/progress/([A-Za-z0-9_.-]+)/(mean|max)$")
 _TRAIN_PROGRESS_METRIC_RE = re.compile(
-    r"^train/progress/([A-Za-z0-9_.-]+)/origin/target/rolling/mean$"
+    r"^train/target/progress/([A-Za-z0-9_.-]+)/mean$"
 )
 
 
@@ -505,26 +499,7 @@ def _checkpoint_training_proxy(
     *,
     progress_fields: frozenset[str],
 ) -> str | None:
-    fixed = {
-        EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MIN: (
-            TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN
-        ),
-        EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MEAN: (
-            TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MEAN
-        ),
-        EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN: (
-            TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN
-        ),
-        EVAL_FULL_EPISODE_RETURN_SHAPED_MAX: (
-            TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MAX
-        ),
-    }
-    if metric in fixed:
-        return fixed[metric]
-    match = _EVAL_PROGRESS_METRIC_RE.fullmatch(metric)
-    if match is None or match.group(2) != "mean" or match.group(1) not in progress_fields:
-        return None
-    return train_progress_origin_target_rolling_mean_metric(match.group(1))
+    return training_proxy_metric(metric, progress_fields=progress_fields)
 
 
 def checkpoint_metric_contract(
@@ -3210,7 +3185,7 @@ class PlayCatalog:
                         "criteria": criteria,
                         "metrics": {LEADER_CHECKPOINT_STEP: float(step)},
                     }
-                # Fail-fast rejections intentionally omit completed eval/full metrics.
+                # Fail-fast rejections intentionally omit completed eval metrics.
                 # W&B returns no rows when scan_history requests a key that is absent
                 # from some history records, so fetch each optional criterion
                 # independently and merge it into the authoritative verdict rows.

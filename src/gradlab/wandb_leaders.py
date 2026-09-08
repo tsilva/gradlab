@@ -52,6 +52,8 @@ class RunScore:
     seed: int | None
     objective: float
     steps: int | None = None
+    rank_values: tuple[float, ...] = ()
+    primary_direction: str = "max"
 
 
 @dataclass(frozen=True)
@@ -68,6 +70,7 @@ class RunLeader:
     best_seed: float
     runs: tuple[RunScore, ...]
     mean_steps: float | None = None
+    primary_direction: str = "max"
 
 
 @dataclass(frozen=True)
@@ -180,6 +183,12 @@ def run_score(run: Any, *, objective_keys: Sequence[str]) -> RunScore | None:
         dict.fromkeys((configured_primary, *objective_keys) if configured_primary else objective_keys)
     )
     objective = _first_float(summary, candidate_keys)
+    configured_values: tuple[float, ...] = ()
+    if configured_primary:
+        values = {criterion.metric: _first_float(summary, (criterion.metric,)) for criterion in configured_rank}
+        if any(value is None for value in values.values()):
+            return None
+        configured_values = rank_score(values, configured_rank)
     if objective is None:
         return None
     goal_slug = _first_text(config.get("goal_slug"))
@@ -201,6 +210,8 @@ def run_score(run: Any, *, objective_keys: Sequence[str]) -> RunScore | None:
         seed=_optional_int(config.get("seed")),
         objective=float(objective),
         steps=_optional_int(_mapping_value(summary, TRAIN_GLOBAL_STEP)),
+        rank_values=configured_values,
+        primary_direction=configured_rank[0].direction if configured_primary else "max",
     )
 
 
@@ -226,10 +237,14 @@ def rank_run_leaders(scores: Iterable[RunScore], *, min_seeds: int = 1) -> list[
     ), group_scores in grouped.items():
         if len(group_scores) < min_seeds:
             continue
+        directions = {item.primary_direction for item in group_scores}
+        if len(directions) != 1:
+            raise ValueError("one recipe cohort cannot mix primary ranking directions")
+        direction = next(iter(directions))
         ordered_runs = tuple(
             sorted(
                 group_scores,
-                key=lambda item: (
+                key=lambda item: item.rank_values or (
                     item.objective,
                     -(item.steps if item.steps is not None else float("inf")),
                 ),
@@ -247,11 +262,12 @@ def rank_run_leaders(scores: Iterable[RunScore], *, min_seeds: int = 1) -> list[
                 effective_goal_contract_sha256=effective_goal_hash,
                 reward_shape_is_default=group_scores[0].reward_shape_is_default,
                 seeds=len(ordered_runs),
-                worst_seed=min(values),
+                worst_seed=min(values) if direction == "max" else max(values),
                 mean_seed=mean(values),
-                best_seed=max(values),
+                best_seed=max(values) if direction == "max" else min(values),
                 runs=ordered_runs,
                 mean_steps=mean(step_values) if step_values else None,
+                primary_direction=direction,
             )
         )
     return sorted(
@@ -259,9 +275,9 @@ def rank_run_leaders(scores: Iterable[RunScore], *, min_seeds: int = 1) -> list[
         key=lambda item: (
             item.reward_shape_is_default,
             item.reward_shape,
-            item.worst_seed,
-            item.mean_seed,
-            item.best_seed,
+            item.worst_seed * (1 if item.primary_direction == "max" else -1),
+            item.mean_seed * (1 if item.primary_direction == "max" else -1),
+            item.best_seed * (1 if item.primary_direction == "max" else -1),
             -(item.mean_steps if item.mean_steps is not None else float("inf")),
             item.seeds,
         ),
@@ -480,7 +496,7 @@ def cmd_runs(args: argparse.Namespace) -> int:
         for run in wandb_runs(
             project=args.project,
             goal=args.goal,
-            extra_filter=run_objective_filter(run_query_objective_keys(args)),
+            extra_filter=(run_objective_filter(tuple(args.objective_key)) if args.objective_key else None),
             order=RUN_PRIMARY_ORDER,
         )
         if (score := run_score(run, objective_keys=run_query_objective_keys(args))) is not None

@@ -13,7 +13,9 @@ from gradlab.metric_names import (
     metric_definition,
     validate_metric_name,
 )
-from gradlab.recipe_documents import load_goal_contract
+from gradlab.recipe_documents import load_goal_contract, compose_train_document
+from gradlab.metric_inventory import MetricInventory, resolve_metric_inventory
+from gradlab.ranking import require_objective_rank
 from gradlab.wandb_utils import resolve_wandb_project
 
 
@@ -83,6 +85,7 @@ class WorkspaceProfileSpec:
     run_scope: str
     max_runs: int
     sections: tuple[WorkspaceSectionSpec, ...]
+    primary_metrics: str = "none"
 
 
 @dataclass(frozen=True)
@@ -95,6 +98,7 @@ class WandbWorkspaceSpec:
     run_scope: str
     max_runs: int
     sections: tuple[WorkspaceSectionSpec, ...]
+    primary_metrics: str = "none"
 
     def to_json(self) -> dict[str, Any]:
         return {
@@ -295,9 +299,12 @@ def _profile_spec(
     document = _mapping(value, label=label)
     _reject_unknown(
         document,
-        {"display_name", "run_scope", "max_runs", "sections"},
+        {"display_name", "run_scope", "max_runs", "sections", "primary_metrics"},
         label=label,
     )
+    primary_metrics = document.get("primary_metrics", "none")
+    if primary_metrics not in {"none", "goal_rank"}:
+        raise ValueError(f"{label}.primary_metrics must be none or goal_rank")
     run_scope = _text(document.get("run_scope"), label=f"{label}.run_scope")
     if run_scope not in _RUN_SCOPES:
         raise ValueError(f"{label}.run_scope must be one of {sorted(_RUN_SCOPES)}")
@@ -313,6 +320,7 @@ def _profile_spec(
             document.get("max_runs"), minimum=1, maximum=100, label=f"{label}.max_runs"
         ),
         sections=tuple(sections[section_id] for section_id in section_ids),
+        primary_metrics=primary_metrics,
     )
 
 
@@ -536,6 +544,7 @@ def load_workspace_declaration(
             view_id=view_id,
             project=project,
             profile_id=assignments[project],
+            primary_metrics=profiles[assignments[project]].primary_metrics,
             display_name=profiles[assignments[project]].display_name,
             run_scope=profiles[assignments[project]].run_scope,
             max_runs=profiles[assignments[project]].max_runs,
@@ -553,16 +562,69 @@ def load_workspace_declaration(
     )
 
 
+def _resolve_project_metrics(
+    spec: WandbWorkspaceSpec,
+    sources: list[tuple[Path, dict[str, Any]]],
+) -> WandbWorkspaceSpec:
+    goals = [goal for _, goal in sources]
+    available: set[str] = set()
+    for path, goal in sources:
+        for recipe in sorted((path.parent / "recipes").glob("*.yaml")):
+            config = compose_train_document(path, recipe)["train_config"]
+            available.update(resolve_metric_inventory(config).names)
+    inventory = MetricInventory(frozenset(available), ())
+    sections: list[WorkspaceSectionSpec] = []
+    primary: set[str] = set()
+    if spec.primary_metrics == "goal_rank":
+        orders = {tuple(goal["objective"]["rank"]) for goal in goals}
+        if len(orders) != 1:
+            raise ValueError(f"{spec.project} has different goal rankings; select an explicit project profile with primary_metrics: none")
+        panels: list[WorkspacePanelSpec] = []
+        for criterion in require_objective_rank(next(iter(orders))):
+            name = criterion.metric
+            definition = metric_definition(name)
+            if definition is None or definition.placement != "history" or definition.axis == name or name in primary:
+                continue
+            primary.add(name)
+            panels.append(WorkspacePanelSpec(
+                panel_id=f"primary_{len(panels)}", kind="line", x=definition.axis,
+                y=(name,), metric_templates=(), width=12, height=8,
+                y_title=definition.unit,
+            ))
+        if panels:
+            sections.append(WorkspaceSectionSpec(
+                section_id="goal_primary", title="Primary metrics", pinned=True,
+                is_open=True, columns=2, panels=tuple(panels),
+            ))
+    for section in spec.sections:
+        panels = []
+        for panel in section.panels:
+            y = tuple(name for name in panel.y if name not in primary and inventory.matches(name))
+            templates = tuple(name for name in panel.metric_templates if inventory.matches(name))
+            if y or templates:
+                panels.append(replace(panel, y=y, metric_templates=templates))
+        if panels:
+            sections.append(replace(section, panels=tuple(panels)))
+    return replace(spec, sections=tuple(sections))
+
+
 def compile_workspace_specs(
     repo_root: Path | str = Path("."),
     *,
     project: str | None = None,
 ) -> tuple[WandbWorkspaceSpec, ...]:
     repo_root = Path(repo_root).resolve()
+    sources: dict[str, list[tuple[Path, dict[str, Any]]]] = {}
+    for path in sorted((repo_root / "experiments/goals").rglob("_goal.yaml")):
+        goal = load_goal_contract(path, repo_root)
+        environment = goal["train"]["environment"]
+        project_name = resolve_wandb_project(None, environment["env_config"]["game"], env_provider=environment["env_provider"])
+        sources.setdefault(project_name, []).append((path, goal))
     specs = load_workspace_declaration(
         repo_root / DEFAULT_WORKSPACE_MANIFEST,
-        projects=discover_wandb_projects(repo_root),
+        projects=tuple(sorted(sources)),
     )
+    specs = tuple(_resolve_project_metrics(spec, sources[spec.project]) for spec in specs if project is None or spec.project == project)
     if project is None:
         return specs
     selected = tuple(spec for spec in specs if spec.project == project)

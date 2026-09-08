@@ -242,7 +242,7 @@ def test_bandit_recipe_materializes_fixed_train_and_eval_contracts() -> None:
     assert "stop_on_acceptance" not in train_config
     assert train_config["checkpoint_eval_acceptance"] == [
         {
-            "metric": "eval/full/episode/return/shaped/mean",
+            "metric": "eval/return_mean",
             "operator": ">=",
             "threshold": 0.9,
         }
@@ -405,8 +405,8 @@ def test_bandit_runs_through_a2c_backend_and_round_trips_checkpoint(
     assert bundle.model["policy"]["model_class"] == "stable_baselines3.a2c.a2c.A2C"
     assert bundle.model["provenance"]["training_execution"]["mode"] == "supervised"
     metric_store = MetricStore(run_dir / "gradlab.sqlite")
-    assert metric_store.latest_metric("train/algorithm/a2c/update/value_loss") is not None
-    assert metric_store.latest_metric("train/algorithm/ppo/update/value_loss") is None
+    assert metric_store.latest_metric("train/a2c/value_loss") is not None
+    assert metric_store.latest_metric("train/ppo/value_loss") is None
     from gradlab.trusted_inputs import approve_internal_model
 
     with approve_internal_model(model_path, execution_id="test-bandit") as approved:

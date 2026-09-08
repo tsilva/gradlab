@@ -585,7 +585,7 @@ def _goal_section_blocks(wr, section: str, goal: GoalReportSpec, *, entity: str)
         ]
         if len(goal.starts) <= 4:
             for start in goal.starts:
-                metric = f"train/outcome/success/start/{start}/rolling/rate"
+                metric = f"train/target/success/by_start/{start}/rate"
                 panels.append(
                     _line(wr, title=metric, x=TRAIN_GLOBAL_STEP, y=[metric], w=12, h=7)
                 )
@@ -615,7 +615,7 @@ def _goal_section_blocks(wr, section: str, goal: GoalReportSpec, *, entity: str)
                         title="Training failure-reason rates",
                         x=TRAIN_GLOBAL_STEP,
                         y=[],
-                        metric_regex=r"train/outcome/failure/reason/.*/rolling/rate",
+                        metric_regex=r"train/all/boundary_event/.*/rolling/rate",
                         layout=wr.Layout(w=12, h=8),
                     ),
                 ],

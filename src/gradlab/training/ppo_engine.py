@@ -762,8 +762,8 @@ def _rollout_diagnostics(
     payload: dict[str, torch.Tensor] = {}
     omit_if_nonfinite: set[str] = set()
     for suffix, values in (
-        ("rollout/value/prediction", buffer.values),
-        ("rollout/advantage", buffer.advantages),
+        ("rollout_value", buffer.values),
+        ("rollout_advantage", buffer.advantages),
     ):
         prefix = train_algorithm_metric("ppo", suffix)
         mean_name = stat_metric(prefix, "mean")
@@ -778,7 +778,7 @@ def _rollout_diagnostics(
         omit_if_nonfinite.update((mean_name, std_name))
     dominant_action_rate = _dominant_action_rate(buffer.actions.detach(), action_space)
     if dominant_action_rate is not None:
-        payload[train_algorithm_metric("ppo", "policy/dominant/action/rate")] = dominant_action_rate
+        payload[train_algorithm_metric("ppo", "dominant_action_rate")] = dominant_action_rate
     return payload, frozenset(omit_if_nonfinite)
 
 
@@ -956,14 +956,14 @@ def _ppo_update(
             TRAIN_PPO_VALUE_LOSS: metric_means[1],
             TRAIN_PPO_LEARNING_RATE: learning_rate,
             TRAIN_PPO_POLICY_ENTROPY: -metric_means[2],
-            train_algorithm_metric("ppo", "update/policy_gradient_loss"): metric_means[0],
+            train_algorithm_metric("ppo", "policy_loss"): metric_means[0],
             TRAIN_PPO_EXPLAINED_VARIANCE: explained_variance,
         }
     )
     optional_metrics = set(omit_if_nonfinite)
     optional_metrics.add(TRAIN_PPO_EXPLAINED_VARIANCE)
     if hasattr(model.policy, "log_std"):
-        payload[train_algorithm_metric("ppo", "policy/distribution/std")] = (
+        payload[train_algorithm_metric("ppo", "action_std")] = (
             torch.exp(model.policy.log_std).mean().detach()
         )
     return _materialize_metrics(

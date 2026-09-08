@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import time
+from collections import deque
 from dataclasses import dataclass
 from numbers import Integral
 from pathlib import Path
@@ -557,17 +558,17 @@ class RolloutDiagnosticsHelper(CallbackHelper):
             getattr(self.model, "action_space", None),
         )
         self._record_stats(
-            train_algorithm_metric(self.algorithm_id, "rollout/value/prediction"),
+            train_algorithm_metric(self.algorithm_id, "rollout_value"),
             value_predictions,
         )
         self._record_stats(
-            train_algorithm_metric(self.algorithm_id, "rollout/advantage"),
+            train_algorithm_metric(self.algorithm_id, "rollout_advantage"),
             advantages,
         )
         if discrete_actions.size > 0:
             _actions, counts = np.unique(discrete_actions, return_counts=True)
             self.logger.record(
-                train_algorithm_metric(self.algorithm_id, "policy/dominant/action/rate"),
+                train_algorithm_metric(self.algorithm_id, "dominant_action_rate"),
                 float(np.max(counts) / discrete_actions.size),
             )
 
@@ -689,36 +690,46 @@ class ArchiveCurriculumFeedbackHelper(CallbackHelper):
         self._fragments.clear()
 
 
-class _BufferedStats:
-    """Reusable contiguous storage for one rollout's vector batches."""
+@dataclass
+class _RewardMoments:
+    """Merge finite batch moments without retaining a rollout's samples."""
 
-    __slots__ = ("buffer", "size")
+    size: int = 0
+    mean: float = 0.0
+    m2: float = 0.0
+    nonzero: int = 0
+    absolute_sum: float = 0.0
 
-    def __init__(self) -> None:
-        self.buffer = np.empty(0, dtype=np.float64)
-        self.size = 0
-
-    def reset(self) -> None:
-        self.size = 0
-
-    def update(self, value: Any, *, reserve: int) -> None:
-        values = np.asarray(value).reshape(-1)
-        if values.size == 0:
-            return
-        end = self.size + values.size
-        if end > self.buffer.size:
-            capacity = max(end, reserve, max(64, self.buffer.size * 2))
-            grown = np.empty(capacity, dtype=np.float64)
-            grown[: self.size] = self.buffer[: self.size]
-            self.buffer = grown
-        self.buffer[self.size : end] = values
-        self.size = end
-
-    def flush(self) -> np.ndarray:
-        values = self.buffer[: self.size]
+    def update(self, value: Any, *, reserve: int) -> np.ndarray:
+        del reserve
+        values = np.asarray(value, dtype=np.float64).reshape(-1)
         values = values[np.isfinite(values)]
-        self.reset()
+        if not values.size:
+            return values
+        count = int(values.size)
+        batch_mean = float(np.mean(values))
+        delta = batch_mean - self.mean
+        total = self.size + count
+        self.m2 += float(np.sum((values - batch_mean) ** 2)) + delta * delta * self.size * count / total
+        self.mean += delta * count / total
+        self.size = total
+        self.nonzero += int(np.count_nonzero(values))
+        self.absolute_sum += float(np.sum(np.abs(values)))
         return values
+
+    def flush(self) -> _RewardMoments:
+        result = _RewardMoments(self.size, self.mean, self.m2, self.nonzero, self.absolute_sum)
+        self.size = self.nonzero = 0
+        self.mean = self.m2 = self.absolute_sum = 0.0
+        return result
+
+    @property
+    def std(self) -> float:
+        return math.sqrt(max(0.0, self.m2 / self.size)) if self.size else 0.0
+
+    @property
+    def nonzero_rate(self) -> float:
+        return self.nonzero / self.size if self.size else 0.0
 
 
 class RewardStatsAccumulator:
@@ -746,19 +757,40 @@ class RewardStatsAccumulator:
         *,
         active_components: Sequence[str] = (),
     ) -> None:
-        self.shaped = _BufferedStats()
-        self.raw = _BufferedStats()
+        self.shaped = _RewardMoments()
+        self.raw = _RewardMoments()
         self.active_components = tuple(
             component for component in active_components if component in self.component_info_keys
         )
-        self.components = {component: _BufferedStats() for component in self.active_components}
-        self.event_rewards: dict[str, _BufferedStats] = {}
+        self.components = {component: _RewardMoments() for component in self.active_components}
+        self.event_rewards: dict[str, _RewardMoments] = {}
+        # Only unmatched finite samples are retained when providers deliver the two
+        # streams in different batches. Normal paired vector records drain immediately.
+        self._pending_shaped: deque[np.ndarray] = deque()
+        self._pending_raw: deque[np.ndarray] = deque()
+        self._rewards_differ = False
 
     def consume(self, metrics: Mapping[str, Any], *, reserve: int) -> None:
         if (value := metrics.get("shaped_reward")) is not None:
-            self.shaped.update(value, reserve=reserve)
+            values = self.shaped.update(value, reserve=reserve)
+            if values.size and not self._rewards_differ:
+                self._pending_shaped.append(values)
         if (value := metrics.get("raw_reward")) is not None:
-            self.raw.update(value, reserve=reserve)
+            values = self.raw.update(value, reserve=reserve)
+            if values.size and not self._rewards_differ:
+                self._pending_raw.append(values)
+        while self._pending_shaped and self._pending_raw:
+            shaped, raw = self._pending_shaped[0], self._pending_raw[0]
+            count = min(shaped.size, raw.size)
+            if not np.array_equal(shaped[:count], raw[:count]):
+                self._rewards_differ = True
+                self._pending_shaped.clear()
+                self._pending_raw.clear()
+                break
+            for pending, values in ((self._pending_shaped, shaped), (self._pending_raw, raw)):
+                pending.popleft()
+                if values.size > count:
+                    pending.appendleft(values[count:])
         for component, accumulator in self.components.items():
             info_key = self.component_info_keys[component]
             value = metrics.get(info_key)
@@ -770,17 +802,17 @@ class RewardStatsAccumulator:
                 continue
             event = info_key.removeprefix(event_prefix)
             train_reward_event_metric(event, "mean")
-            accumulator = self.event_rewards.setdefault(event, _BufferedStats())
+            accumulator = self.event_rewards.setdefault(event, _RewardMoments())
             accumulator.update(value, reserve=reserve)
 
     @staticmethod
-    def _distribution(prefix: str, values: np.ndarray, stats: Sequence[str]) -> dict[str, float]:
+    def _distribution(prefix: str, values: _RewardMoments, stats: Sequence[str]) -> dict[str, float]:
         if values.size == 0:
             return {}
         calculations = {
-            "mean": lambda: float(np.mean(values)),
-            "std": lambda: float(np.std(values)),
-            "nonzero_rate": lambda: float(np.mean(values != 0.0)),
+            "mean": lambda: values.mean,
+            "std": lambda: values.std,
+            "nonzero_rate": lambda: values.nonzero_rate,
         }
         return {
             (
@@ -799,18 +831,19 @@ class RewardStatsAccumulator:
             shaped,
             ("mean", "std", "nonzero_rate"),
         )
-        if raw.size > 0 and (shaped.size != raw.size or not np.array_equal(shaped, raw)):
-            payload.update(self._distribution(f"{TRAIN_REWARD_ROOT}/raw", raw, ("mean", "std")))
+        if raw.size > 0 and (shaped.size != raw.size or self._rewards_differ):
+            payload.update(self._distribution(f"{TRAIN_REWARD_ROOT}/pre_transform", raw, ("mean", "std")))
+        self._rewards_differ = False
+        self._pending_shaped.clear()
+        self._pending_raw.clear()
         abs_sums: dict[str, float] = {}
         for component, accumulator in self.components.items():
             values = accumulator.flush()
             if values.size == 0:
                 continue
-            payload[train_reward_component_metric(component, "mean")] = float(np.mean(values))
-            payload[train_reward_component_metric(component, "nonzero_rate")] = float(
-                np.mean(values != 0.0)
-            )
-            abs_sums[component] = float(np.sum(np.abs(values)))
+            payload[train_reward_component_metric(component, "mean")] = values.mean
+            payload[train_reward_component_metric(component, "nonzero_rate")] = values.nonzero_rate
+            abs_sums[component] = values.absolute_sum
         total_abs_sum = sum(abs_sums.values())
         for component, abs_sum in abs_sums.items():
             payload[train_reward_component_metric(component, "share")] = (
@@ -820,10 +853,8 @@ class RewardStatsAccumulator:
             values = accumulator.flush()
             if values.size == 0:
                 continue
-            payload[train_reward_event_metric(event, "mean")] = float(np.mean(values))
-            payload[train_reward_event_metric(event, "nonzero_rate")] = float(
-                np.mean(values != 0.0)
-            )
+            payload[train_reward_event_metric(event, "mean")] = values.mean
+            payload[train_reward_event_metric(event, "nonzero_rate")] = values.nonzero_rate
         return payload
 
 

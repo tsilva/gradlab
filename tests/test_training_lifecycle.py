@@ -389,7 +389,7 @@ def test_plain_progress_is_bounded_and_uses_only_canonical_outcomes(
     metrics = {
         TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN: 5.0,
         TRAIN_OUTCOME_SUCCESS_STARTS_OBSERVED_CUMULATIVE_RATE_MEAN: 0.25,
-        "train/algorithm/go-explore/best/progress": 999.0,
+        "train/go-explore/best/progress": 999.0,
     }
     sink.update(step=10, metrics=metrics)
     assert capsys.readouterr().out == ""

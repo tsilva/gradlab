@@ -484,7 +484,7 @@ test("run evidence status distinguishes missing evaluation from failed evaluatio
   assert.equal(runEvaluationEvidenceStatus({ success_badges: ["eval/success"] }).label, "Accepted");
 });
 
-const METRIC = "eval/full/episode/return/shaped/mean";
+const METRIC = "eval/return_mean";
 
 test("checkpoint selection boxes are centered and distinguish enabled from disabled", async () => {
   const styles = await readFile(
@@ -715,7 +715,7 @@ test("goal configuration summaries preserve useful science without leaking raw c
     differenceLabel: "5 changes",
   };
   assert.equal(goalConfigurationSummary({
-    display_label: "Eval → {\"acceptance\":[{\"metric\":\"eval/full/episode/return/shaped/mean\"}]} · Evaluation mode training_only → evaluated · +3 more",
+    display_label: "Eval → {\"acceptance\":[{\"metric\":\"eval/return_mean\"}]} · Evaluation mode training_only → evaluated · +3 more",
   }, presentation), "Evaluation mode training_only → evaluated · 5 changes total");
   assert.equal(goalConfigurationSummary({ display_label: "" }, presentation), "5 changes from current goal");
 });
@@ -1405,30 +1405,30 @@ test("rejected active breadcrumb navigation leaves playback and history unchange
 });
 
 test("run metrics use compact labels and values", () => {
-  assert.equal(metricLabel("leader/checkpoint/step"), "Checkpoint step");
+  assert.equal(metricLabel("leader/step"), "Checkpoint step");
   assert.equal(metricLabel(METRIC), "Mean return");
   assert.equal(
-    metricLabel("train/outcome/success/starts/all/rolling/rate/min"),
+    metricLabel("train/target/success/start_rate_min"),
     "Recent all-start success rate min",
   );
   assert.equal(
-    metricLabel("train/outcome/success/starts/all/rolling/rate/mean"),
+    metricLabel("train/target/success/start_rate_mean"),
     "Recent all-start success rate mean",
   );
   assert.equal(
-    metricLabel("train/episode/return/shaped/origin/target/rolling/mean"),
+    metricLabel("train/target/return_mean"),
     "Recent target return mean",
   );
   assert.equal(
-    metricLabel("train/progress/kills/origin/target/rolling/mean"),
+    metricLabel("train/target/progress/kills/mean"),
     "Recent target kills mean",
   );
   assert.equal(
-    metricLabel("train/progress/bricks_destroyed/origin/target/rolling/max"),
+    metricLabel("train/target/progress/bricks_destroyed/max"),
     "Recent target bricks destroyed max",
   );
   assert.equal(
-    formatMetricValue("eval/full/outcome/success/starts/rate/min", 0.875),
+    formatMetricValue("eval/success/start_rate_min", 0.875),
     "87.5%",
   );
   assert.equal(formatMetricValue(METRIC, null), "—");
@@ -1436,23 +1436,23 @@ test("run metrics use compact labels and values", () => {
 
 test("checkpoint metric headers preserve semantics in one short line", () => {
   assert.equal(checkpointMetricHeaderLabel({
-    metric: "eval/full/outcome/success/starts/rate/min",
+    metric: "eval/success/start_rate_min",
     evidence: "evaluation",
   }), "Eval success");
   assert.equal(checkpointMetricHeaderLabel({
-    metric: "train/outcome/success/starts/all/rolling/rate/min",
+    metric: "train/target/success/start_rate_min",
     evidence: "training",
   }), "Train success");
   assert.equal(checkpointMetricHeaderLabel({
-    metric: "eval/full/episode/return/shaped/mean",
+    metric: "eval/return_mean",
     evidence: "evaluation",
   }), "Eval return");
   assert.equal(checkpointMetricHeaderLabel({
-    metric: "train/episode/return/shaped/origin/target/rolling/mean",
+    metric: "train/target/return_mean",
     evidence: "training",
   }), "Train return");
   assert.equal(checkpointMetricHeaderLabel({
-    metric: "eval/full/progress/kills/mean",
+    metric: "eval/progress/kills/mean",
     evidence: "evaluation",
   }), "Eval kills");
 });
@@ -1517,10 +1517,10 @@ test("run finish reasons distinguish resource, training, and evaluation outcomes
       early_stop: {
         condition_id: "training_target",
         trigger: "threshold",
-        metric: "train/episode/return/shaped/origin/target/rolling/mean",
+        metric: "train/target/return_mean",
         value: 5.25,
         condition: {
-          metric: "train/episode/return/shaped/origin/target/rolling/mean",
+          metric: "train/target/return_mean",
           trigger: "threshold",
           operator: ">=",
           threshold: 5,
@@ -1640,14 +1640,14 @@ test("unevaluated and unsuccessfully evaluated checkpoints are selectable", () =
 });
 
 test("checkpoint metric cells identify their own leaders", async () => {
-  const trainSuccess = "train/outcome/success/starts/all/rolling/rate/mean";
-  const evalReturn = "eval/full/episode/return/shaped/mean";
+  const trainSuccess = "train/target/success/start_rate_mean";
+  const evalReturn = "eval/return_mean";
   const checkpoint = { best_metrics: [trainSuccess, evalReturn] };
 
   assert.equal(checkpointMetricIsBest(checkpoint, trainSuccess), true);
   assert.equal(checkpointMetricIsBest(checkpoint, evalReturn), true);
   assert.equal(
-    checkpointMetricIsBest(checkpoint, "eval/full/outcome/success/starts/rate/mean"),
+    checkpointMetricIsBest(checkpoint, "eval/success/start_rate_mean"),
     false,
   );
   assert.equal(checkpointMetricIsBest({}, trainSuccess), false);
@@ -2118,12 +2118,12 @@ test("run panels omit metric columns with no visible evidence", () => {
 
 test("run efficiency prefers complete goal evaluation and follows its rank order", () => {
   const primary = [
-    { metric: "leader/checkpoint/step", direction: "min" },
+    { metric: "leader/step", direction: "min" },
     { metric: METRIC, direction: "max" },
   ];
   const fallback = [
     {
-      metric: "train/outcome/success/starts/all/rolling/rate/min",
+      metric: "train/target/success/start_rate_min",
       direction: "max",
     },
     { metric: "train/global_step", direction: "min" },
@@ -2133,7 +2133,7 @@ test("run efficiency prefers complete goal evaluation and follows its rank order
       run_id: "training-only",
       recipe: "fast-training",
       metrics: {
-        "train/outcome/success/starts/all/rolling/rate/min": 1,
+        "train/target/success/start_rate_min": 1,
         "train/global_step": 100,
       },
     },
@@ -2141,7 +2141,7 @@ test("run efficiency prefers complete goal evaluation and follows its rank order
       run_id: "later-checkpoint",
       recipe: "high-return",
       metrics: {
-        "leader/checkpoint/step": 2_000,
+        "leader/step": 2_000,
         [METRIC]: 500,
       },
     },
@@ -2149,7 +2149,7 @@ test("run efficiency prefers complete goal evaluation and follows its rank order
       run_id: "earlier-checkpoint",
       recipe: "sample-efficient",
       metrics: {
-        "leader/checkpoint/step": 1_000,
+        "leader/step": 1_000,
         [METRIC]: 100,
       },
     },
@@ -2167,12 +2167,12 @@ test("run efficiency prefers complete goal evaluation and follows its rank order
 
 test("run efficiency labels training fallback without evaluation evidence", () => {
   const primary = [
-    { metric: "leader/checkpoint/step", direction: "min" },
+    { metric: "leader/step", direction: "min" },
     { metric: METRIC, direction: "max" },
   ];
   const fallback = [
     {
-      metric: "train/outcome/success/starts/all/rolling/rate/min",
+      metric: "train/target/success/start_rate_min",
       direction: "max",
     },
     { metric: "train/global_step", direction: "min" },
@@ -2181,14 +2181,14 @@ test("run efficiency labels training fallback without evaluation evidence", () =
     {
       run_id: "slower",
       metrics: {
-        "train/outcome/success/starts/all/rolling/rate/min": 0.9,
+        "train/target/success/start_rate_min": 0.9,
         "train/global_step": 2_000,
       },
     },
     {
       run_id: "faster",
       metrics: {
-        "train/outcome/success/starts/all/rolling/rate/min": 0.9,
+        "train/target/success/start_rate_min": 0.9,
         "train/global_step": 1_000,
       },
     },

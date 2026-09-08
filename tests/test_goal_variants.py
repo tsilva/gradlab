@@ -179,7 +179,7 @@ def test_goal_contract_comparison_expands_acceptance_rules_instead_of_json_blobs
         "eval": {
             "acceptance": [
                 {
-                    "metric": "eval/full/episode/return/shaped/mean",
+                    "metric": "eval/return_mean",
                     "operator": ">=",
                     "threshold": 10.0,
                 }
