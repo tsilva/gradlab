@@ -116,3 +116,23 @@ def test_dashboard_uses_goal_order_and_rejects_conflicting_shared_goals(tmp_path
     with pytest.raises(ValueError, match="different goal rankings"):
         _resolve_project_metrics(spec, [(tmp_path / "a.yaml", goal),
             (tmp_path / "b.yaml", {"objective": {"rank": list(reversed(ranks))}})])
+
+
+@pytest.mark.parametrize("representation", ["flat", "nested", "scalar"])
+def test_run_ranking_reads_wandb_summary_reducer_representations(representation):
+    metrics = {"train/target/progress/bricks_destroyed/mean": (32.08, "last"),
+               "train/target/progress/bricks_destroyed/max": (66.0, "last"),
+               "train/all/episode_steps_mean": (2277.98, "last"),
+               "train/global_step": (4915200, "max")}
+    summary = {(f"{name}.{reducer}" if representation == "flat" else name):
+               ({reducer: value} if representation == "nested" else value)
+               for name, (value, reducer) in metrics.items()}
+    run = SimpleNamespace(id="run", name="run", url="", summary=summary, config={
+        "goal_slug": "goal", "recipe_slug": "recipe", "selection_rank": [
+            "max(train/target/progress/bricks_destroyed/mean)",
+            "max(train/target/progress/bricks_destroyed/max)",
+            "min(train/all/episode_steps_mean)"]})
+    result = run_score(run, objective_keys=())
+    assert result.objective == 32.08
+    assert result.rank_values == (32.08, 66.0, -2277.98)
+    assert result.steps == 4915200
