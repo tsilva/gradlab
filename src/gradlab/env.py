@@ -43,6 +43,7 @@ from gradlab.env_identity import task_config_from_train_config, validate_task_co
 from gradlab.env_registry import environment_spec
 from gradlab.task_kernels import (
     CELL_NOVELTY_REWARD_KEY,
+    EVENT_DELTA_REWARDS_KEY,
     EVENT_REWARDS_KEY,
     IdentityTaskDefinition,
     MarioTaskConfig,
@@ -441,9 +442,9 @@ def _bound_task_kernel(
             "generic native-vector tasks require native actions or a task action codec"
         )
     reward_mode = reward.get("reward_mode")
-    if reward_mode not in {"native", "sample-factory-v0"}:
+    if reward_mode not in {"native", "events", "sample-factory-v0"}:
         raise ValueError(
-            "generic native-vector tasks require native or Sample Factory Deathmatch rewards"
+            "generic native-vector tasks require native, events, or Sample Factory Deathmatch rewards"
         )
     if task_conditioning(config).get("enabled"):
         raise ValueError("generic native-vector tasks do not support task conditioning")
@@ -471,7 +472,12 @@ def _bound_task_kernel(
             reward,
         )
     kernel = with_cell_novelty(kernel, reward.get(CELL_NOVELTY_REWARD_KEY))
-    kernel = with_event_rewards(kernel, reward.get(EVENT_REWARDS_KEY))
+    kernel = with_event_rewards(
+        kernel,
+        reward.get(EVENT_REWARDS_KEY),
+        event_delta_rewards=reward.get(EVENT_DELTA_REWARDS_KEY),
+        include_native=reward_mode != "events",
+    )
     kernel = with_reward_transform(kernel, reward)
     kernel = with_episode_progress_metrics(
         kernel,

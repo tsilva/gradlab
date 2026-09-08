@@ -36,6 +36,7 @@ def descriptor() -> ProviderDescriptor:
         signal_schema={
             "ball_y": SignalSpec("ball_y", np.int64),
             "lives": SignalSpec("lives", np.int64),
+            "bricks": SignalSpec("bricks", np.int64),
         },
     )
 
@@ -58,6 +59,69 @@ def test_identity_event_rewards_are_strict_and_reference_declared_events() -> No
 
     configured["reward"]["event_rewards"] = {"life_loss": 0}
     with pytest.raises(ValueError, match="finite non-zero"):
+        validate_task_config(configured)
+
+
+def test_delta_rewards_count_all_bricks_and_preserve_reset_and_terminal_boundaries() -> None:
+    configured = task()
+    configured["signals"]["bricks"] = "bricks"
+    configured["events"]["brick_destroyed"] = {"signal": "bricks", "operation": "increase"}
+    configured["reward"] = {
+        "reward_mode": "events",
+        "reward_scale": 1.0,
+        "reward_clip": False,
+        "event_delta_rewards": {"brick_destroyed": 1.0, "life_loss": -0.1},
+    }
+    validate_task_config(configured)
+    assert active_reward_components(configured) == ("event",)
+    base = IdentityTaskDefinition(signals=configured["signals"], events=configured["events"]).bind(
+        descriptor(), 2
+    )
+    kernel = with_event_rewards(
+        base,
+        None,
+        event_delta_rewards=configured["reward"]["event_delta_rewards"],
+        include_native=False,
+    )
+    obs = np.zeros((2, 1, 8, 8), dtype=np.uint8)
+    flags = np.zeros(2, dtype=np.bool_)
+    kernel.on_reset(obs, {"lives": np.array([5, 5]), "bricks": np.array([0, 107])}, ~flags)
+    step = kernel.process(
+        np.array([21, 7]), flags, flags, {"lives": np.array([5, 3]), "bricks": np.array([3, 109])}
+    )
+    # Three simultaneous bricks; wall rollover still adds two; two lost lives cost 0.2.
+    np.testing.assert_allclose(step.rewards, [3.0, 1.8])
+    np.testing.assert_allclose(step.metrics["native_reward_component"], 0)
+    np.testing.assert_allclose(step.metrics["event_reward_component/brick_destroyed"], [3, 2])
+    kernel.on_reset(
+        obs, {"lives": np.array([5, 3]), "bricks": np.array([0, 109])}, np.array([True, False])
+    )
+    step = kernel.process(
+        np.array([99, 99]), flags, flags, {"lives": np.array([5, 3]), "bricks": np.array([0, 109])}
+    )
+    np.testing.assert_allclose(step.rewards, 0)
+    step = kernel.process(
+        np.array([7, 7]),
+        np.array([True, False]),
+        flags,
+        {"lives": np.array([4, 3]), "bricks": np.array([1, 110])},
+    )
+    np.testing.assert_allclose(step.rewards, [0.9, 1.0])
+
+
+@pytest.mark.parametrize("operation", ["equals", "previous_equals"])
+def test_delta_rewards_reject_non_counter_events(operation: str) -> None:
+    configured = task()
+    configured["events"]["life_loss"] = {"signal": "lives", "operation": operation, "value": 0}
+    configured["reward"]["event_delta_rewards"] = {"life_loss": -0.1}
+    with pytest.raises(ValueError, match="requires an increase or decrease"):
+        validate_task_config(configured)
+
+
+def test_delta_rewards_reject_double_counting() -> None:
+    configured = task()
+    configured["reward"]["event_delta_rewards"] = {"life_loss": -0.1}
+    with pytest.raises(ValueError, match="overlap"):
         validate_task_config(configured)
 
 
