@@ -32,6 +32,7 @@ from gradlab.reward_transform import (
 from gradlab.rom_assets import manifest_from_train_config, portable_rom_asset_identity
 from gradlab.task_kernels import (
     CELL_NOVELTY_REWARD_KEY,
+    EVENT_DELTA_REWARDS_KEY,
     EVENT_REWARDS_KEY,
     default_task_document,
     normalize_cell_novelty_config,
@@ -44,7 +45,8 @@ ENVIRONMENT_HASH_ALGORITHM = "gradlab.environment.v5"
 ENVIRONMENT_SCHEMA_VERSION = 5
 
 IDENTITY_REWARD_KEYS = (
-    frozenset({"reward_mode", CELL_NOVELTY_REWARD_KEY, EVENT_REWARDS_KEY}) | COMMON_REWARD_KEYS
+    frozenset({"reward_mode", CELL_NOVELTY_REWARD_KEY, EVENT_REWARDS_KEY, EVENT_DELTA_REWARDS_KEY})
+    | COMMON_REWARD_KEYS
 )
 
 
@@ -122,6 +124,11 @@ def task_config_from_train_config(
         normalized["reward"][EVENT_REWARDS_KEY] = normalize_event_rewards(
             event_rewards,
             label=f"task.reward.{EVENT_REWARDS_KEY}",
+        )
+    if EVENT_DELTA_REWARDS_KEY in normalized["reward"]:
+        normalized["reward"][EVENT_DELTA_REWARDS_KEY] = normalize_event_rewards(
+            normalized["reward"][EVENT_DELTA_REWARDS_KEY],
+            label=f"task.reward.{EVENT_DELTA_REWARDS_KEY}",
         )
     return normalized
 
@@ -330,9 +337,9 @@ def validate_task_config(task: Mapping[str, Any], *, label: str = "task") -> Non
     if extra_reward_keys:
         raise ValueError(f"{label}.reward has unexpected keys: {extra_reward_keys}")
     reward_transform_from_reward(reward, label=f"{label}.reward")
-    if task_id == "identity" and reward_mode not in {None, "native", "sample-factory-v0"}:
+    if task_id == "identity" and reward_mode not in {None, "native", "events", "sample-factory-v0"}:
         raise ValueError(
-            f"{label}.reward.reward_mode must be 'native' or 'sample-factory-v0' "
+            f"{label}.reward.reward_mode must be 'native', 'events', or 'sample-factory-v0' "
             "for the identity task"
         )
     if task_id == "identity" and reward_mode == "sample-factory-v0":
@@ -360,6 +367,24 @@ def validate_task_config(task: Mapping[str, Any], *, label: str = "task") -> Non
                 f"{label}.reward.reward_mode='sample-factory-v0' requires declared task "
                 f"signal(s): {', '.join(missing_signals)}"
             )
+    if reward_mode == "events" and CELL_NOVELTY_REWARD_KEY in reward:
+        raise ValueError(f"{label}.reward events mode does not support cell_novelty")
+    if reward_mode == "events" and not any(
+        reward.get(key) for key in (EVENT_REWARDS_KEY, EVENT_DELTA_REWARDS_KEY)
+    ):
+        raise ValueError(f"{label}.reward events mode requires event rewards")
+    delta_rewards = reward.get(EVENT_DELTA_REWARDS_KEY)
+    if delta_rewards is not None:
+        normalized_delta = normalize_event_rewards(
+            delta_rewards, label=f"{label}.reward.{EVENT_DELTA_REWARDS_KEY}"
+        )
+        for name in normalized_delta:
+            if name not in events or events[name].get("operation") not in {"increase", "decrease"}:
+                raise ValueError(
+                    f"{label}.reward delta event {name!r} requires an increase or decrease event"
+                )
+        if set(normalized_delta) & set(reward.get(EVENT_REWARDS_KEY) or {}):
+            raise ValueError(f"{label}.reward fixed and delta event rewards overlap")
     event_rewards = reward.get(EVENT_REWARDS_KEY)
     if event_rewards is not None:
         normalized_event_rewards = normalize_event_rewards(

@@ -738,6 +738,7 @@ class TaskStep:
 
 CELL_NOVELTY_REWARD_KEY = "cell_novelty"
 EVENT_REWARDS_KEY = "event_rewards"
+EVENT_DELTA_REWARDS_KEY = "event_delta_rewards"
 
 
 def normalize_event_rewards(
@@ -2540,16 +2541,30 @@ class IdentityTaskKernel:
 
 
 class EventRewardTaskKernel:
-    """Add signed rewards when declared identity-task events fire."""
+    """Pay fixed or absolute-delta rewards when declared task events fire."""
 
     def __init__(
         self,
         kernel: BoundTaskKernel,
-        event_rewards: Mapping[str, Any],
+        event_rewards: Mapping[str, Any] | None,
+        *,
+        event_delta_rewards: Mapping[str, Any] | None = None,
+        include_native: bool = True,
     ) -> None:
         self.kernel = kernel
         self.num_envs = int(kernel.num_envs)
-        normalized = normalize_event_rewards(event_rewards)
+        normalized = normalize_event_rewards(event_rewards) if event_rewards is not None else {}
+        delta_rewards = (
+            normalize_event_rewards(event_delta_rewards, label="task.reward.event_delta_rewards")
+            if event_delta_rewards is not None
+            else {}
+        )
+        overlap = set(normalized) & set(delta_rewards)
+        if overlap:
+            raise ValueError("fixed and delta event rewards overlap: " + ", ".join(sorted(overlap)))
+        self._delta_events = frozenset(delta_rewards)
+        self._include_native = include_native
+        normalized.update(delta_rewards)
         event_indices = {name: index for index, name in enumerate(kernel.event_names)}
         missing = sorted(set(normalized) - set(event_indices))
         if missing:
@@ -2596,13 +2611,31 @@ class EventRewardTaskKernel:
             self._native_reward_component,
             np.asarray(task_step.rewards, dtype=np.float32),
         )
+        if not self._include_native:
+            self._native_reward_component.fill(0.0)
         self._event_reward_total.fill(0.0)
         event_bits = np.asarray(task_step.event_bits, dtype=np.uint64)
         for name, index, coefficient in self._configured:
             active = (event_bits & np.uint64(1 << index)) != 0
             component = self._event_reward_components[name]
             component.fill(0.0)
-            component[active] = coefficient
+            if name in self._delta_events:
+                if name not in task_step.event_transitions:
+                    raise ValueError(f"delta reward event {name!r} has no numeric transition")
+                before, after = task_step.event_transitions[name]
+                # Convert before subtraction to prevent unsigned/integer overflow.
+                delta = np.abs(
+                    np.asarray(after)[active].astype(np.float64)
+                    - np.asarray(before)[active].astype(np.float64)
+                )
+                values = delta * coefficient
+                if np.any(~np.isfinite(values)) or np.any(
+                    np.abs(values) > np.finfo(np.float32).max
+                ):
+                    raise ValueError(f"delta reward event {name!r} exceeds finite float32 range")
+                component[active] = values
+            else:
+                component[active] = coefficient
             self._event_reward_total += component
         np.add(
             self._native_reward_component,
@@ -2670,8 +2703,15 @@ class EventRewardTaskKernel:
 def with_event_rewards(
     kernel: BoundTaskKernel,
     value: Mapping[str, Any] | None,
+    *,
+    event_delta_rewards: Mapping[str, Any] | None = None,
+    include_native: bool = True,
 ) -> BoundTaskKernel:
-    return kernel if value is None else EventRewardTaskKernel(kernel, value)
+    if value is None and event_delta_rewards is None and include_native:
+        return kernel
+    return EventRewardTaskKernel(
+        kernel, value, event_delta_rewards=event_delta_rewards, include_native=include_native
+    )
 
 
 @dataclass(frozen=True)

@@ -1,0 +1,56 @@
+defaults:
+- ../../../recipes/_presets/breakout-ball-state-ablation-ppo@_global_
+- _self_
+recipe_id: ppo-ball-state-brick-reward
+description: Breakout ball-state PPO rewarding each destroyed brick equally instead of native score.
+train:
+  timesteps: 100000000
+  backend:
+    config:
+      gamma: 0.99
+      gae_lambda: 0.95
+      n_steps: 128
+  environment:
+    env_config:
+      n_envs: 64
+    task:
+      model_inputs:
+        schema_version: 1
+        context:
+          ball_x:
+            signal: policy_ball_x
+            update: transition
+            encoding: {kind: continuous, scale: 2.0, offset: -1.0, low: null, high: null, clip: false}
+          ball_y:
+            signal: policy_ball_y
+            update: transition
+            encoding: {kind: continuous, scale: 2.0, offset: -1.0, low: null, high: null, clip: false}
+          ball_vx:
+            signal: policy_ball_vx
+            update: transition
+            encoding: {kind: continuous, scale: 1.0, offset: 0.0, low: null, high: null, clip: false}
+          ball_vy:
+            signal: policy_ball_vy
+            update: transition
+            encoding: {kind: continuous, scale: 1.0, offset: 0.0, low: null, high: null, clip: false}
+          paddle_x:
+            signal: policy_paddle_x
+            update: transition
+            encoding: {kind: continuous, scale: 2.0, offset: -1.0, low: null, high: null, clip: false}
+          paddle_width:
+            signal: policy_paddle_width
+            update: transition
+            encoding: {kind: continuous, scale: 8.0, offset: -7.0, low: null, high: null, clip: false}
+          ball_paddle_offset:
+            signal: policy_ball_paddle_offset
+            update: transition
+            encoding: {kind: continuous, scale: 1.0, offset: 0.0, low: null, high: null, clip: false}
+      events:
+        brick_destroyed:
+          signal: bricks_destroyed
+          operation: increase
+      reward:
+        # Exclude native score; retain inherited life-loss and serve-stall rewards.
+        reward_mode: events
+        event_delta_rewards:
+          brick_destroyed: 1.0

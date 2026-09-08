@@ -3,12 +3,55 @@ from pathlib import Path
 import numpy as np
 
 from gradlab.actor_critic_policy import SharedActorCriticPolicy
-from gradlab.env import make_training_vec_env, resolve_env_config
+from gradlab.env import make_eval_vec_env, make_training_vec_env, resolve_env_config
 from gradlab.env_config import env_config_from_mapping
 from gradlab.recipe_documents import compose_train_document
 
 
 BREAKOUT_ROOT = Path("experiments/goals/Breakout-Atari2600-v0")
+
+
+def test_brick_reward_recipe_matches_provider_deltas_without_native_score() -> None:
+    document = compose_train_document(
+        BREAKOUT_ROOT / "_goal.yaml", BREAKOUT_ROOT / "recipes/ppo-ball-state-brick-reward.yaml"
+    )
+    train = document["train_config"]
+    assert train["n_envs"] == 64
+    assert train["timesteps"] == 100000000
+    assert len(train["task"]["model_inputs"]["context"]) == 7
+    baseline = compose_train_document(
+        BREAKOUT_ROOT / "_goal.yaml", BREAKOUT_ROOT / "recipes/ppo-ball-state.yaml"
+    )["train_config"]
+    assert train["task"]["model_inputs"] == baseline["task"]["model_inputs"]
+    assert train["policy_model"] == baseline["policy_model"]
+    assert train["training_backend"]["config"]["gamma"] == 0.99
+    assert train["training_backend"]["config"]["gae_lambda"] == 0.95
+    assert train["frame_skip"] == 2
+    assert train["task"]["reward"]["event_rewards"] == {"life_loss": -0.1, "serve_stall": -5.0}
+    config = resolve_env_config(env_config_from_mapping(train))
+    env = make_eval_vec_env(config, n_envs=2, seed=10000)
+    try:
+        env.reset()
+        returns = np.zeros(2, dtype=np.float64)
+        completed = 0
+        scored = False
+        rng = np.random.default_rng(10000)
+        for _ in range(6000):
+            _, rewards, dones, infos = env.step(rng.integers(0, 3, size=2, dtype=np.int64))
+            returns += rewards
+            for lane, info in enumerate(infos):
+                if dones[lane]:
+                    expected = int(info["bricks_destroyed"]) - 0.1 * (5 - int(info["lives"]))
+                    np.testing.assert_allclose(returns[lane], expected, atol=1e-5)
+                    scored |= int(info["bricks_destroyed"]) > 0
+                    completed += 1
+                    returns[lane] = 0
+            if completed >= 4 and scored:
+                break
+        assert completed >= 4
+        assert scored
+    finally:
+        env.close()
 
 
 def test_plain_ppo_recipe_exposes_brick_progress_through_the_real_vector_runtime() -> None:
