@@ -59,6 +59,7 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
                 "top_target_return_mean",
                 "top_episode_length",
                 "target_score_mean",
+                "target_score_max",
                 "serve_stall_count",
                 "serve_wait_rate",
                 "target_return_max",
@@ -81,6 +82,10 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
         self.assertFalse(any("/a2c/" in metric for metric in breakout_metrics))
         self.assertIn(
             "train/progress/score/origin/target/rolling/mean",
+            breakout_metrics,
+        )
+        self.assertIn(
+            "train/progress/score/origin/target/rolling/max",
             breakout_metrics,
         )
         self.assertIn(

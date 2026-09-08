@@ -124,6 +124,12 @@ sections:
       x: train/global_step
       y:
       - train/progress/score/origin/target/rolling/mean
+    - id: target_score_max
+      kind: line
+      y_title: score max (last 100 episodes)
+      x: train/global_step
+      y:
+      - train/progress/score/origin/target/rolling/max
     - id: serve_stall_count
       kind: line
       y_title: episodes (last 100)

@@ -153,7 +153,7 @@ metric path. `cumulative` explicitly means all eligible observations seen so far
   start's latest 100 attempts must all clear. This training stop is not acceptance or promotion;
   explicitly evaluated Mario checkpoints rank by earliest `leader/checkpoint/step`, then highest
   `eval/full/episode/return/shaped/mean`. Breakout is training-only and ranks current-contract seeded
-  recipe cohorts using `train/episode/return/shaped/origin/target/rolling/mean`, which
+  recipe cohorts using `train/progress/bricks_destroyed/origin/target/rolling/mean`, which
   excludes archive-curriculum origins and non-episode control boundaries; tied cohorts prefer fewer
   policy transitions.
 - Aggregate training `starts/observed/cumulative/rate/*` is cumulative. Aggregate
@@ -223,8 +223,8 @@ metric path. `cumulative` explicitly means all eligible observations seen so far
   evaluation performance. A threshold condition with `progress_baseline` additionally emits
   `train/early_stop/{condition}/target/progress` as the current metric's clamped fraction from that
   baseline to its threshold. Only goal-owned checkpoint evaluation may establish acceptance.
-- `train/episode/length/origin/all/rolling/mean` counts policy transitions, so one step represents
-  four native frames in the current Breakout contract. It combines target- and archive-origin
+- `train/episode/length/origin/all/rolling/mean` counts policy transitions; nominal native frames
+  per step follow the run's recorded `frame_skip` (two in the ball-state recipe). It combines target- and archive-origin
   episodes and is therefore not a clean survival comparison when archive curricula differ. Within
   identical start, frame-skip, reset, and termination contracts, increasing length can indicate
   better ball defense when target return or progress also improves and failure-reason rates do not;
