@@ -11,6 +11,15 @@ from gradlab.recipe_documents import compose_train_document
 BREAKOUT_ROOT = Path("experiments/goals/Breakout-Atari2600-v0")
 
 
+def test_default_ppo_matches_successful_brick_reward_configuration() -> None:
+    goal = BREAKOUT_ROOT / "_goal.yaml"
+    default = compose_train_document(goal, BREAKOUT_ROOT / "recipes/ppo.yaml")
+    candidate = compose_train_document(
+        goal, BREAKOUT_ROOT / "recipes/ppo-ball-state-brick-reward.yaml"
+    )
+    assert default["train_config"] == candidate["train_config"]
+
+
 def test_brick_reward_recipe_matches_provider_deltas_without_native_score() -> None:
     document = compose_train_document(
         BREAKOUT_ROOT / "_goal.yaml", BREAKOUT_ROOT / "recipes/ppo-ball-state-brick-reward.yaml"

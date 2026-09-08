@@ -1,26 +1,57 @@
 defaults:
-- ../../../recipes/_presets/breakout-high-throughput-ppo@_global_
+- ../../../recipes/_presets/breakout-ball-state-ablation-ppo@_global_
 - _self_
 recipe_id: ppo
-description: High-throughput three-action PPO for {{ goal_id }} with learning-rate and entropy decay plus a near-zero life-loss penalty and five-point serve-stall penalty.
+description: Default Breakout ball-state PPO rewarding each destroyed brick equally instead of native score.
+# Matches the 100M-step configuration of run gradlab-e4b8643a0c7ae2764a90ad31ecfd3cf6.
 train:
+  timesteps: 100000000
+  backend:
+    config:
+      gamma: 0.99
+      gae_lambda: 0.95
+      n_steps: 128
   environment:
     env_config:
-      env_args:
-        # Both Breakout providers compile this table to the same three-action
-        # semantic contract: BUTTON/FIRE, RIGHT, LEFT. NOOP remains available
-        # only to the reset randomizer, outside the policy action space.
-        use_restricted_actions:
-        - [BUTTON]
-        - [RIGHT]
-        - [LEFT]
+      n_envs: 64
     task:
-      signals:
-        lives: lives
+      model_inputs:
+        schema_version: 1
+        context:
+          ball_x:
+            signal: policy_ball_x
+            update: transition
+            encoding: {kind: continuous, scale: 2.0, offset: -1.0, low: null, high: null, clip: false}
+          ball_y:
+            signal: policy_ball_y
+            update: transition
+            encoding: {kind: continuous, scale: 2.0, offset: -1.0, low: null, high: null, clip: false}
+          ball_vx:
+            signal: policy_ball_vx
+            update: transition
+            encoding: {kind: continuous, scale: 1.0, offset: 0.0, low: null, high: null, clip: false}
+          ball_vy:
+            signal: policy_ball_vy
+            update: transition
+            encoding: {kind: continuous, scale: 1.0, offset: 0.0, low: null, high: null, clip: false}
+          paddle_x:
+            signal: policy_paddle_x
+            update: transition
+            encoding: {kind: continuous, scale: 2.0, offset: -1.0, low: null, high: null, clip: false}
+          paddle_width:
+            signal: policy_paddle_width
+            update: transition
+            encoding: {kind: continuous, scale: 8.0, offset: -7.0, low: null, high: null, clip: false}
+          ball_paddle_offset:
+            signal: policy_ball_paddle_offset
+            update: transition
+            encoding: {kind: continuous, scale: 1.0, offset: 0.0, low: null, high: null, clip: false}
       events:
-        life_loss:
-          signal: lives
-          operation: decrease
+        brick_destroyed:
+          signal: bricks_destroyed
+          operation: increase
       reward:
-        event_rewards:
-          life_loss: -0.1
+        # Exclude native score; retain inherited life-loss and serve-stall rewards.
+        reward_mode: events
+        event_delta_rewards:
+          brick_destroyed: 1.0
