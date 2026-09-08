@@ -52,12 +52,17 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
         breakout = next(spec for spec in first if spec.project == "Breakout-Atari2600-v0")
         self.assertEqual(breakout.run_scope, "all")
         self.assertEqual(
+            [panel.panel_id for panel in breakout.sections[0].panels],
+            ["target_bricks_destroyed_mean", "target_bricks_destroyed_max", "top_episode_length"],
+        )
+        self.assertEqual(
             [panel.panel_id for section in breakout.sections for panel in section.panels],
             [
+                "target_bricks_destroyed_mean",
                 "target_bricks_destroyed_max",
+                "top_episode_length",
                 "target_bricks_destroyed_normalized_mean",
                 "top_target_return_mean",
-                "top_episode_length",
                 "target_score_mean",
                 "target_score_max",
                 "serve_stall_count",
@@ -155,6 +160,7 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
         document = yaml.safe_load(MANIFEST.read_text(encoding="utf-8"))
         document["profiles"].pop("breakout_training")
         document["sections"].pop("breakout_diagnostics")
+        document["sections"].pop("breakout_secondary")
         document["profiles"]["compact"] = {
             "display_name": "GradLab Compact",
             "run_scope": "current_metrics_schema",

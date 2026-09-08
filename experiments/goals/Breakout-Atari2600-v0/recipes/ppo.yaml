@@ -50,6 +50,12 @@ train:
         brick_destroyed:
           signal: bricks_destroyed
           operation: increase
+        two_walls_cleared:
+          signal: walls_cleared
+          operation: equals
+          value: 2
+      termination:
+        success: [two_walls_cleared]
       reward:
         # Exclude native score; retain inherited life-loss and serve-stall rewards.
         reward_mode: events

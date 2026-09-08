@@ -94,12 +94,30 @@ sections:
     open: true
     columns: 2
     panels:
+    - id: target_bricks_destroyed_mean
+      kind: line
+      y_title: bricks (last 100 episodes)
+      x: train/global_step
+      y:
+      - train/progress/bricks_destroyed/origin/target/rolling/mean
     - id: target_bricks_destroyed_max
       kind: line
       y_title: bricks (last 100 episodes)
       x: train/global_step
       y:
       - train/progress/bricks_destroyed/origin/target/rolling/max
+    - id: top_episode_length
+      kind: line
+      y_title: steps (last 100 episodes)
+      x: train/global_step
+      y:
+      - train/episode/length/origin/all/rolling/mean
+  breakout_secondary:
+    title: Breakout diagnostics
+    pinned: false
+    open: true
+    columns: 2
+    panels:
     - id: target_bricks_destroyed_normalized_mean
       kind: line
       y_title: fraction (last 100 episodes)
@@ -112,12 +130,6 @@ sections:
       x: train/global_step
       y:
       - train/episode/return/shaped/origin/target/rolling/mean
-    - id: top_episode_length
-      kind: line
-      y_title: steps (last 100 episodes)
-      x: train/global_step
-      y:
-      - train/episode/length/origin/all/rolling/mean
     - id: target_score_mean
       kind: line
       y_title: score (last 100 episodes)
@@ -156,6 +168,7 @@ profiles:
     max_runs: 25
     sections:
     - breakout_diagnostics
+    - breakout_secondary
     - training_essentials
 
 # Every W&B project resolved from a checked-in active goal inherits the default profile.
