@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from gradlab.metric_inventory import active_reward_components
+
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -150,49 +152,6 @@ def normalize_on_policy_config(
         raise ValueError(f"{label}.resume requires a pinned approval hash and byte manifest")
     return normalized
 
-
-def active_reward_components(task: Mapping[str, object]) -> tuple[str, ...]:
-    reward = task.get("reward")
-    if not isinstance(reward, Mapping):
-        return ()
-    components: list[str] = []
-    reward_mode = str(reward.get("reward_mode") or "")
-    if reward_mode == "sample-factory-v0":
-        return (
-            "kill",
-            "death",
-            "hit",
-            "damage",
-            "health",
-            "armor",
-            "weapon",
-            "ammo",
-            "weapon_hold",
-        )
-    if reward_mode == "native" or bool(reward.get("use_native_reward")):
-        components.append("native")
-    if isinstance(reward.get("cell_novelty"), Mapping):
-        components.append("cell_novelty")
-    event_rewards = reward.get("event_rewards")
-    if isinstance(event_rewards, Mapping) or isinstance(reward.get("event_delta_rewards"), Mapping):
-        components.append("event")
-    if (
-        float(reward.get("progress_reward_scale") or 0.0) != 0.0
-        or float(reward.get("progress_reward_boost_scale") or 0.0) != 0.0
-    ):
-        components.append("progress")
-    if reward_mode == "score":
-        components.append("score")
-    if (
-        float(reward.get("terminal_reward") or 0.0) != 0.0
-        or float(reward.get("completion_reward") or 0.0) != 0.0
-    ):
-        components.append("completion")
-    if float(reward.get("death_penalty") or 0.0) != 0.0:
-        components.append("death")
-    if float(reward.get("time_penalty") or 0.0) != 0.0:
-        components.append("time")
-    return tuple(components)
 
 
 def validate_action_space(action_space, *, algorithm_id: str) -> None:

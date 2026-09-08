@@ -112,7 +112,7 @@ def build_wandb_workspace(spec: WandbWorkspaceSpec, *, entity: str):
                     rows=math.ceil(len(panels) / section.columns),
                 ),
                 panel_settings=ws.SectionPanelSettings(
-                    x_axis="train/global_step",
+                    x_axis=section.panels[0].x,
                     smoothing_type="none",
                     smoothing_weight=0,
                 ),

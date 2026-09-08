@@ -110,7 +110,7 @@ def bundle(*, seed: int = 7, step: int = 4_000_000) -> PolicyBundle:
                     "episodes": 2,
                     "acceptance": [
                         {
-                            "metric": "eval/full/progress/kills/mean",
+                            "metric": "eval/progress/kills/mean",
                             "operator": ">=",
                             "threshold": 10.0,
                         }
@@ -118,8 +118,8 @@ def bundle(*, seed: int = 7, step: int = 4_000_000) -> PolicyBundle:
                 },
                 "objective": {
                     "rank": [
-                        "max(eval/full/progress/kills/mean)",
-                        "min(leader/checkpoint/step)",
+                        "max(eval/progress/kills/mean)",
+                        "min(leader/step)",
                     ]
                 },
             },
@@ -169,14 +169,14 @@ def evaluation_evidence() -> dict:
     acceptance = {
         "rules": [
             {
-                "metric": "eval/full/progress/kills/mean",
+                "metric": "eval/progress/kills/mean",
                 "operator": ">=",
                 "threshold": 10.0,
             }
         ],
         "outcomes": [
             {
-                "metric": "eval/full/progress/kills/mean",
+                "metric": "eval/progress/kills/mean",
                 "label": "Full-eval kills mean",
                 "unit": "value",
                 "value": 12.5,
@@ -211,16 +211,16 @@ def evaluation_evidence() -> dict:
             {"episode": 0, "start_id": "default", "progress": {"kills": 12}},
             {"episode": 1, "start_id": "default", "progress": {"kills": 13}},
         ],
-        "aggregates": {"eval/full/progress/kills/mean": 12.5},
+        "aggregates": {"eval/progress/kills/mean": 12.5},
         "acceptance": acceptance,
         "ranking": {
             "rules": [
-                "max(eval/full/progress/kills/mean)",
-                "min(leader/checkpoint/step)",
+                "max(eval/progress/kills/mean)",
+                "min(leader/step)",
             ],
             "outcomes": [
                 {
-                    "metric": "eval/full/progress/kills/mean",
+                    "metric": "eval/progress/kills/mean",
                     "label": "Full-eval kills mean",
                     "unit": "value",
                     "value": 12.5,
@@ -228,7 +228,7 @@ def evaluation_evidence() -> dict:
                     "rank_value": 12.5,
                 },
                 {
-                    "metric": "leader/checkpoint/step",
+                    "metric": "leader/step",
                     "label": "Leader checkpoint step",
                     "unit": "steps",
                     "value": 4_000_000,
@@ -456,7 +456,7 @@ def test_gradlab_card_uses_faithful_metadata_and_provider_aware_quick_start() ->
     assert "uvx --from gradlab gradlab play hf://" in card
     assert "rom import" not in card
     assert "representative media and is not evaluation" in card
-    assert "eval/full/progress/kills/mean" in card
+    assert "eval/progress/kills/mean" in card
 
 
 def test_release_comparison_requires_all_four_contract_axes() -> None:

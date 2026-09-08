@@ -414,9 +414,9 @@ def test_first_training_success_saves_playable_checkpoint_and_stops(tmp_path) ->
     final_metrics = next(
         payload
         for payload, _metadata in context.metric_store.payloads
-        if "train/outcome/success/start/Level1-1/episode/count" in payload
+        if "train/target/success/by_start/Level1-1/episodes_total" in payload
     )
-    assert final_metrics["train/outcome/success/start/Level1-1/episode/count"] == 1
+    assert final_metrics["train/target/success/by_start/Level1-1/episodes_total"] == 1
 
 
 def test_local_jerk_success_stops_without_scientific_acceptance_checkpoint(tmp_path) -> None:

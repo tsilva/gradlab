@@ -17,10 +17,10 @@ def document() -> dict:
         "identity": {"checkpoint_step": 10},
         "protocol": {"episodes": 2, "action_sampling": "stochastic"},
         "episode_results": [{"episode": 0}, {"episode": 1}],
-        "aggregates": {"eval/full/progress/kills/mean": 12.5},
+        "aggregates": {"eval/progress/kills/mean": 12.5},
         "acceptance": {
             "rules": [],
-            "outcomes": [{"metric": "eval/full/progress/kills/mean", "passed": True}],
+            "outcomes": [{"metric": "eval/progress/kills/mean", "passed": True}],
             "passed": True,
         },
         "ranking": {"rules": [], "outcomes": []},

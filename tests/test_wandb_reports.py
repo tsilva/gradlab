@@ -95,14 +95,14 @@ class WandbReportCompilationTests(unittest.TestCase):
 
         self.assertEqual(spec.starts, ("Level1-1", "Level1-2"))
         serialized = str(payload)
-        self.assertIn("min(leader/checkpoint/step)", serialized)
-        self.assertIn("max(eval/full/episode/return/shaped/mean)", serialized)
+        self.assertIn("min(leader/step)", serialized)
+        self.assertIn("max(eval/return_mean)", serialized)
         self.assertIn("eval/acceptance/pass", serialized)
-        self.assertIn("train/outcome/success/starts/all/rolling/rate/min", serialized)
+        self.assertIn("train/target/success/start_rate_min", serialized)
         self.assertIn("train/throughput/provider/step/rate", serialized)
-        self.assertIn("eval/full/start/table", serialized)
-        self.assertNotIn("eval/full/outcome/success/from/Level1-1/rate", serialized)
-        self.assertNotIn("eval/full/outcome/success/from/Level1-2/rate", serialized)
+        self.assertIn("eval/start/table", serialized)
+        self.assertNotIn("eval/outcome/success/from/Level1-1/rate", serialized)
+        self.assertNotIn("eval/outcome/success/from/Level1-2/rate", serialized)
 
     def test_compiled_panel_metrics_are_registered(self) -> None:
         report = build_wandb_report(

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping
 from typing import Any
 
@@ -9,24 +8,9 @@ from gradlab.metric_names import (
     EVAL_ACCEPTANCE_EPISODE_PLANNED_COUNT,
     EVAL_ACCEPTANCE_PASS,
     EVAL_CHECKPOINT_STEP,
-    EVAL_FULL_EPISODE_RETURN_SHAPED_MAX,
-    EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
-    EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MEAN,
-    EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MIN,
     metric_definition,
     require_current_metrics_schema,
 )
-
-
-_CURRENT_FIXED_FULL_METRICS = frozenset(
-    {
-        EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
-        EVAL_FULL_EPISODE_RETURN_SHAPED_MAX,
-        EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MIN,
-        EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MEAN,
-    }
-)
-_PROGRESS_METRIC_RE = re.compile(r"^eval/full/progress/[A-Za-z0-9_.-]+/(?:mean|max)$")
 
 
 def metrics_schema_version_from_recipe_document(document: Mapping[str, Any]) -> int:
@@ -46,9 +30,8 @@ def metrics_schema_version_from_recipe_document(document: Mapping[str, Any]) -> 
 
 def _allowed_full_metric(name: str, *, schema_version: int) -> bool:
     require_current_metrics_schema(schema_version)
-    if _PROGRESS_METRIC_RE.fullmatch(name):
-        return True
-    return name in _CURRENT_FIXED_FULL_METRICS and metric_definition(name) is not None
+    definition = metric_definition(name)
+    return definition is not None and definition.evidence == "evaluation"
 
 
 def validate_evaluation_scientific_metric(

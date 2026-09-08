@@ -9,7 +9,7 @@ train:
   early_stop:
     conditions:
       clear_100:
-        metric: train/outcome/success/starts/all/rolling/rate/min
+        metric: train/target/success/start_rate_min
         trigger: threshold
         operator: '>='
         progress_baseline: 0.0

@@ -558,31 +558,29 @@ export function runFinishPresentation(item) {
 export function metricLabel(metric) {
   const name = String(metric || "");
   const known = {
-    "leader/checkpoint/step": "Checkpoint step",
+    "leader/step": "Checkpoint step",
     "train/global_step": "Global step",
-    "train/episode/return/shaped/origin/target/rolling/mean": "Recent target return mean",
-    "train/outcome/success/starts/all/rolling/rate/min": "Recent all-start success rate min",
-    "train/outcome/success/starts/all/rolling/rate/mean": "Recent all-start success rate mean",
-    "eval/full/outcome/success/starts/rate/min": "Full-eval start success rate min",
-    "eval/full/outcome/success/starts/rate/mean": "Full-eval start success rate mean",
-    "eval/full/episode/return/shaped/mean": "Mean return",
-    "eval/full/episode/return/shaped/max": "Best return",
+    "train/target/return_mean": "Recent target return mean",
+    "train/target/success/start_rate_min": "Recent all-start success rate min",
+    "train/target/success/start_rate_mean": "Recent all-start success rate mean",
+    "eval/success/start_rate_min": "Full-eval start success rate min",
+    "eval/success/start_rate_mean": "Full-eval start success rate mean",
+    "eval/return_mean": "Mean return",
+    "eval/return_max": "Best return",
   };
   if (known[name]) return known[name];
-  const reason = name.match(/^eval\/full\/outcome\/reason\/([^/]+)\/rate$/);
-  if (reason) return `${humanizeMetricPart(reason[1])} failure rate`;
-  const progress = name.match(/^eval\/full\/progress\/([^/]+)\/(mean|max)$/);
+  const progress = name.match(/^eval\/progress\/([^/]+)\/(mean|max)$/);
   if (progress) {
     return `${humanizeMetricPart(progress[1])} ${progress[2]}`;
   }
   const trainingProgress = name.match(
-    /^train\/progress\/([^/]+)\/origin\/target\/rolling\/(mean|max)$/,
+    /^train\/target\/progress\/([^/]+)\/(mean|max)$/,
   );
   if (trainingProgress) {
     return `Recent target ${humanizeMetricPart(trainingProgress[1]).toLowerCase()} ${trainingProgress[2]}`;
   }
   return name
-    .replace(/^(eval\/full|leader|train)\//, "")
+    .replace(/^(eval|leader|train)\//, "")
     .split("/")
     .map(humanizeMetricPart)
     .join(" · ");
@@ -592,7 +590,7 @@ export function formatMetricValue(metric, value) {
   if (value === null || value === undefined || value === "") return "—";
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return "—";
-  if (String(metric).includes("/rate/") || String(metric).endsWith("/rate")) {
+  if (String(metric).includes("/rate/") || String(metric).endsWith("/rate") || /\/success\/(?:observed_)?start_rate_/.test(String(metric))) {
     return `${(numeric * 100).toLocaleString(undefined, { maximumFractionDigits: 2 })}%`;
   }
   return numeric.toLocaleString(undefined, { maximumFractionDigits: 3 });
@@ -801,13 +799,11 @@ export function checkpointMetricHeaderLabel(column) {
     column?.evidence === "evaluation"
     || /^(eval\/|leader\/)/.test(metric)
   ) ? "Eval" : "Train";
-  if (/\/outcome\/success\//.test(metric)) return `${evidence} success`;
-  if (/\/episode\/return\//.test(metric)) return `${evidence} return`;
-  const reason = metric.match(/\/outcome\/reason\/([^/]+)\/rate$/);
-  if (reason) return `${evidence} ${humanizeMetricPart(reason[1]).toLowerCase()}`;
+  if (/\/success\//.test(metric)) return `${evidence} success`;
+  if (/\/return_(mean|max)$/.test(metric)) return `${evidence} return`;
   const progress = metric.match(/\/progress\/([^/]+)\//);
   if (progress) return `${evidence} ${humanizeMetricPart(progress[1]).toLowerCase()}`;
-  if (metric === "leader/checkpoint/step") return "Checkpoint step";
+  if (metric === "leader/step") return "Checkpoint step";
   return column?.label || metricLabel(metric);
 }
 

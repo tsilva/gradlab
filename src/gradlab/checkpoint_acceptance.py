@@ -371,7 +371,7 @@ def build_checkpoint_eval_contract(
         "evidence_policy": {
             "version": EVIDENCE_POLICY_VERSION,
             "fail_fast": fail_fast,
-            "complete_metrics_prefix": "eval/full",
+            "complete_metrics_prefix": "eval",
             "partial_rejection_metrics": False,
             "aggregate_validation": "supervisor-recomputed-v1",
         },

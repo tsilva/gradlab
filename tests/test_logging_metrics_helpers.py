@@ -28,8 +28,8 @@ class Sb3LoggerTests(unittest.TestCase):
         from stable_baselines3.common.logger import HumanOutputFormat
 
         key_values = {
-            "train/outcome/success/from/Level1-2_bonus_room_checkpoint/episode/count": 1,
-            "train/outcome/success/from/Level1-2_bonus_room_checkpoint/rate/current": 0.0,
+            "train/target/success/from/Level1-2_bonus_room_checkpoint/episode/count": 1,
+            "train/target/success/from/Level1-2_bonus_room_checkpoint/rate/current": 0.0,
         }
         key_excluded = {key: () for key in key_values}
 
@@ -83,9 +83,9 @@ class Sb3LoggerTests(unittest.TestCase):
         output_format.write(
             {
                 "rollout/ep_rew_mean": 99.0,
-                "train/episode/return/shaped/origin/target/rolling/mean": 357.25,
-                "train/outcome/success/starts/observed/cumulative/rate/mean": 0.125,
-                "train/algorithm/ppo/update/value_loss": 42.0,
+                "train/target/return_mean": 357.25,
+                "train/target/success/observed_start_rate_lifetime_mean": 0.125,
+                "train/ppo/value_loss": 42.0,
                 "time/fps": 1_344,
             },
             {},
@@ -133,13 +133,13 @@ class Sb3LoggerTests(unittest.TestCase):
         )
         self.assertIs(logger.output_formats[1], complete_format)
 
-        logger.record("train/episode/return/shaped/origin/target/rolling/mean", 10.0)
-        logger.record("train/outcome/success/starts/observed/cumulative/rate/mean", 0.5)
-        logger.record("train/algorithm/ppo/update/value_loss", 42.0)
+        logger.record("train/target/return_mean", 10.0)
+        logger.record("train/target/success/observed_start_rate_lifetime_mean", 0.5)
+        logger.record("train/ppo/value_loss", 42.0)
         logger.dump(step=8_192)
 
         self.assertEqual(
-            complete_format.received["train/algorithm/ppo/update/value_loss"],
+            complete_format.received["train/ppo/value_loss"],
             42.0,
         )
         rendered = strip_ansi(human_output.getvalue())
@@ -153,9 +153,9 @@ class MetricsDocumentationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown metric"):
             metric_names.validate_metric_name("train/mystery/value")
         with self.assertRaisesRegex(ValueError, "unknown metric"):
-            metric_names.validate_metric_name("eval/full/episode/return/typo")
+            metric_names.validate_metric_name("eval/episode/return/typo")
         with self.assertRaisesRegex(ValueError, "unknown metric"):
-            metric_names.validate_metric_name("leader/checkpoint/typo")
+            metric_names.validate_metric_name("leader/typo")
         with self.assertRaisesRegex(ValueError, "metric dimension"):
             metric_names.train_success_count_metric("unsafe start")
 
@@ -166,21 +166,21 @@ class MetricsDocumentationTests(unittest.TestCase):
             "train/episode/return/shaped/mean",
             "train/throughput/rollout_fps",
             "train/early_stop/clear_100/would_trigger",
-            "train/outcome/success/from/Start/rate/current",
+            "train/target/success/from/Start/rate/current",
             "eval/checkpoint_step",
-            "eval/full/episode/return/mean",
-            "eval/full/episode/count",
-            "eval/full/outcome/success/from/Start/rate",
-            "eval/full/outcome/reason/stalled/count",
+            "eval/episode/return/mean",
+            "eval/episode/count",
+            "eval/outcome/success/from/Start/rate",
+            "eval/outcome/reason/stalled/count",
             "eval/full/checkpoint/step",
             "train/throughput/loop_seconds",
-            "leader/checkpoint/steps_to_goal",
-            "leader/checkpoint/local_path",
-            "leader/checkpoint/rank",
-            "leader/checkpoint/objective_name",
-            "leader/checkpoint/objective",
-            "leader/checkpoint/rank_values",
-            "leader/checkpoint/acceptance_pass",
+            "leader/steps_to_goal",
+            "leader/local_path",
+            "leader/rank",
+            "leader/objective_name",
+            "leader/objective",
+            "leader/rank_values",
+            "leader/acceptance_pass",
             "eval/screen/candidate/pass",
             "eval/acceptance/failure/count",
         )
@@ -207,10 +207,10 @@ class MetricsDocumentationTests(unittest.TestCase):
         self.assertEqual(
             payload,
             {
-                "train/algorithm/a2c/update/policy_gradient_loss": -0.25,
-                "train/algorithm/a2c/update/value_loss": 1.5,
-                "train/algorithm/a2c/policy/entropy": 0.75,
-                "train/algorithm/a2c/update/learning_rate": 0.0007,
+                "train/a2c/policy_loss": -0.25,
+                "train/a2c/value_loss": 1.5,
+                "train/a2c/entropy": 0.75,
+                "train/a2c/learning_rate": 0.0007,
             },
         )
         self.assertFalse(any("/ppo/" in name for name in payload))
@@ -305,7 +305,7 @@ class MetricsDocumentationTests(unittest.TestCase):
             with self.subTest(metric=definition.name):
                 self.assertRegex(
                     definition.name,
-                    r"^(train|eval|leader|orchestration)/",
+                    r"^(train|eval|leader|ops)/",
                 )
                 self.assertNotIn("//", definition.name)
                 self.assertIn(definition.unit, allowed_units)

@@ -123,28 +123,16 @@ def configure_wandb_metric_axes(
     if run is None:
         return run
     require_current_metrics_schema(metrics_schema_version)
-    axes_by_prefix = (
-        ("train/", TRAIN_GLOBAL_STEP),
-        ("eval/", EVAL_CHECKPOINT_STEP),
-        ("orchestration/", ORCHESTRATION_EVENT_SEQUENCE),
-    )
     configured = _WANDB_AXIS_METRICS.setdefault(run, set())
     for name in sorted({str(metric_name) for metric_name in metric_names}):
         if name in configured:
             continue
-        axis = next(
-            (
-                candidate_axis
-                for prefix, candidate_axis in axes_by_prefix
-                if name.startswith(prefix)
-            ),
-            None,
-        )
         definition = metric_definition(name)
         if definition is None:
             raise ValueError(f"unknown metric name: {name}")
         if definition.placement != "history":
             raise ValueError(f"summary metric cannot be bound to a history axis: {name}")
+        axis = None if definition.axis == "-" else definition.axis
         options: dict[str, str] = {"summary": definition.summary_reducer}
         if axis is not None and name != axis:
             options["step_metric"] = axis

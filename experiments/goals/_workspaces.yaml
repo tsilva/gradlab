@@ -13,32 +13,32 @@ sections:
       kind: line
       x: train/global_step
       y:
-      - train/outcome/success/starts/all/rolling/rate/min
+      - train/target/success/start_rate_min
     - id: task_success_mean
       kind: line
       x: train/global_step
       y:
-      - train/outcome/success/starts/all/rolling/rate/mean
+      - train/target/success/start_rate_mean
     - id: target_return_mean
       kind: line
       x: train/global_step
       y:
-      - train/episode/return/shaped/origin/target/rolling/mean
+      - train/target/return_mean
     - id: target_return_max
       kind: line
       x: train/global_step
       y:
-      - train/episode/return/shaped/origin/target/rolling/max
+      - train/target/return_max
     - id: episode_length
       kind: line
       x: train/global_step
       y:
-      - train/episode/length/origin/all/rolling/mean
+      - train/all/episode_steps_mean
     - id: completed_episodes
       kind: line
       x: train/global_step
       y:
-      - train/episode/completed/count
+      - train/all/episodes_total
     - id: early_stop_target_progress
       kind: line
       x: train/global_step
@@ -53,31 +53,31 @@ sections:
       kind: line
       x: train/global_step
       y:
-      - train/algorithm/ppo/value/explained_variance
-      - train/algorithm/a2c/value/explained_variance
+      - train/ppo/explained_variance
+      - train/a2c/explained_variance
     - id: value_loss
       kind: line
       x: train/global_step
       y:
-      - train/algorithm/ppo/update/value_loss
-      - train/algorithm/a2c/update/value_loss
+      - train/ppo/value_loss
+      - train/a2c/value_loss
     - id: policy_entropy
       kind: line
       y_title: nats
       x: train/global_step
       y:
-      - train/algorithm/ppo/policy/entropy
-      - train/algorithm/a2c/policy/entropy
+      - train/ppo/entropy
+      - train/a2c/entropy
     - id: ppo_approx_kl
       kind: line
       x: train/global_step
       y:
-      - train/algorithm/ppo/update/approx_kl
+      - train/ppo/approx_kl
     - id: ppo_clip_fraction
       kind: line
       x: train/global_step
       y:
-      - train/algorithm/ppo/update/clip_fraction
+      - train/ppo/clip_fraction
     - id: loop_throughput
       kind: line
       x: train/global_step
@@ -88,30 +88,6 @@ sections:
       x: train/global_step
       y:
       - train/throughput/provider/step/rate
-  breakout_diagnostics:
-    title: Breakout top metrics
-    pinned: true
-    open: true
-    columns: 2
-    panels:
-    - id: target_bricks_destroyed_mean
-      kind: line
-      y_title: bricks (last 100 episodes)
-      x: train/global_step
-      y:
-      - train/progress/bricks_destroyed/origin/target/rolling/mean
-    - id: target_bricks_destroyed_max
-      kind: line
-      y_title: bricks (last 100 episodes)
-      x: train/global_step
-      y:
-      - train/progress/bricks_destroyed/origin/target/rolling/max
-    - id: top_episode_length
-      kind: line
-      y_title: steps (last 100 episodes)
-      x: train/global_step
-      y:
-      - train/episode/length/origin/all/rolling/mean
   breakout_secondary:
     title: Breakout diagnostics
     pinned: false
@@ -123,31 +99,31 @@ sections:
       y_title: fraction (last 100 episodes)
       x: train/global_step
       y:
-      - train/progress/bricks_destroyed_normalized/origin/target/rolling/mean
+      - train/target/progress/bricks_destroyed_normalized/mean
     - id: top_target_return_mean
       kind: line
       y_title: return (last 100 episodes)
       x: train/global_step
       y:
-      - train/episode/return/shaped/origin/target/rolling/mean
+      - train/target/return_mean
     - id: target_score_mean
       kind: line
       y_title: score (last 100 episodes)
       x: train/global_step
       y:
-      - train/progress/score/origin/target/rolling/mean
+      - train/target/progress/score/mean
     - id: target_score_max
       kind: line
       y_title: score max (last 100 episodes)
       x: train/global_step
       y:
-      - train/progress/score/origin/target/rolling/max
+      - train/target/progress/score/max
     - id: serve_stall_count
       kind: line
       y_title: episodes (last 100)
       x: train/global_step
       y:
-      - train/outcome/failure/reason/serve_stall/rolling/count
+      - train/all/boundary_event/serve_stall/rolling/count
     - id: serve_wait_rate
       kind: line
       y_title: fraction of transitions
@@ -158,16 +134,17 @@ sections:
 profiles:
   training:
     display_name: GradLab Training
+    primary_metrics: goal_rank
     run_scope: current_metrics_schema
     max_runs: 25
     sections:
     - training_essentials
   breakout_training:
     display_name: GradLab Training
-    run_scope: all
+    primary_metrics: goal_rank
+    run_scope: current_metrics_schema
     max_runs: 25
     sections:
-    - breakout_diagnostics
     - breakout_secondary
     - training_essentials
 
@@ -183,7 +160,3 @@ projects:
     - episode_length
     - early_stop_target_progress
     - early_stop_patience_progress
-    exclude_metrics:
-    - train/algorithm/a2c/value/explained_variance
-    - train/algorithm/a2c/update/value_loss
-    - train/algorithm/a2c/policy/entropy

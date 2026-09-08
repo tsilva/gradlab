@@ -633,7 +633,7 @@ class RunSupervisorTests(unittest.TestCase):
             "evidence_policy": {"fail_fast": "disabled"},
             "acceptance": [
                 {
-                    "metric": "eval/full/episode/return/shaped/mean",
+                    "metric": "eval/return_mean",
                     "operator": ">=",
                     "threshold": 5.0,
                 }
@@ -648,7 +648,7 @@ class RunSupervisorTests(unittest.TestCase):
                 **valid,
                 "acceptance": [
                     {
-                        "metric": "eval/full/outcome/success/starts/rate/min",
+                        "metric": "eval/success/start_rate_min",
                         "operator": ">=",
                         "threshold": 1.0,
                     }
@@ -678,7 +678,7 @@ class RunSupervisorTests(unittest.TestCase):
             "evidence_policy": {"fail_fast": "disabled"},
             "acceptance": [
                 {
-                    "metric": "eval/full/outcome/success/starts/rate/min",
+                    "metric": "eval/success/start_rate_min",
                     "operator": ">=",
                     "threshold": 1.0,
                 }
@@ -690,7 +690,7 @@ class RunSupervisorTests(unittest.TestCase):
             **valid,
             "acceptance": [
                 {
-                    "metric": "eval/full/episode/return/shaped/mean",
+                    "metric": "eval/return_mean",
                     "operator": ">=",
                     "threshold": 0.95,
                 }
@@ -980,12 +980,12 @@ class RunSupervisorTests(unittest.TestCase):
         self.assertEqual(
             set(supervisor.store.latest_metrics()),
             {
-                "orchestration/outbox/pending/count",
-                "orchestration/outbox/oldest/age/seconds",
-                "orchestration/outbox/remote/visibility/lag/seconds",
-                "orchestration/checkpoint/pending/count",
-                "orchestration/eval/pending/count",
-                "orchestration/scratch/used/fraction",
+                "ops/outbox/pending",
+                "ops/outbox/oldest_age_seconds",
+                "ops/outbox/visibility_lag_seconds",
+                "ops/checkpoints_pending",
+                "ops/evals_pending",
+                "ops/scratch/used_fraction",
             },
         )
         internal = supervisor.store.state("backpressure")
@@ -1164,14 +1164,14 @@ class RunSupervisorTests(unittest.TestCase):
             matched_condition_ids=("return_plateau",),
             outcome=outcome,  # type: ignore[arg-type]
             trigger="no_improvement",
-            metric="train/episode/return/shaped/origin/target/rolling/mean",
+            metric="train/target/return_mean",
             metric_step=2_000_000,
             value=650.0,
             best_value=650.0,
             elapsed_steps=1_000_000,
             patience_progress=1.0,
             condition={
-                "metric": "train/episode/return/shaped/origin/target/rolling/mean",
+                "metric": "train/target/return_mean",
                 "trigger": "no_improvement",
             },
             early_stop_config_sha256="d" * 64,
@@ -1340,7 +1340,7 @@ class RunSupervisorTests(unittest.TestCase):
         config = {
             "conditions": {
                 "clear": {
-                    "metric": "train/outcome/success/starts/all/rolling/rate/min",
+                    "metric": "train/target/success/start_rate_min",
                     "trigger": "threshold",
                     "operator": ">=",
                     "threshold": 1.0,
@@ -1353,7 +1353,7 @@ class RunSupervisorTests(unittest.TestCase):
         machine = MetricEarlyStopStateMachine(config)
         update = machine.update(
             {
-                "train/outcome/success/starts/all/rolling/rate/min": MetricSample(
+                "train/target/success/start_rate_min": MetricSample(
                     value=1.0,
                     step=10,
                 )
@@ -1457,7 +1457,7 @@ class RunSupervisorTests(unittest.TestCase):
                 return self.value.items()
 
         class RemoteRun:
-            summary = {"orchestration/event/sequence": SummarySubDict({"max": 10})}
+            summary = {"ops/event_sequence": SummarySubDict({"max": 10})}
 
         class Api:
             def flush(self) -> None:
@@ -1487,7 +1487,7 @@ class RunSupervisorTests(unittest.TestCase):
         supervisor.store.init()
         supervisor.wandb_run_path = f"entity/project/{self.run_id}"
         supervisor.runtime.remote_summary = MagicMock(
-            return_value={"orchestration/event/sequence.max": 777}
+            return_value={"ops/event_sequence.max": 777}
         )
 
         supervisor._probe_wandb_remote(
@@ -1504,7 +1504,7 @@ class RunSupervisorTests(unittest.TestCase):
         supervisor.wandb_run_path = f"entity/project/{self.run_id}"
         supervisor.runtime.remote_summary = MagicMock(
             return_value={
-                "orchestration/event/sequence.max": 777,
+                "ops/event_sequence.max": 777,
                 "_step": 778,
             }
         )
@@ -1543,7 +1543,7 @@ class RunSupervisorTests(unittest.TestCase):
             supervisor.eval_contract["acceptance"],
             [
                 {
-                    "metric": "eval/full/outcome/success/starts/rate/min",
+                    "metric": "eval/success/start_rate_min",
                     "operator": ">=",
                     "threshold": 1.0,
                 }
@@ -1623,7 +1623,7 @@ class RunSupervisorTests(unittest.TestCase):
             ]
             * 100,
             aggregates={
-                "eval/full/episode/return/shaped/mean": 1.0,
+                "eval/return_mean": 1.0,
                 "failure_count": 0,
             },
             timings={},
@@ -1640,7 +1640,7 @@ class RunSupervisorTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            supervisor.store.latest_metric("eval/full/episode/return/shaped/mean"),
+            supervisor.store.latest_metric("eval/return_mean"),
             1.0,
         )
         self.assertIsNone(supervisor.store.latest_metric("failure_count"))
@@ -1665,7 +1665,7 @@ class RunSupervisorTests(unittest.TestCase):
                     }
                 ]
                 * episode_count,
-                aggregates={"eval/full/episode/return/shaped/mean": 0.0},
+                aggregates={"eval/return_mean": 0.0},
                 timings={},
                 evidence_sha256=[],
                 completed_at=utc_now(),

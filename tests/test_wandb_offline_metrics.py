@@ -95,7 +95,7 @@ class WandbOfflineMetricIntegrationTests(unittest.TestCase):
         run_id = new_run_id()
         attempt_id = new_attempt_id()
         condition = {
-            "metric": "train/episode/return/shaped/origin/target/rolling/mean",
+            "metric": "train/target/return_mean",
             "trigger": "no_improvement",
             "direction": "maximize",
             "min_delta": 0.01,
@@ -319,7 +319,7 @@ class WandbOfflineMetricIntegrationTests(unittest.TestCase):
             store.init()
             store.append_metrics(
                 {
-                    "train/episode/return/shaped/origin/target/rolling/mean": 5.0,
+                    "train/target/return_mean": 5.0,
                     "train/early_stop/return_plateau/patience/progress": 0.25,
                 },
                 step=400_000,
@@ -334,8 +334,8 @@ class WandbOfflineMetricIntegrationTests(unittest.TestCase):
         self.assertEqual([step for _payload, step in run.calls], [row["id"], row["id"]])
         self.assertTrue(
             all(
-                "orchestration/event/id" not in payload
-                and "orchestration/event_id" not in payload
+                "ops/event/id" not in payload
+                and "ops/event_id" not in payload
                 for payload, _step in run.calls
             )
         )
@@ -348,7 +348,7 @@ class WandbOfflineMetricIntegrationTests(unittest.TestCase):
             {400_000},
         )
         for metric_name in (
-            "train/episode/return/shaped/origin/target/rolling/mean",
+            "train/target/return_mean",
             "train/early_stop/return_plateau/patience/progress",
         ):
             definition = (
@@ -383,10 +383,10 @@ class WandbOfflineMetricIntegrationTests(unittest.TestCase):
             store.init()
             store.append_metrics(
                 {
-                    "eval/full/episode/return/shaped/mean": 5.0,
-                    "eval/full/episode/return/shaped/max": 5.0,
-                    "eval/full/outcome/success/starts/rate/min": 1.0,
-                    "eval/full/outcome/success/starts/rate/mean": 1.0,
+                    "eval/return_mean": 5.0,
+                    "eval/return_max": 5.0,
+                    "eval/success/start_rate_min": 1.0,
+                    "eval/success/start_rate_mean": 1.0,
                 },
                 step=100,
                 source="eval:modal",
@@ -428,16 +428,16 @@ class WandbOfflineMetricIntegrationTests(unittest.TestCase):
                 checkpoint_step=100,
                 checkpoint_url="https://models.example/model.zip",
                 metrics={
-                    "eval/full/episode/return/shaped/mean": 5.0,
-                    "eval/full/episode/return/shaped/max": 5.0,
-                    "eval/full/outcome/success/starts/rate/min": 1.0,
-                    "eval/full/outcome/success/starts/rate/mean": 1.0,
+                    "eval/return_mean": 5.0,
+                    "eval/return_max": 5.0,
+                    "eval/success/start_rate_min": 1.0,
+                    "eval/success/start_rate_mean": 1.0,
                 },
                 updated_at="2026-07-24T00:00:00Z",
                 selection_rank=[
-                    "max(eval/full/outcome/success/starts/rate/min)",
-                    "max(eval/full/episode/return/shaped/mean)",
-                    "min(leader/checkpoint/step)",
+                    "max(eval/success/start_rate_min)",
+                    "max(eval/return_mean)",
+                    "min(leader/step)",
                 ],
                 evaluation_source="modal:test",
             )

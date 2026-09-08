@@ -227,7 +227,7 @@ def test_generated_metadata_never_truncates_and_uses_goal_metrics(
             "acceptance": {
                 "outcomes": [
                     {
-                        "metric": "eval/full/progress/kills/mean",
+                        "metric": "eval/progress/kills/mean",
                         "label": "Full-eval kills mean",
                         "unit": "value",
                         "value": 34.29,

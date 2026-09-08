@@ -164,6 +164,7 @@ class EpisodeMetricsReducer:
         self.success_counts: dict[str, int] = {}
         self.attempt_counts: dict[str, int] = {}
         self.success_windows: dict[str, deque[bool]] = {}
+        self._snapshot_cache: dict[str, int | float] | None = None
 
     def consume(self, records: Iterable[Any]) -> dict[str, int | float]:
         for record in records:
@@ -173,6 +174,7 @@ class EpisodeMetricsReducer:
         return self.snapshot()
 
     def _consume_episode(self, record: Any) -> None:
+        self._snapshot_cache = None
         self.lengths.append(int(getattr(record, "episode_length", 0)))
         target_origin = str(getattr(record, "start_origin", "target")) == "target"
         if target_origin:
@@ -237,6 +239,11 @@ class EpisodeMetricsReducer:
             self.success_counts[start] = self.success_counts.get(start, 0) + 1
 
     def snapshot(self) -> dict[str, int | float]:
+        if self._snapshot_cache is None:
+            self._snapshot_cache = self._build_snapshot()
+        return dict(self._snapshot_cache)
+
+    def _build_snapshot(self) -> dict[str, int | float]:
         payload: dict[str, int | float] = {
             TRAIN_EPISODE_COMPLETED_COUNT: self.terminal_count,
         }

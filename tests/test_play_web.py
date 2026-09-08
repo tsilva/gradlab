@@ -2388,8 +2388,8 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                         "checkpoint_id": "checkpoint-1-" + "b" * 16,
                         "sha256": "b" * 64,
                         "metrics": {
-                            "train/progress/kills/origin/target/rolling/mean": 8.5,
-                            "train/episode/return/shaped/origin/target/rolling/mean": 120.0,
+                            "train/target/progress/kills/mean": 8.5,
+                            "train/target/return_mean": 120.0,
                         },
                         "evaluation": {
                             "status": "accepted",
@@ -2399,15 +2399,15 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                             "failure_count": 0,
                             "criteria": [],
                             "metrics": {
-                                "eval/full/progress/kills/mean": 9.0,
-                                "eval/full/progress/kills/max": 15.0,
+                                "eval/progress/kills/mean": 9.0,
+                                "eval/progress/kills/max": 15.0,
                             },
                         },
                     },
                 ),
                 metric_columns=(
                     {
-                        "metric": "eval/full/progress/kills/mean",
+                        "metric": "eval/progress/kills/mean",
                         "direction": "max",
                         "label": "Eval mean kills",
                         "evidence": "evaluation",
@@ -2415,22 +2415,22 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                         "rank_index": 0,
                         "acceptance": [
                             {
-                                "metric": "eval/full/progress/kills/mean",
+                                "metric": "eval/progress/kills/mean",
                                 "operator": ">=",
                                 "threshold": 10.0,
                             }
                         ],
                     },
                     {
-                        "metric": "train/progress/kills/origin/target/rolling/mean",
+                        "metric": "train/target/progress/kills/mean",
                         "direction": "max",
                         "label": "Recent target kills mean",
                         "evidence": "training",
                         "roles": ["training_proxy"],
-                        "proxy_for": "eval/full/progress/kills/mean",
+                        "proxy_for": "eval/progress/kills/mean",
                     },
                     {
-                        "metric": "eval/full/progress/kills/max",
+                        "metric": "eval/progress/kills/max",
                         "direction": "max",
                         "label": "Eval max kills",
                         "evidence": "evaluation",
@@ -2438,7 +2438,7 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                         "rank_index": 1,
                     },
                     {
-                        "metric": "train/episode/return/shaped/origin/target/rolling/mean",
+                        "metric": "train/target/return_mean",
                         "direction": "max",
                         "label": "Recent target return mean",
                         "evidence": "training",
@@ -2489,8 +2489,8 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                         "failure_count": 0,
                         "criteria": [],
                         "metrics": {
-                            "eval/full/progress/kills/mean": 11.0,
-                            "eval/full/progress/kills/max": 16.0,
+                            "eval/progress/kills/mean": 11.0,
+                            "eval/progress/kills/max": 16.0,
                         },
                     },
                 }
@@ -2615,7 +2615,7 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 selection_fence = checkpoint_payload["selection_fence"]
                 assert checkpoint_payload["metric_columns"] == [
                     {
-                        "metric": "eval/full/progress/kills/mean",
+                        "metric": "eval/progress/kills/mean",
                         "direction": "max",
                         "label": "Eval mean kills",
                         "evidence": "evaluation",
@@ -2623,22 +2623,22 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                         "rank_index": 0,
                         "acceptance": [
                             {
-                                "metric": "eval/full/progress/kills/mean",
+                                "metric": "eval/progress/kills/mean",
                                 "operator": ">=",
                                 "threshold": 10.0,
                             }
                         ],
                     },
                     {
-                        "metric": "train/progress/kills/origin/target/rolling/mean",
+                        "metric": "train/target/progress/kills/mean",
                         "direction": "max",
                         "label": "Recent target kills mean",
                         "evidence": "training",
                         "roles": ["training_proxy"],
-                        "proxy_for": "eval/full/progress/kills/mean",
+                        "proxy_for": "eval/progress/kills/mean",
                     },
                     {
-                        "metric": "eval/full/progress/kills/max",
+                        "metric": "eval/progress/kills/max",
                         "direction": "max",
                         "label": "Eval max kills",
                         "evidence": "evaluation",
@@ -2646,7 +2646,7 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                         "rank_index": 1,
                     },
                     {
-                        "metric": "train/episode/return/shaped/origin/target/rolling/mean",
+                        "metric": "train/target/return_mean",
                         "direction": "max",
                         "label": "Recent target return mean",
                         "evidence": "training",
@@ -2654,16 +2654,16 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                     },
                 ]
                 assert checkpoint_payload["items"][0]["metrics"] == {
-                    "eval/full/progress/kills/mean": 11.0,
-                    "train/progress/kills/origin/target/rolling/mean": 8.5,
-                    "eval/full/progress/kills/max": 16.0,
-                    "train/episode/return/shaped/origin/target/rolling/mean": 120.0,
+                    "eval/progress/kills/mean": 11.0,
+                    "train/target/progress/kills/mean": 8.5,
+                    "eval/progress/kills/max": 16.0,
+                    "train/target/return_mean": 120.0,
                 }
                 assert checkpoint_payload["items"][0]["best_metrics"] == [
-                    "eval/full/progress/kills/mean",
-                    "train/progress/kills/origin/target/rolling/mean",
-                    "eval/full/progress/kills/max",
-                    "train/episode/return/shaped/origin/target/rolling/mean",
+                    "eval/progress/kills/mean",
+                    "train/target/progress/kills/mean",
+                    "eval/progress/kills/max",
+                    "train/target/return_mean",
                 ]
                 training = await client.get(
                     (f"{server.origin}/api/catalog/runs/gradlab-{'a' * 32}/checkpoint-training"),
