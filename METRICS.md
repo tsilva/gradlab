@@ -154,8 +154,8 @@ metric path. `cumulative` explicitly means all eligible observations seen so far
   explicitly evaluated Mario checkpoints rank by earliest `leader/checkpoint/step`, then highest
   `eval/full/episode/return/shaped/mean`. Breakout is training-only and ranks current-contract seeded
   recipe cohorts using `train/progress/bricks_destroyed/origin/target/rolling/mean`, which
-  excludes archive-curriculum origins and non-episode control boundaries; tied cohorts prefer fewer
-  policy transitions.
+  excludes archive-curriculum origins and non-episode control boundaries; ties prefer higher
+  rolling maximum target-origin bricks, then lower rolling mean episode length across all origins.
 - Aggregate training `starts/observed/cumulative/rate/*` is cumulative. Aggregate
   `starts/all/rolling/rate/*` uses the configured recent-episode window and appears only after
   every configured start has filled it. Observed-start aggregates intentionally describe only
@@ -244,7 +244,16 @@ metric path. `cumulative` explicitly means all eligible observations seen so far
   window. The normalized value is the `0.0..1.0` two-wall completion fraction. Both statistics
   include warm-up before the window is full and are online behavior-policy training proxies rather
   than frozen-checkpoint evaluation evidence. Breakout ranks runs first by the rolling mean
-  terminal `bricks_destroyed` count, then by the earliest training step.
+  terminal `bricks_destroyed` count, then by higher rolling maximum target-origin bricks,
+  then by lower rolling mean episode length across all origins. Criteria are lexicographic:
+  later criteria apply only when earlier values tie, without a tolerance band.
+  The default `ppo` recipe terminates successfully when the second wall clears. For that
+  contract, episode length measures completion time on successful episodes; its rolling mean
+  also includes failures, so decreasing length indicates faster completion only when full
+  completion remains consistent. Recipes that continue after wall completion would need a
+  separate first-clear timing field to measure completion speed. The length tie-break prefers
+  shorter episodes but does not independently establish better performance below full completion;
+  archive curricula and differing frame skips also limit its comparability.
 - Training episode reduction aggregates return, length, outcome, success, the explicitly supported
   target-origin cell-novelty statistic, and goal-declared numeric episode progress fields.
   Progress field names refer to task-semantic signals and must be populated independently of the
