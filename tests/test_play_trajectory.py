@@ -854,3 +854,76 @@ def test_cancelled_download_keeps_its_files_until_freeze_finishes(tmp_path):
         asyncio.run(scenario())
     finally:
         runner.stop()
+
+
+def test_checkpoint_activation_keeps_download_available_after_candidate_cleanup(
+    tmp_path, monkeypatch
+):
+    from gradlab.environment_fields import EnvConfig
+    from gradlab.model_sources import ResolvedModelSource
+    from gradlab.play_runtime import PlaybackCandidate, PlaybackLoader, PlaySourceSpec
+    from gradlab.play_session import build_parser
+    from gradlab.policy_bundle import load_policy_bundle
+    from gradlab.play_trajectory import export_trajectory
+    from gradlab.play_trajectory_runner import TrajectoryPlaybackRunner
+    from gradlab.trusted_inputs import stage_model_input
+
+    write_bundle(tmp_path)
+    bundle = load_policy_bundle(tmp_path)
+    checkpoint_bytes = bundle.checkpoint_path.read_bytes()
+    config = EnvConfig(game="CartPole-v1", env_provider="gymnasium")
+    args = build_parser().parse_args(["--model", str(bundle.checkpoint_path), "--seed", "40000"])
+    source = ResolvedModelSource(bundle.checkpoint_path, bundle)
+    candidate = PlaybackCandidate(
+        spec=PlaySourceSpec("local", str(bundle.checkpoint_path)),
+        args=args,
+        source=source,
+        config=config,
+        display_config=config,
+        rom_binding=None,
+        staged=stage_model_input(bundle.checkpoint_path),
+        source_identity="fixture",
+        artifact_ref=None,
+        termination_base_config=config,
+        termination_source="training",
+    )
+    session = ScriptedSession(length=1)
+    session.restart = lambda seed: None
+    env = Namespace(action_space=None, close=lambda: None)
+
+    def load_model(verified, **kwargs):
+        assert verified.model_path.read_bytes() == checkpoint_bytes
+        return Namespace(gamma=0.9)
+
+    monkeypatch.setattr("gradlab.policy_models.load_policy_model", load_model)
+    monkeypatch.setattr("gradlab.policy_runtime.PolicyRuntime", lambda *a, **k: None)
+    monkeypatch.setattr("gradlab.policy_runtime.bind_policy_action_space", lambda *a, **k: None)
+    monkeypatch.setattr("gradlab.play_runtime.make_eval_vec_env", lambda **k: env)
+    monkeypatch.setattr("gradlab.play_runtime.assert_action_contract_compatible", lambda *a: None)
+    monkeypatch.setattr("gradlab.play_runtime._PlaybackSession", lambda **k: session)
+    monkeypatch.setattr("gradlab.play_runtime.resolved_play_launch_lines", lambda *a, **k: [])
+    monkeypatch.setattr("gradlab.play_runtime.runtime_versions_metadata", lambda: {})
+    monkeypatch.setattr("gradlab.play_runtime.player_source_provenance", lambda *a: {})
+    active = None
+    imported = None
+    try:
+        active = PlaybackLoader(args, argv=[], explicit_seed=True).activate(
+            candidate,
+            progress=lambda *a: None,
+        )
+        # This is the same ownership transfer performed by PlaybackHost.
+        candidate.cleanup()
+        assert not candidate.staged.root.exists()
+        active.runner.start()
+        assert active.runner.snapshot()["trajectory"]["available"] is True
+        command(active.runner, "step", count=1)
+        wait_step(active.runner, 1)
+        archive = export_trajectory(active.runner.freeze_trajectory(), tmp_path / "loaded.gradtraj")
+        imported = TrajectoryPlaybackRunner(archive, args)
+        assert imported.checkpoint_path.read_bytes() == checkpoint_bytes
+    finally:
+        candidate.cleanup()
+        if active:
+            active.close()
+        if imported:
+            imported.stop()

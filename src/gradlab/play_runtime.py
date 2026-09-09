@@ -450,12 +450,14 @@ class PlaybackLoader:
         progress("loading", "Loading policy runtime")
         playback_device = args.device
         algorithm_id = resolve_policy_algorithm(candidate.source.bundle.model["policy"])
-        with verify_staged_model(candidate.staged) as verified:
-            model = load_policy_model(
-                verified,
-                device=playback_device,
-                algorithm_id=algorithm_id,
-            )
+        # PlaybackHost owns candidate cleanup after activation. Keep these exact
+        # bytes alive until the runner has pinned its trajectory Checkpoint.
+        verified = verify_staged_model(candidate.staged)
+        model = load_policy_model(
+            verified,
+            device=playback_device,
+            algorithm_id=algorithm_id,
+        )
         resume_cell = str(getattr(args, "resume_cell", None) or "").strip()
         archive_resource = None
         snapshot_record: tuple[Mapping[str, Any], bytes] | None = None
