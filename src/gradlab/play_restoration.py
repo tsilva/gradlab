@@ -20,7 +20,6 @@ from gradlab.policy_registry import POLICY_ALGORITHM_SPECS
 # each adapter. Unknown providers, Policy implementations and exploration states
 # have no approximate fallback.
 LIVE_RESTORATION = {
-    "env-supermariobrosnes-turbo-emu": frozenset({"ppo", "a2c", "action-program"}),
     "env-breakoutatari2600-turbo-native": frozenset({"ppo", "a2c", "action-program"}),
 }
 

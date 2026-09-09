@@ -801,7 +801,10 @@ class FrameEncoder:
                 )
                 encoded[kind] = (sequence, packet)
                 with self._condition:
-                    if trajectory_generation == self._trajectory_generation and epoch == self._epoch:
+                    if (
+                        trajectory_generation == self._trajectory_generation
+                        and epoch == self._epoch
+                    ):
                         self._latest[kind] = (sequence, packet)
             with self._condition:
                 if trajectory_generation != self._trajectory_generation or epoch != self._epoch:
@@ -819,6 +822,8 @@ class PlaybackCommand:
     name: str
     payload: Mapping[str, Any]
     expected_revision: int | None
+    session_epoch: int | None = None
+    control_epoch: int | None = None
 
 
 @dataclass(frozen=True)
@@ -837,12 +842,20 @@ class _PlaybackRunnerProtocol:
         self._snapshot_updates: deque[dict[str, Any]] = deque(maxlen=HISTORY_LIMIT)
         self._stop = threading.Event()
         self.revision = 0
+        self._authority_lock = threading.RLock()
+        self._control_epoch = 0
         self.processing_features = PLAYER_PROCESSING_FEATURES
         if thread_name is not None:
             self.commands: queue.Queue[PlaybackCommand] = queue.Queue(COMMAND_QUEUE_LIMIT)
             self._episode_start_snapshot: dict[str, Any] = {}
             self._episode_start_frames: dict[int, tuple[int, bytes]] = {}
             self._thread = threading.Thread(target=self._run, name=thread_name)
+
+    def set_control_epoch(self, epoch: int) -> None:
+        # Invalidate queued mutations immediately, without waiting for a step.
+        # An already executing mutation owns this lock through its commit.
+        with self._authority_lock:
+            self._control_epoch = int(epoch)
 
     def set_processing(self, features: Iterable[object]) -> None:
         self.processing_features = normalize_player_processing(features)
@@ -1025,6 +1038,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         self._recording_options = dict(recording_options or {})
         from gradlab.play_live_trajectory import LiveTrajectory
         from gradlab.play_restoration import LiveRestoration
+
         self.live_trajectory = LiveTrajectory(self, restoration_factory or LiveRestoration)
         self._checkpoint_root: Path | None = None
         if trajectory_bundle is not None:
@@ -1110,7 +1124,11 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             "enabled": self.recording_enabled,
             "activation": "automatic",
             "restoration": self.live_trajectory.status(),
-            "current_step": self.live_trajectory.inspection_step if self.live_trajectory.inspection_step is not None else (self.recording.status()["last_step"] if self.recording else self.session.step_index),
+            "current_step": self.live_trajectory.inspection_step
+            if self.live_trajectory.inspection_step is not None
+            else (
+                self.recording.status()["last_step"] if self.recording else self.session.step_index
+            ),
             "scientific_evidence": False,
             **(self.recording.status() if self.recording is not None else {}),
         }
@@ -1228,7 +1246,11 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             }
         )
 
-        if self.live_trajectory.enabled and not self.live_trajectory.error and not transition.boundary:
+        if (
+            self.live_trajectory.enabled
+            and not self.live_trajectory.error
+            and not transition.boundary
+        ):
             self.live_trajectory._add_range(transition.step)
 
     def _begin_capture(self) -> None:
@@ -1607,9 +1629,17 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
 
     def _apply(self, command: PlaybackCommand) -> None:
         from gradlab.play_live_trajectory import COMMANDS
+
         if command.name in COMMANDS:
             try:
-                with self._trajectory_lock:
+                with self._authority_lock, self._trajectory_lock:
+                    if (
+                        command.control_epoch is not None
+                        and command.control_epoch != self._control_epoch
+                        or command.session_epoch is not None
+                        and command.session_epoch != self.encoder.epoch
+                    ):
+                        raise ValueError("stale session or control ownership")
                     self.live_trajectory.apply(command)
                 self._response(command, ok=True)
             except Exception as exc:
@@ -1850,7 +1880,11 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             if self.live_trajectory.replay_step():
                 return None
             if self.live_trajectory.enabled and self.live_trajectory.error:
-                raise OSError("Restoration capture failed: " + self.live_trajectory.error + ". Disable capture explicitly or retry it before continuing.")
+                raise OSError(
+                    "Restoration capture failed: "
+                    + self.live_trajectory.error
+                    + ". Disable capture explicitly or retry it before continuing."
+                )
             if self.recording_enabled and self.recording is not None:
                 self.recording.check_capacity()
             transition = (
@@ -2568,7 +2602,9 @@ class WebClient:
 
     def offer_snapshot(self, payload: Mapping[str, Any]) -> None:
         trajectory = payload.get("trajectory") or {}
-        self.recorded_navigation = payload.get("mode") == "trajectory" or bool(trajectory.get("available"))
+        self.recorded_navigation = payload.get("mode") == "trajectory" or bool(
+            trajectory.get("available")
+        )
         identity = (trajectory.get("episode_id"), trajectory.get("trajectory_revision"))
         if identity != self.trajectory_identity:
             self.trajectory_identity = identity
@@ -2650,6 +2686,7 @@ class PlaybackWebServer:
         self.control_holder: str | None = None
         self.input_holder: str | None = None
         self.control_epoch = 0
+        self._control_change_lock = asyncio.Lock()
         self.publication_authority_client_id: str | None = None
         self.publication_capability: str | None = None
         self.stop_event = asyncio.Event()
@@ -3492,6 +3529,14 @@ class PlaybackWebServer:
             }
         return payload
 
+    async def _advance_control_epoch(self) -> None:
+        async with self._control_change_lock:
+            next_epoch = self.control_epoch + 1
+            setter = getattr(self.runner, "set_control_epoch", None)
+            if setter is not None:
+                await asyncio.to_thread(setter, next_epoch)
+            self.control_epoch = next_epoch
+
     def _broadcast_control(self) -> None:
         snapshot = self.runner.snapshot()
         for client in self.clients.values():
@@ -3663,8 +3708,8 @@ class PlaybackWebServer:
             await self._sync_player_processing()
             self.ever_connected = True
             if self.control_holder is None:
+                await self._advance_control_epoch()
                 self.control_holder = workspace_id
-                self.control_epoch += 1
             client.offer_reliable(
                 {
                     "type": "welcome",
@@ -3711,9 +3756,9 @@ class PlaybackWebServer:
                         self.control_holder != client.workspace_id
                         or self.publication_authority_client_id != client.client_id
                     ):
+                        await self._advance_control_epoch()
                         self.control_holder = client.workspace_id
                         self.input_holder = None
-                        self.control_epoch += 1
                         self.runner.clear_input()
                         self._rotate_publication_authority(client.client_id)
                         self._broadcast_control()
@@ -3792,11 +3837,23 @@ class PlaybackWebServer:
                         continue
                     command_name = str(payload.get("name") or "")
                     from gradlab.play_live_trajectory import COMMANDS as TRAJECTORY_COMMANDS
-                    if command_name in TRAJECTORY_COMMANDS and command_name not in {"seek", "step_backward"}:
-                        if (payload.get("session_epoch") != self._runner_epoch()
-                                or payload.get("control_epoch") != self.control_epoch):
-                            client.offer_reliable({"type": "command_result", "id": str(payload.get("id") or ""),
-                                                   "ok": False, "error": "stale session or control ownership"})
+
+                    if command_name in TRAJECTORY_COMMANDS and command_name not in {
+                        "seek",
+                        "step_backward",
+                    }:
+                        if (
+                            payload.get("session_epoch") != self._runner_epoch()
+                            or payload.get("control_epoch") != self.control_epoch
+                        ):
+                            client.offer_reliable(
+                                {
+                                    "type": "command_result",
+                                    "id": str(payload.get("id") or ""),
+                                    "ok": False,
+                                    "error": "stale session or control ownership",
+                                }
+                            )
                             continue
                     try:
                         self.runner.submit(
@@ -3809,6 +3866,12 @@ class PlaybackWebServer:
                                 else {},
                                 int(payload["expected_revision"])
                                 if payload.get("expected_revision") is not None
+                                else None,
+                                session_epoch=self._runner_epoch()
+                                if command_name in TRAJECTORY_COMMANDS
+                                else None,
+                                control_epoch=self.control_epoch
+                                if command_name in TRAJECTORY_COMMANDS
                                 else None,
                             )
                         )
@@ -3837,7 +3900,7 @@ class PlaybackWebServer:
                     self.publication_authority_client_id == client.client_id
                 )
                 if publication_authority_closed:
-                    self.control_epoch += 1
+                    await self._advance_control_epoch()
                     self._rotate_publication_authority(None)
                 controlling_workspace_closed = (
                     self.control_holder == client.workspace_id
@@ -3849,7 +3912,7 @@ class PlaybackWebServer:
                 if controlling_workspace_closed:
                     self.control_holder = None
                     if not publication_authority_closed:
-                        self.control_epoch += 1
+                        await self._advance_control_epoch()
                         self._rotate_publication_authority(None)
                     self.runner.clear_input()
                     try:

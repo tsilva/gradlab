@@ -3,6 +3,7 @@
 from copy import deepcopy
 
 import numpy as np
+import pytest
 
 from gradlab.batch_runtime import BatchRuntime, ProviderDescriptor, SignalSpec
 from gradlab.task_kernels import IdentityTaskDefinition
@@ -296,10 +297,13 @@ def test_restore_failure_preserves_timeline_bookmarks_and_exports(tmp_path):
         runner.stop()
 
 
-def test_native_breakout_policy_continuation_is_exact_with_verification_sampling_state():
+@pytest.mark.parametrize("algorithm", ["ppo", "a2c", "action-program"])
+def test_native_breakout_policy_continuation_is_exact_with_verification_sampling_state(algorithm):
     import torch
     from pathlib import Path
-    from stable_baselines3 import PPO
+    from stable_baselines3 import PPO, A2C
+    from gradlab.action_program import ActionProgramPolicy, ActionRun
+    from gradlab.action_contract import action_contract_meanings
     from gradlab.env import make_eval_vec_env, resolve_env_config
     from gradlab.env_config import env_config_from_mapping
     from gradlab.recipe_documents import compose_train_document
@@ -318,28 +322,38 @@ def test_native_breakout_policy_continuation_is_exact_with_verification_sampling
     threads = torch.get_num_threads()
     torch.set_num_threads(1)
     try:
-        model = PPO("MultiInputPolicy", env, n_steps=8, batch_size=8, device="cpu")
+        if algorithm == "ppo":
+            model = PPO("MultiInputPolicy", env, n_steps=8, batch_size=8, device="cpu")
+        elif algorithm == "a2c":
+            model = A2C("MultiInputPolicy", env, n_steps=8, device="cpu")
+        else:
+            model = ActionProgramPolicy(
+                action_names=action_contract_meanings(env.runtime.action_contract),
+                action_runs=(ActionRun(1, 10), ActionRun(2, 10)),
+                fallback_action=0,
+            )
+        mode = "program" if algorithm == "action-program" else "stochastic"
         session = _PlaybackSession(
             model=model,
             env=env,
             config=config,
             initial_seed=40000,
-            policy_runtime=PolicyRuntime(model, algorithm_id="ppo"),
+            policy_runtime=PolicyRuntime(model, algorithm_id=algorithm),
         )
         session.restart()
         session.trajectory_recording = True
         adapter = LiveRestoration(session)
         for _ in range(8):
-            session.step(action_selection_mode="stochastic")
+            session.step(action_selection_mode=mode)
         state = adapter.capture()
         original_sampling = torch.get_rng_state()
-        expected = [session.step(action_selection_mode="stochastic") for _ in range(5)]
+        expected = [session.step(action_selection_mode=mode) for _ in range(5)]
         advancing_sampling = torch.get_rng_state()
         adapter.restore(state)
         assert torch.equal(advancing_sampling, torch.get_rng_state())
         # Only this verification rewinds sampling. User restoration never does.
         torch.set_rng_state(original_sampling)
-        actual = [session.step(action_selection_mode="stochastic") for _ in range(5)]
+        actual = [session.step(action_selection_mode=mode) for _ in range(5)]
         for before, after in zip(expected, actual):
             assert pack_record(before.model_obs) == pack_record(after.model_obs)
             assert pack_record(before.executed_action) == pack_record(after.executed_action)
@@ -474,3 +488,87 @@ def test_shared_viewers_receive_cut_even_when_target_frame_is_unchanged(tmp_path
             host.stop()
 
     asyncio.run(scenario())
+
+
+def test_queued_cut_loses_authority_when_control_changes_during_a_step(tmp_path):
+    import threading
+    import time
+    from argparse import Namespace
+    from tests.test_play_trajectory import ScriptedSession, command, wait_step
+    from tests.test_policy_bundle import write_bundle
+    from gradlab.policy_bundle import load_policy_bundle
+    from gradlab.play_web import PlaybackCommand, WebPlaybackRunner
+
+    entered = threading.Event()
+    release = threading.Event()
+
+    class BlockingSession(ScriptedSession):
+        def step(self, **kwargs):
+            if self.sequence == 2:
+                entered.set()
+                assert release.wait(timeout=5)
+            return super().step(**kwargs)
+
+    write_bundle(tmp_path)
+    runner = WebPlaybackRunner(
+        BlockingSession(20),
+        Namespace(fps=60, episodes=0),
+        config_text="",
+        trajectory_bundle=load_policy_bundle(tmp_path),
+        restoration_factory=ScriptedRestoration,
+    )
+    runner.start()
+    try:
+        runner.set_control_epoch(1)
+        command(runner, "set_restoration_capture", enabled=True)
+        command(runner, "step", count=2)
+        wait_step(runner, 2)
+        identity = {
+            key: runner.snapshot()["trajectory"][key]
+            for key in ("episode_id", "trajectory_revision")
+        }
+        command(runner, "step", count=1)
+        assert entered.wait(timeout=5)
+        runner.submit(
+            PlaybackCommand(
+                "queued-cut",
+                "old-controller",
+                "discard_future",
+                {**identity, "step": 1},
+                None,
+                session_epoch=0,
+                control_epoch=1,
+            )
+        )
+        runner.set_control_epoch(2)
+        release.set()
+        deadline = time.monotonic() + 5
+        while runner.responses.empty() and time.monotonic() < deadline:
+            time.sleep(0.005)
+        result = runner.responses.get_nowait().payload
+        assert result["ok"] is False
+        assert "ownership" in result["error"]
+        assert runner.snapshot()["trajectory"]["last_step"] == 3
+        assert runner.snapshot()["trajectory"]["trajectory_revision"] == 0
+    finally:
+        release.set()
+        runner.stop()
+
+
+def test_historical_contract_is_separate_from_next_action_selection(tmp_path):
+    from tests.test_play_trajectory import live_runner, command, wait_step
+
+    runner = live_runner(tmp_path, length=20, restoration_factory=ScriptedRestoration)
+    try:
+        command(runner, "step", count=2)
+        wait_step(runner, 2)
+        original = runner.snapshot()["session"]["critic_comparison"]
+        command(runner, "set_action_selection_mode", mode="deterministic")
+        command(runner, "seek", step=1)
+        snapshot = runner.snapshot()
+        assert snapshot["session"]["sampling_mode"] == "stochastic"
+        assert snapshot["session"]["critic_comparison"] == original
+        assert snapshot["policy"]["action_selection"]["requested_mode"] == "deterministic"
+        assert snapshot["policy"]["action_selection"]["effective_mode"] == "stochastic"
+    finally:
+        runner.stop()

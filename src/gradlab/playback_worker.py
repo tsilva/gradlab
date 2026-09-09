@@ -132,6 +132,8 @@ def _worker_main(
                     tuple(str(item) for item in request.get("labels") or ()),
                     focused=bool(request.get("focused")),
                 )
+            elif operation == "set_control_epoch":
+                value = host.set_control_epoch(int(request["epoch"]))
             elif operation == "set_processing":
                 value = host.set_processing(request.get("features") or ())
             elif operation == "submit":
@@ -387,6 +389,9 @@ class IsolatedPlaybackHost:
 
     def update_input(self, labels: Sequence[str], *, focused: bool) -> None:
         self._rpc("update_input", labels=list(labels), focused=bool(focused))
+
+    def set_control_epoch(self, epoch: int) -> None:
+        self._rpc("set_control_epoch", epoch=int(epoch))
 
     def set_processing(self, features: Iterable[object]) -> None:
         self._rpc("set_processing", features=[str(feature) for feature in features])

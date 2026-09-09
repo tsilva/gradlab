@@ -273,6 +273,15 @@ class LiveTrajectory:
             recording.metadata["initial_snapshot"]["sequence"] if initial else row["sequence"]
         )
         payload["transition"] = None if initial else row["presentation"]
+        if not initial:
+            payload["session"].update(deepcopy(row["presentation"].get("recorded_session", {})))
+            payload["session"]["next_sampling_mode"] = runner.sampling_mode
+            payload["policy"]["action_selection"].update(
+                requested_mode=runner.sampling_mode,
+                effective_mode=(row["presentation"].get("decision") or {}).get(
+                    "action_selection_mode"
+                ),
+            )
         payload["history_point"] = None if initial else history_point_payload(row["presentation"])
         payload["session"].update(
             step=self.inspection_step,

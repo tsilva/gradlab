@@ -115,6 +115,7 @@ class PlaybackHost:
         self._prefetched: set[tuple[str, str]] = set()
         self._generation = 0
         self._session_epoch = 0
+        self._control_epoch = 0
         self._revision = 0
         self._stopped = False
         self._phase = "selecting"
@@ -232,6 +233,9 @@ class PlaybackHost:
                 self._generation += 1
                 self._session_epoch += 1
                 runner.encoder.set_epoch(self._session_epoch)
+                setter = getattr(runner, "set_control_epoch", None)
+                if setter is not None:
+                    setter(self._control_epoch)
                 runner.set_processing(self._processing_features)
                 runner.start()
                 bundle = runner.recording.bundle
@@ -286,6 +290,15 @@ class PlaybackHost:
             active = self._active if self._phase == "active" else None
         if active is not None:
             active.runner.update_input(labels, focused=focused)
+
+    def set_control_epoch(self, epoch: int) -> None:
+        with self._lock:
+            self._control_epoch = int(epoch)
+            active = self._active
+            if active is not None:
+                setter = getattr(active.runner, "set_control_epoch", None)
+                if setter is not None:
+                    setter(epoch)
 
     def set_processing(self, features: Iterable[object]) -> None:
         normalized = normalize_player_processing(features)
@@ -432,6 +445,9 @@ class PlaybackHost:
                     return
                 previous = self._active
                 self._session_epoch += 1
+                setter = getattr(active.runner, "set_control_epoch", None)
+                if setter is not None:
+                    setter(self._control_epoch)
                 set_epoch = getattr(active.runner.encoder, "set_epoch", None)
                 if callable(set_epoch):
                     set_epoch(self._session_epoch)

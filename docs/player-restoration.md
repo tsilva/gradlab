@@ -27,10 +27,10 @@ provide Training Success, Acceptance or Promotion evidence.
 ## Support and capture
 
 The authoritative combination registry is `gradlab.play_restoration.LIVE_RESTORATION`.
-It covers native Mario and native Breakout with registered PPO, A2C and action-program
+It covers native Breakout with registered PPO, A2C and action-program
 implementations using GradLab's single-lane wrapper and strict portable snapshot
 codecs. PPO/A2C actor execution is stateless; action programs restore their exact
-cursor. State-dependent exploration, cell-graph Policies, other providers, custom
+cursor. State-dependent exploration, cell-graph Policies, Mario and other providers, custom
 wrappers and archive curricula are disabled with a reason. There is no probing,
 approximate reconstruction or reset-to-start fallback.
 
@@ -107,5 +107,6 @@ cost rather than full browser/recording throughput. The existing episode-recordi
 measurements cover its shared bounded background writer. Integration tests inject
 storage failure/backpressure and check preserved data and visible pause.
 Uncontrolled host load explains why the capture-on median can be lower; this is
-not a claim that capture accelerates execution. Mario, larger payloads and higher
-rates have not been measured and use the explicit toggle.
+not a claim that capture accelerates execution. Larger payloads and higher
+rates use the explicit toggle. Mario is unavailable until its complete live
+restoration contract has native verification.
