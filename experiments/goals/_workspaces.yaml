@@ -88,6 +88,36 @@ sections:
       x: train/global_step
       y:
       - train/throughput/provider/step/rate
+  breakout_primary:
+    title: Primary metrics
+    pinned: true
+    open: true
+    columns: 2
+    panels:
+    - id: primary_0
+      kind: line
+      y_title: bricks (last 100 episodes)
+      x: train/global_step
+      y:
+      - train/target/progress/bricks_destroyed/mean
+    - id: primary_1
+      kind: line
+      y_title: bricks (last 100 episodes)
+      x: train/global_step
+      y:
+      - train/target/progress/bricks_destroyed/max
+    - id: primary_2
+      kind: line
+      y_title: bricks (last 100 episodes)
+      x: train/global_step
+      y:
+      - train/target/progress/bricks_destroyed/min
+    - id: primary_3
+      kind: line
+      y_title: steps (last 100 episodes)
+      x: train/global_step
+      y:
+      - train/all/episode_steps_mean
   breakout_secondary:
     title: Breakout diagnostics
     pinned: false
@@ -141,10 +171,11 @@ profiles:
     - training_essentials
   breakout_training:
     display_name: GradLab Training
-    primary_metrics: goal_rank
+    primary_metrics: none
     run_scope: current_metrics_schema
     max_runs: 25
     sections:
+    - breakout_primary
     - breakout_secondary
     - training_essentials
 

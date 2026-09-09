@@ -433,6 +433,12 @@ def train_progress_origin_target_rolling_mean_metric(progress: object) -> str:
     )
 
 
+def train_progress_origin_target_rolling_min_metric(progress: object) -> str:
+    return validate_metric_name(
+        f"train/target/progress/{metric_path_segment(progress)}/min"
+    )
+
+
 def train_progress_origin_target_rolling_max_metric(progress: object) -> str:
     return validate_metric_name(
         f"train/target/progress/{metric_path_segment(progress)}/max"

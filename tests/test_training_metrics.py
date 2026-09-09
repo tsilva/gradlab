@@ -8,6 +8,7 @@ from gradlab.metric_names import (
     TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN,
     TRAIN_PROGRESS_KILLS_ORIGIN_TARGET_ROLLING_MEAN,
     train_progress_origin_target_rolling_max_metric,
+    train_progress_origin_target_rolling_min_metric,
     validate_metric_name,
 )
 from gradlab.training_metrics import EpisodeMetricsReducer
@@ -115,3 +116,17 @@ def test_configured_progress_field_requires_a_finite_episode_value() -> None:
 
     with pytest.raises(ValueError, match="kills.*finite number"):
         reducer.consume((_episode(0.0),))
+
+
+def test_progress_minimum_uses_only_finite_target_values_and_expires():
+    reducer = EpisodeMetricsReducer(progress_fields=("kills",), track_success=False)
+    key = train_progress_origin_target_rolling_min_metric("kills")
+    assert key not in reducer.snapshot()
+    assert reducer.consume([_episode(0, kills=5)])[key] == 5
+    assert reducer.consume([_episode(0, kills=-2)])[key] == -2
+    assert reducer.consume([_episode(0, origin="curriculum", kills=-100)])[key] == -2
+    with pytest.raises(ValueError, match="must be a finite number"):
+        reducer.consume([_episode(0, kills=float("nan"))])
+    assert reducer.snapshot()[key] == -2
+    assert reducer.consume(_episode(0, kills=8) for _ in range(99))[key] == -2
+    assert reducer.consume([_episode(0, kills=8)])[key] == 8
