@@ -62,6 +62,8 @@ class TrajectoryPlaybackRunner(DatasetPlaybackRunner):
             transition=current,
             history_point=dict(self.history[-1]) if self.history else None,
             trajectory={
+                "bookmarks": deepcopy(self.metadata["bookmarks"]),
+                "trajectory_revision": self.metadata["trajectory_revision"],
                 "imported": True,
                 "scientific_evidence": False,
                 "complete": self.metadata["complete"],
@@ -132,6 +134,14 @@ class TrajectoryPlaybackRunner(DatasetPlaybackRunner):
                 }
 
     def _load_step(self, step: int) -> None:
+        if step == self.first_step - 1:
+            first = self.recorded_transition(self.first_step)
+            self.transition_index = 0
+            self.sequence = self.metadata["initial_snapshot"]["sequence"]
+            self.current_frame = first["before_image"]
+            self.observation_frames = first["observation_frames"]
+            self._transition = None
+            return
         row = self.recorded_transition(step)
         self.transition_index = step - self.first_step + 1
         self.sequence = row["sequence"]
@@ -163,9 +173,9 @@ class TrajectoryPlaybackRunner(DatasetPlaybackRunner):
                 if type(step) is not int:
                     raise ValueError("transition number must be an integer")
                 self._load_step(step)
-                assert self._transition is not None
                 self.history.clear()
-                self.history.append(history_point_payload(self._transition))
+                if self._transition is not None:
+                    self.history.append(history_point_payload(self._transition))
                 self.remaining_steps = 0
                 self.continue_target = None
                 self._set_state("paused", message=f"Recorded transition {step}")

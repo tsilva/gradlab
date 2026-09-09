@@ -105,6 +105,7 @@ const state = {
   selectedPanel: null,
   activeWindows: new Map(),
   sessionEpoch: 0,
+  trajectoryIdentity: null,
   sourceMode: false,
   backgroundPlaybackSnapshot: null,
   applicationSnapshot: null,
@@ -231,6 +232,7 @@ function updateConnection(label, kind = "") {
 function resetSession(epoch) {
   cancelInspectionFrameRequest();
   state.sessionEpoch = Number(epoch) || 0;
+  state.trajectoryIdentity = null;
   state.backgroundPlaybackSnapshot = null;
   state.retainedEpisode = null;
   state.inspectionSequence = null;
@@ -459,6 +461,20 @@ function handleMessage(message) {
     }
     if (message.mode === "trajectory") finishCheckpointLoad();
     setSourceMode(false, message);
+    const nextTrajectory = message.trajectory;
+    const nextIdentity = [nextTrajectory?.episode_id, nextTrajectory?.trajectory_revision];
+    const previousIdentity = state.trajectoryIdentity;
+    if (previousIdentity?.[0] === nextIdentity[0]
+      && Number(nextIdentity[1]) < Number(previousIdentity?.[1])) return;
+    if (previousIdentity && (previousIdentity[0] !== nextIdentity[0] || previousIdentity[1] !== nextIdentity[1])) {
+      cancelInspectionFrameRequest();
+      stopInspectionReplay({ render: false });
+      clearRetainedEpisode();
+      state.history = [];
+      state.inspectionSequence = null;
+    }
+    state.trajectoryIdentity = nextIdentity;
+    if (message.trajectory_history) state.history = normalizedHistory(message.trajectory_history);
     prepareRetainedEpisode(message);
     state.snapshots.set(Number(message.sequence), message);
     pruneRetainedTrace();
@@ -848,7 +864,7 @@ function hideGoExploreValuePanel(snapshot) {
 }
 
 function applySnapshot(snapshot) {
-  if (snapshot.mode === "trajectory") state.inspectionSequence = null;
+  if (snapshot.mode === "trajectory" || snapshot.trajectory?.available) state.inspectionSequence = null;
   const previousEnvironmentId = state.liveSnapshot?.session?.env_id;
   const previousEpisode = episodeForSnapshot(state.liveSnapshot);
   const nextEpisode = episodeForSnapshot(snapshot);
@@ -928,6 +944,8 @@ function command(name, payload = {}) {
     name,
     payload,
     expected_revision: state.liveSnapshot?.revision ?? null,
+    session_epoch: state.sessionEpoch,
+    control_epoch: state.controlEpoch,
   });
   return id;
 }
@@ -1002,7 +1020,7 @@ function inspectionEpisodeSequences() {
 }
 
 function canReplayInspection() {
-  if (state.liveSnapshot?.trajectory?.imported) return false;
+  if (state.liveSnapshot?.trajectory?.imported || state.liveSnapshot?.trajectory?.available) return false;
   if (state.liveSnapshot?.run_state !== "paused") return false;
   const sequences = inspectionEpisodeSequences();
   const selectedIndex = sequences.indexOf(Number(state.inspectionSequence));
@@ -1439,10 +1457,10 @@ function renderTimeline() {
   const scrubber = $("#timeline-scrubber");
   if (!scrubber) return;
   const trajectory = state.liveSnapshot?.trajectory;
-  if (trajectory?.imported) {
-    scrubber.min = String(trajectory.first_step);
+  if (trajectory?.imported || trajectory?.available) {
+    scrubber.min = String(trajectory.first_step - 1);
     scrubber.max = String(trajectory.last_step);
-    scrubber.value = String(Math.max(trajectory.first_step, trajectory.current_step));
+    scrubber.value = String(Math.max(trajectory.first_step - 1, trajectory.current_step));
     scrubber.disabled = !state.hasControl;
     scrubber.setAttribute("aria-label", "Seek a recorded transition");
     scrubber.style.setProperty("--timeline-progress", `${timelineProgress(
@@ -2322,7 +2340,7 @@ function bindTimeline() {
     scheduleTimelineOverlayHide();
   });
   const selectIndex = (index) => {
-    if (state.liveSnapshot?.trajectory?.imported) {
+    if (state.liveSnapshot?.trajectory?.imported || state.liveSnapshot?.trajectory?.available) {
       state.inspectionSequence = null;
       command("seek", { step: index });
       return;

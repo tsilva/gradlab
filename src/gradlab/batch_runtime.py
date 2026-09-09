@@ -1042,6 +1042,97 @@ class BatchRuntime:
             raise ValueError("state archive mask must select at least one lane")
         return mask
 
+    def capture_playback_state(self) -> dict[str, Any]:
+        """Own an exact single-lane decision boundary without creating an archive entry.
+
+        Pending external resets and training curricula are deliberately unsupported.
+        Sampling state belongs to the Policy and is not part of this contract.
+        """
+        from copy import deepcopy
+        from gradlab.state_archive import SNAPSHOT_CODECS
+
+        if (
+            self.num_envs != 1
+            or self.state_archive is not None
+            or self._has_pending_resets
+            or not self._observation_buffers
+        ):
+            raise ValueError(
+                "live restoration requires one initialized lane without archive curricula or pending resets"
+            )
+        descriptor = self.descriptor
+        if not descriptor.supports_live_snapshots or not descriptor.live_snapshots_deterministic:
+            raise ValueError("provider does not declare exact snapshot continuation")
+        codec = SNAPSHOT_CODECS.resolve(
+            descriptor.snapshot_codec_id, provider_id=descriptor.provider_id
+        )
+        mask = np.ones(1, dtype=np.bool_)
+        payloads, _handles = codec.capture(self.provider, mask)
+        if len(payloads) != 1 or not isinstance(payloads[0], bytes):
+            raise ValueError("provider did not capture an exact lane payload")
+        return deepcopy(
+            {
+                "provider_id": descriptor.provider_id,
+                "compatibility_id": descriptor.snapshot_compatibility_id,
+                "provider": np.frombuffer(payloads[0], dtype=np.uint8).copy(),
+                "task": self.kernel.capture_lane_states(mask)[0].to_dict(),
+                "observation": self._observation_buffers[self._current_observation_buffer],
+                "episode_indices": self._episode_indices.tolist(),
+                "episode_returns": self._episode_returns.tolist(),
+                "episode_lengths": self._episode_lengths.tolist(),
+                "episode_seeds": list(self._episode_seeds),
+                "start_ids": list(self._start_ids),
+                "start_origins": self._start_origins.tolist(),
+                "reset_infos": self.reset_infos,
+            }
+        )
+
+    def restore_playback_state(self, state: Mapping[str, Any]) -> Any:
+        """Restore captured provider randomness, task memory, stacks and episode counters.
+
+        Caller owns transaction preparation/rollback. No Policy is reset or sampled.
+        """
+        from copy import deepcopy
+        from gradlab.state_archive import SNAPSHOT_CODECS, TaskLaneState
+
+        descriptor = self.descriptor
+        if (
+            self.num_envs != 1
+            or self.state_archive is not None
+            or state["provider_id"] != descriptor.provider_id
+            or state["compatibility_id"] != descriptor.snapshot_compatibility_id
+        ):
+            raise ValueError("incompatible live restoration state")
+        codec = SNAPSHOT_CODECS.resolve(
+            descriptor.snapshot_codec_id, provider_id=descriptor.provider_id
+        )
+        mask = np.ones(1, dtype=np.bool_)
+        task = TaskLaneState.from_dict(state["task"])
+        handles = codec.restore(self.provider, (state["provider"].tobytes(),), mask)
+        observations, infos = self.provider.reset(
+            seed=[None],
+            options=self._reset_options(mask, [None], snapshots=handles),
+        )
+        self.kernel.on_reset(observations, infos, mask)
+        self.kernel.restore_lane_states((task,), mask)
+        encoded = self.kernel.encode_observations(observations)
+        if not _tree_equal(encoded, state["observation"]):
+            raise ValueError("restored observations differ from the captured decision boundary")
+        for buffer in self._observation_buffers:
+            _copy_tree_lanes(buffer, encoded, mask)
+        for name in ("episode_indices", "episode_returns", "episode_lengths", "start_origins"):
+            getattr(self, "_" + name)[:] = state[name]
+        for name in ("episode_seeds", "start_ids"):
+            setattr(self, "_" + name, list(state[name]))
+        self.reset_infos = deepcopy(state["reset_infos"])
+        self._pending_reset_mask.fill(False)
+        self._has_pending_resets = False
+        self._pending_start_ids.fill(None)
+        self._pending_reset_reasons.fill(None)
+        self._records.clear()
+        self._latest_metric_record = None
+        return self._observation_buffers[self._current_observation_buffer]
+
     def capture_archive_entries(
         self,
         mask: np.ndarray,
