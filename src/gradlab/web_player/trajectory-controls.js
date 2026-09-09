@@ -26,6 +26,7 @@ export function mountTrajectoryControls({ command, getState, request, toast }) {
   const confirmation = document.querySelector("#bookmark-confirmation");
   let pendingCut = null;
   let bookmarkKey = "";
+  let resampleControls = [];
   const currentTrajectory = () => (getState().liveSnapshot || getState().snapshot)?.trajectory || {};
   const identity = (trajectory) => ({ episode_id: trajectory.episode_id, trajectory_revision: trajectory.trajectory_revision });
   const canRestore = (trajectory, step) => Boolean(trajectory.restoration?.supported
@@ -132,10 +133,11 @@ export function mountTrajectoryControls({ command, getState, request, toast }) {
     if (trajectory.classification === "counterfactual" && !imported) {
       document.querySelector("#trajectory-status").textContent += " · Counterfactual Playback · inspection only";
     }
-    const nextKey = JSON.stringify([trajectory.bookmarks, trajectory.trajectory_revision, state.hasControl, restore.ranges, imported]);
+    const nextKey = JSON.stringify([trajectory.bookmarks, trajectory.trajectory_revision, state.hasControl, imported]);
     if (bookmarkKey !== nextKey) {
       bookmarkKey = nextKey;
       bookmarksRoot.replaceChildren();
+      resampleControls = [];
       const markers = document.querySelector("#trajectory-bookmark-steps");
       markers.replaceChildren();
       for (const bookmark of trajectory.bookmarks || []) {
@@ -164,7 +166,16 @@ export function mountTrajectoryControls({ command, getState, request, toast }) {
           rename.maxLength = 120;
           rename.setAttribute("aria-label", `Rename ${bookmark.name}`);
           rename.disabled = !state.hasControl;
-          rename.addEventListener("change", () => command("bookmark_rename", { ...identity(trajectory), bookmark_id: bookmark.id, name: rename.value }));
+          const saveName = () => {
+            if (rename.value !== bookmark.name) command("bookmark_rename", { ...identity(trajectory), bookmark_id: bookmark.id, name: rename.value });
+          };
+          rename.addEventListener("change", saveName);
+          rename.addEventListener("keydown", (event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              saveName();
+            }
+          });
           const remove = document.createElement("button");
           remove.type = "button";
           remove.className = "quiet";
@@ -176,11 +187,15 @@ export function mountTrajectoryControls({ command, getState, request, toast }) {
           resample.className = "quiet";
           resample.textContent = "Resample from bookmark";
           resample.disabled = !state.hasControl || !canRestore(trajectory, bookmark.step);
+          resampleControls.push({ button: resample, step: bookmark.step });
           resample.addEventListener("click", () => cut("resample_bookmark", bookmark.step, bookmark.id));
           item.append(rename, resample, remove);
         }
         bookmarksRoot.append(item);
       }
+    }
+    for (const { button, step } of resampleControls) {
+      button.disabled = !state.hasControl || !canRestore(trajectory, step);
     }
     if (available) {
       seek.min = String(Math.max(0, trajectory.first_step - 1));
