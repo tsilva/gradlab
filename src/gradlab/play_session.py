@@ -266,6 +266,11 @@ def add_play_source_args(parser: argparse.ArgumentParser) -> None:
         help="Local gradlab policy path. The artifact must have model.json and recipe.json sidecars.",
     )
     parser.add_argument(
+        "--recording",
+        type=Path,
+        help="Open a local .gradtraj episode archive without loading a Policy or environment.",
+    )
+    parser.add_argument(
         "--recipe",
         help=(
             "Play the newest completed local run for a built-in <goal-path>/<recipe> "

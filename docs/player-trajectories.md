@@ -13,6 +13,18 @@ or execute the bundled Checkpoint, or resolve remote artifacts. Use the transiti
 number, previous/next buttons, timeline, play/pause, and speed setting to navigate.
 Other viewers in the same Playback Session share the imported cursor.
 
+Open a recording directly from the CLI with:
+
+```bash
+gradlab play --recording episode.gradtraj
+```
+
+The import button is available immediately after the Player connects, before a
+Checkpoint is selected. Importing replaces the current Playback Session, including
+when source selection is open. The navigation bar and URL show only the recorded
+environment; opening the archive does not depend on catalog access or on the
+original Checkpoint files still existing.
+
 The recording preserves Faithful Playback, Evaluation Reproduction, and
 Counterfactual Playback classifications. Inspection is never Acceptance,
 Promotion, or Training Success evidence. Heavy attribution maps, gradients, and

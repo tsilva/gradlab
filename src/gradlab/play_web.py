@@ -2981,7 +2981,7 @@ class PlaybackWebServer:
         return web.json_response(page.to_dict())
 
     async def _prepare_initial_catalog(self) -> None:
-        if self.catalog is None:
+        if self.catalog is None or self.runner.snapshot().get("mode") == "trajectory":
             return
         initial_environments = getattr(self.catalog, "initial_environments", None)
         if not callable(initial_environments):
