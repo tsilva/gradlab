@@ -206,6 +206,7 @@ resuming as its cause without a matched uninterrupted continuation.
   `d * ln(2)`. Continuous `Box` policies report differential entropy, which has no finite
   action-space-only minimum or maximum. The bounds remain a pure policy-space calculation used by
   diagnostics and are not duplicated as W&B metrics.
+- For custom PPO, `train/ppo/clip_fraction` averages minibatch fractions across attempted epochs and counts sampled action-probability ratios outside the clipping interval. It does not measure how far those ratios moved or the fraction of gradients disabled; similar fractions can accompany different policy changes. `train/ppo/approx_kl` averages minibatch estimates from the last attempted epoch, not a fresh full-rollout evaluation of the final policy. Interpret both alongside learning rate and progress at matched timesteps; neither has a universally desirable target.
 - Actor-critic explained variance is `1 - Var(value_target - value_prediction) /
   Var(value_target)`: one means the residual variance is zero (perfect up to a constant prediction
   offset), zero means the critic explains no more target variance than a constant baseline, and
@@ -253,7 +254,9 @@ resuming as its cause without a matched uninterrupted continuation.
   weights brick rows differently, so this metric is not a brick count; it remains an online
   behavior-policy training proxy rather than frozen-checkpoint evaluation evidence.
 - Breakout also declares `bricks_destroyed` and `bricks_destroyed_normalized` as
-  reward-independent episode progress. Their `train/target/progress/{progress}/mean`
+  reward-independent episode progress. The Breakout workspace primary panels show normalized
+  bricks destroyed mean, maximum, and minimum as fractions; diagnostics show the absolute mean.
+  Their `train/target/progress/{progress}/mean`
   metrics average the terminal cumulative values over the most recent 100 target-origin episodes,
   while `train/target/progress/{progress}/max` and `/min` report the maximum and minimum
   over that same window. Minimum bricks describes the worst episode in the current window,

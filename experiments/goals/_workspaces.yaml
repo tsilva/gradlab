@@ -96,22 +96,22 @@ sections:
     panels:
     - id: primary_0
       kind: line
-      y_title: bricks (last 100 episodes)
+      y_title: fraction (last 100 episodes)
       x: train/global_step
       y:
-      - train/target/progress/bricks_destroyed/mean
+      - train/target/progress/bricks_destroyed_normalized/mean
     - id: primary_1
       kind: line
-      y_title: bricks (last 100 episodes)
+      y_title: fraction (last 100 episodes)
       x: train/global_step
       y:
-      - train/target/progress/bricks_destroyed/max
+      - train/target/progress/bricks_destroyed_normalized/max
     - id: primary_2
       kind: line
-      y_title: bricks (last 100 episodes)
+      y_title: fraction (last 100 episodes)
       x: train/global_step
       y:
-      - train/target/progress/bricks_destroyed/min
+      - train/target/progress/bricks_destroyed_normalized/min
     - id: primary_3
       kind: line
       y_title: steps (last 100 episodes)
@@ -124,12 +124,12 @@ sections:
     open: true
     columns: 2
     panels:
-    - id: target_bricks_destroyed_normalized_mean
+    - id: target_bricks_destroyed_mean
       kind: line
-      y_title: fraction (last 100 episodes)
+      y_title: bricks (last 100 episodes)
       x: train/global_step
       y:
-      - train/target/progress/bricks_destroyed_normalized/mean
+      - train/target/progress/bricks_destroyed/mean
     - id: top_target_return_mean
       kind: line
       y_title: return (last 100 episodes)

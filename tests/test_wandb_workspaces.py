@@ -62,7 +62,7 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
                 "primary_1",
                 "primary_2",
                 "primary_3",
-                "target_bricks_destroyed_normalized_mean",
+                "target_bricks_destroyed_mean",
                 "top_target_return_mean",
                 "target_score_mean",
                 "target_score_max",
@@ -94,7 +94,7 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
             breakout_metrics,
         )
         self.assertIn(
-            "train/target/progress/bricks_destroyed/max",
+            "train/target/progress/bricks_destroyed_normalized/max",
             breakout_metrics,
         )
         self.assertIn(
