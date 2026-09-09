@@ -53,7 +53,7 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
         self.assertEqual(breakout.run_scope, "current_metrics_schema")
         self.assertEqual(
             [panel.panel_id for panel in breakout.sections[0].panels],
-            ["primary_0", "primary_1", "primary_2"],
+            ["primary_0", "primary_1", "primary_2", "primary_3"],
         )
         self.assertEqual(
             [panel.panel_id for section in breakout.sections for panel in section.panels],
@@ -61,6 +61,7 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
                 "primary_0",
                 "primary_1",
                 "primary_2",
+                "primary_3",
                 "target_bricks_destroyed_normalized_mean",
                 "top_target_return_mean",
                 "target_score_mean",
@@ -159,6 +160,7 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
         document = yaml.safe_load(MANIFEST.read_text(encoding="utf-8"))
         document["profiles"].pop("breakout_training")
         document["sections"].pop("breakout_secondary")
+        document["sections"].pop("breakout_primary")
         document["profiles"]["compact"] = {
             "display_name": "GradLab Compact",
             "run_scope": "current_metrics_schema",

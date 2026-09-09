@@ -28,6 +28,7 @@ from gradlab.metric_names import (
     train_outcome_reason_rolling_count_metric,
     train_outcome_reason_rolling_rate_metric,
     train_progress_origin_target_rolling_max_metric,
+    train_progress_origin_target_rolling_min_metric,
     train_progress_origin_target_rolling_mean_metric,
     train_success_count_metric,
     train_success_rolling_rate_metric,
@@ -265,6 +266,7 @@ class EpisodeMetricsReducer:
                 payload[train_progress_origin_target_rolling_mean_metric(field)] = float(
                     np.mean(window)
                 )
+                payload[train_progress_origin_target_rolling_min_metric(field)] = float(min(window))
                 payload[train_progress_origin_target_rolling_max_metric(field)] = float(
                     np.max(window)
                 )

@@ -255,8 +255,9 @@ resuming as its cause without a matched uninterrupted continuation.
 - Breakout also declares `bricks_destroyed` and `bricks_destroyed_normalized` as
   reward-independent episode progress. Their `train/target/progress/{progress}/mean`
   metrics average the terminal cumulative values over the most recent 100 target-origin episodes,
-  while `train/target/progress/{progress}/max` reports the maximum over that same
-  window. The normalized value is the `0.0..1.0` two-wall completion fraction. Both statistics
+  while `train/target/progress/{progress}/max` and `/min` report the maximum and minimum
+  over that same window. Minimum bricks describes the worst episode in the current window,
+  including failures; it is not an all-time minimum or a fourth ranking criterion. The normalized value is the `0.0..1.0` two-wall completion fraction. All three statistics
   include warm-up before the window is full and are online behavior-policy training proxies rather
   than frozen-checkpoint evaluation evidence. Breakout ranks runs first by the rolling mean
   terminal `bricks_destroyed` count, then by higher rolling maximum target-origin bricks,
@@ -442,6 +443,7 @@ unevaluated for future explicit user action. dstack process exit alone is never 
 | `train/target/unique_cells_mean` | Recent target unique cells mean | Mean episodic unique-cell count over recent target-origin episodes when cell-novelty shaping is active; the reset cell is included. | cells | rollout | history | last | train/global_step | training | - | - |
 | `train/target/progress/{progress}/mean` | Recent target {progress} mean | Mean of a goal-declared finite numeric progress field over recent genuine target-origin episodes. | value | rollout | history | last | train/global_step | training | - | - |
 | `train/target/progress/{progress}/max` | Recent target {progress} max | Maximum of a goal-declared finite numeric progress field over recent genuine target-origin episodes. | value | rollout | history | last | train/global_step | training | - | - |
+| `train/target/progress/{progress}/min` | Recent target {progress} min | Minimum of a goal-declared finite numeric progress field over recent genuine target-origin episodes. | value | rollout | history | last | train/global_step | training | - | - |
 | `train/all/episodes_total` | Completed episodes | Cumulative genuine completed training episodes across origins. | episodes | rollout | history | last | train/global_step | training | - | - |
 | `train/all/boundary_event/{reason}/count` | Failure {reason} count | Cumulative unsuccessful completed episodes whose terminal record contains the reason; reason presence is counted at most once per episode. | episodes | rollout | history | last | train/global_step | training | - | - |
 | `train/all/boundary_event/{reason}/rolling/count` | Recent failure {reason} count | Unsuccessful completed episodes whose terminal record contains the reason among the most recent 100 genuine completed episodes, including warm-up before the window is full; reason presence is counted at most once per episode. | episodes | rollout | history | last | train/global_step | training | - | - |
@@ -557,3 +559,7 @@ Schema v21 shortens names without changing populations or reduction semantics. N
 are emitted. Managed workspaces filter to the current schema; historical runs keep their original
 names and immutable evidence. Reward statistics use streaming moments, and episode snapshots are
 reused until a new episode arrives; both retain their existing emission cadence.
+
+Breakout explicitly pins mean bricks, maximum bricks, minimum bricks, and mean episode steps
+in that display order. This four-chart display is independent of its three-criterion goal ranking;
+minimum bricks remains diagnostic and does not participate in ranking.

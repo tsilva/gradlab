@@ -574,7 +574,7 @@ export function metricLabel(metric) {
     return `${humanizeMetricPart(progress[1])} ${progress[2]}`;
   }
   const trainingProgress = name.match(
-    /^train\/target\/progress\/([^/]+)\/(mean|max)$/,
+    /^train\/target\/progress\/([^/]+)\/(mean|max|min)$/,
   );
   if (trainingProgress) {
     return `Recent target ${humanizeMetricPart(trainingProgress[1]).toLowerCase()} ${trainingProgress[2]}`;
