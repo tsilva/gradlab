@@ -207,6 +207,7 @@ resuming as its cause without a matched uninterrupted continuation.
   action-space-only minimum or maximum. The bounds remain a pure policy-space calculation used by
   diagnostics and are not duplicated as W&B metrics.
 - For custom PPO, `train/ppo/clip_fraction` averages minibatch fractions across attempted epochs and counts sampled action-probability ratios outside the clipping interval. It does not measure how far those ratios moved or the fraction of gradients disabled; similar fractions can accompany different policy changes. `train/ppo/approx_kl` averages minibatch estimates from the last attempted epoch, not a fresh full-rollout evaluation of the final policy. Interpret both alongside learning rate and progress at matched timesteps; neither has a universally desirable target.
+- Changing GAE lambda changes both the policy advantage estimator and the critic return targets. Value loss and explained variance across different lambda settings therefore describe different target distributions; larger loss alone does not prove critic divergence or greater advantage variance. Advantage normalization rescales the estimator but does not remove noise in its action ranking. Rollout advantage standard deviation measures dispersion across sampled transitions, not conditional estimator noise at fixed states; differences across runs can reflect changed state occupancy and true action-value variation.
 - Actor-critic explained variance is `1 - Var(value_target - value_prediction) /
   Var(value_target)`: one means the residual variance is zero (perfect up to a constant prediction
   offset), zero means the critic explains no more target variance than a constant baseline, and
@@ -276,6 +277,7 @@ resuming as its cause without a matched uninterrupted continuation.
   separate first-clear timing field to measure completion speed. The length tie-break prefers
   shorter episodes but does not independently establish better performance below full completion;
   archive curricula and differing frame skips also limit its comparability.
+- Time to a training-progress threshold is elapsed training wall time until the declared rolling target-progress mean reaches that threshold; it is distinct from `train/all/episode_steps_mean`, which measures episode duration in policy steps. Compare both elapsed time and global steps, declare any persistence requirement before comparison, and treat unreached thresholds as unreached rather than estimating completion by extrapolation. W&B `_runtime` is logger runtime and excludes pre-run provisioning; end-to-end comparisons must include launch/setup separately.
 - Training episode reduction aggregates return, length, outcome, success, the explicitly supported
   target-origin cell-novelty statistic, and goal-declared numeric episode progress fields.
   Progress field names refer to task-semantic signals and must be populated independently of the
