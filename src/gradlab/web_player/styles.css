@@ -316,6 +316,9 @@ button:disabled {
 
 body.checkpoint-loading { overflow: hidden; cursor: progress; }
 
+body.checkpoint-loading .app-header { z-index: 201; pointer-events: none; }
+body.checkpoint-loading #trajectory-import { pointer-events: auto; }
+
 .checkpoint-loading-mask {
   position: fixed;
   inset: 0;
@@ -2644,3 +2647,16 @@ body.recording #timeline { opacity: .72; }
   .header-back { width: 2.25rem; height: 2.25rem; padding: .5rem; }
   .header-back span { display: none; }
 }
+/* Episode archives share the active Playback Session's controls. */
+.trajectory-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 20px;
+  font-size: var(--font-size-xs);
+}
+.trajectory-controls[hidden], #trajectory-navigation[hidden] { display: none; }
+#trajectory-navigation { display: inline-flex; align-items: center; gap: 8px; }
+#trajectory-seek { width: 92px; }
+#trajectory-status { opacity: 0.8; }

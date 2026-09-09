@@ -28,6 +28,7 @@ import {
   viewportGridCellHeight,
 } from "./panels/layout-sizing.js";
 import { unavailableDiagnosticRows } from "./panels/diagnostic-availability.js";
+import { mountTrajectoryControls } from "./trajectory-controls.js";
 import { setSvgUseHref, text, timelineLabel } from "./panels/shared.js";
 import {
   bumpWorkspaceRevision,
@@ -230,6 +231,7 @@ function updateConnection(label, kind = "") {
 function resetSession(epoch) {
   cancelInspectionFrameRequest();
   state.sessionEpoch = Number(epoch) || 0;
+  state.backgroundPlaybackSnapshot = null;
   state.retainedEpisode = null;
   state.inspectionSequence = null;
   state.inspectionPauseCommandId = null;
@@ -308,12 +310,18 @@ function setSourceMode(active, snapshot = null) {
     !state.sourceMode
     && snapshot?.app?.route?.checkpoint_id
   );
+  const activeRecordingRoute = (
+    !state.sourceMode
+    && snapshot?.mode === "trajectory"
+    && snapshot?.app?.route?.environment_id
+  );
   document.body.classList.toggle("source-selection", state.sourceMode);
   $("#source-browser").hidden = !state.sourceMode;
   $("#checkpoint-navigation").hidden = Boolean(state.sourceMode || !activeCheckpointRoute);
-  $("#page-title").hidden = state.sourceMode;
+  $("#page-title").hidden = Boolean(state.sourceMode || activeRecordingRoute);
   $("#source-back").hidden = Boolean(
     state.sourceMode
+    || activeRecordingRoute
     || !(snapshot?.app?.has_active_runner || state.liveSnapshot?.app?.has_active_runner)
   );
   $("#more-toggle").hidden = state.sourceMode;
@@ -322,15 +330,15 @@ function setSourceMode(active, snapshot = null) {
   );
   if (!state.sourceMode) {
     const expected = snapshot;
-    if (activeCheckpointRoute) {
+    if (activeCheckpointRoute || activeRecordingRoute) {
       if (sourceBrowser) {
         sourceBrowser.renderActiveBreadcrumbs(expected);
-        $("#source-breadcrumbs").hidden = true;
+        $("#source-breadcrumbs").hidden = Boolean(activeCheckpointRoute);
       } else {
         void ensureSourceBrowser().then((browser) => {
           if (!state.sourceMode && state.applicationSnapshot === expected) {
             browser.renderActiveBreadcrumbs(expected);
-            $("#source-breadcrumbs").hidden = true;
+            $("#source-breadcrumbs").hidden = Boolean(activeCheckpointRoute);
           }
         }).catch((error) => showToast(`Source breadcrumbs failed: ${error.message || error}`, true));
       }
@@ -432,6 +440,7 @@ function handleMessage(message) {
       state.backgroundPlaybackSnapshot = message;
       state.hasControl = Boolean(message.control?.has_control);
       state.controlEpoch = Number(message.control_epoch || 0);
+      trajectoryControls.render();
       return;
     }
     if (snapshotActivatesCheckpointSelection(state.checkpointLoad, message)) {
@@ -445,8 +454,10 @@ function handleMessage(message) {
       state.liveSnapshot = message;
       state.snapshot = message;
       setSourceMode(true, message);
+      updateControlState();
       return;
     }
+    if (message.mode === "trajectory") finishCheckpointLoad();
     setSourceMode(false, message);
     prepareRetainedEpisode(message);
     state.snapshots.set(Number(message.sequence), message);
@@ -837,6 +848,7 @@ function hideGoExploreValuePanel(snapshot) {
 }
 
 function applySnapshot(snapshot) {
+  if (snapshot.mode === "trajectory") state.inspectionSequence = null;
   const previousEnvironmentId = state.liveSnapshot?.session?.env_id;
   const previousEpisode = episodeForSnapshot(state.liveSnapshot);
   const nextEpisode = episodeForSnapshot(snapshot);
@@ -921,6 +933,7 @@ function command(name, payload = {}) {
 }
 
 function syncAttributionToPanel() {
+  if (state.liveSnapshot?.mode === "trajectory") return;
   const panel = state.layout?.panels?.attribution;
   const attribution = state.liveSnapshot?.session?.attribution;
   if (
@@ -958,6 +971,7 @@ function syncAttributionToPanel() {
 }
 
 function syncCnnCaptureToPanel() {
+  if (state.liveSnapshot?.mode === "trajectory") return;
   const panel = state.layout?.panels?.cnn;
   const cnn = state.liveSnapshot?.session?.cnn;
   if (
@@ -988,6 +1002,7 @@ function inspectionEpisodeSequences() {
 }
 
 function canReplayInspection() {
+  if (state.liveSnapshot?.trajectory?.imported) return false;
   if (state.liveSnapshot?.run_state !== "paused") return false;
   const sequences = inspectionEpisodeSequences();
   const selectedIndex = sequences.indexOf(Number(state.inspectionSequence));
@@ -1029,6 +1044,16 @@ function scheduleInspectionReplay() {
 }
 
 function playFromCurrentPosition() {
+  if (state.liveSnapshot?.trajectory?.imported) {
+    state.inspectionSequence = null;
+    const trajectory = state.liveSnapshot.trajectory;
+    if (trajectory.current_step >= trajectory.last_step) {
+      command("replay");
+      return;
+    }
+    command("play");
+    return;
+  }
   if (canReplayInspection()) {
     state.replayingInspection = true;
     renderSnapshot();
@@ -1062,7 +1087,7 @@ function updateTimelinePlaybackControl() {
     running: playbackIsRunning(),
     replaying: state.replayingInspection,
     hasControl: state.hasControl,
-    canReplay: canReplayInspection(),
+    canReplay: canReplayInspection() || Boolean(state.liveSnapshot?.trajectory?.imported && session.awaiting_next_episode),
     session,
     recording: (state.liveSnapshot?.mode || state.snapshot?.mode) === "recording",
   });
@@ -1077,7 +1102,7 @@ function updateTimelinePlaybackControl() {
     const mode = state.liveSnapshot?.mode || state.snapshot?.mode;
     const canReset = (
       state.hasControl
-      && !["recording", "dataset"].includes(mode)
+      && !["recording", "dataset", "trajectory"].includes(mode)
       && (!session.awaiting_next_episode || session.can_start_next_episode)
     );
     reset.disabled = !canReset;
@@ -1090,6 +1115,7 @@ function updateTimelinePlaybackControl() {
 }
 
 function updateControlState() {
+  trajectoryControls?.render();
   updateTimelinePlaybackControl();
   playbackSettings?.updateControl();
   panelRuntime?.invoke("controls", "updateControl");
@@ -1388,6 +1414,11 @@ function setInspectionCursor(
 }
 
 function inspectSequence(sequence) {
+  if (state.liveSnapshot?.mode === "trajectory") {
+    const snapshot = state.snapshots.get(Number(sequence));
+    if (snapshot?.transition) command("seek", { step: snapshot.transition.step });
+    return;
+  }
   setInspectionCursor(sequence);
 }
 
@@ -1407,6 +1438,21 @@ function returnToLive({ announce = true } = {}) {
 function renderTimeline() {
   const scrubber = $("#timeline-scrubber");
   if (!scrubber) return;
+  const trajectory = state.liveSnapshot?.trajectory;
+  if (trajectory?.imported) {
+    scrubber.min = String(trajectory.first_step);
+    scrubber.max = String(trajectory.last_step);
+    scrubber.value = String(Math.max(trajectory.first_step, trajectory.current_step));
+    scrubber.disabled = !state.hasControl;
+    scrubber.setAttribute("aria-label", "Seek a recorded transition");
+    scrubber.style.setProperty("--timeline-progress", `${timelineProgress(
+      trajectory.current_step - trajectory.first_step,
+      trajectory.last_step - trajectory.first_step + 1,
+    )}%`);
+    $("#timeline-markers").replaceChildren();
+    renderWorkspaceStatus();
+    return;
+  }
   const currentEpisode = episodeForSnapshot(state.liveSnapshot);
   state.timelineSequences = [...state.snapshots.entries()]
     .filter(([, snapshot]) => (
@@ -2276,6 +2322,11 @@ function bindTimeline() {
     scheduleTimelineOverlayHide();
   });
   const selectIndex = (index) => {
+    if (state.liveSnapshot?.trajectory?.imported) {
+      state.inspectionSequence = null;
+      command("seek", { step: index });
+      return;
+    }
     stopInspectionReplay({ render: false });
     const sequence = state.timelineSequences[index];
     if (sequence === undefined) return;
@@ -2483,6 +2534,26 @@ panelRuntime = new PanelRuntime({
 window.addEventListener("resize", () => {
   fitGridToViewport();
   panelRuntime.resize();
+});
+const trajectoryControls = mountTrajectoryControls({
+  command,
+  getState: () => state,
+  toast: showToast,
+  request: async (path, body) => {
+    const response = await fetch(path, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "X-Gradlab-Client": state.clientId,
+        "X-Gradlab-Control-Epoch": String(state.controlEpoch),
+        "Content-Type": "application/octet-stream",
+      },
+      body,
+    });
+    const result = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    return result;
+  },
 });
 initWorkspace();
 updateControlState();

@@ -1407,17 +1407,20 @@ export class SourceBrowser {
   renderActiveBreadcrumbs(snapshot) {
     const app = snapshot?.app || {};
     const route = app.route || {};
+    const recording = snapshot?.mode === "trajectory" && Boolean(route.environment_id);
     const signature = routeSignature(route);
     if (
-      route.checkpoint_id
+      (route.checkpoint_id || recording)
       && signature === this.activeBreadcrumbRoute
+      && signature === routeSignature(this.route)
+      && this.app?.phase === "active"
     ) {
-      this.renderActiveCheckpointNavigation(route);
+      if (!recording) this.renderActiveCheckpointNavigation(route);
       return;
     }
-    this.stop({ preserveBreadcrumbs: true, preserveCheckpointNavigation: true });
+    this.stop({ preserveBreadcrumbs: true, preserveCheckpointNavigation: !recording });
     this.app = app;
-    if (!route.checkpoint_id) {
+    if (!route.checkpoint_id && !recording) {
       this.activeBreadcrumbRoute = "";
       this.breadcrumbsRoot.replaceChildren();
       this.breadcrumbsRoot.hidden = true;
@@ -1438,8 +1441,12 @@ export class SourceBrowser {
     this.activeBreadcrumbRoute = signature;
     this.renderBreadcrumbs(this.breadcrumbsRoot);
     this.breadcrumbsRoot.hidden = false;
-    this.renderActiveCheckpointNavigation(this.route);
     this.syncUrl("replace");
+    if (recording) {
+      this.hideActiveCheckpointNavigation();
+      return;
+    }
+    this.renderActiveCheckpointNavigation(this.route);
     void this.loadActiveCheckpointNavigation(this.route, signature);
   }
 

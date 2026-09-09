@@ -147,7 +147,7 @@ export function mountPlaybackSettings({ services, idPrefix = "playback" }) {
     const mode = state.liveSnapshot?.mode || state.snapshot?.mode;
     const readOnly = !state.hasControl;
     const recording = mode === "recording";
-    const dataset = mode === "dataset";
+    const dataset = ["dataset", "trajectory"].includes(mode);
     fps.disabled = readOnly;
     seed.disabled = readOnly || recording || dataset;
     sampling.disabled = readOnly || recording || dataset || sampling.options.length <= 1;
@@ -201,7 +201,7 @@ export function mountPlaybackSettings({ services, idPrefix = "playback" }) {
       }
       wasAwaitingNextEpisode = awaitingNextEpisode;
       const recording = snapshot.mode === "recording";
-      const dataset = snapshot.mode === "dataset";
+      const dataset = ["dataset", "trajectory"].includes(snapshot.mode);
       const playbackContract = session.playback_contract || {};
       const frameSkipDetails = frameSkipPresentation(playbackContract);
       frameSkip.hidden = frameSkipDetails === null;

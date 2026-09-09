@@ -2743,7 +2743,7 @@ def test_initial_environment_catalog_is_embedded_in_selection_snapshots() -> Non
                 "next_cursor": None,
             }
 
-    runner = argparse.Namespace(session_change=0)
+    runner = argparse.Namespace(session_change=0, snapshot=lambda: {})
     server = PlaybackWebServer(runner, human_args(), catalog=FakeCatalog())
     asyncio.run(server._prepare_initial_catalog())
     client = argparse.Namespace(
@@ -2907,7 +2907,7 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert "window.opener.postMessage(message, location.origin)" in oauth_script
     assert "location.replace(`/#token=${encodeURIComponent(token)}`)" in oauth_script
     assert '$("#player-home")' not in script
-    assert '$("#page-title").hidden = state.sourceMode;' in script
+    assert '$("#page-title").hidden = Boolean(state.sourceMode || activeRecordingRoute);' in script
     assert 'id="more-toggle"' in markup
     assert 'id="playback-settings-menu"' in markup
     assert '$("#page-title").textContent = "Select checkpoint"' not in script
