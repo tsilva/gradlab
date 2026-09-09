@@ -271,6 +271,9 @@ export function descriptorAvailability(
         message: `Contract-incomparable: ${reasons.join("; ")}.`,
       };
     }
+    if (snapshot?.mode === "trajectory") {
+      return { status: "not-recorded", message: "Realized-return diagnostics were not recorded." };
+    }
   }
   const value = descriptorValue(descriptor, { snapshot, point });
   if (value !== null && value !== undefined && value !== "") {
@@ -278,6 +281,9 @@ export function descriptorAvailability(
   }
   if (!snapshot?.transition) {
     return { status: "not-yet-observed", message: "N/A" };
+  }
+  if (snapshot?.mode === "trajectory") {
+    return { status: "not-recorded", message: "Not recorded for this transition." };
   }
   if (descriptor.key === "policy/entropy") {
     return {

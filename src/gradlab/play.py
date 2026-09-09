@@ -35,10 +35,15 @@ def main(argv: list[str] | None = None) -> int:
             args.model,
             args.recipe,
             args.run,
+            args.recording,
         )
     )
     if selected_sources > 1:
-        parser.error("pass exactly one of --run, --recipe, a positional remote source, or --model")
+        parser.error(
+            "pass exactly one of --run, --recipe, a positional remote source, --model, or --recording"
+        )
+    if args.recording and not args.recording.expanduser().is_file():
+        parser.error(f"recording file does not exist: {args.recording}")
     wandb_location = parse_wandb_location(args.artifact_ref)
     if args.recipe:
         recipe_source = resolve_recipe_source(args.recipe)
@@ -166,8 +171,11 @@ def main(argv: list[str] | None = None) -> int:
         initial_source=initial_source,
     )
     try:
+        if args.recording:
+            host.import_trajectory(str(args.recording.expanduser().resolve()))
         return run_web_player_application(host, args, catalog=catalog, repo_root=repo_root)
     finally:
+        host.stop()
         if catalog_authority is not None:
             catalog_authority.close()
 

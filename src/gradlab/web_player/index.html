@@ -20,6 +20,8 @@
         <nav id="source-breadcrumbs" class="source-breadcrumbs header-breadcrumbs" aria-label="Playback source" hidden></nav>
       </div>
       <div class="header-status">
+        <button id="trajectory-import" class="quiet" type="button">Import episode</button>
+        <input id="trajectory-file" type="file" accept=".gradtraj,.zip" aria-label="Episode trajectory archive" hidden>
         <nav id="checkpoint-navigation" class="checkpoint-navigation" aria-label="Checkpoint navigation" hidden>
           <button class="quiet checkpoint-navigation-button icon-only" type="button" aria-label="Previous checkpoint" data-checkpoint-previous><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-arrow-left"></use></svg></button>
           <span class="checkpoint-navigation-position" data-checkpoint-position aria-label="Checkpoint position" aria-live="polite">— / —</span>
@@ -77,6 +79,16 @@
     </div>
 
     <main id="source-browser" class="source-browser" hidden></main>
+    <section id="trajectory-controls" class="trajectory-controls" aria-label="Episode recording" hidden>
+      <button id="trajectory-retry" class="quiet" type="button" hidden>Retry recording</button>
+      <button id="trajectory-download" class="quiet" type="button">Download episode</button>
+      <span id="trajectory-navigation" hidden>
+        <button id="trajectory-previous" class="quiet icon-only" type="button" aria-label="Previous recorded transition"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-arrow-left"></use></svg></button>
+        <label>Transition <input id="trajectory-seek" type="number" min="1" step="1" aria-label="Exact recorded transition"></label>
+        <button id="trajectory-next" class="quiet icon-only" type="button" aria-label="Next recorded transition"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-arrow-right"></use></svg></button>
+      </span>
+      <span id="trajectory-status" role="status"></span>
+    </section>
     <section id="unavailable-diagnostics" class="unavailable-diagnostics" aria-label="Unavailable diagnostics" hidden>
       <details>
         <summary><span data-unavailable-diagnostics-title>Unavailable diagnostics</span></summary>

@@ -22,6 +22,7 @@ This specification applies to the public checkpoint browser and interactive web 
 - Interactive Playback must provide independently arranged and synchronized views of frames, Policy inputs and decisions, transition facts, and bounded histories.
 - Users must be able to change the active Policy’s supported action-selection mode at any point, taking effect on the next Policy decision without resetting or otherwise altering the existing trajectory.
 - Inspection must not alter the active trajectory or Policy randomness.
+- Trajectory archives may contain exact Checkpoints as opaque, hash-verified attachments. Imported Playback must never load or execute them.
 - Playback must expose only actor, critic, action-value, program, attribution, and calibration diagnostics that apply to the selected Policy and recorded contract.
 - Unsupported, missing, and scientifically incomparable diagnostics must remain visibly distinct without fabricated values.
 - Live-Policy attribution must be disabled by default and must be switchable from the web player without restarting or changing the shared trajectory.

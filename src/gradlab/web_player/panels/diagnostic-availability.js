@@ -5,6 +5,9 @@ export function unavailableDiagnosticPresentation(statuses) {
   if (statuses.includes("contract-incomparable")) {
     return { label: "Incomparable", tone: "incomparable" };
   }
+  if (statuses.includes("not-recorded")) {
+    return { label: "Not recorded", tone: "not-recorded" };
+  }
   if (statuses.includes("unsupported") || statuses.includes("disabled")) {
     return { label: "Unsupported", tone: "unsupported" };
   }
