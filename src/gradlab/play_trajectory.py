@@ -32,7 +32,7 @@ from gradlab.file_utils import file_sha256
 from gradlab.policy_bundle import load_policy_bundle, write_canonical_json
 from gradlab.validation import is_secret_like_key
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
 MAX_RECORD_BYTES = 32 * 1024**2
 BUFFER_BYTES = 64 * 1024**2
 MAX_ARCHIVE_BYTES = 32 * 1024**3
@@ -201,6 +201,10 @@ class EpisodeRecording:
             format_version=FORMAT_VERSION,
             scientific_evidence=False,
             complete=False,
+            trajectory_revision=0,
+            bookmarks=[],
+            bookmark_revision=0,
+            resampling=[],
         )
         self.buffer_bytes = buffer_bytes
         self._write_record = write_record or self._append
@@ -231,6 +235,11 @@ class EpisodeRecording:
                 "complete": self.metadata["complete"],
                 "first_step": self.metadata["first_step"],
                 "episode_id": self.metadata["episode_id"],
+                "trajectory_revision": self.metadata["trajectory_revision"],
+                "bookmark_revision": self.metadata["bookmark_revision"],
+                "bookmarks": deepcopy(self.metadata["bookmarks"]),
+                "classification": self.metadata["classification"],
+                "last_step": self.metadata["first_step"] + self._accepted - 1,
             }
 
     def check_capacity(self) -> None:
@@ -314,6 +323,76 @@ class EpisodeRecording:
                 stream.truncate(end)
             self._error = None
             self._condition.notify_all()
+
+    def transition(self, step: int) -> dict[str, Any]:
+        with self._condition:
+            index = step - self.metadata["first_step"]
+            if type(step) is not int or not 0 <= index < self._accepted:
+                raise ValueError("transition is outside the recorded range")
+            if index >= self._written:
+                return unpack_record(self._pending[index - self._written])
+            return read_record(self.root, index)
+
+    def set_initial_restore(self, state: Mapping[str, Any]) -> None:
+        data = pack_record(state)
+        path = self.root / "initial-restore.bin"
+        temporary = path.with_suffix(".tmp")
+        temporary.write_bytes(data)
+        temporary.replace(path)
+
+    def restore_point(self, step: int) -> dict[str, Any]:
+        if step == self.metadata["first_step"] - 1:
+            path = self.root / "initial-restore.bin"
+            if not path.exists():
+                raise ValueError("this position was not captured for exact restoration")
+            return unpack_record(path.read_bytes())
+        row = self.transition(step)
+        if row["boundary"]:
+            raise ValueError("this is an episode boundary; choose an earlier position")
+        state = row.get("restoration")
+        if state is None:
+            raise ValueError("this position was not captured for exact restoration")
+        return state
+
+    def replacement(self, step: int, *, sampling_mode: str, next_sequence: int):
+        """Prepare a new append-only store. Existing readers keep the old inode."""
+        status = self.status()
+        if not self.metadata["first_step"] - 1 <= step <= status["last_step"]:
+            raise ValueError("cut is outside the current episode")
+        replacement = EpisodeRecording(self.metadata, buffer_bytes=self.buffer_bytes)
+        replacement.metadata.update(deepcopy(self.metadata))
+        replacement.metadata.update(
+            complete=False,
+            classification="counterfactual",
+            trajectory_revision=self.metadata["trajectory_revision"] + 1,
+            bookmarks=[deepcopy(b) for b in self.metadata["bookmarks"] if b["step"] <= step],
+            bookmark_revision=self.metadata["bookmark_revision"] + 1,
+            resampling=[
+                *deepcopy(self.metadata["resampling"]),
+                {
+                    "revision": self.metadata["trajectory_revision"] + 1,
+                    "cut_step": step,
+                    "next_sequence": next_sequence,
+                    "sampling_mode": sampling_mode,
+                    "sampling_stream": "continued",
+                },
+            ],
+        )
+        try:
+            initial = self.root / "initial-restore.bin"
+            if initial.exists():
+                shutil.copyfile(initial, replacement.root / initial.name)
+            # Copy only a bounded row at a time; no background backlog for this
+            # preparation. The new writer has nothing queued until commit.
+            for position in range(self.metadata["first_step"], step + 1):
+                row = self.transition(position)
+                replacement._append(replacement.root, pack_record(row))
+                replacement._accepted += 1
+                replacement._written += 1
+            return replacement
+        except BaseException:
+            replacement.close()
+            raise
 
     def reserve_prefix(self):
         with self._condition:
@@ -417,6 +496,7 @@ def parquet_schema():
         [
             ("episode_id", pa.string()),
             ("sequence", pa.int64()),
+            ("trajectory_revision", pa.int64()),
             ("step", pa.int64()),
             ("seed", pa.int64()),
             ("start_id", pa.string()),
@@ -432,7 +512,7 @@ def parquet_schema():
             *[(name, tree) for name in TREE_COLUMNS],
             ("presentation", pa.string()),
         ],
-        metadata={b"gradlab.trajectory.version": b"1"},
+        metadata={b"gradlab.trajectory.version": b"2"},
     )
 
 
@@ -559,6 +639,9 @@ class ImportedTrajectory:
             not in {"faithful", "evaluation_reproduction", "counterfactual"}
         ):
             raise ValueError("invalid trajectory episode metadata")
+        from gradlab.play_bookmarks import validate_annotations
+
+        validate_annotations(metadata)
         snapshot = metadata["initial_snapshot"]
         if not isinstance(snapshot, dict) or not isinstance(snapshot.get("session"), dict):
             raise ValueError("invalid trajectory initial presentation")
@@ -572,9 +655,26 @@ class ImportedTrajectory:
         if (
             row["step"] != expected_step
             or previous
-            and (row["sequence"] != previous["sequence"] + 1 or previous["boundary"])
+            and (row["sequence"] <= previous["sequence"] or previous["boundary"])
         ):
             raise ValueError("trajectory ordering or episode boundary is invalid")
+        revision = row["trajectory_revision"]
+        if (
+            type(revision) is not int
+            or not 0 <= revision <= self.metadata["trajectory_revision"]
+            or previous
+            and revision < previous["trajectory_revision"]
+            or revision > 0
+            and row["classification"] != "counterfactual"
+        ):
+            raise ValueError("invalid transition trajectory identity")
+        if previous and revision == previous["trajectory_revision"]:
+            if row["sequence"] != previous["sequence"] + 1:
+                raise ValueError("transition identity gap without a resampling cut")
+        elif revision > 0:
+            cut = self.metadata["resampling"][revision - 1]
+            if row["sequence"] != cut["next_sequence"] or row["step"] != cut["cut_step"] + 1:
+                raise ValueError("transition disagrees with resampling provenance")
         if row["classification"] not in {"faithful", "evaluation_reproduction", "counterfactual"}:
             raise ValueError("invalid recorded Playback classification")
         if any(type(row[name]) is not bool for name in ("terminated", "truncated", "boundary")):

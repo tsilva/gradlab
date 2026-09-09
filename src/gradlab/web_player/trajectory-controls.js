@@ -19,6 +19,35 @@ export function mountTrajectoryControls({ command, getState, request, toast }) {
   const seek = document.querySelector("#trajectory-seek");
   const previous = document.querySelector("#trajectory-previous");
   const next = document.querySelector("#trajectory-next");
+  const toggle = document.querySelector("#restoration-toggle");
+  const discard = document.querySelector("#trajectory-discard");
+  const add = document.querySelector("#bookmark-add");
+  const bookmarksRoot = document.querySelector("#trajectory-bookmarks");
+  const confirmation = document.querySelector("#bookmark-confirmation");
+  let pendingCut = null;
+  let bookmarkKey = "";
+  const currentTrajectory = () => (getState().liveSnapshot || getState().snapshot)?.trajectory || {};
+  const identity = (trajectory) => ({ episode_id: trajectory.episode_id, trajectory_revision: trajectory.trajectory_revision });
+  const canRestore = (trajectory, step) => Boolean(trajectory.restoration?.supported
+    && trajectory.restoration.ranges?.some(([first, last]) => step >= first && step <= last));
+  function cut(name, step, bookmarkId) {
+    const trajectory = currentTrajectory();
+    const payload = { ...identity(trajectory), step, bookmark_id: bookmarkId };
+    if (trajectory.bookmarks?.some((bookmark) => bookmark.step > step)) {
+      pendingCut = { name, payload: { ...payload, confirmed_bookmark_revision: trajectory.bookmark_revision } };
+      confirmation.showModal();
+    } else command(name, payload);
+  }
+  confirmation.addEventListener("close", () => {
+    if (confirmation.returnValue === "confirm" && pendingCut) command(pendingCut.name, pendingCut.payload);
+    pendingCut = null;
+  });
+  toggle.addEventListener("change", () => command("set_restoration_capture", { enabled: toggle.checked }));
+  discard.addEventListener("click", () => cut("discard_future", currentTrajectory().current_step));
+  add.addEventListener("click", () => {
+    const trajectory = currentTrajectory();
+    command("bookmark_add", { ...identity(trajectory), step: trajectory.current_step, name: document.querySelector("#bookmark-name").value });
+  });
   let preparing = false;
   let importing = false;
 
@@ -79,19 +108,86 @@ export function mountTrajectoryControls({ command, getState, request, toast }) {
     const imported = Boolean(trajectory.imported);
     const available = trajectory.available || imported;
     document.querySelector("#trajectory-controls").hidden = !available;
-    document.querySelector("#trajectory-navigation").hidden = !imported;
+    document.querySelector("#trajectory-navigation").hidden = !available;
     retry.hidden = !trajectory.error;
     retry.disabled = !state.hasControl;
     download.hidden = imported;
     download.disabled = preparing || !trajectory.transitions;
     importButton.disabled = importing || !state.hasControl;
     document.querySelector("#trajectory-status").textContent = recordingDescription(trajectory);
-    if (imported) {
-      seek.min = String(trajectory.first_step);
+    const restore = trajectory.restoration || {};
+    toggle.checked = Boolean(restore.enabled);
+    toggle.disabled = imported || !state.hasControl || !restore.supported;
+    document.querySelector("#restoration-toggle-label").hidden = imported;
+    discard.hidden = imported;
+    discard.disabled = !state.hasControl || !canRestore(trajectory, trajectory.current_step);
+    add.hidden = imported;
+    add.disabled = !state.hasControl;
+    document.querySelector("#bookmark-name").parentElement.hidden = imported;
+    document.querySelector("#restoration-status").textContent = imported
+      ? "Bookmarks navigate stored data only. Live restoration is unavailable in imported episodes."
+      : restore.error ? `Capture paused: ${restore.error}. Disable capture or retry before continuing.`
+      : !restore.supported ? restore.reason || "Exact restoration unavailable."
+      : `Resumable positions: ${restore.ranges?.map(([first, last]) => first === last ? first : `${first}–${last}`).join(", ") || "none"}. ${restore.explanation}`;
+    if (trajectory.classification === "counterfactual" && !imported) {
+      document.querySelector("#trajectory-status").textContent += " · Counterfactual Playback · inspection only";
+    }
+    const nextKey = JSON.stringify([trajectory.bookmarks, trajectory.trajectory_revision, state.hasControl, restore.ranges, imported]);
+    if (bookmarkKey !== nextKey) {
+      bookmarkKey = nextKey;
+      bookmarksRoot.replaceChildren();
+      const markers = document.querySelector("#trajectory-bookmark-steps");
+      markers.replaceChildren();
+      for (const bookmark of trajectory.bookmarks || []) {
+        const marker = document.createElement("option");
+        marker.value = String(bookmark.step);
+        marker.label = bookmark.name;
+        markers.append(marker);
+        const item = document.createElement("div");
+        item.className = "trajectory-bookmark";
+        const navigate = document.createElement("button");
+        navigate.type = "button";
+        navigate.className = "quiet";
+        navigate.textContent = `${bookmark.name} · episode ${bookmark.episode}, step ${bookmark.step}`;
+        navigate.disabled = !state.hasControl;
+        navigate.addEventListener("click", () => command("seek", { step: bookmark.step }));
+        if (bookmark.thumbnail) {
+          const image = document.createElement("img");
+          image.src = `data:image/png;base64,${bookmark.thumbnail}`;
+          image.alt = "";
+          navigate.prepend(image);
+        }
+        item.append(navigate);
+        if (!imported) {
+          const rename = document.createElement("input");
+          rename.value = bookmark.name;
+          rename.maxLength = 120;
+          rename.setAttribute("aria-label", `Rename ${bookmark.name}`);
+          rename.disabled = !state.hasControl;
+          rename.addEventListener("change", () => command("bookmark_rename", { ...identity(trajectory), bookmark_id: bookmark.id, name: rename.value }));
+          const remove = document.createElement("button");
+          remove.type = "button";
+          remove.className = "quiet";
+          remove.textContent = "Delete";
+          remove.disabled = !state.hasControl;
+          remove.addEventListener("click", () => command("bookmark_delete", { ...identity(trajectory), bookmark_id: bookmark.id }));
+          const resample = document.createElement("button");
+          resample.type = "button";
+          resample.className = "quiet";
+          resample.textContent = "Resample from bookmark";
+          resample.disabled = !state.hasControl || !canRestore(trajectory, bookmark.step);
+          resample.addEventListener("click", () => cut("resample_bookmark", bookmark.step, bookmark.id));
+          item.append(rename, resample, remove);
+        }
+        bookmarksRoot.append(item);
+      }
+    }
+    if (available) {
+      seek.min = String(Math.max(0, trajectory.first_step - 1));
       seek.max = String(trajectory.last_step);
-      if (document.activeElement !== seek) seek.value = String(Math.max(trajectory.first_step, trajectory.current_step));
+      if (document.activeElement !== seek) seek.value = String(Math.max(trajectory.first_step - 1, trajectory.current_step));
       seek.disabled = !state.hasControl;
-      previous.disabled = !state.hasControl || trajectory.current_step <= trajectory.first_step;
+      previous.disabled = !state.hasControl || trajectory.current_step <= trajectory.first_step - 1;
       next.disabled = !state.hasControl || trajectory.current_step >= trajectory.last_step;
     }
   }

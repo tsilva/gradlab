@@ -159,6 +159,13 @@ class ActionProgramPolicy:
                 "action-program semantic action table does not match the playback environment"
             )
 
+    def capture_execution_state(self) -> dict[str, np.ndarray]:
+        return {"indices": self._run_indices.copy(), "remaining": self._run_remaining.copy()}
+
+    def restore_execution_state(self, state: Mapping[str, Any]) -> None:
+        self._run_indices = np.asarray(state["indices"], dtype=np.int64).copy()
+        self._run_remaining = np.asarray(state["remaining"], dtype=np.int64).copy()
+
     def reset_episode(self) -> None:
         self._run_indices.fill(0)
         self._run_remaining.fill(0)

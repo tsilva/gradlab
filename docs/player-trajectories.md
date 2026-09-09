@@ -45,7 +45,7 @@ checkpoint/recipe.json
 data/train-00000-of-00001.parquet
 ```
 
-Version 1 uses a JSON manifest containing `format_version: 1` and a `files`
+Version 2 uses a JSON manifest containing `format_version: 2` and a `files`
 mapping from relative member name to its byte `size` and hex `sha256`. The
 manifest inventories every other member. The checkpoint file is the exact
 immutable file staged for the active Playback Session. Its existing model and
@@ -69,15 +69,15 @@ validation applies to checkpoint sidecars.
 
 ## Parquet features
 
-The Arrow schema carries `gradlab.trajectory.version = 1`. Each ordered transition
+The Arrow schema carries `gradlab.trajectory.version = 2`. Each ordered transition
 is one row and one indexed row group, compressed with Zstandard. Physical row
 order is authoritative. Step numbers remain those of the original episode;
-`sequence` remains the original Playback Session decision sequence.
+`sequence` remains the original Playback Session decision sequence. Resampled continuations may have gaps as specified in the validated cut provenance; `trajectory_revision` distinguishes replacement trajectories.
 
 | Columns | Arrow type | Meaning |
 | --- | --- | --- |
 | `episode_id` | string | Joins the episode metadata |
-| `sequence`, `step`, `seed` | int64 | Original decision order, episode step, start seed |
+| `sequence`, `step`, `seed`, `trajectory_revision` | int64 | Original decision order, episode step, start seed |
 | `start_id`, `action_source` | nullable string | Recorded task/start identity and action producer |
 | `reward`, `return` | float64 | Policy-facing step reward and undiscounted episode return |
 | `terminated`, `truncated`, `boundary` | bool | Original environment/task boundary facts |
@@ -131,7 +131,7 @@ Imported recordings use disk indexing, so seek does not load the full episode.
 
 Import validates member names, duplicates, hashes, model/recipe bindings, version,
 Arrow features, numeric shapes/dtypes, ordering, images, boundary/missingness,
-classification, and presentation consistency. Version 1 limits archives and
+classification, and presentation consistency. Version 2 limits archives and
 expanded Parquet data to 32 GiB, individual records to 32 MiB, metadata files to
 8 MiB, the manifest to 64 KiB, the Parquet footer to 128 MiB, and transition count
 to ten million. It rejects object arrays and unknown archive members.
@@ -157,3 +157,5 @@ copy. This feature does not upload datasets or provide a training integration.
 
 See [capture measurements](player-trajectory-performance.md) for the activation
 choice and reproducible workload.
+
+See [live restoration and bookmarks](player-restoration.md) for capture support, resampling controls, archive annotations and performance measurements.

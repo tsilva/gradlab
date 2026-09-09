@@ -88,6 +88,19 @@
         <button id="trajectory-next" class="quiet icon-only" type="button" aria-label="Next recorded transition"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-arrow-right"></use></svg></button>
       </span>
       <span id="trajectory-status" role="status"></span>
+      <label id="restoration-toggle-label"><input id="restoration-toggle" type="checkbox"> Capture restore points</label>
+      <button id="trajectory-discard" class="quiet" type="button">Discard future</button>
+      <label>Bookmark name <input id="bookmark-name" maxlength="120" value="Rare state"></label>
+      <button id="bookmark-add" class="quiet" type="button">Bookmark position</button>
+      <span id="restoration-status" role="status"></span>
+      <div id="trajectory-bookmarks" aria-label="Episode bookmarks"></div>
+      <dialog id="bookmark-confirmation">
+        <form method="dialog">
+          <p>Discarding this future will delete its later bookmarks.</p>
+          <button value="cancel" class="quiet">Cancel</button>
+          <button id="bookmark-confirm-discard" value="confirm">Delete later bookmarks and continue</button>
+        </form>
+      </dialog>
     </section>
     <section id="unavailable-diagnostics" class="unavailable-diagnostics" aria-label="Unavailable diagnostics" hidden>
       <details>
@@ -104,8 +117,9 @@
         <span id="playback-evidence-status" class="playback-evidence-status" role="status" hidden></span>
       </div>
       <div class="timeline-track">
+        <datalist id="trajectory-bookmark-steps"></datalist>
         <div class="timeline-scrubber-track">
-          <input id="timeline-scrubber" type="range" min="0" max="0" step="1" value="0" aria-label="Inspect a retained transition one step at a time" title="Left/Right: move one step · Space: play or pause">
+          <input id="timeline-scrubber" list="trajectory-bookmark-steps" type="range" min="0" max="0" step="1" value="0" aria-label="Inspect a retained transition one step at a time" title="Left/Right: move one step · Space: play or pause">
           <div id="timeline-markers" class="timeline-markers" aria-hidden="true"></div>
         </div>
         <div class="timeline-actions">
