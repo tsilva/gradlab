@@ -37,6 +37,14 @@ class ScriptedSession:
         self.frames = ()
         self.model = Namespace(gamma=0.9)
 
+    def reset_episode(self, seed=None):
+        sequence, episode = self.sequence, self.episode
+        self.__init__(self.length)
+        self.sequence = sequence
+        self.episode = episode + 1
+        if seed is not None:
+            self.active_seed = seed
+
     def step(self, *, deterministic):
         self.sequence += 1
         self.step_index += 1
@@ -92,7 +100,7 @@ class ScriptedSession:
         )
 
 
-def command(runner, name, **payload):
+def command(runner, name, /, **payload):
     runner.submit(PlaybackCommand(name, "test", name, payload, None))
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline:
@@ -389,7 +397,7 @@ def test_import_rejects_unsafe_or_corrupt_archives(tmp_path, corruption):
                 if corruption == "hash" and member.filename == "checkpoint/model.zip":
                     data = data[:-1] + b"!"
                 if corruption == "version" and member.filename == "manifest.json":
-                    data = data.replace(b'"format_version": 1', b'"format_version": 9')
+                    data = data.replace(b'"format_version": 2', b'"format_version": 9')
                 target.writestr(member.filename, data)
             if corruption == "path":
                 target.writestr("../escape.py", "raise RuntimeError('unsafe')")

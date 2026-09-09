@@ -2660,3 +2660,10 @@ body.recording #timeline { opacity: .72; }
 #trajectory-navigation { display: inline-flex; align-items: center; gap: 8px; }
 #trajectory-seek { width: 92px; }
 #trajectory-status { opacity: 0.8; }
+
+#restoration-status { flex-basis: 100%; font-size: var(--font-size-sm); color: var(--color-text-muted); }
+#trajectory-bookmarks { display: flex; flex-wrap: wrap; gap: 8px; width: 100%; }
+.trajectory-bookmark { display: flex; align-items: center; gap: 6px; }
+.trajectory-bookmark img { width: 64px; height: 48px; object-fit: contain; margin-right: 8px; }
+.trajectory-bookmark input, #bookmark-name { width: 120px; }
+#bookmark-confirmation { max-width: 440px; border-radius: 8px; padding: 24px; }

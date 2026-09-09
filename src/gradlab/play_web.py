@@ -686,6 +686,7 @@ class FrameEncoder:
         self._latest: dict[int, tuple[int, bytes]] = {}
         self._retained: dict[tuple[int, int], dict[int, tuple[int, bytes]]] = {}
         self._epoch = 0
+        self._trajectory_generation = 0
         self._closed = False
         self._thread = threading.Thread(target=self._run, name="gradlab-frame-encoder")
 
@@ -702,6 +703,14 @@ class FrameEncoder:
             self._pending.clear()
             self._latest.clear()
             self._retained.clear()
+
+    def clear_trajectory(self) -> None:
+        with self._condition:
+            self._trajectory_generation += 1
+            self._pending.clear()
+            self._latest.clear()
+            self._retained.clear()
+            self._condition.notify_all()
 
     def start(self) -> None:
         self._thread.start()
@@ -778,6 +787,7 @@ class FrameEncoder:
                 if self._closed and not self._pending:
                     return
                 pending = self._pending.popleft()
+                trajectory_generation = self._trajectory_generation
                 self._condition.notify_all()
             epoch, sequence, frames, generations = pending
             encoded: dict[int, tuple[int, bytes]] = {}
@@ -791,8 +801,11 @@ class FrameEncoder:
                 )
                 encoded[kind] = (sequence, packet)
                 with self._condition:
-                    self._latest[kind] = (sequence, packet)
+                    if trajectory_generation == self._trajectory_generation and epoch == self._epoch:
+                        self._latest[kind] = (sequence, packet)
             with self._condition:
+                if trajectory_generation != self._trajectory_generation or epoch != self._epoch:
+                    continue
                 self._retained.setdefault((epoch, sequence), {}).update(encoded)
                 while len(self._retained) > HISTORY_LIMIT:
                     del self._retained[next(iter(self._retained))]
@@ -924,6 +937,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         capture_context: Mapping[str, Any] | None = None,
         trajectory_bundle: Any | None = None,
         recording_options: Mapping[str, Any] | None = None,
+        restoration_factory=None,
     ) -> None:
         self._init_protocol(thread_name="gradlab-playback-runtime")
         self.session = session
@@ -1009,6 +1023,9 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         self.recording: EpisodeRecording | None = None
         self.recording_enabled = False
         self._recording_options = dict(recording_options or {})
+        from gradlab.play_live_trajectory import LiveTrajectory
+        from gradlab.play_restoration import LiveRestoration
+        self.live_trajectory = LiveTrajectory(self, restoration_factory or LiveRestoration)
         self._checkpoint_root: Path | None = None
         if trajectory_bundle is not None:
             self._checkpoint_root = Path(tempfile.mkdtemp(prefix="gradlab-trajectory-checkpoint-"))
@@ -1061,10 +1078,12 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 "initial_observation_status": "captured with first recorded decision",
             }
             self.recording = EpisodeRecording(metadata, **self._recording_options)
+            self.live_trajectory.begin()
 
     def _recording_classification(self, seed: int | None = None) -> str:
         if (
-            self.session.interactive
+            self.live_trajectory.resampled
+            or self.session.interactive
             or self.driver == "human"
             or self.contract_details.get("mode") == "counterfactual"
             or self.sampling_mode
@@ -1090,6 +1109,8 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             "available": self._checkpoint_root is not None,
             "enabled": self.recording_enabled,
             "activation": "automatic",
+            "restoration": self.live_trajectory.status(),
+            "current_step": self.live_trajectory.inspection_step if self.live_trajectory.inspection_step is not None else (self.recording.status()["last_step"] if self.recording else self.session.step_index),
             "scientific_evidence": False,
             **(self.recording.status() if self.recording is not None else {}),
         }
@@ -1172,6 +1193,8 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         self.recording.append(
             {
                 "sequence": transition.sequence,
+                "trajectory_revision": self.recording.metadata["trajectory_revision"],
+                "restoration": self.live_trajectory.capture(transition),
                 "step": transition.step,
                 "seed": transition.seed,
                 "start_id": transition.start_id,
@@ -1204,6 +1227,9 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 "presentation": portable_metadata(presentation),
             }
         )
+
+        if self.live_trajectory.enabled and not self.live_trajectory.error and not transition.boundary:
+            self.live_trajectory._add_range(transition.step)
 
     def _begin_capture(self) -> None:
         if not self.capture.enabled:
@@ -1449,6 +1475,14 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         }
 
     def _publish(self, transition: _PlaybackTransition | None = None) -> None:
+        inspection = self.live_trajectory.inspection()
+        if inspection is not None:
+            payload, frames = inspection
+            self.encoder.submit_batch(payload["sequence"], frames)
+            with self._snapshot_lock:
+                self._latest_snapshot = payload
+                self._snapshot_updates.append(payload)
+            return
         if (
             "history" in self.processing_features
             and transition is not None
@@ -1558,7 +1592,11 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         return self.awaiting_next_episode and (limit <= 0 or self.boundaries < limit)
 
     def _require_active_episode(self) -> None:
-        if self.awaiting_next_episode:
+        if self.awaiting_next_episode and not (
+            self.live_trajectory.inspection_step is not None
+            and self.recording is not None
+            and self.live_trajectory.inspection_step < self.recording.status()["last_step"]
+        ):
             raise ValueError("episode complete; choose Play next episode")
 
     @staticmethod
@@ -1568,6 +1606,16 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         return enabled
 
     def _apply(self, command: PlaybackCommand) -> None:
+        from gradlab.play_live_trajectory import COMMANDS
+        if command.name in COMMANDS:
+            try:
+                with self._trajectory_lock:
+                    self.live_trajectory.apply(command)
+                self._response(command, ok=True)
+            except Exception as exc:
+                self._set_state("paused", message=str(exc))
+                self._response(command, ok=False, error=str(exc))
+            return
         if (
             bool(command.payload.get("strict_revision", False))
             and command.expected_revision is not None
@@ -1799,6 +1847,10 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
 
     def _step_and_record(self) -> _PlaybackTransition | None:
         try:
+            if self.live_trajectory.replay_step():
+                return None
+            if self.live_trajectory.enabled and self.live_trajectory.error:
+                raise OSError("Restoration capture failed: " + self.live_trajectory.error + ". Disable capture explicitly or retry it before continuing.")
             if self.recording_enabled and self.recording is not None:
                 self.recording.check_capacity()
             transition = (
@@ -1844,6 +1896,9 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 self.run_state = "paused"
                 if self.continue_count >= 10_000 and not matched:
                     self._status_message = "continue reached the 10,000-step safety limit"
+        if self.live_trajectory.error:
+            self.run_state = "paused"
+            self._status_message = "Restoration capture failed: " + self.live_trajectory.error
         self._publish(transition)
         return transition
 
@@ -2497,6 +2552,7 @@ class WebClient:
         self.sent_frames: dict[int, tuple[int, bytes]] = {}
         self.closed = False
         self.recorded_navigation = False
+        self.trajectory_identity = None
 
     def offer_reliable(self, payload: Mapping[str, Any] | bytes) -> None:
         rendered = (
@@ -2511,7 +2567,14 @@ class WebClient:
         self.event.set()
 
     def offer_snapshot(self, payload: Mapping[str, Any]) -> None:
-        self.recorded_navigation = payload.get("mode") == "trajectory"
+        trajectory = payload.get("trajectory") or {}
+        self.recorded_navigation = payload.get("mode") == "trajectory" or bool(trajectory.get("available"))
+        identity = (trajectory.get("episode_id"), trajectory.get("trajectory_revision"))
+        if identity != self.trajectory_identity:
+            self.trajectory_identity = identity
+            self.pending_snapshots.clear()
+            self.latest_frames.clear()
+            self.sent_frames.clear()
         key = (
             int(payload.get("session_epoch", 0)),
             int(payload.get("revision", 0)),
@@ -3728,6 +3791,13 @@ class PlaybackWebServer:
                         )
                         continue
                     command_name = str(payload.get("name") or "")
+                    from gradlab.play_live_trajectory import COMMANDS as TRAJECTORY_COMMANDS
+                    if command_name in TRAJECTORY_COMMANDS and command_name not in {"seek", "step_backward"}:
+                        if (payload.get("session_epoch") != self._runner_epoch()
+                                or payload.get("control_epoch") != self.control_epoch):
+                            client.offer_reliable({"type": "command_result", "id": str(payload.get("id") or ""),
+                                                   "ok": False, "error": "stale session or control ownership"})
+                            continue
                     try:
                         self.runner.submit(
                             PlaybackCommand(
@@ -3804,6 +3874,7 @@ class PlaybackWebServer:
     async def pump(self) -> None:
         latest_snapshot_key = (-1, -1, -1)
         latest_frames: dict[int, tuple[int, bytes]] = {}
+        trajectory_identity = None
         while not self.stop_event.is_set():
             session_change = int(getattr(self.runner, "session_change", 0))
             if session_change != self._observed_session_change:
@@ -3822,6 +3893,11 @@ class PlaybackWebServer:
             if not snapshots:
                 snapshots = [self.runner.snapshot()]
             for snapshot in snapshots:
+                trajectory = snapshot.get("trajectory") or {}
+                identity = (trajectory.get("episode_id"), trajectory.get("trajectory_revision"))
+                if identity != trajectory_identity:
+                    trajectory_identity = identity
+                    latest_frames.clear()
                 key = (
                     int(snapshot.get("session_epoch", 0)),
                     int(snapshot.get("revision", 0)),
