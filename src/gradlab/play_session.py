@@ -516,10 +516,7 @@ def _truncation_bootstrap_value(
     active_task_state: str | None,
     active_info_value: tuple[int | str, ...] | None,
 ) -> tuple[float | None, str | None]:
-    if (
-        policy_runtime is None
-        or "state_value" not in policy_runtime.capabilities.introspection
-    ):
+    if policy_runtime is None or "state_value" not in policy_runtime.capabilities.introspection:
         return None, None
     if final_policy_obs is None:
         return None, "exact final policy observation is unavailable"
@@ -591,6 +588,7 @@ class _PlaybackTransition:
     cnn_layer_id: str | None = None
     cnn_generation: int = 0
     cnn_reason: str | None = "disabled"
+    next_model_obs: object = None
 
     @property
     def events(self) -> tuple[str, ...]:
@@ -1214,9 +1212,12 @@ class _PlaybackSession:
         action_source: str,
     ) -> _PlaybackTransition:
         processing = self.processing_features
-        needs_raw = "raw" in processing
-        needs_observation = bool(processing & {"observation", "attribution", "cnn-inspection"})
-        needs_policy_input = bool(
+        recording = bool(getattr(self, "trajectory_recording", False))
+        needs_raw = recording or "raw" in processing
+        needs_observation = recording or bool(
+            processing & {"observation", "attribution", "cnn-inspection"}
+        )
+        needs_policy_input = recording or bool(
             processing & {"observation", "raw", "attribution", "cnn-inspection"}
         )
         model_obs = self.model_obs
@@ -1307,6 +1308,23 @@ class _PlaybackSession:
             after_frame_role = "after_action_observation"
             after_policy_obs = policy_obs
         after_frames = optional_fast_env_frames(after_policy_obs)
+        next_model_obs = None
+        if recording:
+            exact_next = info.get("terminal_observation") if boundary else policy_obs
+            if exact_next is not None:
+                next_model_obs = deepcopy(
+                    playback_model_observation(
+                        self.model,
+                        exact_next,
+                        self.config,
+                        active_task_state=terminal_task_state
+                        if boundary
+                        else self.active_task_state,
+                        active_info_value=terminal_info_value
+                        if boundary
+                        else self.active_info_value,
+                    )
+                )
         self.sequence += 1
         transition = _PlaybackTransition(
             sequence=self.sequence,
@@ -1335,6 +1353,7 @@ class _PlaybackSession:
             completed=completed,
             boundary=boundary,
             after_frame_role=after_frame_role,
+            next_model_obs=next_model_obs,
             return_bootstrap_value=return_bootstrap_value,
             return_bootstrap_reason=return_bootstrap_reason,
             attribution_status=(

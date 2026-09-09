@@ -54,6 +54,9 @@ export function attributionPresentation(snapshot, hasExactFrame = false) {
         || "This playback source does not expose live-policy attribution.",
     };
   }
+  if (session.status === "not-recorded") {
+    return { kind: "not-recorded", label: "Not recorded", detail: "Episode archives omit attribution maps." };
+  }
   if (session.status === "error" || transition?.status === "error") {
     return {
       kind: "error",
@@ -105,6 +108,9 @@ export function cnnPresentation(snapshot, hasExactFrame = false) {
         || session.unavailable_reason
         || "This playback source has no inspectable actor CNN.",
     };
+  }
+  if (session.status === "not-recorded") {
+    return { kind: "not-recorded", label: "Not recorded", detail: "Episode archives omit activation tensors." };
   }
   if (session.status === "error" || transition?.status === "error") {
     return {

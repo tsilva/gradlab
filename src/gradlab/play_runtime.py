@@ -27,6 +27,7 @@ from gradlab.model_sources import (
 from gradlab.policy_bundle import (
     STATE_ARCHIVE_SUMMARY_FIELDS,
     critic_value_contract,
+    load_policy_bundle_from_checkpoint,
     playback_contract,
     playback_contract_audit,
 )
@@ -677,6 +678,7 @@ class PlaybackLoader:
                 contract_details=candidate.contract_details,
                 value_contract=candidate.value_contract,
                 capture_context=capture_context,
+                trajectory_bundle=load_policy_bundle_from_checkpoint(candidate.staged.model_path),
             )
             return ActivePlayback(
                 runner=runner,

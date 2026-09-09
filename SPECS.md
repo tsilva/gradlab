@@ -39,8 +39,7 @@ GradLab is a public, reproducible, general-purpose reinforcement-learning resear
 - Every Release must remain usable through its recorded execution requirements when current GradLab contracts change.
 - Generated outputs and secrets must remain untracked, and normal operation must not expose credentials.
 - Machine-specific inventory, fleet names, hostnames, SSH identities, and operator endpoints must remain outside tracked source.
-- External Policy artifacts must use known data-only formats and pass integrity and compatibility checks before use.
-- GradLab must reject externally supplied executable Policy artifacts.
+- External Policy execution inputs must use known data-only formats and pass integrity and compatibility checks; executable Policy artifacts must be rejected.
 - Supported installation methods must be reproducible, supply-chain hardened, and resistant to newly published or known-bad dependencies.
 - A new user must be able to run a bundled local example from the published package with one command and without cloning, persistent installation, credentials, or private environment assets.
 
