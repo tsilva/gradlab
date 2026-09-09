@@ -6,6 +6,7 @@ import uuid
 from collections.abc import Iterable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 from gradlab.play_runtime import (
@@ -169,6 +170,8 @@ class PlaybackHost:
         with self._lock:
             if self._active is None or self._phase != "active":
                 return None
+            if self._active.runner.snapshot().get("mode") == "trajectory":
+                return None
             capture = getattr(self._active.runner, "capture", None)
             status = (
                 capture.status()
@@ -204,6 +207,55 @@ class PlaybackHost:
             source = self._last_source
         if source is not None:
             self._begin_prepare(source)
+
+    def freeze_trajectory(self) -> str:
+        with self._lock:
+            active = self._active if self._phase == "active" else None
+        if active is None or not hasattr(active.runner, "freeze_trajectory"):
+            raise ValueError("no recorded live episode is available")
+        return active.runner.freeze_trajectory()
+
+    def import_trajectory(self, path: str) -> None:
+        from gradlab.model_sources import ResolvedModelSource
+        from gradlab.play_trajectory_runner import TrajectoryPlaybackRunner
+
+        with self._lock:
+            if self._stopped:
+                raise ValueError("Player has stopped")
+            generation = self._generation
+        runner = TrajectoryPlaybackRunner(Path(path), self.loader.base_args)
+        try:
+            with self._lock:
+                if self._stopped or generation != self._generation:
+                    raise ValueError("Playback source changed while the recording was importing")
+                previous = self._active
+                self._generation += 1
+                self._session_epoch += 1
+                runner.encoder.set_epoch(self._session_epoch)
+                runner.set_processing(self._processing_features)
+                runner.start()
+                bundle = runner.recording.bundle
+                self._active = ActivePlayback(
+                    runner=runner,
+                    policy_env=None,
+                    spec=PlaySourceSpec(kind="local", value="Imported episode"),
+                    source=ResolvedModelSource(model_path=bundle.checkpoint_path, bundle=bundle),
+                )
+                self._candidate = None
+                self._last_source = None
+                self._phase = "active"
+                self._message = self._error = ""
+                self._route = {
+                    "level": "goals",
+                    "environment_id": runner.snapshot()["session"]["env_id"],
+                }
+                self._revision += 1
+                self._session_change += 1
+            if previous is not None:
+                previous.close()
+        except BaseException:
+            runner.stop()
+            raise
 
     def stop(self) -> None:
         with self._lock:

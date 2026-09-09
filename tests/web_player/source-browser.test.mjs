@@ -1252,6 +1252,41 @@ test("active breadcrumb rendering hides routes without a selected checkpoint", (
   assert.equal(browser.breadcrumbsRoot.replaceChildrenCalled, 1);
 });
 
+test("imported recording breadcrumbs show the environment without loading checkpoints", () => {
+  const browser = Object.create(SourceBrowser.prototype);
+  browser.breadcrumbsRoot = { hidden: true, replaceChildren() {} };
+  browser.stop = () => {};
+  browser.hideActiveCheckpointNavigation = () => {};
+  let rendered = [];
+  browser.renderBreadcrumbs = () => {
+    rendered = sourceBreadcrumbItems(browser.route);
+  };
+  let path;
+  browser.syncUrl = () => { path = sourceRoutePath(browser.route); };
+  browser.loadActiveCheckpointNavigation = () => {
+    throw new Error("Recorded playback must not fetch checkpoint navigation");
+  };
+  const snapshot = {
+    mode: "trajectory",
+    app: {
+      phase: "active",
+      route: { level: "goals", environment_id: "CartPole-v1" },
+    },
+  };
+
+  browser.renderActiveBreadcrumbs(snapshot);
+  // Source selection can be opened while the recording remains active.
+  browser.route = { level: "goal_variants", environment_id: "Mario", goal_id: "Level1-1" };
+  browser.app = { phase: "selecting", has_active_runner: true };
+  browser.renderBreadcrumbs();
+  browser.syncUrl();
+  browser.renderActiveBreadcrumbs(snapshot);
+
+  assert.equal(browser.breadcrumbsRoot.hidden, false);
+  assert.deepEqual(rendered.map((item) => item.label), ["Environments", "Cart Pole"]);
+  assert.equal(path, "/environments/CartPole-v1");
+});
+
 test("hidden breadcrumbs do not restart active checkpoint loading", () => {
   const browser = Object.create(SourceBrowser.prototype);
   browser.activeBreadcrumbRoute = "";
