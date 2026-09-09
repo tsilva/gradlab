@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from contextlib import nullcontext
 import queue
 import time
 from types import SimpleNamespace
@@ -232,7 +231,7 @@ def test_playback_loader_enforces_cpu_and_passes_bundle_algorithm(monkeypatch) -
     )
     monkeypatch.setattr(
         "gradlab.play_runtime.verify_staged_model",
-        lambda _staged: nullcontext(verified),
+        lambda _staged: verified,
     )
     monkeypatch.setattr("gradlab.policy_models.load_policy_model", model_loader)
     monkeypatch.setattr(
