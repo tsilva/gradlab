@@ -246,7 +246,7 @@ class PlaybackHost:
                 self._phase = "active"
                 self._message = self._error = ""
                 self._route = {
-                    "level": "environments",
+                    "level": "goals",
                     "environment_id": runner.snapshot()["session"]["env_id"],
                 }
                 self._revision += 1

@@ -927,3 +927,49 @@ def test_checkpoint_activation_keeps_download_available_after_candidate_cleanup(
             active.close()
         if imported:
             imported.stop()
+
+
+def test_cli_opens_recording_without_a_checkpoint_or_catalog(tmp_path, monkeypatch):
+    from gradlab.main import main
+    from gradlab.play_trajectory import export_trajectory
+
+    runner = live_runner(tmp_path)
+    try:
+        command(runner, "step", count=1)
+        wait_step(runner, 1)
+        archive = export_trajectory(runner.freeze_trajectory(), tmp_path / "episode.gradtraj")
+    finally:
+        runner.stop()
+
+    def unavailable_catalog(*args, **kwargs):
+        raise AssertionError("Opening a recording must not require the catalog")
+
+    def inspect_player(host, args, **kwargs):
+        from gradlab.play_web import PlaybackWebServer
+
+        host.start()
+        server = PlaybackWebServer(host, args, catalog=kwargs["catalog"])
+        asyncio.run(server._prepare_initial_catalog())
+        snapshot = host.snapshot()
+        assert snapshot["mode"] == "trajectory"
+        assert snapshot["app"]["route"] == {"level": "goals", "environment_id": "Game-v0"}
+        assert snapshot["app"]["source"] is None
+        assert snapshot["trajectory"]["last_step"] == 1
+        return 0
+
+    monkeypatch.setattr(
+        "gradlab.play_catalog_authority.start_catalog_authority_helper", unavailable_catalog
+    )
+    monkeypatch.setattr("gradlab.play_catalog.PlayCatalog.initial_environments", unavailable_catalog)
+    monkeypatch.setattr("gradlab.play_web.run_web_player_application", inspect_player)
+    assert main(["play", "--recording", str(archive), "--no-open"]) == 0
+
+
+@pytest.mark.parametrize("source", ["--model", "--run", "--recipe"])
+def test_cli_rejects_recording_with_another_playback_source(source, capsys):
+    from gradlab.main import main
+
+    with pytest.raises(SystemExit) as error:
+        main(["play", "--recording", "episode.gradtraj", source, "another-source"])
+    assert error.value.code == 2
+    assert "pass exactly one" in capsys.readouterr().err

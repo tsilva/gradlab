@@ -316,6 +316,9 @@ button:disabled {
 
 body.checkpoint-loading { overflow: hidden; cursor: progress; }
 
+body.checkpoint-loading .app-header { z-index: 201; pointer-events: none; }
+body.checkpoint-loading #trajectory-import { pointer-events: auto; }
+
 .checkpoint-loading-mask {
   position: fixed;
   inset: 0;
