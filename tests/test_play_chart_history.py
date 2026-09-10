@@ -162,3 +162,44 @@ def test_live_return_estimate_uses_full_suffix_and_pre_action_tail(tmp_path):
         assert "realized_return" not in result["points"][0]
         result = chart_history(runner, "live", 3, 3)
         assert result["points"][0]["estimated_return"] == 8
+
+
+def test_incremental_returns_match_exact_suffixes_and_stop_at_invalid_transitions(tmp_path):
+    import random
+    import pytest
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    from gradlab.play_chart_history import chart_history
+
+    rng = random.Random(7)
+    for gamma in (0., .99, 1.):
+        root = tmp_path / str(gamma)
+        root.mkdir()
+        end = 513
+        data = {step: dict(step=step, sequence=step, episode=1,
+                           reward_shaped=rng.uniform(-2, 3), value=rng.uniform(-2, 3))
+                for step in range(1, end + 2)}
+        data[100]["policy_sampled"] = False
+        recording = SimpleNamespace(root=root,
+            metadata=dict(episode_id="test", episode=1, first_step=1, discount=gamma),
+            status=lambda: dict(last_step=end),
+            transition=lambda step: dict(presentation=data[step]))
+        runner = SimpleNamespace(recording=recording, history=[])
+        with patch("gradlab.play_web.history_point_payload", side_effect=lambda point: point):
+            for current_end in (513,514):
+                end = current_end
+                full = chart_history(runner, "test", None, None)
+                for point in full["points"]:
+                    step = point["step"]
+                    if step <= 100:
+                        assert "estimated_return" not in point
+                    else:
+                        expected = data[end]["value"]
+                        for index in range(end - 1, step - 1, -1):
+                            expected = data[index]["reward_shaped"] + gamma * expected
+                        assert point["estimated_return"] == pytest.approx(expected, abs=1e-10)
+            # A calibration amendment changes an indexed leaf and its ancestors.
+            runner.history = [dict(step=300, episode=1, value_comparison_reasons=["changed contract"])]
+            result = chart_history(runner, "test", 299,301)
+            assert "estimated_return" not in result["points"][0]
+            assert "estimated_return" in result["points"][-1]

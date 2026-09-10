@@ -74,7 +74,6 @@ MAX_JSON_ITEMS = 128
 MAX_JSON_TEXT = 4096
 INPUT_HEARTBEAT_SECONDS = 0.25
 LAST_CLIENT_GRACE_SECONDS = 30.0
-PAIRED_START_GRACE_SECONDS = 2.0
 
 FRAME_SUBSCRIPTIONS = {
     FRAME_GAME: "game",
@@ -1011,6 +1010,9 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             resolved_capture_context.get("execution", {})
         )
         self._trajectory_lock = threading.RLock()
+        self._diagnostic_lock = self._trajectory_lock
+        from gradlab.play_diagnostics import DiagnosticQueries
+        self._diagnostics = DiagnosticQueries()
         self._inspection_history: tuple[str, int, int, list[dict[str, Any]]] | None = None
         self.recording: EpisodeRecording | None = None
         self.recording_enabled = False
@@ -1108,6 +1110,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         return payload
 
     def close_recording(self) -> None:
+        self._diagnostics.close()
         with self._trajectory_lock:
             if self.recording is not None:
                 self.recording.close()
@@ -1116,22 +1119,19 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 shutil.rmtree(self._checkpoint_root, ignore_errors=True)
 
     def chart_history(self, episode_id, first=None, last=None):
-        from gradlab.play_chart_history import chart_history
+        from gradlab.play_diagnostics import read_diagnostics
 
-        with self._trajectory_lock:
-            return chart_history(self, episode_id, first, last)
+        return read_diagnostics(self, episode_id, "chart", first, last)
 
     def reward_history(self, episode_id, first=None, last=None):
-        from gradlab.play_reward_history import reward_history
+        from gradlab.play_diagnostics import read_diagnostics
 
-        with self._trajectory_lock:
-            return reward_history(self, episode_id, first, last)
+        return read_diagnostics(self, episode_id, "reward", first, last)
 
     def event_history(self, episode_id, first=None, last=None):
-        from gradlab.play_event_history import event_history
+        from gradlab.play_diagnostics import read_diagnostics
 
-        with self._trajectory_lock:
-            return event_history(self, episode_id, first, last)
+        return read_diagnostics(self, episode_id, "event", first, last)
 
     def inspect_recorded_step(self, episode_id: str, step: int) -> dict[str, Any]:
         """Read an inspection window without touching the live policy or cursor."""
@@ -2713,6 +2713,29 @@ class WebClient:
                     self.sent_frames[kind] = (sequence, packet)
 
 
+def playback_updates(runner):
+    """One background read supplies the event loop with cached playback state."""
+    drain = getattr(runner, "drain_snapshot_updates", None)
+    snapshots = drain() if callable(drain) else []
+    if not snapshots:
+        snapshots = [runner.snapshot()]
+    responses = []
+    poll = getattr(runner, "poll_response", None)
+    for _ in range(COMMAND_QUEUE_LIMIT):
+        if callable(poll):
+            response = poll()
+            if response is None:
+                break
+        else:
+            try:
+                response = runner.responses.get_nowait()
+            except queue.Empty:
+                break
+        responses.append(response)
+    return dict(snapshots=snapshots, frames=runner.encoder.latest(), responses=responses,
+                stopped=runner.stopped, session_change=int(getattr(runner, "session_change", 0)))
+
+
 class PlaybackWebServer:
     def __init__(
         self,
@@ -2726,6 +2749,8 @@ class PlaybackWebServer:
         repo_root: Path | None = None,
         publication_factory: Any | None = None,
     ) -> None:
+        from gradlab.play_chart_transport import ChartResponses
+        self._chart_responses = ChartResponses()
         self.runner = runner
         self.args = args
         self.paired_windows = paired_windows
@@ -2742,9 +2767,6 @@ class PlaybackWebServer:
         self.stop_event = asyncio.Event()
         self.ever_connected = False
         self.last_client_at = time.monotonic()
-        self._auto_started_epoch = -1
-        self._auto_start_task: asyncio.Task[None] | None = None
-        self._auto_start_task_epoch = -1
         self._observed_session_change = int(getattr(self.runner, "session_change", 0))
         self._secondary_opened = False
         self._initial_environment_catalog: dict[str, Any] | None = None
@@ -3131,7 +3153,7 @@ class PlaybackWebServer:
         return web.json_response(page.to_dict())
 
     async def _prepare_initial_catalog(self) -> None:
-        if self.catalog is None or self.runner.snapshot().get("mode") == "trajectory":
+        if self.catalog is None or (await asyncio.to_thread(self.runner.snapshot)).get("mode") == "trajectory":
             return
         initial_environments = getattr(self.catalog, "initial_environments", None)
         if not callable(initial_environments):
@@ -3323,7 +3345,7 @@ class PlaybackWebServer:
             episode_id = request.query["episode_id"]
             first = int(request.query["first"]) if "first" in request.query else None
             last = int(request.query["last"]) if "last" in request.query else None
-            if epoch != self._runner_epoch():
+            if epoch != await asyncio.to_thread(self._runner_epoch):
                 raise ValueError("the Playback Session has been replaced")
             read = getattr(self.runner, "chart_history", None)
             if read is None:
@@ -3334,9 +3356,23 @@ class PlaybackWebServer:
                 else (epoch, episode_id, first, last)
             )
             result = await asyncio.to_thread(read, *args)
-            if epoch != self._runner_epoch():
+            if epoch != await asyncio.to_thread(self._runner_epoch):
                 raise ValueError("the Playback Session has been replaced")
-            return web.json_response(result, headers={"Cache-Control": "no-store"})
+            if request.query.get("format") == "chart-columns-v1":
+                result = await asyncio.to_thread(
+                    self._chart_responses.encode, result, request.query.get("base")
+                )
+            body = await asyncio.to_thread(
+                json.dumps, result, separators=(",", ":"), allow_nan=False
+            )
+            response = web.Response(
+                text=body,
+                content_type="application/json",
+                headers={"Cache-Control": "no-store"},
+                zlib_executor_size=64 * 1024,
+            )
+            response.enable_compression()
+            return response
         except (KeyError, ValueError, OSError, RuntimeError) as exc:
             return web.json_response({"error": str(exc)}, status=400)
 
@@ -3347,7 +3383,7 @@ class PlaybackWebServer:
             episode_id = request.query["episode_id"]
             first = int(request.query["first"]) if "first" in request.query else None
             last = int(request.query["last"]) if "last" in request.query else None
-            if epoch != self._runner_epoch():
+            if epoch != await asyncio.to_thread(self._runner_epoch):
                 raise ValueError("the Playback Session has been replaced")
             read = getattr(self.runner, "reward_history", None)
             if read is None:
@@ -3358,7 +3394,7 @@ class PlaybackWebServer:
                 else (epoch, episode_id, first, last)
             )
             result = await asyncio.to_thread(read, *args)
-            if epoch != self._runner_epoch():
+            if epoch != await asyncio.to_thread(self._runner_epoch):
                 raise ValueError("the Playback Session has been replaced")
             return web.json_response(result, headers={"Cache-Control": "no-store"})
         except (KeyError, ValueError, OSError, RuntimeError) as exc:
@@ -3371,7 +3407,7 @@ class PlaybackWebServer:
             episode_id = request.query["episode_id"]
             first = int(request.query["first"]) if "first" in request.query else None
             last = int(request.query["last"]) if "last" in request.query else None
-            if epoch != self._runner_epoch():
+            if epoch != await asyncio.to_thread(self._runner_epoch):
                 raise ValueError("the Playback Session has been replaced")
             read = getattr(self.runner, "event_history", None)
             if read is None:
@@ -3382,7 +3418,7 @@ class PlaybackWebServer:
                 else (epoch, episode_id, first, last)
             )
             result = await asyncio.to_thread(read, *args)
-            if epoch != self._runner_epoch():
+            if epoch != await asyncio.to_thread(self._runner_epoch):
                 raise ValueError("the Playback Session has been replaced")
             return web.json_response(result, headers={"Cache-Control": "no-store"})
         except (KeyError, ValueError, OSError, RuntimeError) as exc:
@@ -3399,7 +3435,7 @@ class PlaybackWebServer:
                 raise ValueError("recorded inspection is unavailable for this source")
             # Direct runners are used by embedded players; the application host
             # additionally binds reads to the immutable Playback Session epoch.
-            if epoch != self._runner_epoch():
+            if epoch != await asyncio.to_thread(self._runner_epoch):
                 raise ValueError("the Playback Session has been replaced")
             args = (
                 (episode_id, step)
@@ -3407,7 +3443,7 @@ class PlaybackWebServer:
                 else (epoch, episode_id, step)
             )
             result = await asyncio.to_thread(inspect, *args)
-            if epoch != self._runner_epoch():
+            if epoch != await asyncio.to_thread(self._runner_epoch):
                 raise ValueError("the Playback Session has been replaced")
             result["snapshot"]["session_epoch"] = epoch
             return web.json_response(result, headers={"Cache-Control": "no-store"})
@@ -3720,102 +3756,18 @@ class PlaybackWebServer:
             }
         return payload
 
-    def _broadcast_control(self) -> None:
-        snapshot = self.runner.snapshot()
+    async def _broadcast_control(self) -> None:
+        snapshot = await asyncio.to_thread(self.runner.snapshot)
         for client in self.clients.values():
             client.offer_snapshot(self._snapshot_for(client, snapshot))
 
     def _runner_epoch(self) -> int:
         return int(getattr(self.runner, "session_epoch", 0))
 
-    def _runner_active(self) -> bool:
-        return bool(getattr(self.runner, "has_active_runner", True))
-
-    def _cancel_auto_start_task(self) -> None:
-        task = self._auto_start_task
-        self._auto_start_task = None
-        self._auto_start_task_epoch = -1
-        if task is not None and task is not asyncio.current_task() and not task.done():
-            task.cancel()
-
-    def _auto_start_client(self, preferred_client_id: str | None = None) -> str | None:
-        preferred = self.clients.get(preferred_client_id or "")
-        if preferred is not None and (
-            self.control_holder is None or preferred.workspace_id == self.control_holder
-        ):
-            return preferred.client_id
-        for client in self.clients.values():
-            if self.control_holder is None or client.workspace_id == self.control_holder:
-                return client.client_id
-        return None
-
-    def _paired_workspace_ready(self) -> bool:
-        if not self.paired_windows or self.control_holder is None:
-            return not self.paired_windows
-        windows = {
-            client.window_id
-            for client in self.clients.values()
-            if client.workspace_id == self.control_holder
-        }
-        return {"main", "stats"}.issubset(windows)
-
-    def _start_epoch(self, epoch: int, preferred_client_id: str | None) -> None:
-        client_id = self._auto_start_client(preferred_client_id)
-        if (
-            epoch != self._runner_epoch()
-            or not self._runner_active()
-            or self._auto_started_epoch == epoch
-            or bool(getattr(self.args, "debug", False))
-            or client_id is None
-        ):
-            return
-        try:
-            self.runner.submit(PlaybackCommand(uuid.uuid4().hex, client_id, "play", {}, None))
-        except queue.Full:
-            return
-        self._auto_started_epoch = epoch
-        self._cancel_auto_start_task()
-
-    async def _auto_start_after_grace(
-        self,
-        epoch: int,
-        preferred_client_id: str | None,
-    ) -> None:
-        try:
-            await asyncio.sleep(PAIRED_START_GRACE_SECONDS)
-            self._start_epoch(epoch, preferred_client_id)
-        except asyncio.CancelledError:
-            return
-        finally:
-            if self._auto_start_task is asyncio.current_task():
-                self._auto_start_task = None
-                self._auto_start_task_epoch = -1
-
-    def _maybe_auto_start(self, client_id: str | None = None) -> None:
-        epoch = self._runner_epoch()
-        if (
-            not self._runner_active()
-            or self._auto_started_epoch == epoch
-            or bool(getattr(self.args, "debug", False))
-        ):
-            return
-        if not self.paired_windows or self._paired_workspace_ready():
-            self._start_epoch(epoch, client_id)
-            return
-        if (
-            self._auto_start_task is not None
-            and not self._auto_start_task.done()
-            and self._auto_start_task_epoch == epoch
-        ):
-            return
-        self._cancel_auto_start_task()
-        self._auto_start_task_epoch = epoch
-        self._auto_start_task = asyncio.create_task(self._auto_start_after_grace(epoch, client_id))
-
-    def _announce_session_change(self) -> None:
-        epoch = self._runner_epoch()
-        self._cancel_auto_start_task()
-        for client in self.clients.values():
+    async def _announce_session_change(self) -> None:
+        epoch = await asyncio.to_thread(self._runner_epoch)
+        history = await asyncio.to_thread(self.runner.history_payload)
+        for client in tuple(self.clients.values()):
             client.reset_session(epoch)
             client.offer_reliable(
                 {
@@ -3824,7 +3776,7 @@ class PlaybackWebServer:
                     "session_epoch": epoch,
                 }
             )
-            client.offer_reliable(self.runner.history_payload())
+            client.offer_reliable(history)
         if self.paired_windows and self.defer_secondary_window and not self._secondary_opened:
             self._secondary_opened = True
             stats_url = self.dashboard_urls()[1]
@@ -3905,24 +3857,23 @@ class PlaybackWebServer:
             )
             if self.publication_authority_client_id is None and self.control_holder == workspace_id:
                 self._rotate_publication_authority(client_id)
-            client.offer_reliable(self.runner.history_payload())
+            client.offer_reliable((await asyncio.to_thread(self.runner.history_payload)))
             episode_start_payload = getattr(self.runner, "episode_start_payload", None)
             if callable(episode_start_payload):
-                episode_start_snapshot, episode_start_frames = episode_start_payload()
+                episode_start_snapshot, episode_start_frames = await asyncio.to_thread(episode_start_payload)
                 if episode_start_snapshot:
                     client.offer_reliable(self._snapshot_for(client, episode_start_snapshot))
                 for frame_kind, (_sequence, packet) in episode_start_frames.items():
                     subscription = FRAME_SUBSCRIPTIONS.get(frame_kind)
                     if subscription in client.subscriptions:
                         client.offer_reliable(packet)
-            client.offer_snapshot(self._snapshot_for(client, self.runner.snapshot()))
-            for frame_kind, (sequence, packet) in self.runner.encoder.latest().items():
+            client.offer_snapshot(self._snapshot_for(client, (await asyncio.to_thread(self.runner.snapshot))))
+            for frame_kind, (sequence, packet) in (await asyncio.to_thread(self.runner.encoder.latest)).items():
                 subscription = FRAME_SUBSCRIPTIONS.get(frame_kind)
                 if subscription in client.subscriptions:
                     client.offer_frame(frame_kind, sequence, packet)
             writer = asyncio.create_task(client.write())
-            self._broadcast_control()
-            self._maybe_auto_start(client_id)
+            await self._broadcast_control()
             async for message in socket:
                 if message.type == WSMsgType.ERROR:
                     break
@@ -3942,9 +3893,9 @@ class PlaybackWebServer:
                         self.control_holder = client.workspace_id
                         self.input_holder = None
                         self.control_epoch += 1
-                        self.runner.clear_input()
+                        await asyncio.to_thread(self.runner.clear_input)
                         self._rotate_publication_authority(client.client_id)
-                        self._broadcast_control()
+                        await self._broadcast_control()
                 elif kind == "subscribe":
                     client.subscriptions = {
                         str(value)
@@ -3956,12 +3907,14 @@ class PlaybackWebServer:
                             payload.get("processing") or ()
                         )
                         await self._sync_player_processing()
-                    for frame_kind, (sequence, packet) in self.runner.encoder.latest().items():
+                    for frame_kind, (sequence, packet) in (
+                        await asyncio.to_thread(self.runner.encoder.latest)
+                    ).items():
                         subscription = FRAME_SUBSCRIPTIONS.get(frame_kind)
                         if subscription in client.subscriptions:
                             client.offer_frame(frame_kind, sequence, packet)
                 elif kind == "history":
-                    client.offer_reliable(self.runner.history_payload())
+                    client.offer_reliable((await asyncio.to_thread(self.runner.history_payload)))
                 elif kind == "inspection_frames":
                     try:
                         epoch = int(payload.get("session_epoch", -1))
@@ -3977,7 +3930,11 @@ class PlaybackWebServer:
                             {"type": "error", "error": "invalid inspection frame request"}
                         )
                         continue
-                    if epoch != self._runner_epoch() or sequence < 0 or not requested_kinds:
+                    if (
+                        epoch != await asyncio.to_thread(self._runner_epoch)
+                        or sequence < 0
+                        or not requested_kinds
+                    ):
                         continue
                     retained = await asyncio.to_thread(
                         self.runner.encoder.retained,
@@ -3998,15 +3955,16 @@ class PlaybackWebServer:
                         focused = bool(payload.get("focused", False))
                         if focused:
                             if self.input_holder != client_id:
-                                self.runner.clear_input()
+                                await asyncio.to_thread(self.runner.clear_input)
                             self.input_holder = client_id
-                            self.runner.update_input(
+                            await asyncio.to_thread(
+                                self.runner.update_input,
                                 labels if isinstance(labels, list) else (),
                                 focused=True,
                             )
                         elif self.input_holder == client_id:
                             self.input_holder = None
-                            self.runner.update_input((), focused=False)
+                            await asyncio.to_thread(self.runner.update_input, (), focused=False)
                 elif kind == "command":
                     if self.control_holder != client.workspace_id:
                         client.offer_reliable(
@@ -4020,7 +3978,8 @@ class PlaybackWebServer:
                         continue
                     command_name = str(payload.get("name") or "")
                     try:
-                        self.runner.submit(
+                        await asyncio.to_thread(
+                            self.runner.submit,
                             PlaybackCommand(
                                 str(payload.get("id") or uuid.uuid4().hex),
                                 client_id,
@@ -4031,11 +3990,8 @@ class PlaybackWebServer:
                                 int(payload["expected_revision"])
                                 if payload.get("expected_revision") is not None
                                 else None,
-                            )
+                            ),
                         )
-                        if command_name == "play":
-                            self._auto_started_epoch = self._runner_epoch()
-                            self._cancel_auto_start_task()
                     except queue.Full:
                         client.offer_reliable(
                             {
@@ -4053,7 +4009,7 @@ class PlaybackWebServer:
                 await self._sync_player_processing()
                 if self.input_holder == client.client_id:
                     self.input_holder = None
-                    self.runner.clear_input()
+                    await asyncio.to_thread(self.runner.clear_input)
                 publication_authority_closed = (
                     self.publication_authority_client_id == client.client_id
                 )
@@ -4072,21 +4028,22 @@ class PlaybackWebServer:
                     if not publication_authority_closed:
                         self.control_epoch += 1
                         self._rotate_publication_authority(None)
-                    self.runner.clear_input()
+                    await asyncio.to_thread(self.runner.clear_input)
                     try:
-                        self.runner.submit(
+                        await asyncio.to_thread(
+                            self.runner.submit,
                             PlaybackCommand(
                                 uuid.uuid4().hex,
                                 client.client_id,
                                 "pause",
                                 {},
                                 None,
-                            )
+                            ),
                         )
                     except queue.Full:
                         pass
                 self.last_client_at = time.monotonic()
-                self._broadcast_control()
+                await self._broadcast_control()
             if writer is not None:
                 writer.cancel()
                 await asyncio.gather(writer, return_exceptions=True)
@@ -4096,22 +4053,17 @@ class PlaybackWebServer:
         latest_snapshot_key = (-1, -1, -1)
         latest_frames: dict[int, tuple[int, bytes]] = {}
         while not self.stop_event.is_set():
-            session_change = int(getattr(self.runner, "session_change", 0))
+            poll = getattr(self.runner, "playback_updates", None)
+            update = await asyncio.to_thread(
+                poll if callable(poll) else lambda: playback_updates(self.runner)
+            )
+            session_change = update["session_change"]
             if session_change != self._observed_session_change:
                 self._observed_session_change = session_change
                 latest_snapshot_key = (-1, -1, -1)
                 latest_frames.clear()
-                self._announce_session_change()
-                if self.clients:
-                    self._maybe_auto_start(next(iter(self.clients)))
-            drain_snapshot_updates = getattr(self.runner, "drain_snapshot_updates", None)
-            snapshots = (
-                drain_snapshot_updates()
-                if callable(drain_snapshot_updates)
-                else [self.runner.snapshot()]
-            )
-            if not snapshots:
-                snapshots = [self.runner.snapshot()]
+                await self._announce_session_change()
+            snapshots = update["snapshots"]
             for snapshot in snapshots:
                 key = (
                     int(snapshot.get("session_epoch", 0)),
@@ -4127,9 +4079,11 @@ class PlaybackWebServer:
                             bool((snapshot.get("transition") or {}).get("boundary"))
                             and (snapshot.get("session") or {}).get("value_discount") is not None
                         ):
-                            client.offer_reliable(self.runner.history_payload())
+                            client.offer_reliable(
+                                (await asyncio.to_thread(self.runner.history_payload))
+                            )
                         client.offer_snapshot(self._snapshot_for(client, snapshot))
-            for kind, (sequence, packet) in self.runner.encoder.latest().items():
+            for kind, (sequence, packet) in update["frames"].items():
                 if (sequence, packet) == latest_frames.get(kind):
                     continue
                 latest_frames[kind] = (sequence, packet)
@@ -4137,19 +4091,7 @@ class PlaybackWebServer:
                 for client in tuple(self.clients.values()):
                     if subscription in client.subscriptions:
                         client.offer_frame(kind, sequence, packet)
-            while True:
-                poll_response = getattr(self.runner, "poll_response", None)
-                if callable(poll_response):
-                    response = poll_response()
-                    if response is None:
-                        break
-                else:
-                    try:
-                        response = self.runner.responses.get_nowait()
-                    except queue.Empty:
-                        break
-                if response is None:
-                    break
+            for response in update["responses"]:
                 client = self.clients.get(response.client_id)
                 if client is not None:
                     client.offer_reliable(response.payload)
@@ -4157,7 +4099,7 @@ class PlaybackWebServer:
                 if client.closed:
                     await client.socket.close(code=1013, message=b"client is too slow")
                     self.clients.pop(client_id, None)
-            if self.runner.stopped:
+            if update["stopped"]:
                 self.stop_event.set()
                 break
             if (
@@ -4165,7 +4107,7 @@ class PlaybackWebServer:
                 and not self.clients
                 and time.monotonic() - self.last_client_at >= LAST_CLIENT_GRACE_SECONDS
             ):
-                self.runner.stop()
+                await asyncio.to_thread(self.runner.stop)
                 self.stop_event.set()
                 break
             await asyncio.sleep(1.0 / 120.0)
@@ -4293,7 +4235,7 @@ class PlaybackWebServer:
         if self.paired_windows and not self.defer_secondary_window:
             print(f"Player stats: {urls[1]}", flush=True)
         await self._prepare_initial_catalog()
-        self.runner.start()
+        await asyncio.to_thread(self.runner.start)
         pump = asyncio.create_task(self.pump())
         if not bool(getattr(self.args, "no_open", False)):
             launch_urls = urls[:1] if self.defer_secondary_window else urls
@@ -4302,15 +4244,11 @@ class PlaybackWebServer:
         try:
             await self.stop_event.wait()
         finally:
-            auto_start_task = self._auto_start_task
-            self._cancel_auto_start_task()
-            if auto_start_task is not None:
-                await asyncio.gather(auto_start_task, return_exceptions=True)
             pump.cancel()
             await asyncio.gather(pump, return_exceptions=True)
             for client in tuple(self.clients.values()):
                 await client.socket.close(code=1001, message=b"player shutting down")
-            self.runner.stop()
+            await asyncio.to_thread(self.runner.stop)
             await app_runner.cleanup()
             self.trajectory_transfers.close()
         return 0

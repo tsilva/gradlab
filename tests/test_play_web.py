@@ -1182,148 +1182,64 @@ def test_frame_encoder_retains_every_rapidly_submitted_observation() -> None:
     assert all(frames[FRAME_OBSERVATION][0] == sequence for sequence, frames in enumerate(retained))
 
 
-def test_paired_auto_start_waits_for_both_workspace_windows() -> None:
-    class Runner:
-        session_epoch = 3
-        has_active_runner = True
-
-        def __init__(self) -> None:
-            self.commands = []
-
-        def submit(self, command) -> None:
-            self.commands.append(command)
-
+@pytest.mark.parametrize("paired", [False, True])
+@pytest.mark.parametrize("debug", [False, True])
+def test_player_connection_and_checkpoint_load_wait_for_explicit_play(paired, debug) -> None:
     async def scenario() -> None:
-        runner = Runner()
-        server = PlaybackWebServer(
-            runner,
-            human_args(debug=False),
-            paired_windows=True,
-        )
-        server.control_holder = "workspace"
-        server.clients["main-client"] = argparse.Namespace(
-            client_id="main-client",
-            workspace_id="workspace",
-            window_id="main",
-        )
-        server._maybe_auto_start("main-client")
-        assert runner.commands == []
-        assert server._auto_start_task is not None
+        args = human_args(debug=debug)
+        runner = HumanRecordingRunner(FakeHumanSession(), args)
+        runner.submit = Mock(wraps=runner.submit)
+        server = PlaybackWebServer(runner, args, paired_windows=paired)
+        task = asyncio.create_task(server.run())
 
-        server.clients["stats-client"] = argparse.Namespace(
-            client_id="stats-client",
-            workspace_id="workspace",
-            window_id="stats",
-        )
-        server._maybe_auto_start("stats-client")
-        await asyncio.sleep(0)
+        async def receive_type(socket, kind):
+            async with asyncio.timeout(2):
+                while True:
+                    message = await socket.receive()
+                    if message.type == WSMsgType.TEXT and message.json()["type"] == kind:
+                        return message.json()
 
-        assert [command.name for command in runner.commands] == ["play"]
-        assert server._auto_started_epoch == 3
+        try:
+            async with asyncio.timeout(3):
+                while not server.origin:
+                    await asyncio.sleep(0.01)
+            async with ClientSession() as client:
+                async def connect(window):
+                    socket = await client.ws_connect(f"{server.origin}/ws", origin=server.origin)
+                    await socket.send_json({
+                        "type": "hello", "token": server.token,
+                        "workspace_id": "workspace", "window_id": window,
+                        "subscriptions": ["telemetry"],
+                    })
+                    await receive_type(socket, "welcome")
+                    await receive_type(socket, "snapshot")
+                    return socket
 
-    asyncio.run(scenario())
+                main = await connect("main")
+                if paired:
+                    await connect("stats")
+                # Connecting an additional viewer must not start the prepared runner.
+                await connect("observer")
+                assert runner.run_state == "paused"
+                runner.submit.assert_not_called()
 
+                # Exercise the checkpoint-ready notification path in the real server pump.
+                runner.session_epoch = 1
+                runner.session_change = 1
+                await receive_type(main, "session_changed")
+                await receive_type(main, "history")
+                assert runner.run_state == "paused"
+                runner.submit.assert_not_called()
 
-def test_paired_auto_start_falls_back_when_stats_window_is_missing() -> None:
-    class Runner:
-        session_epoch = 4
-        has_active_runner = True
-
-        def __init__(self) -> None:
-            self.commands = []
-
-        def submit(self, command) -> None:
-            self.commands.append(command)
-
-    async def scenario() -> None:
-        runner = Runner()
-        server = PlaybackWebServer(
-            runner,
-            human_args(debug=False),
-            paired_windows=True,
-        )
-        server.control_holder = "workspace"
-        server.clients["main-client"] = argparse.Namespace(
-            client_id="main-client",
-            workspace_id="workspace",
-            window_id="main",
-        )
-        with patch("gradlab.play_web.PAIRED_START_GRACE_SECONDS", 0.01):
-            server._maybe_auto_start("main-client")
-            await asyncio.sleep(0.03)
-
-        assert [command.name for command in runner.commands] == ["play"]
-        assert server._auto_started_epoch == 4
-
-    asyncio.run(scenario())
-
-
-def test_non_paired_auto_start_is_immediate() -> None:
-    class Runner:
-        session_epoch = 5
-        has_active_runner = True
-
-        def __init__(self) -> None:
-            self.commands = []
-
-        def submit(self, command) -> None:
-            self.commands.append(command)
-
-    async def scenario() -> None:
-        runner = Runner()
-        server = PlaybackWebServer(
-            runner,
-            human_args(debug=False),
-            paired_windows=False,
-        )
-        server.clients["main-client"] = argparse.Namespace(
-            client_id="main-client",
-            workspace_id="workspace",
-            window_id="main",
-        )
-
-        server._maybe_auto_start("main-client")
-
-        assert [command.name for command in runner.commands] == ["play"]
-        assert server._auto_started_epoch == 5
-        assert server._auto_start_task is None
-
-    asyncio.run(scenario())
-
-
-def test_debug_mode_never_auto_starts_paired_workspace() -> None:
-    class Runner:
-        session_epoch = 6
-        has_active_runner = True
-
-        def __init__(self) -> None:
-            self.commands = []
-
-        def submit(self, command) -> None:
-            self.commands.append(command)
-
-    async def scenario() -> None:
-        runner = Runner()
-        server = PlaybackWebServer(
-            runner,
-            human_args(debug=True),
-            paired_windows=True,
-        )
-        server.control_holder = "workspace"
-        for window_id in ("main", "stats"):
-            client_id = f"{window_id}-client"
-            server.clients[client_id] = argparse.Namespace(
-                client_id=client_id,
-                workspace_id="workspace",
-                window_id=window_id,
-            )
-
-        server._maybe_auto_start("main-client")
-        await asyncio.sleep(0)
-
-        assert runner.commands == []
-        assert server._auto_started_epoch == -1
-        assert server._auto_start_task is None
+                await main.send_json({"type": "command", "id": "user-play",
+                    "name": "play", "payload": {}})
+                result = await receive_type(main, "command_result")
+                assert result["id"] == "user-play"
+                assert result["ok"] is True
+                assert [call.args[0].name for call in runner.submit.call_args_list] == ["play"]
+        finally:
+            server.stop_event.set()
+            await task
 
     asyncio.run(scenario())
 

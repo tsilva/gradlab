@@ -25,6 +25,15 @@ or the writer cannot keep up. Existing steps remain inspectable and downloadable
 including queued steps after a writer failure. The timeline begins at the first
 captured step when recording was enabled partway through an episode.
 
+Chart, event, and reward-history reads run in a separate diagnostic process over
+a pinned recording prefix. Recording can advance or retire that episode while a
+read finishes; results from replaced episodes are rejected. Chart overviews use
+an incremental disk index of aligned ranges, retaining endpoints and scalar
+extrema. Zoomed ranges recover exact recorded steps at fine resolution. The web
+player receives compressed chart columns and revision deltas, cancels obsolete
+range requests, and combines pending history redraws in one animation frame.
+These derived indexes are local caches and are not added to trajectory archives.
+
 Use **Import episode** to open an archive in Player, including from its source
 selection screen. Imported Playback reads stored images, Policy inputs, decisions,
 and transition facts. It does not construct an environment, require a ROM, load

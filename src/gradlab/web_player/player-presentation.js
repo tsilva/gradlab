@@ -40,16 +40,19 @@ export function transportPresentation({
   hasControl = false,
   canReplay = false,
   replaying = false,
+  independentInference = false,
   session = {},
   recording = false,
 } = {}) {
   if (running) {
     return {
       action: "pause",
-      label: replaying ? "Pause replay" : "Pause",
+      label: replaying && !independentInference ? "Pause replay" : "Pause",
       icon: "player-pause",
       disabled: !hasControl,
-      reason: hasControl ? "Pause after the current transition" : "Another window has control",
+      reason: !hasControl ? "Another window has control"
+        : independentInference ? "Pause playback and policy inference"
+          : "Pause after the current transition",
     };
   }
   if (canReplay) {

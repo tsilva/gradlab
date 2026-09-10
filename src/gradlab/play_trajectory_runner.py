@@ -24,6 +24,9 @@ class TrajectoryPlaybackRunner(DatasetPlaybackRunner):
         self.metadata = self.recording.metadata
         self.checkpoint_path = self.recording.bundle.checkpoint_path
         self._init_protocol(thread_name="gradlab-trajectory-playback")
+        from gradlab.play_diagnostics import DiagnosticQueries
+        self._diagnostics = DiagnosticQueries()
+        self._diagnostic_lock = self._snapshot_lock
         self.args = args
         self.rows = range(self.metadata["transition_count"] + 1)
         self.transition_index = 0
@@ -41,25 +44,23 @@ class TrajectoryPlaybackRunner(DatasetPlaybackRunner):
         self.observation_frames = first["observation_frames"]
 
     def chart_history(self, episode_id, first=None, last=None):
-        from gradlab.play_chart_history import chart_history
+        from gradlab.play_diagnostics import read_diagnostics
 
-        with self._snapshot_lock:
-            return chart_history(self, episode_id, first, last)
+        return read_diagnostics(self, episode_id, "chart", first, last)
 
     def reward_history(self, episode_id, first=None, last=None):
-        from gradlab.play_reward_history import reward_history
+        from gradlab.play_diagnostics import read_diagnostics
 
-        with self._snapshot_lock:
-            return reward_history(self, episode_id, first, last)
+        return read_diagnostics(self, episode_id, "reward", first, last)
 
     def event_history(self, episode_id, first=None, last=None):
-        from gradlab.play_event_history import event_history
+        from gradlab.play_diagnostics import read_diagnostics
 
-        with self._snapshot_lock:
-            return event_history(self, episode_id, first, last)
+        return read_diagnostics(self, episode_id, "event", first, last)
 
     def stop(self) -> None:
         super().stop()
+        self._diagnostics.close()
         self.recording.close()
 
     def recorded_transition(self, step: int) -> dict[str, Any]:

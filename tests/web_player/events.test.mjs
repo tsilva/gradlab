@@ -32,7 +32,7 @@ test("event rows inspect their retained transition", () => {
   assert.match(app, /services: \{[\s\S]*?\n    inspectSequence,/);
 });
 
-test("inspection pauses active playback before selecting the event sequence", () => {
+test("inspection checks driver safety before selecting the event sequence", () => {
   const cursorStart = app.indexOf("function setInspectionCursor(");
   const cursorEnd = app.indexOf("\nfunction inspectSequence(", cursorStart);
   const cursor = app.slice(cursorStart, cursorEnd);

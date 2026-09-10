@@ -34,6 +34,8 @@ def _worker_main(
     host = None
     transfers = ThreadPoolExecutor(max_workers=2, thread_name_prefix="gradlab-trajectory-transfer")
     jobs = {}
+    reads = ThreadPoolExecutor(max_workers=4, thread_name_prefix="gradlab-diagnostic-read")
+    read_jobs = {}
     try:
         signal.signal(signal.SIGINT, signal.SIG_IGN)
         leaked = sorted(name for name in PROTECTED_ENV_NAMES if os.environ.get(name))
@@ -61,6 +63,34 @@ def _worker_main(
                 host.stop()
                 connection.send({"ok": True, "value": None})
                 return
+            if operation in {"begin_read", "poll_read"}:
+                try:
+                    if operation == "begin_read":
+                        if len(read_jobs) >= 8:
+                            raise ValueError("too many pending diagnostic reads")
+                        kind = request["kind"]
+                        if kind not in {"chart_history", "reward_history", "event_history"}:
+                            raise ValueError("unsupported diagnostic read")
+                        value = uuid.uuid4().hex
+                        read_jobs[value] = reads.submit(
+                            getattr(host, kind),
+                            request["epoch"],
+                            request["episode_id"],
+                            request.get("first"),
+                            request.get("last"),
+                        )
+                    else:
+                        future = read_jobs[request["job_id"]]
+                        value = {"done": future.done()}
+                        if future.done():
+                            del read_jobs[request["job_id"]]
+                            value["result"] = future.result()
+                    connection.send({"ok": True, "value": value})
+                except Exception as exc:
+                    connection.send(
+                        {"ok": False, "error_type": type(exc).__name__, "error": str(exc)}
+                    )
+                continue
             if operation in {"begin_trajectory", "poll_trajectory"}:
                 try:
                     if operation == "begin_trajectory":
@@ -90,6 +120,9 @@ def _worker_main(
                 continue
             if operation == "start":
                 value = host.start()
+            elif operation == "playback_updates":
+                from gradlab.play_web import playback_updates
+                value = playback_updates(host)
             elif operation == "snapshot":
                 value = host.snapshot()
             elif operation == "drain_snapshot_updates":
@@ -208,6 +241,7 @@ def _worker_main(
                 host.stop()
             except Exception:
                 pass
+        reads.shutdown(wait=True, cancel_futures=True)
         transfers.shutdown(wait=True, cancel_futures=True)
         for kind, future in jobs.values():
             if kind == "freeze" and not future.cancelled() and future.exception() is None:
@@ -395,19 +429,30 @@ class IsolatedPlaybackHost:
     def history_payload(self) -> dict[str, Any]:
         return dict(self._rpc("history_payload"))
 
+    def playback_updates(self):
+        return self._rpc("playback_updates")
+
+    def _read(self, kind, **payload):
+        job = self._rpc("begin_read", kind=kind, **payload)
+        while True:
+            result = self._rpc("poll_read", job_id=job)
+            if result["done"]:
+                return result["result"]
+            time.sleep(0.01)
+
     def chart_history(self, epoch, episode_id, first=None, last=None):
         return dict(
-            self._rpc("chart_history", epoch=epoch, episode_id=episode_id, first=first, last=last)
+            self._read("chart_history", epoch=epoch, episode_id=episode_id, first=first, last=last)
         )
 
     def reward_history(self, epoch, episode_id, first=None, last=None):
         return dict(
-            self._rpc("reward_history", epoch=epoch, episode_id=episode_id, first=first, last=last)
+            self._read("reward_history", epoch=epoch, episode_id=episode_id, first=first, last=last)
         )
 
     def event_history(self, epoch, episode_id, first=None, last=None):
         return dict(
-            self._rpc("event_history", epoch=epoch, episode_id=episode_id, first=first, last=last)
+            self._read("event_history", epoch=epoch, episode_id=episode_id, first=first, last=last)
         )
 
     def inspect_recorded_step(self, epoch: int, episode_id: str, step: int) -> dict[str, Any]:

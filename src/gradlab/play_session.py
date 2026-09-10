@@ -261,6 +261,11 @@ def add_play_source_args(parser: argparse.ArgumentParser) -> None:
         ),
     )
     parser.add_argument(
+        "--latest",
+        action="store_true",
+        help="Open the highest-step published checkpoint of the newest catalog run, paused.",
+    )
+    parser.add_argument(
         "--model",
         default=None,
         help="Local gradlab policy path. The artifact must have model.json and recipe.json sidecars.",
@@ -374,7 +379,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--debug",
         action="store_true",
-        help="Start paused for interactive transition debugging.",
+        help="Start paused for interactive transition debugging (now the default).",
     )
     parser.add_argument(
         "--continuous-play",

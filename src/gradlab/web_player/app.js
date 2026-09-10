@@ -1,3 +1,5 @@
+import { ChartVersions, frameScheduler } from "./chart-transport.js";
+import { createPlaybackTransport, hasIndependentInference, shouldPauseForInspection } from "./playback-transport.js";
 import { rewardReferenceStore } from "./panels/reward-reference.js";
 import { chartWithLiveTail } from "./chart-live-tail.js";
 import { bindTimelineRange } from "./chart-range.js";
@@ -98,6 +100,8 @@ const state = {
   chartEpisode: null,
   chartRequest: 0,
   chartPending: false,
+  chartAbort: null,
+  chartVersions: new ChartVersions(),
   chartUpdated: 0,
   chartTimer: null,
   chartDirty: false,
@@ -255,6 +259,13 @@ function updateConnection(label, kind = "") {
 }
 
 function resetSession(epoch) {
+  state.chartAbort?.abort();
+  state.chartVersions.reset();
+  state.chartRequest += 1;
+  state.chartHistory = null;
+  state.chartEpisode = null;
+  clearTimeout(state.chartTimer);
+  state.chartTimer = null;
   cancelInspectionFrameRequest();
   state.sessionEpoch = Number(epoch) || 0;
   state.backgroundPlaybackSnapshot = null;
@@ -956,6 +967,8 @@ function applySnapshot(snapshot) {
 }
 
 async function prepareSnapshotFrames(snapshot) {
+  // Background inference must not replace a replay frame's pending decode.
+  if (state.inspectionSequence !== null) return;
   const sequence = Number(snapshot.sequence);
   await Promise.all(requiredFrameKinds(snapshot).map((kind) => (
     panelRuntime.prepareFrame(
@@ -1066,94 +1079,14 @@ function inspectionEpisodeSequences() {
   );
 }
 
-function canReplayInspection() {
-  if (state.liveSnapshot?.trajectory?.imported) return false;
-  if (state.liveSnapshot?.run_state !== "paused") return false;
-  if (state.liveSnapshot?.trajectory?.transitions > 0 && state.inspectionSequence !== null) {
-    return Number(state.snapshot?.transition?.step) < state.liveSnapshot.trajectory.last_step;
-  }
-  const sequences = inspectionEpisodeSequences();
-  const selectedIndex = sequences.indexOf(Number(state.inspectionSequence));
-  return selectedIndex >= 0 && selectedIndex < sequences.length - 1;
-}
-
-function stopInspectionReplay({ render = true } = {}) {
-  if (state.replayingInspection) {
-    recordedStepReader.invalidate();
-    state.seekingStep = null;
-  }
-  if (state.inspectionReplayTimer !== null) {
-    window.clearTimeout(state.inspectionReplayTimer);
-    state.inspectionReplayTimer = null;
-  }
-  const wasReplaying = state.replayingInspection;
-  state.replayingInspection = false;
-  if (render && wasReplaying && state.snapshot) renderSnapshot();
-}
-
-function inspectionReplayDelay() {
-  const fps = Number(state.liveSnapshot?.session?.target_fps || 0);
-  return fps > 0 ? 1000 / fps : 0;
-}
-
-function scheduleInspectionReplay() {
-  state.inspectionReplayTimer = window.setTimeout(async () => {
-    state.inspectionReplayTimer = null;
-    if (!state.replayingInspection) return;
-    if (state.liveSnapshot?.trajectory?.transitions > 0) {
-      await inspectStep(Number(state.snapshot.transition.step) + 1, { preserveReplay: true });
-      if (state.replayingInspection) scheduleInspectionReplay();
-      return;
-    }
-    const sequences = inspectionEpisodeSequences();
-    const selectedIndex = sequences.indexOf(Number(state.inspectionSequence));
-    const nextSequence = sequences[selectedIndex + 1];
-    if (selectedIndex < 0 || nextSequence === undefined) {
-      stopInspectionReplay();
-      return;
-    }
-    const reachedEpisodeEnd = selectedIndex + 1 === sequences.length - 1;
-    if (reachedEpisodeEnd) state.replayingInspection = false;
-    if (nextSequence === state.timelineSequences.at(-1)) returnToLive();
-    else setInspectionCursor(nextSequence, { preserveReplay: true });
-    if (!reachedEpisodeEnd) scheduleInspectionReplay();
-  }, inspectionReplayDelay());
-}
-
-function playFromCurrentPosition() {
-  if (state.liveSnapshot?.trajectory?.imported) {
-    state.inspectionSequence = null;
-    const trajectory = state.liveSnapshot.trajectory;
-    if (trajectory.current_step >= trajectory.last_step) {
-      command("replay");
-      return;
-    }
-    command("play");
-    return;
-  }
-  if (canReplayInspection()) {
-    state.replayingInspection = true;
-    renderSnapshot();
-    scheduleInspectionReplay();
-    return;
-  }
-  command("play");
-}
-
-function pauseCurrentPlayback() {
-  if (state.replayingInspection) {
-    stopInspectionReplay();
-    return;
-  }
-  command("pause");
-}
-
-function playbackIsRunning() {
-  return state.replayingInspection
-    || ["playing", "stepping", "continuing"].includes(
-      state.liveSnapshot?.run_state,
-    );
-}
+const {
+  canReplayInspection, stopInspectionReplay, playFromCurrentPosition,
+  pauseCurrentPlayback, playbackIsRunning,
+} = createPlaybackTransport({
+  state, command, renderSnapshot, inspectStep, setInspectionCursor, returnToLive,
+  inspectionEpisodeSequences,
+  invalidateRead: () => recordedStepReader.invalidate(),
+});
 
 function updateTimelinePlaybackControl() {
   const playbackToggle = $("#timeline-playback-toggle");
@@ -1163,6 +1096,7 @@ function updateTimelinePlaybackControl() {
   const presentation = transportPresentation({
     running: playbackIsRunning(),
     replaying: state.replayingInspection,
+    independentInference: hasIndependentInference(state.liveSnapshot),
     hasControl: state.hasControl,
     canReplay: canReplayInspection() || Boolean(state.liveSnapshot?.trajectory?.imported && session.awaiting_next_episode),
     session,
@@ -1257,6 +1191,8 @@ function setChartRange(range, { broadcast = true } = {}) {
   clearTimeout(state.chartTimer);
   state.chartTimer = null;
   state.chartRange = range;
+  state.chartAbort?.abort();
+  state.chartVersions.reset();
   state.chartRequest += 1;
   state.chartUpdated = 0;
   if (broadcast) workspaceChannel?.postMessage({ type: "chart-range", source: state.windowId, epoch: state.sessionEpoch, episode: state.liveSnapshot?.trajectory?.episode_id, range });
@@ -1265,6 +1201,8 @@ function setChartRange(range, { broadcast = true } = {}) {
 }
 
 async function refreshChartHistory() {
+  if (!enabledPanelDefinitions().some((definition) => definition.type === "telemetry"
+    && definition.config?.blocks?.some((block) => ["line", "signals", "reward-table"].includes(block.kind)))) return;
   const trajectory = state.liveSnapshot?.trajectory;
   if (!trajectory?.episode_id || !trajectory.last_step) return;
   const episode = `${state.sessionEpoch}:${trajectory.episode_id}`;
@@ -1272,6 +1210,8 @@ async function refreshChartHistory() {
     state.chartEpisode = episode;
     state.chartRange = null;
     state.chartHistory = null;
+    state.chartAbort?.abort();
+    state.chartVersions.reset();
     state.chartUpdated = 0;
     state.chartRequest += 1;
   }
@@ -1287,33 +1227,41 @@ async function refreshChartHistory() {
   state.chartDirty = false;
   const request = state.chartRequest;
   const epoch = state.sessionEpoch;
-  const query = new URLSearchParams({ epoch, episode_id: trajectory.episode_id });
+  const query = new URLSearchParams({ epoch, episode_id: trajectory.episode_id, format: "chart-columns-v1" });
+  if (state.chartVersions.revision) query.set("base", state.chartVersions.revision);
   if (state.chartRange) {
     query.set("first", state.chartRange.first);
     query.set("last", state.chartRange.last);
   }
   state.chartPending = true;
+  const controller = new AbortController();
+  state.chartAbort = controller;
   try {
-    const response = await fetch(`/api/playback/chart-history?${query}`, { headers: { Authorization: `Bearer ${token}` } });
+    const response = await fetch(`/api/playback/chart-history?${query}`, { signal: controller.signal, headers: { Authorization: `Bearer ${token}` } });
     const result = await response.json();
     if (request !== state.chartRequest || epoch !== state.sessionEpoch || trajectory.episode_id !== state.liveSnapshot?.trajectory?.episode_id) return;
     if (!response.ok) throw new Error(result.error || "Unable to load episode charts");
-    state.chartHistory = result.points;
-    panelRuntime.renderHistory(currentEpisodeHistory(), state.snapshot, panelView());
+    state.chartHistory = state.chartVersions.accept(result);
+    scheduleHistoryRender();
   } catch (error) {
-    if (request === state.chartRequest) showToast(error.message, true);
+    if (error.name !== "AbortError" && request === state.chartRequest) showToast(error.message, true);
   } finally {
     state.chartPending = false;
-    if (request === state.chartRequest) state.chartUpdated = Date.now();
+    if (request === state.chartRequest && !controller.signal.aborted) state.chartUpdated = Date.now();
     if (request !== state.chartRequest || state.chartDirty) void refreshChartHistory();
   }
 }
 
-function renderHistory() {
-  void refreshChartHistory();
+const scheduleHistoryRender = frameScheduler(() => {
+  if (!state.snapshot || !panelRuntime) return;
   panelRuntime.renderHistory(currentEpisodeHistory(), state.snapshot, panelView());
   fitGridToViewport();
   renderTimeline();
+});
+
+function renderHistory() {
+  void refreshChartHistory();
+  scheduleHistoryRender();
 }
 
 function attributionGeneration(snapshot) {
@@ -1451,12 +1399,7 @@ function scheduleInspectionFrameRequest(sequence, kinds) {
 }
 
 function maybePauseForInspection() {
-  if (
-    !state.hasControl
-    || state.inspectionPauseCommandId !== null
-    || state.liveSnapshot?.mode === "recording"
-    || !["playing", "stepping", "continuing"].includes(state.liveSnapshot?.run_state)
-  ) return;
+  if (!shouldPauseForInspection(state)) return;
   state.inspectionPauseCommandId = command("pause");
 }
 
