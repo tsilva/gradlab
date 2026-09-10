@@ -147,6 +147,14 @@ resuming as its cause without a matched uninterrupted continuation.
 
 ## Research interpretation
 
+- A first rolling maximum of normalized bricks equal to 1 means at least one episode in
+  that window completed both walls; it is not maximum shaped return or reliable completion.
+  Its proximity to a learning-rate or entropy-coefficient schedule endpoint does not establish
+  causation: training exposure and both coefficients change together. Compare matched-seed
+  runs changing one schedule at a time, using mean progress and episode completion frequency
+  alongside first-hit timing. An entropy coefficient controls regularization strength, not
+  the policy's measured entropy directly.
+
 - Player event labels show `ep` for the episode number and `step` for the transition
   number within that episode. The internal `sequence` identifies playback transitions
   across episodes and supports inspection navigation. Each executed environment step

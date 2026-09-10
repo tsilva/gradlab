@@ -11,6 +11,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import unquote, urlparse
@@ -2909,6 +2910,48 @@ class PlayCatalog:
             "early_stop": dict(early_stop) if isinstance(early_stop, Mapping) else None,
             "updated_at": str(projected.get("updated_at") or ""),
         }
+
+    def latest_run_route(self) -> dict[str, str]:
+        """Select by run creation time from verified catalog projections, never activity."""
+        if self.control_bucket is None:
+            raise CatalogUnavailable(
+                self.control_error or "--latest requires control-catalog authority for run discovery",
+                code="catalog_configuration",
+            )
+        goals = self._repository_goals()
+        scopes = self._control_generation_scopes(goals)
+        selected = None
+        for goal, scope in zip(goals, scopes, strict=True):
+            if scope is None:
+                continue
+            runs = self._control_run_catalog(
+                environment_id=goal.environment_id,
+                selected_goal_slug=goal.goal_slug,
+                selected_goal_variant_id="",
+                metric_specs=(),
+                fallback_metric_specs=(),
+                generation_scope=scope,
+            )
+            for run in runs or ():
+                try:
+                    created = datetime.fromisoformat(str(run["created_at"]))
+                    if created.tzinfo is None:
+                        raise ValueError("run creation time must include a timezone")
+                except (KeyError, ValueError) as exc:
+                    raise CatalogIntegrityError("run has an invalid creation time") from exc
+                key = (created, str(run["run_id"]))
+                if selected is None or key > selected[0]:
+                    selected = (key, {
+                        "level": "runs",
+                        "environment_id": goal.environment_id,
+                        "goal_id": goal.goal_id,
+                        "goal_variant_id": str(run["goal_variant_id"]),
+                        "run_id": str(run["run_id"]),
+                        "checkpoint_id": "",
+                    })
+        if selected is None:
+            raise CatalogUnavailable("No runs are available in the player catalog", code="no_runs")
+        return selected[1]
 
     def public_run_route(self, *, run_id: str) -> dict[str, str]:
         """Return the hierarchical checkpoint-browser route proven by a public run."""

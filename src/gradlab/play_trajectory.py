@@ -382,6 +382,23 @@ class EpisodeRecording:
             self._error = None
             self._condition.notify_all()
 
+    def reserve_read(self):
+        """Pin immutable written records and own references to the bounded pending tail."""
+        with self._condition:
+            if self._retired:
+                raise ValueError("the recorded episode has been replaced")
+            self._pins += 1
+            metadata = deepcopy(self.metadata)
+            metadata["transition_count"] = self._accepted
+            return dict(root=str(self.root), metadata=metadata, written=self._written,
+                        pending=tuple(self._pending))
+
+    def release_read(self):
+        with self._condition:
+            self._pins -= 1
+            if self._retired and not self._pins:
+                shutil.rmtree(self.root, ignore_errors=True)
+
     def reserve_prefix(self):
         with self._condition:
             cutoff = self._accepted
@@ -552,6 +569,9 @@ class ImportedTrajectory:
     def __init__(self, archive_path: Path):
         import pyarrow.parquet as pq
 
+        self._read_lock = threading.Lock()
+        self._read_pins = 0
+        self._retired = False
         self.root = Path(tempfile.mkdtemp(prefix="gradlab-imported-episode-"))
         try:
             self._extract(archive_path)
@@ -761,5 +781,22 @@ class ImportedTrajectory:
             raise ValueError("transition is outside the recorded range")
         return read_record(self.root, index)
 
+    def reserve_read(self):
+        with self._read_lock:
+            if self._retired:
+                raise ValueError("the recorded episode has been replaced")
+            self._read_pins += 1
+            return dict(root=str(self.root), metadata=deepcopy(self.metadata),
+                        written=self.metadata["transition_count"], pending=())
+
+    def release_read(self):
+        with self._read_lock:
+            self._read_pins -= 1
+            if self._retired and not self._read_pins:
+                shutil.rmtree(self.root, ignore_errors=True)
+
     def close(self) -> None:
-        shutil.rmtree(self.root, ignore_errors=True)
+        with self._read_lock:
+            self._retired = True
+            if not self._read_pins:
+                shutil.rmtree(self.root, ignore_errors=True)

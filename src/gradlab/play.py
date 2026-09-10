@@ -12,6 +12,7 @@ def main(argv: list[str] | None = None) -> int:
         is_huggingface_model_ref,
         is_public_checkpoint_manifest_ref,
         public_checkpoint_manifest,
+        public_run_checkpoint_manifest_url,
     )
     from gradlab.play_catalog import PlayCatalog, parse_wandb_location
     from gradlab.play_runtime import PlaySourceSpec
@@ -31,6 +32,7 @@ def main(argv: list[str] | None = None) -> int:
     selected_sources = sum(
         bool(value)
         for value in (
+            args.latest,
             args.artifact_ref,
             args.model,
             args.recipe,
@@ -40,7 +42,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     if selected_sources > 1:
         parser.error(
-            "pass exactly one of --run, --recipe, a positional remote source, --model, or --recording"
+            "pass exactly one of --latest, --run, --recipe, a positional remote source, --model, or --recording"
         )
     if args.recording and not args.recording.expanduser().is_file():
         parser.error(f"recording file does not exist: {args.recording}")
@@ -78,7 +80,7 @@ def main(argv: list[str] | None = None) -> int:
         except CatalogError as exc:
             catalog_control_error = str(exc)
 
-    if selected_sources == 0:
+    if selected_sources == 0 or args.latest:
         start_private_catalog()
     catalog = PlayCatalog(
         public_models_base_url=args.public_models_base_url,
@@ -89,7 +91,26 @@ def main(argv: list[str] | None = None) -> int:
     )
     initial_route: dict[str, object] = {"level": "environments"}
     initial_source: PlaySourceSpec | None = None
-    if args.run:
+    if args.latest:
+        try:
+            initial_route = catalog.latest_run_route()
+            run_id = str(initial_route["run_id"])
+            manifest_url = public_run_checkpoint_manifest_url(
+                run_id, public_base_url=args.public_models_base_url, latest=True,
+            )
+            checkpoint = public_checkpoint_manifest(manifest_url)
+            initial_route["checkpoint_id"] = checkpoint.checkpoint_id
+            initial_source = PlaySourceSpec(
+                "public_run", manifest_url,
+                run_id=run_id, checkpoint_id=checkpoint.checkpoint_id,
+            )
+            print(f"Latest checkpoint: {run_id} · step {checkpoint.step} · {checkpoint.checkpoint_id}", flush=True)
+        except (CatalogError, ValueError, OSError) as exc:
+            if catalog_authority is not None:
+                catalog_authority.close()
+            scrub_protected_environment()
+            parser.error(str(exc))
+    elif args.run:
         run_ref = str(args.run)
         exact_checkpoint = (
             public_checkpoint_manifest(run_ref)

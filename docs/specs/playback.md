@@ -4,6 +4,7 @@ This specification applies to the public checkpoint browser and interactive web 
 
 ## Discovery
 
+- `gradlab play --latest` must open the highest-step published Checkpoint from the newest Run by creation time directly in the player, paused; if that Run has no published Checkpoint, report it without substituting an older Run.
 - Discovery must provide a searchable Environment → Research Goal → Goal Revision or Goal Variant → Run → public Checkpoint flow.
 - Discovery must preserve browser history for each navigable screen; selecting a Run from a Goal Revision or Goal Variant must open its public Checkpoints directly without an intermediate Run-selection screen or route.
 - Discovery must use a rebuildable precomputed catalog and must not perform synchronous storage scans.
@@ -17,6 +18,7 @@ This specification applies to the public checkpoint browser and interactive web 
 
 ## Evidence and Inspection
 
+- Launching gradplay or loading a Policy must leave Playback and inference paused until the user presses Play in the player.
 - Checkpoint lists must show the exact Goal Variant's Acceptance and ranking measures with applicable Training Success proxies.
 - Training Success proxies must remain visibly distinct from authoritative checkpoint-evaluation evidence.
 - Interactive Playback must provide independently arranged and synchronized views of frames, Policy inputs and decisions, transition facts, and bounded histories.
@@ -25,6 +27,7 @@ This specification applies to the public checkpoint browser and interactive web 
 - Users must be able to change the active Policy’s supported action-selection mode at any point, taking effect on the next Policy decision without resetting or otherwise altering the existing trajectory.
 - History charts must show the full recorded episode by default. Dragging with the primary mouse button selects a shared step window across history panels; the playbar must show the selected window offsets, and users must be able to reset to the full episode. Seeking must preserve the selected chart window.
 - Inspection must not alter the active trajectory or Policy randomness.
+- Pause must stop both Playback and Policy inference. Play must advance recorded Playback from the selected cursor and resume unfinished Policy inference from the live head, even when the cursor is behind it; scrubbing while paused must not run either. Episode boundaries, storage limits, execution errors, and human-control safety must still stop execution when required.
 - Recorded episodes must remain seekable from their first captured step as they grow, with bounded memory, synchronized recorded frames and diagnostics, and step navigation through the playbar. Reaching the episode storage limit must pause Playback and preserve captured steps until the user replaces the episode.
 - Trajectory archives may contain exact Checkpoints as opaque, hash-verified attachments. Imported Playback must never load or execute them.
 - Playback must expose only actor, critic, action-value, program, attribution, and calibration diagnostics that apply to the selected Policy and recorded contract.
