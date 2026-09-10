@@ -930,6 +930,9 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         self.session = session
         self.args = args
         self.config_text = ANSI_PATTERN.sub("", config_text)
+        from gradlab.play_reward_summary import EpisodeRewardSummary
+
+        self.episode_rewards = EpisodeRewardSummary()
         self.reward_accounting = reward_accounting_contract(session.config)
         self.run_state = "paused"
         self.driver = "policy"
@@ -1111,6 +1114,12 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             if self._checkpoint_root is not None:
                 shutil.rmtree(self._checkpoint_root, ignore_errors=True)
 
+    def chart_history(self, episode_id, first=None, last=None):
+        from gradlab.play_chart_history import chart_history
+
+        with self._trajectory_lock:
+            return chart_history(self, episode_id, first, last)
+
     def inspect_recorded_step(self, episode_id: str, step: int) -> dict[str, Any]:
         """Read an inspection window without touching the live policy or cursor."""
         with self._trajectory_lock:
@@ -1126,11 +1135,13 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             if not (
                 cached is not None
                 and cached[0] == episode_id
-                and cached[1] <= step <= cached[2]
-                and (step < cached[2] - 16 or cached[2] == last_step)
+                and cached[1] <= max(recording.metadata["first_step"], step - 63)
+                and step <= cached[2]
             ):
-                first = max(recording.metadata["first_step"], step - 64)
-                last = min(last_step, step + 64)
+                # Aligned pages retain the trailing 64 steps and room to advance
+                # without rereading a diagnostic page on every cursor movement.
+                first = max(recording.metadata["first_step"], ((step - 1) // 64) * 64 - 63)
+                last = min(last_step, first + 127)
                 points = [
                     history_point_payload(
                         recording.transition(index)["inspection_snapshot"]["transition"]
@@ -1188,13 +1199,22 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         # Wait for the fixed prefix outside the transition lock so live Playback continues.
         return freeze_recording(recording, destination, reservation)
 
-    def _record_transition(self, transition: _PlaybackTransition) -> None:
+    def _record_transition(
+        self,
+        transition: _PlaybackTransition,
+        *,
+        full: dict[str, Any],
+        current: dict[str, Any],
+    ) -> None:
         if not self.recording_enabled or self.recording is None:
             return
         from dataclasses import fields
 
-        presentation = transition_payload(transition, reward_accounting=self.reward_accounting)
+        # Archive presentation omits live diagnostics and may mark a terminal
+        # image missing. Keep those edits separate from the inspection/live view.
+        presentation = {**full, "after": dict(full["after"])}
         reasons = self._critic_comparison_reasons(transition)
+        presentation["episode_rewards"] = self.episode_rewards.payload(full)
         presentation["recorded_session"] = {
             "sampling_mode": self.sampling_mode,
             "critic_comparison": {
@@ -1238,7 +1258,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 if field.name not in {"terminal_frame", "outcome"}
             }
         decision = transition.decision
-        inspection_snapshot = self._snapshot_payload(transition)
+        inspection_snapshot = self._snapshot_payload(transition, current=current)
         inspection_snapshot["sequence"] = transition.sequence
         inspection_snapshot["session"].update(
             episode=transition.episode,
@@ -1409,16 +1429,18 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             self._input_focused = False
             self._input_updated_at = 0.0
 
-    def _snapshot_payload(self, transition: _PlaybackTransition | None) -> dict[str, Any]:
-        current = (
-            transition_payload(
+    def _snapshot_payload(
+        self,
+        transition: _PlaybackTransition | None,
+        *,
+        current: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        if current is None and transition is not None:
+            current = transition_payload(
                 transition,
                 reward_accounting=self.reward_accounting,
                 processing=self.processing_features,
             )
-            if transition is not None
-            else None
-        )
         current_history = (
             dict(self.history[-1])
             if transition is not None
@@ -1533,21 +1555,27 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             },
             "transition": current,
             "history_point": current_history,
+            "episode_rewards": self.episode_rewards.payload(current),
         }
 
-    def _publish(self, transition: _PlaybackTransition | None = None) -> None:
+    def _publish(
+        self,
+        transition: _PlaybackTransition | None = None,
+        *,
+        current: dict[str, Any] | None = None,
+    ) -> None:
+        if transition is not None and current is None:
+            current = transition_payload(
+                transition,
+                reward_accounting=self.reward_accounting,
+                processing=self.processing_features,
+            )
         if (
             "history" in self.processing_features
             and transition is not None
             and (not self.history or int(self.history[-1]["sequence"]) != transition.sequence)
         ):
-            self.history.append(
-                history_point(
-                    transition,
-                    reward_accounting=self.reward_accounting,
-                    processing=self.processing_features,
-                )
-            )
+            self.history.append(history_point_payload(current))
             if transition.boundary and "critic-calibration" in self.processing_features:
                 annotate_realized_returns(
                     self.history,
@@ -1604,7 +1632,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 FRAME_CNN_INSPECTION: cnn_generation,
             },
         )
-        payload = self._snapshot_payload(transition)
+        payload = self._snapshot_payload(transition, current=current)
         episode_start_frames: dict[int, tuple[int, bytes]] = {}
         if transition is None and self.session.step_index == 0:
             if game_frame is not None:
@@ -1897,7 +1925,18 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                     else self.session.step(deterministic=self.sampling_mode == "deterministic")
                 )
             )
-            self._record_transition(transition)
+            full = transition_payload(transition, reward_accounting=self.reward_accounting)
+            current = (
+                full
+                if self.processing_features == PLAYER_PROCESSING_FEATURES
+                else transition_payload(
+                    transition,
+                    reward_accounting=self.reward_accounting,
+                    processing=self.processing_features,
+                )
+            )
+            self.episode_rewards.append(full, self.reward_accounting)
+            self._record_transition(transition, full=full, current=current)
         except Exception as exc:
             self._set_state("paused", message=str(exc))
             return None
@@ -1931,7 +1970,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 self.run_state = "paused"
                 if self.continue_count >= 10_000 and not matched:
                     self._status_message = "continue reached the 10,000-step safety limit"
-        self._publish(transition)
+        self._publish(transition, current=current)
         return transition
 
     def _run(self) -> None:
@@ -3251,6 +3290,30 @@ class PlaybackWebServer:
             return web.json_response({"error": str(exc)}, status=502)
         return web.json_response(document)
 
+    async def chart_history(self, request: web.Request) -> web.Response:
+        self._authorize_api(request)
+        try:
+            epoch = int(request.query["epoch"])
+            episode_id = request.query["episode_id"]
+            first = int(request.query["first"]) if "first" in request.query else None
+            last = int(request.query["last"]) if "last" in request.query else None
+            if epoch != self._runner_epoch():
+                raise ValueError("the Playback Session has been replaced")
+            read = getattr(self.runner, "chart_history", None)
+            if read is None:
+                raise ValueError("episode chart history is unavailable")
+            args = (
+                (episode_id, first, last)
+                if isinstance(self.runner, (WebPlaybackRunner, DatasetPlaybackRunner))
+                else (epoch, episode_id, first, last)
+            )
+            result = await asyncio.to_thread(read, *args)
+            if epoch != self._runner_epoch():
+                raise ValueError("the Playback Session has been replaced")
+            return web.json_response(result, headers={"Cache-Control": "no-store"})
+        except (KeyError, ValueError, OSError, RuntimeError) as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+
     async def inspect_recorded_step(self, request: web.Request) -> web.Response:
         self._authorize_api(request)
         try:
@@ -4079,6 +4142,7 @@ class PlaybackWebServer:
                 ),
                 web.get("/api/playback/inspection", self.inspect_active_playback),
                 web.get("/api/playback/recorded-step", self.inspect_recorded_step),
+                web.get("/api/playback/chart-history", self.chart_history),
                 web.get("/api/publication/current", self.publication_current),
                 web.post("/api/publication/render", self.publication_render),
                 web.post("/api/publication/preflight", self.publication_preflight),

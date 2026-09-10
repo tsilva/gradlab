@@ -43,3 +43,42 @@ smoothness for every provider, observation size, disk, or unlimited-speed run.
 The bounded queue and explicit pause on storage failure/backpressure remain
 necessary. The integration suite separately forces a slow/failing sink and checks
 lossless continuation, and verifies an episode longer than the live history cap.
+
+## Recording hot-path optimization, 2026-09-10
+
+A real cached Breakout PPO checkpoint exposed work absent from the scripted
+benchmark: repeated transition projections and a complete inspection snapshot
+serialized at each decision. Recording now shares transition projections with
+live history and publication, caches only bounded metadata field-name
+classification, and handles native JSON scalar leaves without NumPy dispatch.
+The archive format, exact array ownership, recording defaults, storage bounds,
+and first-step inspection are unchanged.
+
+The differential probe alternated three pairs of 200-decision blocks in one
+process, resetting the same checkpoint and seed before every block. It used
+the real native Breakout environment, CPU PolicyRuntime, recording queue, and
+frame encoder, with four 84×84 image planes and eight scalar context fields.
+Recording stayed enabled and attribution/CNN inspection stayed off. Baseline
+blocks used the recording, snapshot, publication, and encoding functions from
+`82b95af8`; optimized blocks used the working implementation, including concurrent
+episode reward-summary support. This was a function-level comparison, not a
+complete checkout comparison. No browser or other benchmark ran during these
+blocks, though background workstation load was not controlled.
+
+| Pair | Before step p50 / p99 ms | After step p50 / p99 ms |
+| --- | --- | --- |
+| 1 | 6.84 / 9.37 | 4.49 / 5.37 |
+| 2 | 6.73 / 7.54 | 4.49 / 5.53 |
+| 3 | 6.98 / 9.02 | 4.56 / 5.34 |
+
+Median full-step work fell about 34%. Separate 1,200-decision stage measurements
+put median recording work at 3.14 ms before and 1.26 ms after; the latter excludes
+the shared transition projection now built once before recording. Background
+CPU contention still produced occasional long pauses in those separate runs,
+so these results do not promise elimination of all browser or scheduler stalls.
+
+The projection regression test covers both full and filtered live views and
+checks unchanged recorded diagnostics. Codec tests cover private-field removal,
+mutable metadata, scalar types, non-finite values, noncontiguous arrays, and
+byte order. The existing trajectory suite covers export/import, writer failures,
+storage limits, and inspection beyond the live-history retention window.

@@ -21,6 +21,13 @@ controls processing. A disabled panel stays in its workspace position but is
 excluded from browser rendering, frame subscriptions, retained-history demand,
 inspection work, and policy-diagnostic demand.
 
+Game fullscreen temporarily suspends other panels in that window without changing
+their persisted enabled state, configuration, or layout. Suspended panels receive
+no rendering, frame decoding, or optional processing demand. Exiting fullscreen
+refreshes the existing instances at the current cursor. Other windows retain their
+own demand; required trajectory and reward recording continues. Diagnostics not
+computed during fullscreen remain missing in recorded history.
+
 Telemetry configuration is a list of visualization blocks:
 
 - `stats`: current or selected-transition values for multiple metrics.
@@ -106,7 +113,11 @@ export function mount({ definition, services }) {
 
 Only `element` is required. The shared `view` identifies the selected and live
 transition with `sessionEpoch`, `selectedSequence`, `liveSequence`, and
-`inspection`. History is already filtered to the active episode. Panels render
+`inspection`. `chartHistory` supplies the separate extrema-preserving episode
+overview or shared `chartRange` for line and signal plots. Exact history remains
+separate for selected-step values and action frequencies; never compute statistics
+from display samples. `setChartRange` synchronizes zoom and `inspectStep` seeks an
+original recorded step. History is already filtered to the active episode. Panels render
 the supplied selected snapshot; controls intentionally read the live snapshot.
 
 Add a visualization metric by adding a descriptor. Add a reusable visualization

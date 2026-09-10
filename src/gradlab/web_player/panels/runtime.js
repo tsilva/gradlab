@@ -1,6 +1,7 @@
 export class PanelRuntime {
   constructor({
     definitionFor,
+    isSuspended = () => false,
     container,
     services,
     onMount,
@@ -9,6 +10,7 @@ export class PanelRuntime {
     onError,
   }) {
     this.definitionFor = definitionFor;
+    this.isSuspended = isSuspended;
     this.container = container;
     this.services = services;
     this.onMount = onMount;
@@ -149,6 +151,9 @@ export class PanelRuntime {
   }
 
   safeCall(id, method, ...args) {
+    if (this.isSuspended(id) && [
+      "render", "renderHistory", "renderFrame", "prepareFrame", "resize",
+    ].includes(method)) return undefined;
     const callback = this.instances.get(id)?.[method];
     if (typeof callback !== "function") return undefined;
     try {

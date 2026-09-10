@@ -89,6 +89,14 @@ const state = {
   seekingStep: null,
   history: [],
   historyLimit: 4096,
+  chartRange: null,
+  chartHistory: null,
+  chartEpisode: null,
+  chartRequest: 0,
+  chartPending: false,
+  chartUpdated: 0,
+  chartTimer: null,
+  chartDirty: false,
   hasControl: false,
   publicationAuthority: false,
   publicationCapability: null,
@@ -162,18 +170,28 @@ function panelsInThisWindow() {
     .map(([name]) => name);
 }
 
+function panelSuspended(id) {
+  const fullscreen = document.fullscreenElement;
+  if (!fullscreen?.matches(".game-stage")) return false;
+  return fullscreen.closest("[data-panel]")?.dataset.panel !== id;
+}
+
+function processingPanels() {
+  return panelsInThisWindow().filter((id) => !panelSuspended(id));
+}
+
 function subscriptions() {
-  return panelSubscriptions(state.layout, panelsInThisWindow());
+  return panelSubscriptions(state.layout, processingPanels());
 }
 
 function processing() {
-  const features = new Set(panelProcessing(state.layout, panelsInThisWindow()));
+  const features = new Set(panelProcessing(state.layout, processingPanels()));
   if (state.windowId === "main") features.add("rewards");
   return [...features];
 }
 
 function enabledPanelDefinitions() {
-  return panelsInThisWindow()
+  return processingPanels()
     .map((id) => panelDefinition(state.layout, id))
     .filter((definition) => definition?.enabled);
 }
@@ -797,6 +815,8 @@ function currentEpisodeHistory() {
 function panelView() {
   return {
     history: currentEpisodeHistory(),
+    chartHistory: state.liveSnapshot?.trajectory?.episode_id ? (state.chartHistory || []) : null,
+    chartRange: state.chartRange,
     inspection: state.inspectionSequence !== null,
     sessionEpoch: state.sessionEpoch,
     selectedSequence: state.inspectionSequence ?? state.snapshot?.sequence ?? null,
@@ -1212,7 +1232,64 @@ function configureMode(mode) {
   document.body.classList.toggle("recording", recording);
 }
 
+function setChartRange(range, { broadcast = true } = {}) {
+  clearTimeout(state.chartTimer);
+  state.chartTimer = null;
+  state.chartRange = range;
+  state.chartRequest += 1;
+  state.chartUpdated = 0;
+  if (broadcast) workspaceChannel?.postMessage({ type: "chart-range", source: state.windowId, epoch: state.sessionEpoch, episode: state.liveSnapshot?.trajectory?.episode_id, range });
+  void refreshChartHistory();
+  renderTimeline();
+}
+
+async function refreshChartHistory() {
+  const trajectory = state.liveSnapshot?.trajectory;
+  if (!trajectory?.episode_id || !trajectory.last_step) return;
+  const episode = `${state.sessionEpoch}:${trajectory.episode_id}`;
+  if (state.chartEpisode !== episode) {
+    state.chartEpisode = episode;
+    state.chartRange = null;
+    state.chartHistory = null;
+    state.chartUpdated = 0;
+    state.chartRequest += 1;
+  }
+  if (state.chartPending) { state.chartDirty = true; return; }
+  const delay = 1000 - (Date.now() - state.chartUpdated);
+  if (delay > 0) {
+    if (state.chartTimer === null) state.chartTimer = setTimeout(() => {
+      state.chartTimer = null;
+      void refreshChartHistory();
+    }, delay);
+    return;
+  }
+  state.chartDirty = false;
+  const request = state.chartRequest;
+  const epoch = state.sessionEpoch;
+  const query = new URLSearchParams({ epoch, episode_id: trajectory.episode_id });
+  if (state.chartRange) {
+    query.set("first", state.chartRange.first);
+    query.set("last", state.chartRange.last);
+  }
+  state.chartPending = true;
+  try {
+    const response = await fetch(`/api/playback/chart-history?${query}`, { headers: { Authorization: `Bearer ${token}` } });
+    const result = await response.json();
+    if (request !== state.chartRequest || epoch !== state.sessionEpoch || trajectory.episode_id !== state.liveSnapshot?.trajectory?.episode_id) return;
+    if (!response.ok) throw new Error(result.error || "Unable to load episode charts");
+    state.chartHistory = result.points;
+    panelRuntime.renderHistory(currentEpisodeHistory(), state.snapshot, panelView());
+  } catch (error) {
+    if (request === state.chartRequest) showToast(error.message, true);
+  } finally {
+    state.chartPending = false;
+    if (request === state.chartRequest) state.chartUpdated = Date.now();
+    if (request !== state.chartRequest || state.chartDirty) void refreshChartHistory();
+  }
+}
+
 function renderHistory() {
+  void refreshChartHistory();
   panelRuntime.renderHistory(currentEpisodeHistory(), state.snapshot, panelView());
   fitGridToViewport();
   renderTimeline();
@@ -1554,6 +1631,16 @@ function renderTimeline() {
   )}%`);
   $("#timeline").setAttribute("aria-busy", String(state.seekingStep !== null));
   renderWorkspaceStatus();
+  const zoomLabel = $("#timeline-zoom");
+  zoomLabel.hidden = !state.chartRange;
+  zoomLabel.textContent = state.chartRange ? `Steps ${state.chartRange.first}–${state.chartRange.last} · Reset zoom` : "";
+  const zoomBand = $("#timeline-zoom-band");
+  zoomBand.hidden = !state.chartRange || !range;
+  if (state.chartRange && range) {
+    const span = Math.max(1, range.last - range.first);
+    zoomBand.style.left = `${100 * (state.chartRange.first - range.first) / span}%`;
+    zoomBand.style.width = `${100 * (state.chartRange.last - state.chartRange.first) / span}%`;
+  }
   const markers = $("#timeline-markers");
   if (!range) { markers.replaceChildren(); return; }
   const markerSlots = Math.max(1, Math.min(120, Math.floor(scrubber.clientWidth / 9)));
@@ -1765,6 +1852,10 @@ async function applyLayout() {
   syncTimelineOverlay();
   fitGridToViewport();
   syncGridNodes();
+  refreshPanels();
+}
+
+function refreshPanels() {
   if (state.snapshot) {
     panelRuntime.renderSnapshot(state.snapshot, panelView());
     panelRuntime.renderHistory(currentEpisodeHistory(), state.snapshot, panelView());
@@ -2248,7 +2339,9 @@ function bindWorkspaceSync() {
   if (workspaceChannel) {
     workspaceChannel.addEventListener("message", (event) => {
       const message = event.data || {};
-      if (message.type === "layout" && message.source !== state.windowId) {
+      if (message.type === "chart-range" && message.source !== state.windowId) {
+        if (message.epoch === state.sessionEpoch && message.episode === state.liveSnapshot?.trajectory?.episode_id) setChartRange(message.range, { broadcast: false });
+      } else if (message.type === "layout" && message.source !== state.windowId) {
         const next = normalizeWorkspace(message.layout, {
           paired: pairedWorkspace,
           writer: state.windowId,
@@ -2359,6 +2452,7 @@ function bindWorkspaceSync() {
 }
 
 function bindTimeline() {
+  $("#timeline-zoom").addEventListener("click", () => setChartRange(null));
   const scrubber = $("#timeline-scrubber");
   let trackWidth = 0;
   const markerResizeObserver = new ResizeObserver(([entry]) => {
@@ -2557,12 +2651,15 @@ function initWorkspace() {
 
 panelRuntime = new PanelRuntime({
   definitionFor: panelDefinition,
+  isSuspended: panelSuspended,
   container: $("#dashboard"),
   services: {
     getState: () => state,
     send,
     command,
     inspectSequence,
+    inspectStep,
+    setChartRange,
     showToast,
     setAttributionPreference: (config) => {
       state.attributionPreference = {
@@ -2630,3 +2727,10 @@ const trajectoryControls = mountTrajectoryControls({
 initWorkspace();
 updateControlState();
 connect();
+
+// Fullscreen is a local processing override, never a persisted layout edit.
+document.addEventListener("fullscreenchange", () => {
+  panelRuntime.resetFrames();
+  send({ type: "subscribe", subscriptions: subscriptions(), processing: processing() });
+  refreshPanels();
+});

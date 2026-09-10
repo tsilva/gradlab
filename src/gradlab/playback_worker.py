@@ -96,6 +96,19 @@ def _worker_main(
                 value = host.drain_snapshot_updates()
             elif operation == "history_payload":
                 value = host.history_payload()
+            elif operation == "chart_history":
+                try:
+                    value = host.chart_history(
+                        request["epoch"],
+                        request["episode_id"],
+                        request.get("first"),
+                        request.get("last"),
+                    )
+                except (ValueError, OSError) as exc:
+                    connection.send(
+                        {"ok": False, "error_type": type(exc).__name__, "error": str(exc)}
+                    )
+                    continue
             elif operation == "inspect_recorded_step":
                 try:
                     value = host.inspect_recorded_step(
@@ -355,6 +368,11 @@ class IsolatedPlaybackHost:
 
     def history_payload(self) -> dict[str, Any]:
         return dict(self._rpc("history_payload"))
+
+    def chart_history(self, epoch, episode_id, first=None, last=None):
+        return dict(
+            self._rpc("chart_history", epoch=epoch, episode_id=episode_id, first=first, last=last)
+        )
 
     def inspect_recorded_step(self, epoch: int, episode_id: str, step: int) -> dict[str, Any]:
         return dict(

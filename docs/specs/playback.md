@@ -21,6 +21,7 @@ This specification applies to the public checkpoint browser and interactive web 
 - Training Success proxies must remain visibly distinct from authoritative checkpoint-evaluation evidence.
 - Interactive Playback must provide independently arranged and synchronized views of frames, Policy inputs and decisions, transition facts, and bounded histories.
 - Users must be able to change the active Policy’s supported action-selection mode at any point, taking effect on the next Policy decision without resetting or otherwise altering the existing trajectory.
+- History charts must show the full recorded episode by default. Dragging with the primary mouse button selects a shared step window across history panels; the playbar must show the selected window offsets, and users must be able to reset to the full episode. Seeking must preserve the selected chart window.
 - Inspection must not alter the active trajectory or Policy randomness.
 - Recorded episodes must remain seekable from their first captured step as they grow, with bounded memory, synchronized recorded frames and diagnostics, and step navigation through the playbar. Reaching the episode storage limit must pause Playback and preserve captured steps until the user replaces the episode.
 - Trajectory archives may contain exact Checkpoints as opaque, hash-verified attachments. Imported Playback must never load or execute them.

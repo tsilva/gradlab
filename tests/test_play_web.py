@@ -800,13 +800,9 @@ def test_termination_conditions_cannot_change_mid_episode() -> None:
 
 
 def test_web_playback_requires_explicit_command_after_episode_boundary() -> None:
-    transition = argparse.Namespace(boundary=True, events=(), episode=1)
-    session = argparse.Namespace(
-        config={"game": "Game-v0"},
-        episode=2,
-        last_transition=transition,
-        step=Mock(return_value=transition),
-    )
+    from tests.test_play_trajectory import ScriptedSession
+
+    session = ScriptedSession(length=1)
     runner = WebPlaybackRunner(session, human_args(episodes=0), config_text="")
     runner._publish = Mock()
     runner.run_state = "playing"
@@ -832,13 +828,9 @@ def test_web_playback_requires_explicit_command_after_episode_boundary() -> None
 
 
 def test_web_playback_episode_limit_disables_next_episode() -> None:
-    transition = argparse.Namespace(boundary=True, events=(), episode=1)
-    session = argparse.Namespace(
-        config={"game": "Game-v0"},
-        episode=2,
-        last_transition=transition,
-        step=Mock(return_value=transition),
-    )
+    from tests.test_play_trajectory import ScriptedSession
+
+    session = ScriptedSession(length=1)
     runner = WebPlaybackRunner(session, human_args(episodes=1), config_text="")
     runner._publish = Mock()
     runner.run_state = "playing"

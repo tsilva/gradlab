@@ -1,3 +1,4 @@
+import { bindChartRange } from "../chart-range.js";
 import {
   createPanel,
   drawHistogram,
@@ -297,18 +298,23 @@ export function policyDecisionPresentation(snapshot, history, view) {
       semantics.reason || "the provider did not declare them"
     }.`);
   }
-  for (const state of [comparison.history, comparison.step]) {
+  for (const state of [comparison.step]) {
     if (state.message) footMessages.push(state.message);
   }
   return {
     discrete: true,
     action: selected?.name || actionMetric.value,
+    effectiveAction: snapshot?.transition?.effective_action == null
+      ? "Unavailable · not recorded"
+      : formatActionValue(snapshot.transition.effective_action, snapshot),
+    overrideRuleId: snapshot?.transition?.action_override_rule_id || null,
     mode: modeMetric.value,
     rank: policyDecisionRank(comparison.rows, selected),
     choiceCount: comparison.rows.length,
     stepProbability: selected?.stepProbability ?? null,
     selectedIsHighest: selected?.highest ?? null,
     rows: comparison.rows,
+    windowScope: comparison.history.message,
     stats: POLICY_DECISION_FOOTER_METRICS
       .map((key) => policyDecisionMetric(key, snapshot, point))
       .filter(({ availability: metricAvailability }) => (
@@ -340,6 +346,7 @@ function makeLineBlock(block, services) {
   let hoverX = null;
 
   const renderChart = ({ history, view }) => {
+    history = view?.chartHistory || history;
     const series = descriptors.map((descriptor) => ({
       values: seriesForMetric(descriptor.key, history),
       color: themeColor(descriptor.color || "chartBar"),
@@ -349,20 +356,22 @@ function makeLineBlock(block, services) {
       ? null
       : lineCursorIndex(chartGeometry?.plot, hoverX, chartGeometry?.pointCount);
     let displayedIndex = hoveredIndex ?? defaultIndex;
-    chartGeometry = drawLines(canvas, series, { cursorIndex: displayedIndex });
+    chartGeometry = drawLines(canvas, series, { cursorIndex: displayedIndex, steps: history.map((point) => point.step), cursorStep: hoverX === null ? currentContext.snapshot?.transition?.step : null });
     const correctedIndex = hoverX === null
       ? null
       : lineCursorIndex(chartGeometry?.plot, hoverX, chartGeometry?.pointCount);
     if (correctedIndex !== null && correctedIndex !== displayedIndex) {
       displayedIndex = correctedIndex;
-      chartGeometry = drawLines(canvas, series, { cursorIndex: displayedIndex });
+      chartGeometry = drawLines(canvas, series, { cursorIndex: displayedIndex, steps: history.map((point) => point.step), cursorStep: hoverX === null ? currentContext.snapshot?.transition?.step : null });
     }
-    lineLegendPresentationAtIndex(descriptors, history, displayedIndex)
+    lineLegendPresentationAtIndex(descriptors, hoverX === null ? currentContext.history : history, hoverX === null ? cursorIndex(currentContext.history, view) : displayedIndex)
       .forEach(({ key, value }) => {
         const target = legendValues.get(key);
         if (target) target.textContent = value;
       });
   };
+
+  bindChartRange(canvas, () => chartGeometry, () => currentContext, services);
 
   canvas.addEventListener("pointermove", (event) => {
     const bounds = canvas.getBoundingClientRect();
@@ -374,17 +383,26 @@ function makeLineBlock(block, services) {
     hoverX = null;
     renderChart(currentContext);
   });
+  let clickTimer = null;
+  canvas.addEventListener("dblclick", () => clearTimeout(clickTimer));
   canvas.addEventListener("click", (event) => {
     const bounds = canvas.getBoundingClientRect();
     if (!(bounds.width > 0)) return;
     const x = (event.clientX - bounds.left) * (canvas.clientWidth / bounds.width);
     const sequence = lineCursorSequence(
-      currentContext.history,
+      currentContext.view?.chartHistory || currentContext.history,
       chartGeometry?.plot,
       x,
       chartGeometry?.pointCount,
     );
-    if (sequence !== null) services.inspectSequence?.(sequence);
+    if (sequence !== null) {
+      const point = (currentContext.view?.chartHistory || currentContext.history).find((point) => point.sequence === sequence);
+      clearTimeout(clickTimer);
+      clickTimer = setTimeout(() => {
+        if (point && services.inspectStep) services.inspectStep(point.step);
+        else services.inspectSequence?.(sequence);
+      }, 250);
+    }
   });
 
   return {
@@ -463,31 +481,49 @@ export function actionComparisonPresentation(snapshot, history, decision) {
   const highestStepProbability = count && !invalidStepValues
     ? Math.max(...stepProbabilities)
     : null;
-  const executedActions = (history || [])
-    .map((point) => point?.executed_action)
-    .filter((value) => value !== null && value !== undefined);
-  const counts = Array.from({ length: count }, () => 0);
-  let unmappable = 0;
-  executedActions.forEach((value) => {
-    const offset = discreteActionOffset(value, start, count, snapshot);
-    if (offset === null) unmappable += 1;
-    else counts[offset] += 1;
-  });
-  const historyStatus = !executedActions.length
-    ? "not-yet-observed"
-    : unmappable
-      ? "contract-incomparable"
-      : "available";
-  const historyMessage = historyStatus === "not-yet-observed"
-    ? "No executed actions have been retained for this episode yet."
-    : historyStatus === "contract-incomparable"
-      ? `Episode action history is contract-incomparable: ${unmappable} of ${
-        executedActions.length
-      } executed actions do not map to this discrete policy distribution.`
-      : "";
-  const episodeProbabilities = historyStatus === "available"
-    ? counts.map((value) => value / executedActions.length)
-    : counts.map(() => null);
+  const cursor = snapshot?.transition;
+  const lastStep = Number(cursor?.step);
+  const firstStep = Math.max(1, lastStep - 63);
+  const points = [...new Map((history || []).filter((point) => (
+    Number(point.episode) === Number(cursor?.episode)
+    && Number(point.step) >= firstStep && Number(point.step) <= lastStep
+  )).map((point) => [Number(point.step), point])).values()]
+    .sort((a, b) => Number(a.step) - Number(b.step));
+  const complete = Number.isInteger(lastStep) && lastStep >= 1
+    && points.length === lastStep - firstStep + 1
+    && points.every((point, index) => Number(point.step) === firstStep + index);
+  function frequencies(field, eligible, label) {
+    const population = points.filter(eligible);
+    const counts = Array.from({ length: count }, () => 0);
+    let missing = 0;
+    let unmappable = 0;
+    for (const point of population) {
+      if (point[field] == null || (field === "policy_action" && point.action_source !== "policy")) {
+        missing += 1;
+        continue;
+      }
+      const offset = discreteActionOffset(point[field], start, count, snapshot);
+      if (offset === null) unmappable += 1;
+      else counts[offset] += 1;
+    }
+    const sampleCount = population.length - missing;
+    const status = !complete ? "partial-history" : unmappable ? "contract-incomparable"
+      : missing ? "unavailable" : !sampleCount ? "not-yet-observed" : "available";
+    const message = `${label}: n=${sampleCount}` + (unmappable
+      ? `; ${unmappable} of ${population.length} actions do not map to the policy action space.`
+      : missing ? `; ${missing} actions not recorded.` : ".");
+    return { sampleCount, status, message, values: counts.map((value) => status === "available" ? value / sampleCount : null) };
+  }
+  const policy = frequencies("policy_action", (point) => point.action_source !== "human", "Policy choices");
+  const environment = frequencies("effective_action", () => true, "Environment actions");
+  const historyStatus = !complete ? "partial-history"
+    : [policy, environment].find((item) => item.status === "contract-incomparable")?.status || "available";
+  const historyMessage = [
+    !complete ? "Complete window unavailable." : "",
+    ...[policy, environment]
+      .filter((state) => state.status !== "available")
+      .map((state) => state.message),
+  ].filter(Boolean).join(" ");
   const selectedIndex = discreteActionOffset(decision.selected_action, start, count);
   const executedIndex = discreteActionOffset(
     snapshot?.transition?.executed_action,
@@ -497,7 +533,8 @@ export function actionComparisonPresentation(snapshot, history, decision) {
   );
   return {
     history: {
-      sampleCount: executedActions.length,
+      sampleCount: points.length,
+      firstStep, lastStep, policy, environment,
       status: historyStatus,
       message: historyMessage,
     },
@@ -509,7 +546,8 @@ export function actionComparisonPresentation(snapshot, history, decision) {
     },
     rows: names.map((name, index) => ({
       name,
-      episodeProbability: episodeProbabilities[index],
+      policyFrequency: policy.values[index],
+      environmentFrequency: environment.values[index],
       stepProbability: stepProbabilities[index],
       selected: index === selectedIndex,
       highest: highestStepProbability === null
@@ -529,7 +567,7 @@ function actionComparisonTrack(name, series, value) {
   track.className = `action-comparison-track ${series}`;
   track.setAttribute("role", "progressbar");
   track.setAttribute("aria-label", `${name} ${
-    series === "episode" ? "episode action frequency" : "step action probability"
+    series === "episode" ? "window policy-choice frequency" : series === "environment" ? "window environment-action frequency" : "step action probability"
   }`);
   track.setAttribute("aria-valuemin", "0");
   track.setAttribute("aria-valuemax", "100");
@@ -568,7 +606,8 @@ function actionComparisonRow(row) {
   bars.className = "action-comparison-bars";
   bars.append(
     actionComparisonBar(row.name, "step", row.stepProbability),
-    actionComparisonBar(row.name, "episode", row.episodeProbability),
+    actionComparisonBar(row.name, "episode", row.policyFrequency),
+    actionComparisonBar(row.name, "environment", row.environmentFrequency),
   );
   item.append(label, bars);
   return item;
@@ -601,7 +640,8 @@ function policyDecisionComparisonRow(row) {
   bars.setAttribute("role", "cell");
   bars.append(
     actionComparisonTrack(row.name, "step", row.stepProbability),
-    actionComparisonTrack(row.name, "episode", row.episodeProbability),
+    actionComparisonTrack(row.name, "episode", row.policyFrequency),
+    actionComparisonTrack(row.name, "environment", row.environmentFrequency),
   );
   const step = document.createElement("span");
   step.className = "policy-decision-amount step";
@@ -609,9 +649,13 @@ function policyDecisionComparisonRow(row) {
   step.setAttribute("role", "cell");
   const episode = document.createElement("span");
   episode.className = "policy-decision-amount episode";
-  episode.textContent = formatProbability(row.episodeProbability);
+  episode.textContent = formatProbability(row.policyFrequency);
   episode.setAttribute("role", "cell");
-  item.append(label, bars, step, episode);
+  const environment = document.createElement("span");
+  environment.className = "policy-decision-amount environment";
+  environment.textContent = formatProbability(row.environmentFrequency);
+  environment.setAttribute("role", "cell");
+  item.append(label, bars, step, episode, environment);
   return item;
 }
 
@@ -623,6 +667,9 @@ function makePolicyDecisionBlock(statsBlock, distributionBlock) {
   discrete.className = "policy-decision-discrete";
   const hero = document.createElement("div");
   hero.className = "policy-decision-hero";
+  const choiceLabel = document.createElement("span");
+  choiceLabel.className = "policy-decision-context-label";
+  choiceLabel.textContent = "Policy chose";
   const heroLine = document.createElement("div");
   heroLine.className = "policy-decision-hero-line";
   const action = document.createElement("strong");
@@ -637,14 +684,25 @@ function makePolicyDecisionBlock(statsBlock, distributionBlock) {
   const mode = document.createElement("span");
   mode.className = "policy-decision-mode";
   modeLine.append(mode, rank);
-  hero.append(heroLine, modeLine);
+  hero.append(choiceLabel, heroLine, modeLine);
+  const execution = document.createElement("div");
+  execution.className = "policy-decision-execution";
+  const executionLabel = document.createElement("span");
+  executionLabel.className = "policy-decision-context-label";
+  executionLabel.textContent = "Environment received";
+  const effectiveAction = document.createElement("strong");
+  effectiveAction.className = "policy-decision-effective-action";
+  const overrideReason = document.createElement("span");
+  overrideReason.className = "policy-decision-override-reason";
+  execution.append(executionLabel, effectiveAction, overrideReason);
+  hero.append(execution);
 
   const comparison = document.createElement("div");
   comparison.className = "policy-decision-comparison";
   comparison.setAttribute("role", "table");
   comparison.setAttribute(
     "aria-label",
-    "Step action probability compared with retained episode action frequency",
+    "Selected-step probabilities and trailing-window policy and environment action frequencies",
   );
   const comparisonHeader = document.createElement("div");
   comparisonHeader.className = "policy-decision-comparison-header";
@@ -653,7 +711,8 @@ function makePolicyDecisionBlock(statsBlock, distributionBlock) {
     ["Action", "action"],
     ["", "bars"],
     ["STEP", "step"],
-    ["EPISODE", "episode"],
+    ["POLICY", "episode"],
+    ["ENV", "environment"],
   ]) {
     const cell = document.createElement("span");
     cell.className = className;
@@ -666,10 +725,12 @@ function makePolicyDecisionBlock(statsBlock, distributionBlock) {
   comparisonRows.setAttribute("role", "rowgroup");
   comparison.append(comparisonHeader, comparisonRows);
 
+  const windowScope = document.createElement("p");
+  windowScope.className = "action-window-scope";
   const footerStats = document.createElement("div");
   footerStats.className = "policy-decision-stats";
   const foot = appendFoot(discrete, "", { force: true });
-  discrete.append(hero, comparison, footerStats);
+  discrete.append(hero, windowScope, comparison, footerStats);
   discrete.append(foot);
 
   const fallback = document.createElement("div");
@@ -697,7 +758,15 @@ function makePolicyDecisionBlock(statsBlock, distributionBlock) {
         return;
       }
       section.dataset.telemetryStatus = "available";
+      windowScope.textContent = presentation.windowScope;
+      windowScope.hidden = !presentation.windowScope;
       action.textContent = presentation.action;
+      effectiveAction.textContent = presentation.effectiveAction;
+      overrideReason.textContent = presentation.overrideRuleId
+        ? `Override: ${presentation.overrideRuleId}`
+        : "";
+      overrideReason.hidden = !presentation.overrideRuleId;
+      execution.classList.toggle("overridden", Boolean(presentation.overrideRuleId));
       mode.textContent = presentation.mode;
       probability.textContent = formatProbability(presentation.stepProbability);
       for (const target of [hero, action, rank]) {
@@ -821,7 +890,8 @@ function makeDistributionBlock(block) {
   legend.innerHTML = `
     <div class="action-comparison-legend-series">
       <span class="step">Step action probability</span>
-      <span class="episode">Episode action frequency</span>
+      <span class="episode">Window: policy choices</span>
+      <span class="environment">Window: environment actions</span>
     </div>
   `;
   const layout = document.createElement("div");
@@ -935,8 +1005,12 @@ function makeNamespaceBlock(block, definition, services) {
   let selected = block.metric || "";
   let currentContext = { snapshot: null, history: [], view: {} };
 
+  let chartGeometry = null;
+  bindChartRange(canvas, () => chartGeometry, () => currentContext, services);
+
   const render = ({ snapshot, history, view }) => {
     currentContext = { snapshot, history, view };
+    const chartHistory = view?.chartHistory || history;
     const descriptors = namespaceDescriptors(block.namespace, snapshot, history);
     if (!descriptors.some((descriptor) => descriptor.key === selected)) {
       selected = descriptors[0]?.key || "";
@@ -962,10 +1036,10 @@ function makeNamespaceBlock(block, definition, services) {
         : prior;
     }
     const descriptor = descriptorFor(selected);
-    drawLines(canvas, [{
-      values: descriptor ? seriesForMetric(descriptor.key, history) : [],
+    chartGeometry = drawLines(canvas, [{
+      values: descriptor ? seriesForMetric(descriptor.key, chartHistory) : [],
       color: themeColor(descriptor?.color || "chartHighlight"),
-    }], { cursorIndex: cursorIndex(history, view) });
+    }], { cursorIndex: cursorIndex(chartHistory, view), steps: chartHistory.map((point) => point.step), cursorStep: snapshot?.transition?.step });
     const point = selectedPoint(history, snapshot, view);
     body.replaceChildren(...descriptors.map((item) => {
       const row = document.createElement("tr");
@@ -1073,7 +1147,9 @@ function makeRewardBreakdownBlock(block, definition, services) {
   );
   scope.value = block.scope === "step" ? "step" : "episode";
   scopeLabel.append(scope);
-  toolbar.append(scopeLabel);
+  const scopeRange = document.createElement("span");
+  scopeRange.className = "reward-scope-range";
+  toolbar.append(scopeLabel, scopeRange);
 
   const state = document.createElement("div");
   state.className = "reward-analysis-state empty-state";
@@ -1115,6 +1191,9 @@ function makeRewardBreakdownBlock(block, definition, services) {
     });
     section.dataset.telemetryStatus = presentation.status;
     const available = presentation.status === "available";
+    scopeRange.textContent = available
+      ? `${presentation.scope === "episode" ? `Steps 1–${presentation.step}` : `Step ${presentation.step}`} · n=${presentation.count}`
+      : "";
     state.hidden = available;
     content.hidden = !available;
     foot?.classList.toggle(

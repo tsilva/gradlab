@@ -15,6 +15,44 @@ from gradlab.play_web import HISTORY_LIMIT, PlaybackWebServer
 from tests.test_play_trajectory import command, live_runner, wait_step
 
 
+@pytest.mark.parametrize("filtered", [False, True])
+def test_recording_reuses_transition_projection_without_changing_inspection(
+    tmp_path, monkeypatch, filtered
+):
+    import gradlab.play_web as player
+
+    runner = live_runner(tmp_path, length=2)
+    project = player.transition_payload
+    projections = []
+
+    def counted(transition, **kwargs):
+        projections.append(transition.sequence)
+        return project(transition, **kwargs)
+
+    try:
+        if filtered:
+            runner.processing_features = frozenset({"game", "history", "rewards"})
+        monkeypatch.setattr(player, "transition_payload", counted)
+        transition = runner._step_once()
+        assert transition is not None
+        live = runner.snapshot()
+        row = runner.recording.transition(1)
+        assert row["inspection_snapshot"]["transition"] == live["transition"]
+        assert live["history_point"] == player.history_point_payload(live["transition"])
+        assert row["presentation"]["decision"]["value"] == 2.5
+        assert row["presentation"]["cnn"]["status"] == "not-recorded"
+        assert live["transition"]["cnn"]["status"] == "off"
+        # The full archive and a filtered viewer each need at most one conversion.
+        assert projections == [1] * (2 if filtered else 1)
+        runner._step_once()
+        retained = runner.recording.transition(1)
+        assert retained["inspection_snapshot"] == row["inspection_snapshot"]
+        assert retained["presentation"] == row["presentation"]
+        np.testing.assert_array_equal(retained["observation"]["image"], row["observation"]["image"])
+    finally:
+        runner.stop()
+
+
 def test_seek_before_memory_window_preserves_live_trajectory_and_exact_frames(
     tmp_path, monkeypatch
 ):
@@ -45,6 +83,14 @@ def test_seek_before_memory_window_preserves_live_trajectory_and_exact_frames(
         assert snapshot["transition"]["decision"]["value"] == 2.5
         assert result["points"][0]["step"] == 1
         assert len(result["points"]) <= 129
+        assert snapshot["episode_rewards"]["final"] == 0.5
+        middle = runner.inspect_recorded_step(status["episode_id"], 100)["snapshot"]["episode_rewards"]
+        assert middle["step"] == 100
+        assert middle["final"] == 50
+        runner.inspect_recorded_step(status["episode_id"], HISTORY_LIMIT)
+        assert runner.inspect_recorded_step(status["episode_id"], 100)["snapshot"]["episode_rewards"] == middle
+        # Return to the first page before checking sequential page reuse below.
+        runner.inspect_recorded_step(status["episode_id"], 1)
         game = next(frame for frame in result["frames"] if frame["kind"] == 1)
         pixels = np.asarray(Image.open(io.BytesIO(base64.b64decode(game["png"]))))
         assert np.all(pixels == 1)
