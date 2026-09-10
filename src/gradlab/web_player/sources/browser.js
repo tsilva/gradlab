@@ -2558,11 +2558,7 @@ export class SourceBrowser {
       body.classList.add("loading");
       if (!this.items.length) body.classList.add("loading-empty");
     }
-    if (this.loading && !this.items.length && !this.query.trim()) {
-      if (this.route.level === "goals") body.append(this.renderGoals());
-      return body;
-    }
-    if (!this.items.length) {
+    if (!this.items.length && !this.loading) {
       const empty = document.createElement("div");
       empty.className = "source-empty";
       const heading = document.createElement("strong");
@@ -2682,13 +2678,23 @@ export class SourceBrowser {
       const trainingCell = document.createElement("td");
       const trainingStatus = environmentSuccessStatus(environment, "train/success");
       trainingCell.className = `environment-status ${trainingStatus.className}`;
-      trainingCell.textContent = trainingStatus.label;
+      if (trainingStatus.label === "Loading…") {
+        trainingCell.append(this.tableSkeleton(trainingStatus.description));
+        trainingCell.setAttribute("aria-busy", "true");
+      } else {
+        trainingCell.textContent = trainingStatus.label;
+      }
       trainingCell.title = trainingStatus.description;
       trainingCell.setAttribute("aria-label", trainingStatus.description);
       const evaluationCell = document.createElement("td");
       const evaluationStatus = environmentSuccessStatus(environment, "eval/success");
       evaluationCell.className = `environment-status ${evaluationStatus.className}`;
-      evaluationCell.textContent = evaluationStatus.label;
+      if (evaluationStatus.label === "Loading…") {
+        evaluationCell.append(this.tableSkeleton(evaluationStatus.description));
+        evaluationCell.setAttribute("aria-busy", "true");
+      } else {
+        evaluationCell.textContent = evaluationStatus.label;
+      }
       evaluationCell.title = evaluationStatus.description;
       evaluationCell.setAttribute("aria-label", evaluationStatus.description);
       const goalsCell = document.createElement("td");
@@ -2708,6 +2714,7 @@ export class SourceBrowser {
       row.append(favoriteCell, environmentCell, goalsCell, trainingCell, evaluationCell);
       body.append(row);
     });
+    this.appendLoadingRows(body, 5);
     table.append(environmentColumns, metricColumns, head, body);
     scroll.append(table);
     return scroll;
@@ -2754,13 +2761,23 @@ export class SourceBrowser {
       const trainingCell = document.createElement("td");
       const trainingStatus = environmentSuccessStatus(goal, "train/success");
       trainingCell.className = `goal-status ${trainingStatus.className}`;
-      trainingCell.textContent = trainingStatus.label;
+      if (trainingStatus.label === "Loading…") {
+        trainingCell.append(this.tableSkeleton(trainingStatus.description));
+        trainingCell.setAttribute("aria-busy", "true");
+      } else {
+        trainingCell.textContent = trainingStatus.label;
+      }
       trainingCell.title = trainingStatus.description;
       trainingCell.setAttribute("aria-label", trainingStatus.description);
       const evaluationCell = document.createElement("td");
       const evaluationStatus = environmentSuccessStatus(goal, "eval/success");
       evaluationCell.className = `goal-status ${evaluationStatus.className}`;
-      evaluationCell.textContent = evaluationStatus.label;
+      if (evaluationStatus.label === "Loading…") {
+        evaluationCell.append(this.tableSkeleton(evaluationStatus.description));
+        evaluationCell.setAttribute("aria-busy", "true");
+      } else {
+        evaluationCell.textContent = evaluationStatus.label;
+      }
       evaluationCell.title = evaluationStatus.description;
       evaluationCell.setAttribute("aria-label", evaluationStatus.description);
       const openGoal = () => this.navigate({
@@ -2788,6 +2805,7 @@ export class SourceBrowser {
       row.append(goalCell, recipesCell, trainingCell, evaluationCell, inspectCell);
       body.append(row);
     });
+    this.appendLoadingRows(body, 5);
     table.append(head, body);
     scroll.append(table);
     return scroll;
@@ -3124,9 +3142,14 @@ export class SourceBrowser {
         const cell = document.createElement("td");
         cell.className = "goal-run-success";
         // Match the catalog success convention without hiding the exact evidence state.
-        cell.textContent = ["Loading…", "Unavailable"].includes(status.label)
-          ? status.label
-          : successBadgeLabels(run).includes(badge) ? "✅" : "❌";
+        if (status.label === "Loading…") {
+          cell.append(this.tableSkeleton(status.description));
+          cell.setAttribute("aria-busy", "true");
+        } else {
+          cell.textContent = status.label === "Unavailable"
+            ? status.label
+            : successBadgeLabels(run).includes(badge) ? "✅" : "❌";
+        }
         cell.title = `${badge}: ${status.label}. ${status.description}`;
         cell.setAttribute("aria-label", cell.title);
         return cell;
@@ -3482,7 +3505,7 @@ export class SourceBrowser {
           && item.metrics?.[metadata.column.metric] == null
         ) {
           main.textContent = "";
-          main.className = "checkpoint-metric-skeleton";
+          main.className = "table-skeleton";
           main.setAttribute("role", "status");
           main.setAttribute("aria-label", `Loading ${metadata.label}`);
           cell.setAttribute("aria-busy", "true");
@@ -3594,9 +3617,32 @@ export class SourceBrowser {
       });
       body.append(row);
     });
+    this.appendLoadingRows(body, columns.length);
     table.append(head, body);
     scroll.append(table);
     return scroll;
+  }
+
+  tableSkeleton(label = "Loading table value") {
+    const skeleton = document.createElement("span");
+    skeleton.className = "table-skeleton";
+    skeleton.setAttribute("role", "status");
+    skeleton.setAttribute("aria-label", label);
+    return skeleton;
+  }
+
+  appendLoadingRows(body, columnCount) {
+    if (!this.loading || this.items.length) return;
+    body.setAttribute("aria-busy", "true");
+    for (let index = 0; index < 5; index += 1) {
+      const row = document.createElement("tr");
+      for (let column = 0; column < columnCount; column += 1) {
+        const cell = document.createElement("td");
+        cell.append(this.tableSkeleton());
+        row.append(cell);
+      }
+      body.append(row);
+    }
   }
 
   loadingState(message) {

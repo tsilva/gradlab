@@ -1054,10 +1054,8 @@ test("catalog refresh animates and disables only the header refresh control", as
   assert.match(source, /if \(refreshing\) refresh\.classList\.add\("refreshing"\)/);
   assert.match(source, /refresh\.setAttribute\("aria-label", refreshing \? "Refreshing" : "Refresh"\)/);
   assert.match(source, /refresh\.disabled = refreshing/);
-  assert.match(
-    source,
-    /if \(this\.loading && !this\.items\.length && !this\.query\.trim\(\)\) \{\s*if \(this\.route\.level === "goals"\) body\.append\(this\.renderGoals\(\)\);\s*return body;/,
-  );
+  assert.match(source, /this\.appendLoadingRows\(body, 5\)/);
+  assert.match(source, /this\.appendLoadingRows\(body, columns\.length\)/);
   assert.doesNotMatch(source, /loadingState\("Loading catalog…"\)/);
   assert.doesNotMatch(source, /Some catalog evidence is unavailable/);
   assert.doesNotMatch(styles, /source-list-loading-indicator/);

@@ -2786,8 +2786,8 @@ body.recording #timeline { opacity: .72; }
 }
 .reward-reference-controls button { font-size: inherit; }
 
-/* Pending checkpoint evidence; completed missing values retain their dash. */
-.checkpoint-metric-skeleton {
+/* Shared table loading indicator; completed missing values retain their dash. */
+.table-skeleton {
   display: inline-block;
   width: 4.5rem;
   max-width: 100%;
@@ -2795,12 +2795,12 @@ body.recording #timeline { opacity: .72; }
   border-radius: .25rem;
   background: linear-gradient(100deg, rgba(180, 160, 200, .09) 20%, rgba(180, 160, 200, .23) 50%, rgba(180, 160, 200, .09) 80%);
   background-size: 220% 100%;
-  animation: checkpoint-shimmer 1.6s ease-in-out infinite alternate;
+  animation: table-shimmer 1.6s ease-in-out infinite alternate;
 }
-@keyframes checkpoint-shimmer {
+@keyframes table-shimmer {
   from { background-position: 100% 0; }
   to { background-position: 0% 0; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .checkpoint-metric-skeleton, .source-head .icon-only.refreshing .icon { animation: none; }
+  .table-skeleton, .source-head .icon-only.refreshing .icon { animation: none; }
 }
