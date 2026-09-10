@@ -41,6 +41,22 @@ def descriptor() -> ProviderDescriptor:
     )
 
 
+def test_bare_identity_emits_reward_statistics_without_other_task_metrics() -> None:
+    configured = {"id": "identity", "reward": {"reward_mode": "native"}}
+    kernel = IdentityTaskDefinition().bind(descriptor(), 2)
+    flags = np.zeros(2, dtype=np.bool_)
+    step = kernel.process(np.array([2.0, 4.0]), flags, flags, {})
+    accumulator = RewardStatsAccumulator(
+        task=configured, active_components=active_reward_components(configured)
+    )
+    accumulator.consume(step.metrics, reserve=2)
+    assert accumulator.flush() == {
+        "train/reward/mean": 3.0,
+        "train/reward/std": 1.0,
+        "train/reward/nonzero/fraction": 1.0,
+    }
+
+
 def test_identity_event_rewards_are_strict_and_reference_declared_events() -> None:
     configured = task()
     validate_task_config(configured)
@@ -208,7 +224,7 @@ def test_identity_equals_event_rewards_every_matching_transition() -> None:
     accumulator.consume(second.metrics, reserve=4)
     payload = accumulator.flush()
     assert payload["train/reward/event/serve_wait/mean"] == pytest.approx(-0.0075)
-    assert payload["train/reward/event/serve_wait/nonzero/rate"] == 0.75
+    assert payload["train/reward/event/serve_wait/fraction"] == 0.75
 
 
 def test_previous_equals_attributes_serve_wait_to_the_transition_after_life_loss() -> None:
@@ -349,10 +365,10 @@ def test_event_reward_is_included_before_the_global_reward_transform_and_logging
     accumulator = RewardStatsAccumulator(active_components=components)
     accumulator.consume(step.metrics, reserve=1)
     payload = accumulator.flush()
-    assert payload["train/reward/component/native/mean"] == 1.0
-    assert payload["train/reward/component/event/mean"] == -5.0
+    assert payload["train/reward/part/native/mean"] == 1.0
+    assert payload["train/reward/part/event/mean"] == -5.0
     assert payload["train/reward/event/life_loss/mean"] == -5.0
-    assert payload["train/reward/event/life_loss/nonzero/rate"] == 1.0
+    assert payload["train/reward/event/life_loss/fraction"] == 1.0
 
 
 def test_player_reward_accounting_exposes_the_event_component() -> None:

@@ -8,5 +8,5 @@ tags:
 - "env_id:{{ env_id }}"
 objective:
   rank:
-  - max(train/target/return_mean)
-  - min(train/global_step)
+  - max(train/return/mean)
+  - min(train/step)

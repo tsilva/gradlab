@@ -13,7 +13,7 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv
 
 from gradlab.actor_critic_policy import SharedActorCriticFeatureExtractor, SharedActorCriticPolicy
-from gradlab.batch_runtime import BatchRuntime, ProviderDescriptor, SignalSpec
+from gradlab.batch_runtime import BatchRuntime, EpisodeRecord, ProviderDescriptor, SignalSpec
 from gradlab.env import EnvConfig
 from gradlab.env_providers import provider_descriptor, provider_native_vec_kwargs
 from gradlab.model_inputs import ContextTaskKernel, normalize_model_inputs
@@ -527,7 +527,11 @@ def test_terminal_history_survives_masked_reset_and_matches_terminal_observation
     np.testing.assert_allclose(step.observations["context/health"][1, :, 0], [2.0, 2.05, 2.1])
     assert step.transition_info["health"][0] == pytest.approx(90.0)
     assert step.transition_info["health_frame_stack"][0].tolist() == [100.0, 95.0, 90.0]
-    assert any("health_decreased" in record.events for record in runtime.drain_records())
+    assert any(
+        "health_decreased" in record.events
+        for record in runtime.drain_records()
+        if isinstance(record, EpisodeRecord)
+    )
 
 
 def _vizdoom_config() -> EnvConfig:

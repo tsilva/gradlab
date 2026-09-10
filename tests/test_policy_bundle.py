@@ -108,8 +108,8 @@ def test_recipe_v4_embeds_verified_goal_and_recipe_bases() -> None:
     )
 
     assert document["format_version"] == 4
-    assert document["recipe"]["train_config"]["metrics_schema_version"] == 21
-    assert document["resolution"]["recipe"]["base"]["train_config"]["metrics_schema_version"] == 21
+    assert document["recipe"]["train_config"]["metrics_schema_version"] == 22
+    assert document["resolution"]["recipe"]["base"]["train_config"]["metrics_schema_version"] == 22
     assert document["resolution"]["goal"]["base"] == resolved.canonical_goal
     assert document["resolution"]["recipe"]["variant_id"].startswith("v-")
     assert (
@@ -151,7 +151,7 @@ def test_portable_recipe_reader_preserves_historical_failure_plateau() -> None:
 
     for recipe in (document["recipe"], base_recipe):
         recipe["train_config"]["early_stop"]["conditions"]["return_plateau"] = {
-            "metric": "train/target/return_mean",
+            "metric": "train/return/mean",
             "trigger": "no_improvement",
             "direction": "maximize",
             "min_delta": 0.01,
@@ -336,7 +336,7 @@ def test_level1_3_training_clear_bundle_omits_eval_and_preserves_early_stop() ->
         "clear_100",
     }
     assert recipe["train_config"]["early_stop"]["conditions"]["clear_100"] == {
-        "metric": "train/target/success/start_rate_min",
+        "metric": "train/success/min",
         "trigger": "threshold",
         "outcome": "success",
         "action": "stop",

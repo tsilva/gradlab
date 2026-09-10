@@ -193,7 +193,7 @@ goal_file: experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml
 recipe_file: experiments/goals/SuperMarioBros-Nes-v0/Level1-1/recipes/ppo.yaml
 recipe_overrides:
 - train.backend.config.timstepz=512
-required_metrics: [train/throughput/loop/rate]
+required_metrics: [train/throughput/rate]
 """,
                 encoding="utf-8",
             )
@@ -400,13 +400,13 @@ required_metrics: [train/throughput/not_real]
                 store.init()
                 is_candidate = command.label.startswith("candidate-")
                 payload = {
-                    "train/throughput/loop/rate": 95.0 if is_candidate else 100.0,
+                    "train/throughput/rate": 95.0 if is_candidate else 100.0,
                 }
                 if is_candidate:
                     payload.update(
                         {
-                            "train/curriculum/archive/transition/share": 0.2,
-                            "train/curriculum/archive/capture/call/count": 1.0,
+                            "train/curriculum/transitions/fraction": 0.2,
+                            "train/curriculum/capture/count": 1.0,
                         }
                     )
                 store.append_metrics(payload, step=1, source="test", publish=False)

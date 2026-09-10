@@ -310,7 +310,7 @@ def _publish_frame(
             require_current_metrics_schema(metrics_schema_version)
             payload[EVAL_CHECKPOINT_STEP] = step
         elif not source.startswith("orchestration"):
-            payload["train/global_step"] = step
+            payload["train/step"] = step
         # Use the durable outbox sequence as W&B's internal step. If the SDK call
         # succeeded but the local acknowledgement was interrupted, replaying the
         # same sequence is rejected by W&B as an already-committed step instead

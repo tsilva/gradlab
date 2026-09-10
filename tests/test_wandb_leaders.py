@@ -88,21 +88,21 @@ class WandbLeaderRewardShapeTests(unittest.TestCase):
                     "goal_slug": "Breakout-Atari2600-v0",
                     "recipe_slug": "ppo",
                     "selection_rank": [
-                        "max(train/target/return_mean)",
-                        "min(train/global_step)",
+                        "max(train/return/mean)",
+                        "min(train/step)",
                     ],
                 },
                 summary={
-                    "train/target/return_mean": 42.0,
-                    "train/target/success/start_rate_min": 0.1,
-                    "train/global_step": 1_000_000,
+                    "train/return/mean": 42.0,
+                    "train/success/min": 0.1,
+                    "train/step": 1_000_000,
                 },
                 tags=(),
                 id="run",
                 name="run",
                 url="https://example.invalid/run",
             ),
-            objective_keys=("train/target/success/start_rate_min",),
+            objective_keys=("train/success/min",),
         )
 
         self.assertIsNotNone(score)

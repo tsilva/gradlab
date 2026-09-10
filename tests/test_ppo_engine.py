@@ -380,15 +380,15 @@ def test_rollout_diagnostics_remain_on_device_until_one_materialization() -> Non
     assert pending
     assert all(isinstance(value, torch.Tensor) for value in pending.values())
     metrics = ppo_engine._materialize_metrics(pending, omit_if_nonfinite=optional)
-    assert metrics["train/ppo/rollout_value/mean"] == pytest.approx(3.0)
-    assert metrics["train/ppo/rollout_value/std"] == pytest.approx(
+    assert metrics["train/value/mean"] == pytest.approx(3.0)
+    assert metrics["train/value/std"] == pytest.approx(
         np.std([1.0, 3.0, 5.0])
     )
-    assert metrics["train/ppo/rollout_advantage/mean"] == pytest.approx(2.5)
-    assert metrics["train/ppo/rollout_advantage/std"] == pytest.approx(
+    assert metrics["train/advantage/mean"] == pytest.approx(2.5)
+    assert metrics["train/advantage/std"] == pytest.approx(
         np.std([1.0, 2.0, 3.0, 4.0])
     )
-    assert metrics["train/ppo/dominant_action_rate"] == pytest.approx(0.75)
+    assert metrics["train/action/fraction/max"] == pytest.approx(0.75)
 
 
 def test_rollout_diagnostics_count_legal_tuple_actions_on_device() -> None:
@@ -417,7 +417,7 @@ def test_rollout_diagnostics_count_legal_tuple_actions_on_device() -> None:
     pending, optional = ppo_engine._rollout_diagnostics(buffer, action_space)
     metrics = ppo_engine._materialize_metrics(pending, omit_if_nonfinite=optional)
 
-    assert metrics["train/ppo/dominant_action_rate"] == pytest.approx(0.5)
+    assert metrics["train/action/fraction/max"] == pytest.approx(0.5)
 
 
 def test_target_kl_stops_before_optimization_after_one_control_read(monkeypatch) -> None:
@@ -501,8 +501,8 @@ def test_target_kl_stops_before_optimization_after_one_control_read(monkeypatch)
     assert model._n_updates == 1
     assert not policy.optimizer.state
     torch.testing.assert_close(policy.weight, initial_weight)
-    assert metrics["train/ppo/approx_kl"] == pytest.approx(np.exp(0.5) - 1.0 - 0.5)
-    assert metrics["train/ppo/clip_fraction"] == pytest.approx(1.0)
+    assert metrics["train/kl/mean"] == pytest.approx(np.exp(0.5) - 1.0 - 0.5)
+    assert metrics["train/clip/fraction"] == pytest.approx(1.0)
 
 
 @pytest.mark.parametrize("method", ["collect_rollouts", "train", "learn"])
@@ -680,6 +680,6 @@ def test_tensor_native_update_matches_one_sb3_ppo_update(monkeypatch) -> None:
                 atol=2e-6,
             )
         assert materializations == 1
-        assert metrics["train/ppo/learning_rate"] == pytest.approx(1e-3)
+        assert metrics["train/learning_rate"] == pytest.approx(1e-3)
     finally:
         env.close()

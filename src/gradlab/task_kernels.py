@@ -1819,6 +1819,7 @@ class DeathmatchRewardTaskKernel:
         if self._metrics is None:
             self._metrics = dict(task_step.metrics)
             self._metrics.update(self._components)
+            self._metrics.pop("native_reward_component", None)
             self._metrics["kills"] = self._kills_metric
             self._metrics["raw_reward"] = self._rewards
             self._metrics["shaped_reward"] = self._rewards
@@ -2423,7 +2424,8 @@ class IdentityTaskKernel:
             self._truncated,
             self._outcomes,
             self._events,
-            {},
+            {"raw_reward": self._rewards, "shaped_reward": self._rewards,
+             "native_reward_component": self._rewards},
             self._event_transitions,
         )
 
@@ -2649,6 +2651,8 @@ class EventRewardTaskKernel:
                 "native_reward_component",
                 self._native_reward_component,
             )
+            if not self._include_native:
+                self._metrics["native_reward_component"] = self._native_reward_component
             self._metrics["event_reward_component"] = self._event_reward_total
             for name, component in self._event_reward_components.items():
                 self._metrics[f"event_reward_component/{name}"] = component

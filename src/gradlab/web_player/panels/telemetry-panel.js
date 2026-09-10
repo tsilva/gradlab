@@ -356,11 +356,10 @@ function makeLineBlock(block, services, definition) {
   let referenceEpisode = null;
   const referenceControls = document.createElement("div");
   referenceControls.className = "reward-reference-controls";
-  const referenceLabel = document.createElement("span");
   const referenceButton = document.createElement("button");
   referenceButton.type = "button";
   referenceButton.textContent = "Set return reference to cursor";
-  referenceControls.append(referenceLabel, referenceButton);
+  referenceControls.append(referenceButton);
   if (rewardLayout) section.insertBefore(referenceControls, canvas);
   referenceButton.addEventListener("click", () => {
     const step = currentContext.snapshot?.transition?.step;
@@ -373,7 +372,6 @@ function makeLineBlock(block, services, definition) {
     const { snapshot, history, view } = currentContext;
     const transition = snapshot?.transition;
     referenceButton.disabled = !Number.isInteger(transition?.step);
-    referenceLabel.textContent = `Return reference: ${referenceStep ?? "—"} · Cursor: ${transition?.step ?? "—"}`;
     const selected = transition ? { step: transition.step, sequence: transition.sequence,
       reward_provider: transition.reward?.provider, reward_shaped: transition.reward?.shaped,
       ...(Number.isFinite(transition.decision?.value) ? { value: transition.decision.value } : {}) } : null;

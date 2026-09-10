@@ -44,21 +44,26 @@ test("missing discount and reward stay unavailable while zero is a value", () =>
   assert.deepEqual(rewardInspectionRows([], null, .99), []);
 });
 
-test("scrubbing preserves the pinned return reference while moving row selection", () => {
-  const history = Array.from({ length: 100 }, (_, step) => ({ step, reward_shaped: 1 }));
-  for (const cursor of [20, 60, 40]) {
+test("scrubbing preserves reference rows and discounts while moving only the highlight", () => {
+  const history = Array.from({ length: 100 }, (_, step) => ({ step, reward_shaped: step % 10 === 0 ? 1 : 0 }));
+  const baseline = rewardInspectionRows(history, history[40], .99, 5, 40);
+  const withoutHighlight = rows => rows.map(({ inspected, ...row }) => row);
+  for (const cursor of [80, 60, 20, 45, 99, 40]) {
     const rows = rewardInspectionRows(history, history[cursor], .99, 5, 40);
-    const selected = rows.find(row => row.inspected);
-    assert.ok(rows.every(row => row.step >= Math.max(cursor, 40)));
-    if (cursor < 40) {
-      assert.equal(selected, undefined);
-      assert.equal(rows[0].step, 40);
-      continue;
-    }
-    assert.equal(selected.step, cursor);
-    assert.equal(selected.delay, cursor - 40);
-    assert.equal(selected.contribution, cursor < 40 ? null : .99 ** (cursor - 40));
+    assert.deepEqual(rows.map(row => row.step), [40, 50, 60, 70, 80]);
+    assert.deepEqual(withoutHighlight(rows), withoutHighlight(baseline));
+    assert.equal(rows.find(row => row.inspected)?.step,
+      [40, 50, 60, 70, 80].includes(cursor) ? cursor : undefined);
   }
+  const changedReference = rewardInspectionRows(history, history[60], .99, 5, 60);
+  assert.deepEqual(changedReference.map(row => row.step), [60, 70, 80, 90]);
+  assert.equal(changedReference[0].delay, 0);
+});
+
+test("seeking to a sample omitted from chart history does not insert a row", () => {
+  const history = [10, 30, 50].map(step => ({ step, reward_shaped: 1 }));
+  const rows = rewardInspectionRows(history, { step: 20, reward_shaped: 2 }, .99, 5, 10);
+  assert.deepEqual(rows.map(row => row.step), [10, 30, 50]);
 });
 
 test("return reference 564 excludes earlier reward events", () => {

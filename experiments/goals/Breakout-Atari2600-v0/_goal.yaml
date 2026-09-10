@@ -9,9 +9,9 @@ tags:
 title: Atari 2600 Breakout wall completion
 objective:
   rank:
-  - max(train/target/progress/bricks_destroyed/mean)
-  - max(train/target/progress/bricks_destroyed/max)
-  - min(train/all/episode_steps_mean)
+  - max(train/progress/bricks_destroyed/mean)
+  - max(train/progress/bricks_destroyed/max)
+  - min(train/episode_steps/mean)
 train:
   checkpoint_freq: 500000
   episode_progress_fields:

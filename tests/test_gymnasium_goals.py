@@ -180,8 +180,8 @@ def test_gymnasium_goal_and_recipe_materialize_exact_contract(game: str) -> None
 
     assert goal["evaluation_mode"] == "training_only"
     assert goal["objective"]["rank"] == [
-        "max(train/target/return_mean)",
-        "min(train/global_step)",
+        "max(train/return/mean)",
+        "min(train/step)",
     ]
     assert "eval" not in goal
     assert "release" not in goal
@@ -212,7 +212,7 @@ def test_gymnasium_goal_and_recipe_materialize_exact_contract(game: str) -> None
     assert backend["clip_range"] == 0.2
     target = config["early_stop"]["conditions"]["return_target"]
     assert target == {
-        "metric": "train/target/return_mean",
+        "metric": "train/return/mean",
         "trigger": "threshold",
         "outcome": "success",
         "action": "stop",
@@ -223,7 +223,7 @@ def test_gymnasium_goal_and_recipe_materialize_exact_contract(game: str) -> None
     }
     plateau = config["early_stop"]["conditions"]["return_plateau"]
     assert plateau == {
-        "metric": "train/target/return_mean",
+        "metric": "train/return/mean",
         "trigger": "no_improvement",
         "outcome": "neutral",
         "action": "stop",

@@ -303,9 +303,9 @@ class CertificationRuntime(SupervisorRuntime):
             if event["kind"] == "history":
                 event["payload"][ORCHESTRATION_EVENT_SEQUENCE] = event_seq
                 if event["source"].startswith("eval"):
-                    event["payload"]["eval/checkpoint/step"] = event["step"]
+                    event["payload"]["eval/step"] = event["step"]
                 elif not event["source"].startswith("orchestration"):
-                    event["payload"]["train/global_step"] = event["step"]
+                    event["payload"]["train/step"] = event["step"]
             self.wandb_events.append(event)
             if self.evidence_path is not None:
                 self.evidence_path.parent.mkdir(parents=True, exist_ok=True)
@@ -967,7 +967,7 @@ def _scenario_full_lifecycle(root: Path) -> dict[str, Any]:
     prepared = fixture.prepare(run_number=1)
     supervisor = prepared.supervisor
     supervisor.store.append_metrics(
-        {"train/target/return_mean": 1.0},
+        {"train/return/mean": 1.0},
         step=250_000,
         source="learner",
     )
@@ -1053,7 +1053,7 @@ def _scenario_parallel_run_isolation(root: Path) -> dict[str, Any]:
     second = fixture.prepare(run_number=12)
     for index, prepared in enumerate((first, second), start=1):
         prepared.supervisor.store.append_metrics(
-            {"train/target/return_mean": float(index)},
+            {"train/return/mean": float(index)},
             step=100 * index,
             source="learner",
         )
@@ -1168,7 +1168,7 @@ def _scenario_wandb_retry_deduplication(root: Path) -> dict[str, Any]:
     prepared = fixture.prepare(run_number=31, publish_failures=1)
     supervisor = prepared.supervisor
     supervisor.store.append_metrics(
-        {"train/target/return_mean": 3.0},
+        {"train/return/mean": 3.0},
         step=300,
         source="learner",
     )
@@ -1209,7 +1209,7 @@ def _scenario_wandb_visibility_gating(root: Path) -> dict[str, Any]:
     prepared = fixture.prepare(run_number=36)
     supervisor = prepared.supervisor
     supervisor.store.append_metrics(
-        {"train/target/return_mean": 3.6},
+        {"train/return/mean": 3.6},
         step=360,
         source="learner",
     )
@@ -1453,7 +1453,7 @@ def _scenario_scratch_preservation_stop(root: Path) -> dict[str, Any]:
     prepared = fixture.prepare(run_number=56)
     supervisor = prepared.supervisor
     supervisor.store.append_metrics(
-        {"train/target/return_mean": 5.6},
+        {"train/return/mean": 5.6},
         step=560,
         source="learner",
     )
@@ -1499,7 +1499,7 @@ def _scenario_drain_only_recovery(root: Path) -> dict[str, Any]:
     fixture = CertificationFixture(root)
     first = fixture.prepare(run_number=61)
     first.supervisor.store.append_metrics(
-        {"train/target/return_mean": 6.0},
+        {"train/return/mean": 6.0},
         step=600,
         source="learner",
     )
@@ -1661,14 +1661,14 @@ def _scenario_early_stop_outcomes(root: Path) -> dict[str, Any]:
             matched_condition_ids=("target_reached",),
             outcome="success",
             trigger="threshold",
-            metric="train/target/success/start_rate_min",
+            metric="train/success/min",
             metric_step=10,
             value=0.95,
             best_value=0.95,
             elapsed_steps=0,
             patience_progress=1.0,
             condition={
-                "metric": "train/target/success/start_rate_min",
+                "metric": "train/success/min",
                 "trigger": "threshold",
                 "operator": ">=",
                 "threshold": 0.95,
@@ -1688,7 +1688,7 @@ def _scenario_early_stop_outcomes(root: Path) -> dict[str, Any]:
     config = {
         "conditions": {
             "return_plateau": {
-                "metric": "train/target/return_mean",
+                "metric": "train/return/mean",
                 "trigger": "no_improvement",
                 "direction": "maximize",
                 "min_delta": 0.01,
@@ -1701,7 +1701,7 @@ def _scenario_early_stop_outcomes(root: Path) -> dict[str, Any]:
         }
     }
     machine = MetricEarlyStopStateMachine(config)
-    metric = "train/target/return_mean"
+    metric = "train/return/mean"
     machine.update({metric: MetricSample(value=100.0, step=0)})
     update = machine.update({metric: MetricSample(value=100.0, step=10)})
     decision = validate_metric_early_stop_decision(update.stop_decision, config)
@@ -2128,7 +2128,7 @@ def _scenario_local_background_jobs(root: Path) -> dict[str, Any]:
     prepared = fixture.prepare(run_number=81)
     supervisor = prepared.supervisor
     supervisor.store.append_metrics(
-        {"train/target/return_mean": 1.0},
+        {"train/return/mean": 1.0},
         step=250_000,
         source="learner",
     )

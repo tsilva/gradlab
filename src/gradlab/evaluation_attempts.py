@@ -179,14 +179,15 @@ def evaluation_metric_records(
     schema_version: int,
     checkpoint_step: int,
     episodes_planned: int,
+    required_metrics: frozenset[str] = frozenset(),
 ) -> tuple[dict[str, Any], list[dict[str, Any]] | None]:
     metrics = evaluation_wandb_projection(
         result.aggregates,
         schema_version=schema_version,
         checkpoint_step=checkpoint_step,
         accepted=result.status == "accepted",
-        episodes_planned=episodes_planned,
         episodes_completed=len(result.episode_results),
+        required_metrics=required_metrics,
     )
     by_start = None
     if result.status in {"accepted", "rejected"} and len(

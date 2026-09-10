@@ -124,7 +124,7 @@ def build_wandb_workspace(spec: WandbWorkspaceSpec, *, entity: str):
         name=spec.display_name,
         sections=sections,
         settings=ws.WorkspaceSettings(
-            x_axis="train/global_step",
+            x_axis="train/step",
             smoothing_type="none",
             smoothing_weight=0,
             sort_panels_alphabetically=False,

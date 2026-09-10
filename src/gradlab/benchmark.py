@@ -261,7 +261,7 @@ def validate_benchmark_results(
             missing = sorted(name for name, value in metrics.items() if value is None)
             if missing:
                 issues.append(f"{command.label} metrics are missing: {', '.join(missing)}")
-            loop_value = metrics.get("train/throughput/loop/rate")
+            loop_value = metrics.get("train/throughput/rate")
             if loop_value is not None:
                 loop_rates[variant].append(float(loop_value))
             samples.append(
@@ -338,7 +338,7 @@ def validate_benchmark_results(
             missing = sorted(name for name, value in latest.items() if value is None)
             if missing:
                 issues.append(f"{command.label} metrics are missing: {', '.join(missing)}")
-            history = store.metric_history("train/throughput/loop/rate")
+            history = store.metric_history("train/throughput/rate")
             measured = [float(sample["value"]) for sample in history[warmup:]]
             if not measured:
                 issues.append(

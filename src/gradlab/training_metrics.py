@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import time
 from collections import deque
 from collections.abc import Iterable, Mapping, Sequence
-import time
 from typing import Any, Callable
 
 import numpy as np
@@ -10,31 +10,30 @@ import numpy as np
 from gradlab.eval_metrics import episode_reason_names
 from gradlab.metric_names import (
     EPISODE_METRIC_WINDOW_SIZE,
+    TRAIN_EPISODE_COMPLETED_COUNT,
     TRAIN_EPISODE_LENGTH_ORIGIN_ALL_ROLLING_MEAN,
     TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MAX,
     TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN,
+    TRAIN_EXPLORATION_CELL_UNIQUE_ORIGIN_TARGET_ROLLING_MEAN,
     TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MEAN,
     TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN,
-    TRAIN_OUTCOME_SUCCESS_STARTS_OBSERVED_CUMULATIVE_RATE_MEAN,
-    TRAIN_OUTCOME_SUCCESS_STARTS_OBSERVED_CUMULATIVE_RATE_MIN,
-    TRAIN_EPISODE_COMPLETED_COUNT,
-    TRAIN_EXPLORATION_CELL_UNIQUE_ORIGIN_TARGET_ROLLING_MEAN,
     TRAIN_THROUGHPUT_BETWEEN_ROLLOUTS_SECONDS,
     TRAIN_THROUGHPUT_LOOP_RATE,
     TRAIN_THROUGHPUT_PROVIDER_STEP_RATE,
     TRAIN_THROUGHPUT_ROLLOUT_OVERHEAD_SECONDS,
     metric_value_segment,
-    train_outcome_reason_count_metric,
-    train_outcome_reason_rolling_count_metric,
     train_outcome_reason_rolling_rate_metric,
     train_progress_origin_target_rolling_max_metric,
-    train_progress_origin_target_rolling_min_metric,
     train_progress_origin_target_rolling_mean_metric,
+    train_progress_origin_target_rolling_min_metric,
     train_success_count_metric,
     train_success_rolling_rate_metric,
     validate_metric_payload,
 )
 from gradlab.task_kernels import CELL_NOVELTY_EPISODE_UNIQUE_CELLS
+
+# Local display data is deliberately outside the published metric registry.
+LOCAL_COMPLETION_FRACTION = "completion"
 
 
 def _outcome_name(record: Any) -> str:
@@ -142,12 +141,14 @@ class EpisodeMetricsReducer:
         configured_starts: Sequence[str] = (),
         progress_fields: Sequence[str] = (),
         track_success: bool = True,
+        required_metrics: Sequence[str] = (),
     ) -> None:
         self.event_names = tuple(dict.fromkeys(str(name) for name in event_names))
         self.configured_starts = tuple(
             dict.fromkeys(metric_value_segment(start) for start in configured_starts)
         )
         self.track_success = bool(track_success)
+        self.required_metrics = frozenset(required_metrics)
         self.progress_fields = tuple(
             dict.fromkeys(metric_value_segment(field) for field in progress_fields)
         )
@@ -161,7 +162,6 @@ class EpisodeMetricsReducer:
         self.reason_windows: dict[str, deque[bool]] = {
             name: deque(maxlen=self.window_size) for name in self.event_names
         }
-        self.reason_counts: dict[str, int] = dict.fromkeys(self.event_names, 0)
         self.success_counts: dict[str, int] = {}
         self.attempt_counts: dict[str, int] = {}
         self.success_windows: dict[str, deque[bool]] = {}
@@ -222,8 +222,6 @@ class EpisodeMetricsReducer:
                     [False] * prior,
                     maxlen=self.window_size,
                 )
-                self.reason_counts[reason] = 0
-            self.reason_counts[reason] += 1
         for reason, window in self.reason_windows.items():
             window.append(reason in reasons)
 
@@ -243,6 +241,20 @@ class EpisodeMetricsReducer:
         if self._snapshot_cache is None:
             self._snapshot_cache = self._build_snapshot()
         return dict(self._snapshot_cache)
+
+    def local_progress(self) -> dict[str, float]:
+        if not self.attempt_counts:
+            return {}
+        return {
+            LOCAL_COMPLETION_FRACTION: float(
+                np.mean(
+                    [
+                        self.success_counts.get(start, 0) / attempts
+                        for start, attempts in self.attempt_counts.items()
+                    ]
+                )
+            )
+        }
 
     def _build_snapshot(self) -> dict[str, int | float]:
         payload: dict[str, int | float] = {
@@ -271,28 +283,23 @@ class EpisodeMetricsReducer:
                     np.max(window)
                 )
         for reason, window in sorted(self.reason_windows.items()):
-            payload[train_outcome_reason_count_metric(reason)] = self.reason_counts[reason]
-            payload[train_outcome_reason_rolling_count_metric(reason)] = sum(window)
             payload[train_outcome_reason_rolling_rate_metric(reason)] = (
                 sum(window) / len(window) if window else 0.0
             )
 
         if not self.track_success or not self.attempt_counts:
             return payload
-        rates: dict[str, float] = {}
+        expected = self.configured_starts or tuple(self.attempt_counts)
         for start, attempts in self.attempt_counts.items():
             successes = self.success_counts.get(start, 0)
-            rates[start] = successes / attempts
             payload[train_success_count_metric(start)] = successes
             window = self.success_windows[start]
-            if len(window) >= self.window_size:
+            if len(window) >= self.window_size and (
+                len(expected) != 1
+                or train_success_rolling_rate_metric(start) in self.required_metrics
+            ):
                 payload[train_success_rolling_rate_metric(start)] = sum(window) / len(window)
 
-        expected = self.configured_starts or tuple(self.attempt_counts)
-        payload[TRAIN_OUTCOME_SUCCESS_STARTS_OBSERVED_CUMULATIVE_RATE_MIN] = min(rates.values())
-        payload[TRAIN_OUTCOME_SUCCESS_STARTS_OBSERVED_CUMULATIVE_RATE_MEAN] = float(
-            np.mean(tuple(rates.values()))
-        )
         if expected and all(
             len(self.success_windows.get(start, ())) >= self.window_size for start in expected
         ):
@@ -301,7 +308,11 @@ class EpisodeMetricsReducer:
                 for start in expected
             ]
             payload[TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN] = min(window_rates)
-            payload[TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MEAN] = float(
-                np.mean(window_rates)
-            )
+            if (
+                len(expected) != 1
+                or TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MEAN in self.required_metrics
+            ):
+                payload[TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MEAN] = float(
+                    np.mean(window_rates)
+                )
         return payload

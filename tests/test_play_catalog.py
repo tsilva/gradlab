@@ -165,7 +165,7 @@ def current_goal_document(*, goal_id: str, title: str) -> str:
             "objective:",
             "  rank:",
             "  - min(leader/step)",
-            "  - max(eval/return_mean)",
+            "  - max(eval/return/mean)",
             "train:",
             "  checkpoint_freq: 128",
             "  environment:",
@@ -328,13 +328,13 @@ def mario_checkpoint_train_config() -> dict[str, object]:
         "metrics_schema_version": METRICS_SCHEMA_VERSION,
         "checkpoint_eval_backend": "modal",
         "selection_rank": [
-            "max(eval/success/start_rate_mean)",
-            "max(eval/return_mean)",
+            "max(eval/success/mean)",
+            "max(eval/return/mean)",
             "min(leader/step)",
         ],
         "checkpoint_eval_acceptance": [
             {
-                "metric": "eval/success/start_rate_min",
+                "metric": "eval/success/min",
                 "operator": ">=",
                 "threshold": 1.0,
             }
@@ -794,7 +794,7 @@ def test_run_catalog_uses_lifecycle_owned_variant_index_without_wandb(
         "url": f"https://wandb.ai/research/Mario/runs/{RUN_ID}",
         "metrics": {
             "leader/step": 1_500_000,
-            "eval/return_mean": 321.25,
+            "eval/return/mean": 321.25,
         },
     }
     generation, pointer = goal_catalog_documents(descriptor, [run_record])
@@ -1393,7 +1393,7 @@ def test_deathmatch_checkpoint_metric_contract_prioritizes_frag_evidence() -> No
             ],
         },
         {
-            "metric": "train/target/progress/kills/mean",
+            "metric": "train/progress/kills/mean",
             "direction": "max",
             "label": "Recent target kills mean",
             "evidence": "training",
@@ -1409,7 +1409,7 @@ def test_deathmatch_checkpoint_metric_contract_prioritizes_frag_evidence() -> No
             "rank_index": 1,
         },
         {
-            "metric": "train/target/return_mean",
+            "metric": "train/return/mean",
             "direction": "max",
             "label": "Recent target return mean",
             "evidence": "training",
@@ -1419,10 +1419,10 @@ def test_deathmatch_checkpoint_metric_contract_prioritizes_frag_evidence() -> No
 
 
 def test_checkpoint_metric_leaders_marks_each_best_value_and_ties() -> None:
-    train_success = "train/target/success/start_rate_mean"
-    train_return = "train/target/return_mean"
-    eval_success = "eval/success/start_rate_mean"
-    eval_return = "eval/return_mean"
+    train_success = "train/success/mean"
+    train_return = "train/return/mean"
+    eval_success = "eval/success/mean"
+    eval_return = "eval/return/mean"
 
     columns = tuple(
         {"metric": metric, "direction": "max"}
@@ -1514,31 +1514,31 @@ def test_catalog_attaches_latest_training_metrics_at_each_checkpoint(
         def scan_history(*, keys, page_size):
             assert page_size == 10_000
             if keys == [
-                "train/global_step",
-                "train/target/progress/kills/mean",
+                "train/step",
+                "train/progress/kills/mean",
             ]:
                 return [
                     {
-                        "train/global_step": 200_000,
-                        "train/target/progress/kills/mean": 2.5,
+                        "train/step": 200_000,
+                        "train/progress/kills/mean": 2.5,
                     },
                     {
-                        "train/global_step": 490_000,
-                        "train/target/progress/kills/mean": 9.0,
+                        "train/step": 490_000,
+                        "train/progress/kills/mean": 9.0,
                     },
                 ]
             if keys == [
-                "train/global_step",
-                "train/target/return_mean",
+                "train/step",
+                "train/return/mean",
             ]:
                 return [
                     {
-                        "train/global_step": 220_000,
-                        "train/target/return_mean": 11.5,
+                        "train/step": 220_000,
+                        "train/return/mean": 11.5,
                     },
                     {
-                        "train/global_step": 480_000,
-                        "train/target/return_mean": 22.0,
+                        "train/step": 480_000,
+                        "train/return/mean": 22.0,
                     },
                 ]
             assert "across_origins" not in " ".join(keys)
@@ -1562,19 +1562,19 @@ def test_catalog_attaches_latest_training_metrics_at_each_checkpoint(
 
     assert periodic_row["metrics"] == {
         "eval/progress/kills/mean": None,
-        "train/target/progress/kills/mean": 2.5,
+        "train/progress/kills/mean": 2.5,
         "eval/progress/kills/max": None,
-        "train/target/return_mean": 11.5,
+        "train/return/mean": 11.5,
     }
     assert final_row["metrics"] == {
         "eval/progress/kills/mean": None,
-        "train/target/progress/kills/mean": 9.0,
+        "train/progress/kills/mean": 9.0,
         "eval/progress/kills/max": None,
-        "train/target/return_mean": 22.0,
+        "train/return/mean": 22.0,
     }
     assert final_row["best_metrics"] == [
-        "train/target/progress/kills/mean",
-        "train/target/return_mean",
+        "train/progress/kills/mean",
+        "train/return/mean",
     ]
     assert periodic_row["best_metrics"] == []
     filtered = catalog.checkpoints(
@@ -1636,23 +1636,23 @@ def test_catalog_attaches_training_metrics_when_checkpoint_evaluation_is_disable
         def scan_history(*, keys, page_size):
             assert page_size == 10_000
             if keys == [
-                "train/global_step",
-                "train/target/success/start_rate_min",
+                "train/step",
+                "train/success/min",
             ]:
                 return [
                     {
-                        "train/global_step": 490_000,
-                        "train/target/success/start_rate_min": 1.0,
+                        "train/step": 490_000,
+                        "train/success/min": 1.0,
                     }
                 ]
             if keys == [
-                "train/global_step",
-                "train/target/return_mean",
+                "train/step",
+                "train/return/mean",
             ]:
                 return [
                     {
-                        "train/global_step": 480_000,
-                        "train/target/return_mean": 22.0,
+                        "train/step": 480_000,
+                        "train/return/mean": 22.0,
                     }
                 ]
             return []
@@ -1676,12 +1676,12 @@ def test_catalog_attaches_training_metrics_when_checkpoint_evaluation_is_disable
     assert page.warnings == ()
     assert row["evaluation"] is None
     assert row["metrics"] == {
-        "eval/success/start_rate_mean": None,
-        "train/target/success/start_rate_mean": None,
-        "eval/return_mean": None,
-        "train/target/return_mean": 22.0,
-        "eval/success/start_rate_min": None,
-        "train/target/success/start_rate_min": 1.0,
+        "eval/success/mean": None,
+        "train/success/mean": None,
+        "eval/return/mean": None,
+        "train/return/mean": 22.0,
+        "eval/success/min": None,
+        "train/success/min": 1.0,
     }
 
 
@@ -1699,7 +1699,7 @@ def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
             "promotion": {"checkpoint_id": periodic["checkpoint_id"]},
         },
     )
-    required_metric = "eval/success/start_rate_min"
+    required_metric = "eval/success/min"
 
     repo_root = Path.cwd()
     goal_path = repo_root / "experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml"
@@ -1739,8 +1739,8 @@ def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
             ],
             "metrics": {
                 required_metric: 1.0,
-                "eval/success/start_rate_mean": 1.0,
-                "eval/return_mean": 1.0,
+                "eval/success/mean": 1.0,
+                "eval/return/mean": 1.0,
             },
         },
         final["checkpoint_id"]: {
@@ -1825,15 +1825,15 @@ def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
     assert accepted_row["playback_seed_source"] == "evaluation"
     assert accepted["metrics"] == {
         required_metric: 1.0,
-        "eval/success/start_rate_mean": 1.0,
-        "eval/return_mean": 1.0,
+        "eval/success/mean": 1.0,
+        "eval/return/mean": 1.0,
         "leader/step": 250_000.0,
     }
-    assert accepted_row["metrics"]["eval/success/start_rate_mean"] == 1.0
-    assert accepted_row["metrics"]["eval/return_mean"] == 1.0
+    assert accepted_row["metrics"]["eval/success/mean"] == 1.0
+    assert accepted_row["metrics"]["eval/return/mean"] == 1.0
     assert accepted_row["best_metrics"] == [
-        "eval/success/start_rate_mean",
-        "eval/return_mean",
+        "eval/success/mean",
+        "eval/return/mean",
         required_metric,
     ]
     rejected = rejected_row["evaluation"]
@@ -1925,8 +1925,8 @@ def test_checkpoint_training_history_publishes_each_metric_before_fetching_next(
     from gradlab.play_catalog import _checkpoint_training_metric_history
 
     published = []
-    first = "train/target/return_mean"
-    second = "train/all/episode_steps_mean"
+    first = "train/return/mean"
+    second = "train/episode_steps/mean"
 
     class Run:
         def scan_history(self, *, keys, page_size):
@@ -1934,8 +1934,8 @@ def test_checkpoint_training_history_publishes_each_metric_before_fetching_next(
                 assert published == [(first, ((10, 2.0), (20, 3.0)))]
                 return []
             return [
-                {"train/global_step": 20, first: 3},
-                {"train/global_step": 10, first: 2},
+                {"train/step": 20, first: 3},
+                {"train/step": 10, first: 2},
             ]
 
     _checkpoint_training_metric_history(

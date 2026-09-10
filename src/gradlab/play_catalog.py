@@ -49,7 +49,6 @@ from gradlab.evaluation_fence import evaluation_selection_fence
 from gradlab.metric_names import (
     EVAL_ACCEPTANCE_PASS,
     EVAL_ACCEPTANCE_EPISODE_COMPLETED_COUNT,
-    EVAL_ACCEPTANCE_EPISODE_PLANNED_COUNT,
     EVAL_CHECKPOINT_STEP,
     LEADER_CHECKPOINT_STEP,
     TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN,
@@ -115,7 +114,7 @@ CHECKPOINT_COLUMN_ROLES = frozenset(
 )
 _EVAL_PROGRESS_METRIC_RE = re.compile(r"^eval/progress/([A-Za-z0-9_.-]+)/(mean|max)$")
 _TRAIN_PROGRESS_METRIC_RE = re.compile(
-    r"^train/target/progress/([A-Za-z0-9_.-]+)/mean$"
+    r"^train/progress/([A-Za-z0-9_.-]+)/mean$"
 )
 
 
@@ -3176,7 +3175,6 @@ class PlayCatalog:
                 result_keys = {
                     EVAL_CHECKPOINT_STEP,
                     EVAL_ACCEPTANCE_PASS,
-                    EVAL_ACCEPTANCE_EPISODE_PLANNED_COUNT,
                     EVAL_ACCEPTANCE_EPISODE_COMPLETED_COUNT,
                 }
                 evaluations = {}
@@ -3209,9 +3207,7 @@ class PlayCatalog:
                     evaluations[step] = {
                         "status": "accepted" if accepted >= 0.5 else "rejected",
                         "pass": accepted >= 0.5,
-                        "episodes_planned": _safe_int(
-                            raw.get(EVAL_ACCEPTANCE_EPISODE_PLANNED_COUNT)
-                        ),
+                        "episodes_planned": _safe_int(contract.get("episodes")),
                         "episodes_completed": _safe_int(
                             raw.get(EVAL_ACCEPTANCE_EPISODE_COMPLETED_COUNT)
                         ),

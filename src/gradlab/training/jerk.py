@@ -7,20 +7,22 @@ from typing import Any
 
 from gymnasium import spaces
 
-from gradlab.artifacts import install_model_bundle
 from gradlab.action_contract import (
     action_contract_meanings,
     configured_action_meanings,
     runtime_action_contract,
 )
-from gradlab.batch_runtime import EpisodeRecord
+from gradlab.artifacts import install_model_bundle
+from gradlab.batch_runtime import BatchMetricRecord, EpisodeRecord
 from gradlab.env import make_training_vec_env
 from gradlab.jerk import JerkSearch
+from gradlab.metric_inventory import active_reward_components, required_metric_names
 from gradlab.metric_names import (
-    TRAIN_ALGORITHM_JERK_BEST_RETURN_MEAN,
     TRAIN_ALGORITHM_JERK_BEST_PROGRAM_STEPS,
+    TRAIN_ALGORITHM_JERK_BEST_RETURN_MEAN,
     TRAIN_ALGORITHM_JERK_RETAINED_COUNT,
 )
+from gradlab.reward_metrics import RewardStatsAccumulator
 from gradlab.training_backend import (
     CHECKPOINT_EVAL_ACCEPTANCE,
     FIRST_TRAINING_SUCCESS_ACCEPTANCE,
@@ -34,7 +36,6 @@ from gradlab.training_lifecycle import (
     TrainingResult,
 )
 from gradlab.training_metrics import DeltaThroughputTracker, episode_succeeded
-
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "acceptance_mode": CHECKPOINT_EVAL_ACCEPTANCE,
@@ -225,6 +226,11 @@ def run_jerk(context: BackendContext) -> TrainingResult:
             progress_fields=JERK_PROGRESS_FIELDS,
         )
         context.mark_ready()
+        reward_stats = RewardStatsAccumulator(
+            task=config.task,
+            active_components=active_reward_components(config.task),
+            required_metrics=required_metric_names(common_config),
+        )
         throughput = DeltaThroughputTracker(env, initial_step=search.global_step)
         next_log = int(backend_config["log_interval_steps"])
         checkpoint_freq = int(common_config["checkpoint_freq"])
@@ -246,6 +252,9 @@ def run_jerk(context: BackendContext) -> TrainingResult:
             actions = search.next_actions()
             _observations, rewards, dones, _infos = env.step(actions)
             records = env.drain_records()
+            for record in records:
+                if isinstance(record, BatchMetricRecord):
+                    reward_stats.consume(record.metrics, reserve=n_envs)
             records_by_lane: dict[int, EpisodeRecord] = {}
             success_records: list[EpisodeRecord] = []
             for record in records:
@@ -295,6 +304,7 @@ def run_jerk(context: BackendContext) -> TrainingResult:
                     metrics={
                         **_wandb_metric_payload(search),
                         **throughput.snapshot(step),
+                        **reward_stats.flush(),
                     },
                 )
                 next_log += int(backend_config["log_interval_steps"])
@@ -321,6 +331,7 @@ def run_jerk(context: BackendContext) -> TrainingResult:
             metrics={
                 **_wandb_metric_payload(search),
                 **throughput.snapshot(step),
+                **reward_stats.flush(),
             },
         )
         default_reason = (

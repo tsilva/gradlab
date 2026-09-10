@@ -8,9 +8,9 @@ import gymnasium as gym
 import numpy as np
 import pytest
 
-from gradlab.batch_runtime import EpisodeRecord
-from gradlab.callbacks import MetricEarlyStopHelper
 from gradlab.action_program import ActionProgramPolicy
+from gradlab.batch_runtime import BatchMetricRecord, EpisodeRecord
+from gradlab.callbacks import MetricEarlyStopHelper
 from gradlab.jerk import (
     JerkSearch,
     RetainedSequence,
@@ -31,7 +31,6 @@ from gradlab.training_lifecycle import (
     TrainingSession,
 )
 from gradlab.training_metrics import EpisodeMetricsReducer
-
 
 ACTIONS = ("noop", "right", "right_b", "right_a", "right_a_b", "a", "left")
 
@@ -275,9 +274,10 @@ class _FakeJerkEnv:
         )
 
     def drain_records(self):
+        rewards = [BatchMetricRecord(num_envs=1, metrics={"shaped_reward": np.array([1.0])})]
         if not self.success or self.steps != 1:
-            return []
-        return [
+            return rewards
+        return rewards + [
             EpisodeRecord(
                 lane=0,
                 episode_index=0,
@@ -363,7 +363,12 @@ def _jerk_context(
     return SimpleNamespace(
         train_config=train_config,
         backend_config=train_config["training_backend"]["config"],
-        environment=SimpleNamespace(game="SuperMarioBros-Nes-v0", state="Level1-1", states=()),
+        environment=SimpleNamespace(
+            game="SuperMarioBros-Nes-v0",
+            state="Level1-1",
+            states=(),
+            task={"id": "identity", "reward": {"reward_mode": "native"}},
+        ),
         checkpoint_dir=tmp_path / "checkpoints",
         run_dir=tmp_path,
         metric_store=metric_store,
@@ -414,9 +419,13 @@ def test_first_training_success_saves_playable_checkpoint_and_stops(tmp_path) ->
     final_metrics = next(
         payload
         for payload, _metadata in context.metric_store.payloads
-        if "train/target/success/by_start/Level1-1/episodes_total" in payload
+        if "train/success/Level1-1/count" in payload
     )
-    assert final_metrics["train/target/success/by_start/Level1-1/episodes_total"] == 1
+    assert final_metrics["train/success/Level1-1/count"] == 1
+    assert any(
+        payload.get("train/reward/mean") == 1.0
+        for payload, _metadata in context.metric_store.payloads
+    )
 
 
 def test_local_jerk_success_stops_without_scientific_acceptance_checkpoint(tmp_path) -> None:

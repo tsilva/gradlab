@@ -16,12 +16,15 @@ from gradlab.file_utils import atomic_write_json
 from gradlab.metric_names import (
     TRAIN_ARTIFACT_SAVE_SECONDS,
     TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN,
-    TRAIN_OUTCOME_SUCCESS_STARTS_OBSERVED_CUMULATIVE_RATE_MEAN,
+    metric_path_segment,
     train_early_stop_metric,
     validate_metric_payload,
 )
-from gradlab.training_metrics import EpisodeMetricsReducer, episode_succeeded
-
+from gradlab.training_metrics import (
+    LOCAL_COMPLETION_FRACTION,
+    EpisodeMetricsReducer,
+    episode_succeeded,
+)
 
 TRAINING_RESULT_FILENAME = "training-result.json"
 LEARNER_READY_FILENAME = "learner-ready.json"
@@ -232,7 +235,7 @@ COMMON_PROGRESS_FIELDS = (
         group="outcomes",
     ),
     ProgressField(
-        TRAIN_OUTCOME_SUCCESS_STARTS_OBSERVED_CUMULATIVE_RATE_MEAN,
+        LOCAL_COMPLETION_FRACTION,
         "completion",
         ProgressValueFormat.PERCENT,
         group="outcomes",
@@ -490,6 +493,10 @@ class CheckpointCoordinator:
         return installed
 
 
+def local_target_progress_field(condition_id: str) -> str:
+    return f"target_progress:{metric_path_segment(condition_id)}"
+
+
 class MetricStopController:
     def __init__(
         self,
@@ -504,6 +511,7 @@ class MetricStopController:
         self.stop_flag = stop_flag
         self.event = event
         self.decision: Mapping[str, Any] | None = None
+        self.local_metrics: dict[str, float] = {}
 
     def target_progress_fields(self) -> tuple[ProgressField, ...]:
         if self.machine is None:
@@ -519,7 +527,7 @@ class MetricStopController:
             )
             fields.append(
                 ProgressField(
-                    train_early_stop_metric(condition_id, "target/progress"),
+                    local_target_progress_field(condition_id),
                     label,
                     ProgressValueFormat.PERCENT,
                     group="outcomes",
@@ -551,11 +559,11 @@ class MetricStopController:
         update = self.machine.update(samples)
         metrics: dict[str, int | float] = {}
         for condition_id, observation in update.observations.items():
-            metrics[
-                train_early_stop_metric(condition_id, "patience/progress")
-            ] = observation.patience_progress
+            metrics[train_early_stop_metric(condition_id, "fraction")] = (
+                observation.patience_progress
+            )
             if observation.target_progress is not None:
-                metrics[train_early_stop_metric(condition_id, "target/progress")] = (
+                self.local_metrics[local_target_progress_field(condition_id)] = (
                     observation.target_progress
                 )
         if update.stop_decision is not None:
@@ -706,6 +714,7 @@ class TrainingSession:
         metrics = self.reducer.consume(records)
         self.progress_metrics.update(self._finite_scalars(progress_metrics or {}))
         self.progress_metrics.update(metrics)
+        self.progress_metrics.update(self.reducer.local_progress())
         self.progress.update(step=current, metrics=self.progress_metrics)
         return metrics
 
@@ -737,6 +746,7 @@ class TrainingSession:
         self.last_report_step = int(step)
         self.last_report_payload = dict(payload)
         self.progress_metrics.update(payload)
+        self.progress_metrics.update(self.stop_controller.local_metrics)
         self.progress.update(step=int(step), metrics=self.progress_metrics)
         return self.stop_controller.decision is not None
 

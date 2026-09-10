@@ -551,14 +551,14 @@ export function metricLabel(metric) {
   const name = String(metric || "");
   const known = {
     "leader/step": "Checkpoint step",
-    "train/global_step": "Global step",
-    "train/target/return_mean": "Recent target return mean",
-    "train/target/success/start_rate_min": "Recent all-start success rate min",
-    "train/target/success/start_rate_mean": "Recent all-start success rate mean",
-    "eval/success/start_rate_min": "Full-eval start success rate min",
-    "eval/success/start_rate_mean": "Full-eval start success rate mean",
-    "eval/return_mean": "Mean return",
-    "eval/return_max": "Best return",
+    "train/step": "Global step",
+    "train/return/mean": "Recent target return mean",
+    "train/success/min": "Recent all-start success rate min",
+    "train/success/mean": "Recent all-start success rate mean",
+    "eval/success/min": "Full-eval start success rate min",
+    "eval/success/mean": "Full-eval start success rate mean",
+    "eval/return/mean": "Mean return",
+    "eval/return/max": "Best return",
   };
   if (known[name]) return known[name];
   const progress = name.match(/^eval\/progress\/([^/]+)\/(mean|max)$/);
@@ -1287,6 +1287,7 @@ export class SourceBrowser {
     this.initialCatalogConsumed = false;
     this.environmentCatalogCache = null;
     this.goalCatalogCache = new Map();
+    this.goalActivityCache = new Map();
     this.favoriteEnvironments = readEnvironmentFavorites();
     writeEnvironmentFavorites(this.favoriteEnvironments);
     this.historyEnabled = (
@@ -1368,7 +1369,7 @@ export class SourceBrowser {
       this.selectedCheckpoints.clear();
       this.resetGoalVariantDetail();
       this.autoSelectedRoute = "";
-      restoredCatalog = this.restoreEnvironmentCatalog() || this.restoreGoalCatalog();
+      restoredCatalog = this.restoreEnvironmentCatalog() || this.restoreGoalCatalog() || this.restoreGoalActivity();
       this.syncUrl("replace");
     }
     this.hydrateInitialEnvironments();
@@ -1754,6 +1755,28 @@ export class SourceBrowser {
     return true;
   }
 
+  rememberGoalActivity() {
+    if (this.route.level !== "goal_variants") return;
+    this.goalActivityCache.set(this.routeKey(), {
+      items: [...this.sourceItems],
+      activityRevision: this.activityRevision,
+    });
+    if (this.goalActivityCache.size > 20) {
+      this.goalActivityCache.delete(this.goalActivityCache.keys().next().value);
+    }
+  }
+
+  restoreGoalActivity() {
+    if (this.route.level !== "goal_variants") return false;
+    const cached = this.goalActivityCache.get(this.routeKey());
+    if (!cached) return false;
+    this.sourceItems = [...cached.items];
+    this.items = [...this.sourceItems];
+    this.activityRevision = cached.activityRevision;
+    this.freshness = "stale";
+    return true;
+  }
+
   endpoint(cursor = null, { force = false } = {}) {
     const query = new URLSearchParams();
     if (this.query.trim()) query.set("q", this.query.trim());
@@ -1875,6 +1898,8 @@ export class SourceBrowser {
       this.error = "";
       this.rememberEnvironmentCatalog();
       this.rememberGoalCatalog();
+      this.rememberGoalActivity();
+      this.goalVariantDiff = null;
       if (this.route.level === "goals" && received.some((item) => item.evidence_status === "pending")) {
         void this.loadGoalEvidence(key, this.goalEvidenceEpoch, cursor, received);
       }
@@ -2108,7 +2133,7 @@ export class SourceBrowser {
       this.items = [...this.sourceItems];
       this.freshness = "partial";
     } else {
-      restoredCatalog = this.restoreEnvironmentCatalog() || this.restoreGoalCatalog();
+      restoredCatalog = this.restoreEnvironmentCatalog() || this.restoreGoalCatalog() || this.restoreGoalActivity();
     }
     this.hydrateInitialEnvironments();
     this.renderView();
@@ -2552,13 +2577,13 @@ export class SourceBrowser {
       });
       error.append(message, retry);
       body.append(error);
-      return body;
+      if (!this.items.length) return body;
     }
     if (this.loading) {
       body.classList.add("loading");
       if (!this.items.length) body.classList.add("loading-empty");
     }
-    if (!this.items.length && !this.loading) {
+    if (!this.items.length && !this.loading && this.loadedKey) {
       const empty = document.createElement("div");
       empty.className = "source-empty";
       const heading = document.createElement("strong");
@@ -2823,7 +2848,37 @@ export class SourceBrowser {
       ({ variant }) => variant.variant_id === this.selectedGoalVariantId,
     ) || variants.find(({ presentation }) => presentation.kind === "current_default")
       || variants[0];
-    if (!selected) return container;
+    if (!selected) {
+      if (this.loading || !this.loadedKey) {
+        container.setAttribute("aria-busy", "true");
+        const layout = document.createElement("div");
+        layout.className = "goal-configuration-layout";
+        const list = document.createElement("aside");
+        list.className = "goal-configuration-list";
+        const heading = document.createElement("h3");
+        heading.textContent = "Goal configurations";
+        list.append(heading);
+        for (let index = 0; index < 4; index += 1) {
+          const card = document.createElement("div");
+          card.className = "goal-configuration-option goal-configuration-placeholder";
+          for (let line = 0; line < 4; line += 1) {
+            card.append(this.tableSkeleton("Loading goal configuration"));
+          }
+          list.append(card);
+        }
+        const panel = document.createElement("section");
+        panel.className = "goal-configuration-panel";
+        for (const className of ["goal-configuration-panel-header", "goal-configuration-runs", "goal-configuration-baseline"]) {
+          const section = document.createElement("div");
+          section.className = `${className} goal-configuration-placeholder`;
+          section.append(this.tableSkeleton("Loading configuration details"), this.tableSkeleton());
+          panel.append(section);
+        }
+        layout.append(list, panel);
+        container.append(layout);
+      }
+      return container;
+    }
     this.selectedGoalVariantId = String(selected.variant.variant_id || "");
     if (this.goalVariantDiff?.variantId !== this.selectedGoalVariantId) {
       this.goalVariantDiff = this.goalVariantDiffFromActivity(selected.variant);
@@ -3392,9 +3447,7 @@ export class SourceBrowser {
               ...(showingCheckpoints ? [[null, "", "source-selection-cell"]] : []),
               [
                 checkpointName,
-                showingCheckpoints
-                  ? [item.checkpoint_id, item.sha256].filter(Boolean).join(" · ")
-                  : "",
+                "",
                 "checkpoint-cell",
               ],
               [Number(item.step).toLocaleString(), "", "data-cell"],
@@ -3541,7 +3594,7 @@ export class SourceBrowser {
           const identity = document.createElement("div");
           identity.className = "checkpoint-identity";
           identity.append(main);
-          if (item.purpose) {
+          if (/final/i.test(String(item.purpose || ""))) {
             const badge = document.createElement("span");
             badge.className = "checkpoint-purpose-badge";
             badge.textContent = item.purpose;

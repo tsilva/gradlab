@@ -10,7 +10,7 @@ import numpy as np
 from gymnasium import spaces
 
 from gradlab.action_program import ActionProgramPolicy
-from gradlab.batch_runtime import EpisodeRecord
+from gradlab.batch_runtime import BatchMetricRecord, EpisodeRecord
 from gradlab.cell_graph import CellGraphExecutionContext, CellGraphPolicy
 from gradlab.go_explore import GoExploreSearch
 from gradlab.metric_names import (
@@ -22,16 +22,15 @@ from gradlab.metric_names import (
     TRAIN_GO_EXPLORE_BEST_PROGRAM_STEPS,
     TRAIN_GO_EXPLORE_BEST_PROGRESS,
     TRAIN_GO_EXPLORE_BEST_RETURN,
-    TRAIN_OUTCOME_SUCCESS_STARTS_OBSERVED_CUMULATIVE_RATE_MEAN,
 )
 from gradlab.task_kernels import Outcome
+from gradlab.training import go_explore as go_explore_training
 from gradlab.training.go_explore import (
     GO_EXPLORE_PROGRESS_FIELDS,
     GoExploreBackend,
     normalize_config,
     run_go_explore,
 )
-from gradlab.training import go_explore as go_explore_training
 from gradlab.training_backend import BackendContext, GracefulStopFlag
 from gradlab.training_lifecycle import (
     TerminalReason,
@@ -39,7 +38,7 @@ from gradlab.training_lifecycle import (
     TrainingExecutionPolicy,
     TrainingSession,
 )
-from gradlab.training_metrics import EpisodeMetricsReducer
+from gradlab.training_metrics import LOCAL_COMPLETION_FRACTION, EpisodeMetricsReducer
 
 
 def test_go_explore_progress_fields_define_dashboard_groups() -> None:
@@ -341,7 +340,7 @@ class GoExploreSearchTests(unittest.TestCase):
                 )
                 self.assertEqual(progress.n, 1 if interrupted else 2)
                 self.assertNotIn(
-                    TRAIN_OUTCOME_SUCCESS_STARTS_OBSERVED_CUMULATIVE_RATE_MEAN,
+                    LOCAL_COMPLETION_FRACTION,
                     progress.metrics,
                 )
 
@@ -403,7 +402,7 @@ class GoExploreSearchTests(unittest.TestCase):
             10.0,
         )
         self.assertEqual(
-            progress.metrics[TRAIN_OUTCOME_SUCCESS_STARTS_OBSERVED_CUMULATIVE_RATE_MEAN],
+            progress.metrics[LOCAL_COMPLETION_FRACTION],
             1.0,
         )
 
@@ -462,8 +461,11 @@ class GoExploreSearchTests(unittest.TestCase):
                 )
 
             def drain_records(self):
+                rewards = (
+                    BatchMetricRecord(num_envs=1, metrics={"shaped_reward": np.array([0.0])}),
+                )
                 if completion_event and self.steps == 1:
-                    return (
+                    return rewards + (
                         EpisodeRecord(
                             lane=0,
                             episode_index=0,
@@ -477,7 +479,7 @@ class GoExploreSearchTests(unittest.TestCase):
                             metrics={"level_complete": True},
                         ),
                     )
-                return ()
+                return rewards
 
             def state_archive_summary(self):
                 return {}
@@ -644,7 +646,10 @@ class GoExploreSearchTests(unittest.TestCase):
                     },
                 },
             },
-            environment=SimpleNamespace(game="SuperMarioBros-Nes-v0"),
+            environment=SimpleNamespace(
+                game="SuperMarioBros-Nes-v0",
+                task={"id": "identity", "reward": {"reward_mode": "native"}},
+            ),
             run_dir=root,
             checkpoint_dir=checkpoint_dir,
             metric_store=mock.Mock(),
@@ -682,6 +687,9 @@ class GoExploreSearchTests(unittest.TestCase):
         ):
             result = run_go_explore(context)
         session.finalize(result)
+        assert any(
+            payload.get("train/reward/mean") == 0.0 for payload, _metadata in metric_store.payloads
+        )
 
         return (
             metric_store.checkpoints,

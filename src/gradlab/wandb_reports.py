@@ -17,7 +17,6 @@ from gradlab.metric_names import (
     EVAL_FULL_START_TABLE,
     EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
     EVAL_ACCEPTANCE_EPISODE_COMPLETED_COUNT,
-    EVAL_ACCEPTANCE_EPISODE_PLANNED_COUNT,
     EVAL_ACCEPTANCE_PASS,
     EVAL_CHECKPOINT_STEP,
     LEADER_CHECKPOINT_ARTIFACT_REF,
@@ -28,16 +27,10 @@ from gradlab.metric_names import (
     LEADER_CHECKPOINT_OUTCOME_SUCCESS_STARTS_RATE_MIN,
     LEADER_CHECKPOINT_PROJECTION_TIMESTAMP,
     METRICS_SCHEMA_VERSION,
-    TRAIN_A2C_EXPLAINED_VARIANCE,
-    TRAIN_A2C_LEARNING_RATE,
-    TRAIN_A2C_POLICY_ENTROPY,
-    TRAIN_A2C_VALUE_LOSS,
     TRAIN_ARTIFACT_SAVE_SECONDS,
     TRAIN_GLOBAL_STEP,
     TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MEAN,
     TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN,
-    TRAIN_OUTCOME_SUCCESS_STARTS_OBSERVED_CUMULATIVE_RATE_MEAN,
-    TRAIN_OUTCOME_SUCCESS_STARTS_OBSERVED_CUMULATIVE_RATE_MIN,
     TRAIN_PPO_APPROX_KL,
     TRAIN_PPO_CLIP_FRACTION,
     TRAIN_PPO_EXPLAINED_VARIANCE,
@@ -107,7 +100,6 @@ ACTIVE_COLUMNS = [
     "config:algorithm_id.value",
     f"summary:{EVAL_ACCEPTANCE_PASS}",
     f"summary:{EVAL_ACCEPTANCE_EPISODE_COMPLETED_COUNT}",
-    f"summary:{EVAL_ACCEPTANCE_EPISODE_PLANNED_COUNT}",
 ]
 COLUMN_WIDTHS = {
     "run:name": 320,
@@ -410,9 +402,7 @@ def _leader_order_spec(criteria: Sequence[RankCriterion]) -> list[tuple[str, boo
 
 
 def _leader_columns(goal: GoalReportSpec) -> list[str]:
-    rank_columns = [
-        f"summary:{metric}" for metric, _ascending in _leader_order_spec(goal.rank)
-    ]
+    rank_columns = [f"summary:{metric}" for metric, _ascending in _leader_order_spec(goal.rank)]
     return list(dict.fromkeys([*LEADER_COLUMNS, *rank_columns]))
 
 
@@ -491,7 +481,7 @@ def _line(wr, *, title: str, x: str, y: Sequence[str], w: int = 12, h: int = 8):
     return wr.LinePlot(
         title=title,
         x=x,
-        y=list(y),
+        y=list(dict.fromkeys(y)),
         layout=wr.Layout(w=w, h=h),
         smoothing_type="none",
     )
@@ -539,7 +529,6 @@ def _goal_section_blocks(wr, section: str, goal: GoalReportSpec, *, entity: str)
                         x=EVAL_CHECKPOINT_STEP,
                         y=[
                             EVAL_ACCEPTANCE_EPISODE_COMPLETED_COUNT,
-                            EVAL_ACCEPTANCE_EPISODE_PLANNED_COUNT,
                         ],
                     ),
                     _line(
@@ -566,29 +555,22 @@ def _goal_section_blocks(wr, section: str, goal: GoalReportSpec, *, entity: str)
         panels = [
             _line(
                 wr,
-                title="Cumulative training success",
-                x=TRAIN_GLOBAL_STEP,
-                y=[
-                    TRAIN_OUTCOME_SUCCESS_STARTS_OBSERVED_CUMULATIVE_RATE_MIN,
-                    TRAIN_OUTCOME_SUCCESS_STARTS_OBSERVED_CUMULATIVE_RATE_MEAN,
-                ],
-            ),
-            _line(
-                wr,
                 title="Recent all-start training success",
                 x=TRAIN_GLOBAL_STEP,
                 y=[
                     TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN,
-                    TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MEAN,
-                ],
+                ]
+                + (
+                    [TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MEAN]
+                    if len(goal.starts) > 1
+                    else []
+                ),
             ),
         ]
-        if len(goal.starts) <= 4:
+        if 1 < len(goal.starts) <= 4:
             for start in goal.starts:
-                metric = f"train/target/success/by_start/{start}/rate"
-                panels.append(
-                    _line(wr, title=metric, x=TRAIN_GLOBAL_STEP, y=[metric], w=12, h=7)
-                )
+                metric = f"train/success/{start}/fraction"
+                panels.append(_line(wr, title=metric, x=TRAIN_GLOBAL_STEP, y=[metric], w=12, h=7))
         return [
             wr.H2("Training progress (diagnostic only)"),
             wr.MarkdownBlock(
@@ -615,7 +597,7 @@ def _goal_section_blocks(wr, section: str, goal: GoalReportSpec, *, entity: str)
                         title="Training failure-reason rates",
                         x=TRAIN_GLOBAL_STEP,
                         y=[],
-                        metric_regex=r"train/all/boundary_event/.*/rolling/rate",
+                        metric_regex=r"train/unsuccessful/.*/fraction",
                         layout=wr.Layout(w=12, h=8),
                     ),
                 ],
@@ -631,19 +613,19 @@ def _goal_section_blocks(wr, section: str, goal: GoalReportSpec, *, entity: str)
                         wr,
                         title="Explained variance",
                         x=TRAIN_GLOBAL_STEP,
-                        y=[TRAIN_PPO_EXPLAINED_VARIANCE, TRAIN_A2C_EXPLAINED_VARIANCE],
+                        y=[TRAIN_PPO_EXPLAINED_VARIANCE],
                     ),
                     _line(
                         wr,
                         title="Value loss",
                         x=TRAIN_GLOBAL_STEP,
-                        y=[TRAIN_PPO_VALUE_LOSS, TRAIN_A2C_VALUE_LOSS],
+                        y=[TRAIN_PPO_VALUE_LOSS],
                     ),
                     _line(
                         wr,
                         title="Learning rate",
                         x=TRAIN_GLOBAL_STEP,
-                        y=[TRAIN_PPO_LEARNING_RATE, TRAIN_A2C_LEARNING_RATE],
+                        y=[TRAIN_PPO_LEARNING_RATE],
                     ),
                     _line(
                         wr,
@@ -651,7 +633,6 @@ def _goal_section_blocks(wr, section: str, goal: GoalReportSpec, *, entity: str)
                         x=TRAIN_GLOBAL_STEP,
                         y=[
                             TRAIN_PPO_POLICY_ENTROPY,
-                            TRAIN_A2C_POLICY_ENTROPY,
                         ],
                     ),
                     _line(

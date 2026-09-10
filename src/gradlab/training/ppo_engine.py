@@ -19,6 +19,7 @@ from gradlab.callbacks import (
     ARCHIVE_CURRICULUM_METRIC_MAP,
     RewardStatsAccumulator,
 )
+from gradlab.metric_inventory import required_metric_names
 from gradlab.metric_names import (
     TRAIN_PPO_APPROX_KL,
     TRAIN_PPO_CLIP_FRACTION,
@@ -44,7 +45,6 @@ from gradlab.training.sb3_on_policy import (
 from gradlab.training_backend import BackendContext
 from gradlab.training_lifecycle import ProgressField, TrainingExecutionMode, TrainingResult
 from gradlab.training_metrics import throughput_delta_metrics
-
 
 ObservationTree = torch.Tensor | dict[str, "ObservationTree"]
 
@@ -1138,6 +1138,8 @@ def run_gradlab_ppo(
         precision = _Precision(str(backend_config["precision"]), device)
         reward_stats = RewardStatsAccumulator(
             active_components=active_reward_components(config.task),
+            task=config.task,
+            required_metrics=required_metric_names(common_config),
         )
         curriculum = _CurriculumFeedback(runtime)
         throughput = _ThroughputTracker(context, runtime, device)

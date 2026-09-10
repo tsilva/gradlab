@@ -269,6 +269,6 @@ def test_training_telemetry_registers_every_deathmatch_component() -> None:
     accumulator.consume(step.metrics, reserve=1)
     payload = accumulator.flush()
 
-    assert payload["train/reward/component/kill/mean"] == 1.0
-    assert payload["train/reward/component/kill/nonzero/rate"] == 1.0
-    assert payload["train/reward/component/kill/share"] == 1.0
+    assert payload["train/reward/part/kill/mean"] == 1.0
+    assert payload["train/reward/part/kill/fraction"] == 1.0
+    assert payload["train/reward/part/kill/share"] == 1.0

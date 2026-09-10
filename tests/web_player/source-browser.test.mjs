@@ -484,7 +484,7 @@ test("run evidence status distinguishes missing evaluation from failed evaluatio
   assert.equal(runEvaluationEvidenceStatus({ success_badges: ["eval/success"] }).label, "Accepted");
 });
 
-const METRIC = "eval/return_mean";
+const METRIC = "eval/return/mean";
 
 test("checkpoint selection boxes are centered and distinguish enabled from disabled", async () => {
   const styles = await readFile(
@@ -715,7 +715,7 @@ test("goal configuration summaries preserve useful science without leaking raw c
     differenceLabel: "5 changes",
   };
   assert.equal(goalConfigurationSummary({
-    display_label: "Eval → {\"acceptance\":[{\"metric\":\"eval/return_mean\"}]} · Evaluation mode training_only → evaluated · +3 more",
+    display_label: "Eval → {\"acceptance\":[{\"metric\":\"eval/return/mean\"}]} · Evaluation mode training_only → evaluated · +3 more",
   }, presentation), "Evaluation mode training_only → evaluated · 5 changes total");
   assert.equal(goalConfigurationSummary({ display_label: "" }, presentation), "5 changes from current goal");
 });
@@ -1435,27 +1435,27 @@ test("run metrics use compact labels and values", () => {
   assert.equal(metricLabel("leader/step"), "Checkpoint step");
   assert.equal(metricLabel(METRIC), "Mean return");
   assert.equal(
-    metricLabel("train/target/success/start_rate_min"),
+    metricLabel("train/success/min"),
     "Recent all-start success rate min",
   );
   assert.equal(
-    metricLabel("train/target/success/start_rate_mean"),
+    metricLabel("train/success/mean"),
     "Recent all-start success rate mean",
   );
   assert.equal(
-    metricLabel("train/target/return_mean"),
+    metricLabel("train/return/mean"),
     "Recent target return mean",
   );
   assert.equal(
-    metricLabel("train/target/progress/kills/mean"),
+    metricLabel("train/progress/kills/mean"),
     "Recent target kills mean",
   );
   assert.equal(
-    metricLabel("train/target/progress/bricks_destroyed/max"),
+    metricLabel("train/progress/bricks_destroyed/max"),
     "Recent target bricks destroyed max",
   );
   assert.equal(
-    formatMetricValue("eval/success/start_rate_min", 0.875),
+    formatMetricValue("eval/success/min", 0.875),
     "87.5%",
   );
   assert.equal(formatMetricValue(METRIC, null), "—");
@@ -1463,19 +1463,19 @@ test("run metrics use compact labels and values", () => {
 
 test("checkpoint metric headers preserve semantics in one short line", () => {
   assert.equal(checkpointMetricHeaderLabel({
-    metric: "eval/success/start_rate_min",
+    metric: "eval/success/min",
     evidence: "evaluation",
   }), "Eval success");
   assert.equal(checkpointMetricHeaderLabel({
-    metric: "train/target/success/start_rate_min",
+    metric: "train/success/min",
     evidence: "training",
   }), "Train success");
   assert.equal(checkpointMetricHeaderLabel({
-    metric: "eval/return_mean",
+    metric: "eval/return/mean",
     evidence: "evaluation",
   }), "Eval return");
   assert.equal(checkpointMetricHeaderLabel({
-    metric: "train/target/return_mean",
+    metric: "train/return/mean",
     evidence: "training",
   }), "Train return");
   assert.equal(checkpointMetricHeaderLabel({
@@ -1544,10 +1544,10 @@ test("run finish reasons distinguish resource, training, and evaluation outcomes
       early_stop: {
         condition_id: "training_target",
         trigger: "threshold",
-        metric: "train/target/return_mean",
+        metric: "train/return/mean",
         value: 5.25,
         condition: {
-          metric: "train/target/return_mean",
+          metric: "train/return/mean",
           trigger: "threshold",
           operator: ">=",
           threshold: 5,
@@ -1667,14 +1667,14 @@ test("unevaluated and unsuccessfully evaluated checkpoints are selectable", () =
 });
 
 test("checkpoint metric cells identify their own leaders", async () => {
-  const trainSuccess = "train/target/success/start_rate_mean";
-  const evalReturn = "eval/return_mean";
+  const trainSuccess = "train/success/mean";
+  const evalReturn = "eval/return/mean";
   const checkpoint = { best_metrics: [trainSuccess, evalReturn] };
 
   assert.equal(checkpointMetricIsBest(checkpoint, trainSuccess), true);
   assert.equal(checkpointMetricIsBest(checkpoint, evalReturn), true);
   assert.equal(
-    checkpointMetricIsBest(checkpoint, "eval/success/start_rate_mean"),
+    checkpointMetricIsBest(checkpoint, "eval/success/mean"),
     false,
   );
   assert.equal(checkpointMetricIsBest({}, trainSuccess), false);
@@ -1893,6 +1893,7 @@ test("runless run routes return to goal versions instead of rendering run select
   browser.resetGoalVariantDetail = () => {};
   browser.restoreEnvironmentCatalog = () => false;
   browser.restoreGoalCatalog = () => false;
+  browser.restoreGoalActivity = () => false;
   browser.hydrateInitialEnvironments = () => false;
   browser.checkpointTrainingController = null;
   browser.checkpointTrainingSerial = 0;
@@ -2150,18 +2151,18 @@ test("run efficiency prefers complete goal evaluation and follows its rank order
   ];
   const fallback = [
     {
-      metric: "train/target/success/start_rate_min",
+      metric: "train/success/min",
       direction: "max",
     },
-    { metric: "train/global_step", direction: "min" },
+    { metric: "train/step", direction: "min" },
   ];
   const items = [
     {
       run_id: "training-only",
       recipe: "fast-training",
       metrics: {
-        "train/target/success/start_rate_min": 1,
-        "train/global_step": 100,
+        "train/success/min": 1,
+        "train/step": 100,
       },
     },
     {
@@ -2199,24 +2200,24 @@ test("run efficiency labels training fallback without evaluation evidence", () =
   ];
   const fallback = [
     {
-      metric: "train/target/success/start_rate_min",
+      metric: "train/success/min",
       direction: "max",
     },
-    { metric: "train/global_step", direction: "min" },
+    { metric: "train/step", direction: "min" },
   ];
   const items = [
     {
       run_id: "slower",
       metrics: {
-        "train/target/success/start_rate_min": 0.9,
-        "train/global_step": 2_000,
+        "train/success/min": 0.9,
+        "train/step": 2_000,
       },
     },
     {
       run_id: "faster",
       metrics: {
-        "train/target/success/start_rate_min": 0.9,
-        "train/global_step": 1_000,
+        "train/success/min": 0.9,
+        "train/step": 1_000,
       },
     },
   ];
@@ -2322,4 +2323,43 @@ test("interrupted checkpoint evidence keeps received values and releases refresh
   assert.equal(browser.checkpointTrainingController, null);
   assert.equal(browser.freshness, "partial");
   assert.match(browser.catalogWarnings[0].message, /ended before completion/);
+});
+
+test("goal activity restores available content while leaving refresh pending", () => {
+  const view = Object.create(SourceBrowser.prototype);
+  Object.assign(view, {
+    route: { level: "goal_variants", environment_id: "env", goal_id: "goal" },
+    query: "", goalActivityCache: new Map(), loadedKey: "",
+    sourceItems: [{ variant_id: "current", recent_runs: [] }], activityRevision: "revision",
+  });
+  view.rememberGoalActivity();
+  view.sourceItems = [];
+  view.items = [];
+  assert.equal(view.restoreGoalActivity(), true);
+  assert.equal(view.items[0].variant_id, "current");
+  assert.equal(view.loadedKey, "");
+  assert.equal(view.freshness, "stale");
+  view.route.goal_id = "different";
+  assert.equal(view.restoreGoalActivity(), false);
+});
+
+test("goal configuration loading renders both columns before data arrives", () => {
+  const previousDocument = globalThis.document;
+  globalThis.document = { createElement: () => ({
+    children: [], attributes: {},
+    append(...children) { this.children.push(...children); },
+    setAttribute(name, value) { this.attributes[name] = value; },
+  }) };
+  try {
+    const view = Object.create(SourceBrowser.prototype);
+    Object.assign(view, { items: [], loading: true, loadedKey: "" });
+    const result = view.renderGoalVariants();
+    assert.equal(result.attributes["aria-busy"], "true");
+    const [list, panel] = result.children[0].children;
+    assert.equal(list.children.length, 5);
+    assert.equal(panel.children.length, 3);
+    assert.equal(list.children[1].children[0].attributes["role"], "status");
+  } finally {
+    globalThis.document = previousDocument;
+  }
 });

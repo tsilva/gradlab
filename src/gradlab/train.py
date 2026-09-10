@@ -1,19 +1,19 @@
 from __future__ import annotations
 
 # ruff: noqa: E402
-
 import argparse
+import hashlib
+import json
 import os
 import signal
 import sys
-import hashlib
-import json
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 
 from gradlab.local_paths import configure_matplotlib_cache
+from gradlab.metric_inventory import required_metric_names
 
 configure_matplotlib_cache()
 
@@ -28,8 +28,19 @@ from gradlab.env import (
 )
 from gradlab.env_config import env_config_from_mapping
 from gradlab.metric_store import MetricStore, metric_store_path
-from gradlab.provider_config import provider_num_envs
 from gradlab.policy_bundle import load_recipe_document
+from gradlab.provider_config import provider_num_envs
+from gradlab.rom_assets import (
+    manifest_from_train_config,
+    portable_rom_asset_identity,
+    validate_rom_asset_manifest,
+)
+from gradlab.rom_runtime import (
+    RomRuntimeBinding,
+    bind_cached_rom,
+    bind_rom_path,
+    runtime_cache_root,
+)
 from gradlab.seeds import validate_training_seed
 from gradlab.train_config import load_materialized_train_config
 from gradlab.training_backend import (
@@ -51,18 +62,6 @@ from gradlab.training_lifecycle import (
     TrainingSession,
 )
 from gradlab.training_metrics import EpisodeMetricsReducer
-from gradlab.rom_assets import (
-    manifest_from_train_config,
-    portable_rom_asset_identity,
-    validate_rom_asset_manifest,
-)
-from gradlab.rom_runtime import (
-    RomRuntimeBinding,
-    bind_cached_rom,
-    bind_rom_path,
-    runtime_cache_root,
-)
-
 
 GRACEFUL_STOP_SIGNAL = getattr(signal, "SIGUSR1", None)
 INTERNAL_LEARNER_ENV = "GRADLAB_INTERNAL_LEARNER"
@@ -259,6 +258,7 @@ def main(
             attempt_id=str(train_config["attempt_id"]),
             run_id=str(train_config.get("wandb_run_id") or train_config["run_name"]),
             reducer=EpisodeMetricsReducer(
+                required_metrics=required_metric_names(train_config),
                 event_names=tuple(task_termination(environment).get("failure", ())),
                 progress_fields=tuple(train_config.get("episode_progress_fields", ())),
                 configured_starts=tuple(

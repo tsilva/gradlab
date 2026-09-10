@@ -19,7 +19,7 @@ from gradlab.run_contracts import (
 )
 
 
-METRIC = "train/target/return_mean"
+METRIC = "train/return/mean"
 
 
 def _neutral_decision() -> tuple[dict, dict]:

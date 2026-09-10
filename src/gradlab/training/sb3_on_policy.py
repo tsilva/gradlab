@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from gradlab.metric_inventory import active_reward_components
-
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -12,11 +10,11 @@ from gymnasium import spaces
 
 from gradlab.action_contract import runtime_action_contract
 from gradlab.artifacts import install_model_bundle
+from gradlab.metric_inventory import active_reward_components, required_metric_names
 from gradlab.policy_execution import compile_policy_execution_contract
 from gradlab.state_archive import state_archive_artifact_summary
 from gradlab.training_backend import BackendContext
 from gradlab.training_lifecycle import ProgressField, TrainingExecutionMode, TrainingResult
-
 
 ModelFactory = Callable[[BackendContext, Any, Any, str], Any]
 ConfigNormalizer = Callable[..., dict[str, Any]]
@@ -257,12 +255,12 @@ def run_sb3_on_policy(
     from stable_baselines3.common.utils import set_random_seed
 
     from gradlab.callbacks import (
+        ArchiveCurriculumFeedbackHelper,
+        GradLabCallback,
         LedgerCheckpointHelper,
         MetricStoreLoggerHelper,
-        GradLabCallback,
         RolloutDiagnosticsHelper,
         RuntimeMetricsHelper,
-        ArchiveCurriculumFeedbackHelper,
         ThroughputHelper,
     )
     from gradlab.device import resolve_sb3_device
@@ -360,6 +358,8 @@ def run_sb3_on_policy(
                 RuntimeMetricsHelper(
                     event_names=tuple(task_termination(config).get("failure", ())),
                     active_reward_components=active_reward_components(config.task),
+                    task=config.task,
+                    required_metrics=required_metric_names(common_config),
                     progress_fields=tuple(common_config.get("episode_progress_fields", ())),
                     configured_starts=tuple(
                         config.states or ((config.state,) if config.state else ())

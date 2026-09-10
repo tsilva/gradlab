@@ -8,7 +8,7 @@ train:
   early_stop:
     conditions:
       return_target:
-        metric: train/target/return_mean
+        metric: train/return/mean
         trigger: threshold
         operator: '>='
         threshold: -13.0
@@ -17,7 +17,7 @@ train:
         outcome: success
         action: stop
       return_plateau:
-        metric: train/target/return_mean
+        metric: train/return/mean
         trigger: no_improvement
         direction: maximize
         min_delta: 1.0

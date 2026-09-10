@@ -989,6 +989,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             else "stochastic"
         )
         self.target_fps = max(0.0, float(args.fps))
+        self._next_presentation_at = 0.0
         self.remaining_steps = 0
         self.continue_target: str | None = None
         self.continue_count = 0
@@ -1575,6 +1576,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         transition: _PlaybackTransition | None = None,
         *,
         current: dict[str, Any] | None = None,
+        paced: bool = False,
     ) -> None:
         if transition is not None and current is None:
             current = transition_payload(
@@ -1595,6 +1597,12 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                     discount=self.value_discount,
                     comparison_reasons=self._critic_comparison_reasons(transition),
                 )
+        # Keep every history point, but only prepare live frames at display speed.
+        # Commands and terminal transitions bypass pacing so they remain visible.
+        now = time.perf_counter()
+        if paced and self.target_fps > 0 and now < self._next_presentation_at:
+            return
+        self._next_presentation_at = now + (1.0 / self.target_fps if self.target_fps > 0 else 0.0)
         if transition is not None:
             game_frame = transition.after_frame if "game" in self.processing_features else None
             obs_frames = transition.before_frames
@@ -1982,7 +1990,11 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 self.run_state = "paused"
                 if self.continue_count >= 10_000 and not matched:
                     self._status_message = "continue reached the 10,000-step safety limit"
-        self._publish(transition, current=current)
+        self._publish(
+            transition,
+            current=current,
+            paced=self.run_state in {"playing", "stepping", "continuing"},
+        )
         return transition
 
     def _run(self) -> None:
@@ -1998,7 +2010,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             if self.run_state not in {"playing", "stepping", "continuing"}:
                 time.sleep(0.005)
                 continue
-            fps = 60.0 if self.driver == "human" and self.target_fps <= 0 else self.target_fps
+            fps = (self.target_fps or 60.0) if self.driver == "human" else 0.0
             if fps > 0:
                 now = time.perf_counter()
                 if now < next_step_at:

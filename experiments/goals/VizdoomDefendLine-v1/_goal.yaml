@@ -11,9 +11,9 @@ objective:
   # Rank candidates lexicographically using the priorities listed below.
   rank:
   # Prefer the checkpoint with the highest mean shaped evaluation return.
-  - max(eval/return_mean)
+  - max(eval/return/mean)
   # Break remaining ties with the highest single-episode shaped return.
-  - max(eval/return_max)
+  - max(eval/return/max)
   # Prefer the earlier checkpoint when return criteria remain tied.
   - min(leader/step)
 # Override the shared settings used while training a policy for this goal.
@@ -25,7 +25,7 @@ train:
       # Specialize the inherited successful-stop rule for line defense.
       target_reached:
         # Select the training metric compared with this condition's threshold.
-        metric: train/target/success/start_rate_min
+        metric: train/success/min
         # Require every episode in the mature rolling window to reach the native horizon.
         threshold: 1.0
         # Stop training after the policy sustains a perfect rolling success rate.
@@ -72,7 +72,7 @@ eval:
   # Declare every metric threshold a checkpoint must satisfy to be accepted.
   acceptance:
   # Select the evaluation metric tested by this acceptance rule.
-  - metric: eval/return_mean
+  - metric: eval/return/mean
     # Choose how the observed metric is compared with the threshold.
     operator: '>='
     # Set the mean shaped-return threshold required for acceptance.
