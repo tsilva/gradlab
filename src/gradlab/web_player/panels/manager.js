@@ -11,6 +11,7 @@ const BLOCK_LABELS = Object.freeze({
   distribution: "Distribution",
   "namespace-explorer": "Metric explorer",
   "reward-breakdown": "Reward breakdown",
+  "reward-table": "Reward table",
 });
 
 function clone(value) {
@@ -32,6 +33,7 @@ export function defaultBlockForKind(kind) {
   if (kind === "namespace-explorer") {
     return { kind, namespace: "signal", metric: "" };
   }
+  if (kind === "reward-table") return { kind };
   if (kind === "reward-breakdown") return { kind, scope: "episode" };
   return {
     kind,
@@ -41,7 +43,7 @@ export function defaultBlockForKind(kind) {
 
 export function editorFieldsForBlock(block) {
   return {
-    metric: block?.kind !== "reward-breakdown",
+    metric: !["reward-breakdown", "reward-table"].includes(block?.kind),
     namespace: block?.kind === "namespace-explorer",
     scope: block?.kind === "reward-breakdown",
   };
@@ -298,6 +300,7 @@ export class PanelManager {
     }
     const catalog = this.contextCatalog();
     const invalid = this.draftBlocks.find((block) => {
+      if (block.kind === "reward-table") return false;
       if (block.kind === "stats") return !block.metrics?.length;
       if (block.kind === "line") {
         return !block.metrics?.length

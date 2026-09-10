@@ -2739,7 +2739,7 @@ body.recording #timeline { opacity: .72; }
 .timeline-range-handle:active::after { background: var(--color-chart-selection); }
 .timeline-range-handle:focus-visible { outline: 2px solid var(--color-interaction-active); outline-offset: 3px; }
 
-/* Compact recorded-reward inspection: chart, legend, and a bounded ledger. */
+/* Synchronized reward chart and independently arranged reward table. */
 .step-reward-panel > .panel-header {
   padding-bottom: .55rem;
   margin-bottom: .35rem;
@@ -2834,3 +2834,7 @@ body.recording #timeline { opacity: .72; }
 .goal-configuration-placeholder { display: grid; gap: .8rem; margin-top: 1rem; min-height: 6rem; }
 .goal-configuration-placeholder .table-skeleton { width: 100%; }
 .goal-configuration-placeholder .table-skeleton:last-child { width: 65%; }
+
+.reward-table-block { min-width: 0; }
+.reward-table-block > button { align-self: flex-start; margin-bottom: .75rem; }
+.reward-table-block .reward-history-scroll { overflow: auto; }

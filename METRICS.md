@@ -167,6 +167,11 @@ resuming as its cause without a matched uninterrupted continuation.
   A line chart legend reports the hovered point while the pointer is over the chart;
   otherwise it follows the selected playback transition. In inspection, that transition
   can precede the end of the recorded curve, so its legend need not equal the last value.
+  The independent Reward table follows the shared cursor and chart window. Its bounded rows
+  start at the explicitly selected return reference; seeking changes the row highlight without
+  moving that reference. Delay is the row step minus the reference step, weight is `gamma^delay`,
+  and contribution is that weight times the recorded shaped reward. The table's `G(s)` and `V(s)`
+  retain their per-row state semantics; the contribution is not a causal attribution.
   A partial window does not establish a realized full-episode critic return.
   Timeline event dots use a separate bounded episode-wide overview and may group
   nearby events for display; they are not individual scientific metric samples.
@@ -667,9 +672,10 @@ are emitted. Managed workspaces filter to the current schema; historical runs ke
 names and immutable evidence. Reward statistics use streaming moments, and episode snapshots are
 reused until a new episode arrives; both retain their existing emission cadence.
 
-Breakout explicitly pins mean bricks, maximum bricks, minimum bricks, and mean episode steps
-in that display order. This four-chart display is independent of its three-criterion goal ranking;
-minimum bricks remains diagnostic and does not participate in ranking.
+Breakout explicitly pins normalized bricks destroyed (mean, maximum, minimum), then mean episode
+steps in that display order. Raw mean bricks remains in Breakout diagnostics. This four-chart
+display is independent of its three-criterion goal ranking; minimum normalized bricks remains
+diagnostic and does not participate in ranking.
 
 ## Reward discount overlay in Playback
 

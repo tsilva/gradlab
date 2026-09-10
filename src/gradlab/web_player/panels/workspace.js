@@ -13,6 +13,7 @@ const BLOCK_KINDS = new Set([
   "distribution",
   "namespace-explorer",
   "reward-breakdown",
+  "reward-table",
 ]);
 const LEGACY_BUILTIN_TITLES = Object.freeze({
   observation: "Observation",
@@ -63,7 +64,7 @@ function normalizeBlock(value) {
     if (!["signal", "reward-component"].includes(namespace)) return null;
     block.namespace = namespace;
     block.metric = cleanMetric(value.metric) || "";
-  } else {
+  } else if (value.kind === "reward-breakdown") {
     block.scope = value.scope === "step" ? "step" : "episode";
   }
   return block;
@@ -195,6 +196,16 @@ export function normalizeWorkspace(value, { paired = false, writer = "" } = {}) 
     const normalized = normalizePanel(id, panel, null);
     if (normalized) panels[id] = normalized;
   });
+  if (!legacyFixedView && !value.panels?.["reward-table"] && value.panels?.["step-reward"]) {
+    const chart = panels["step-reward"].placement;
+    const table = panels["reward-table"].placement;
+    Object.assign(table, { x: 0, y: chart.y + chart.h, w: 12,
+      window: chart.window, visible: chart.visible });
+    Object.entries(panels).forEach(([id, panel]) => {
+      if (table.visible && id !== "reward-table" && panel.placement.window === table.window
+          && panel.placement.y >= table.y) panel.placement.y += table.h;
+    });
+  }
   return {
     version: WORKSPACE_VERSION,
     revision: {
