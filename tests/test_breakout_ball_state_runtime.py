@@ -11,13 +11,40 @@ from gradlab.recipe_documents import compose_train_document
 BREAKOUT_ROOT = Path("experiments/goals/Breakout-Atari2600-v0")
 
 
-def test_default_ppo_matches_successful_brick_reward_configuration() -> None:
-    goal = BREAKOUT_ROOT / "_goal.yaml"
-    default = compose_train_document(goal, BREAKOUT_ROOT / "recipes/ppo.yaml")
-    candidate = compose_train_document(
-        goal, BREAKOUT_ROOT / "recipes/ppo-ball-state-brick-reward.yaml"
-    )
-    assert default["train_config"] == candidate["train_config"]
+def test_default_ppo_injects_native_paddle_velocity() -> None:
+    document = compose_train_document(BREAKOUT_ROOT / "_goal.yaml", BREAKOUT_ROOT / "recipes/ppo.yaml")
+    train = document["train_config"]
+    assert train["frame_skip"] == 2
+    assert train["training_backend"]["config"]["gamma"] == 0.99
+    assert train["timesteps"] == 1_000_000_000
+    assert len(train["task"]["model_inputs"]["context"]) == 8
+    config = resolve_env_config(env_config_from_mapping(train))
+    config.env_args["noop_reset_max"] = 0
+    env = make_training_vec_env(config, n_envs=2, seed=12)
+    try:
+        observations = env.reset()
+        np.testing.assert_array_equal(observations["context/paddle_vx"], 0.0)
+        assert observations["context/paddle_vx"].dtype == np.float32
+        # Serve first so the task's automatic FIRE override no longer replaces movement.
+        env.step(np.zeros(2, dtype=np.int64))
+        for _ in range(3):
+            env.step(np.ones(2, dtype=np.int64))
+        for _ in range(3):
+            observations, _, _, _ = env.step(np.asarray([1, 2], dtype=np.int64))
+        velocity = observations["context/paddle_vx"][:, 0]
+        assert velocity[0] > 0
+        assert velocity[1] < 0
+        assert np.all(np.abs(velocity) < 1.0)
+        assert np.isneginf(env.observation_space["context/paddle_vx"].low).all()
+        assert np.isposinf(env.observation_space["context/paddle_vx"].high).all()
+        policy = SharedActorCriticPolicy(
+            env.observation_space, env.action_space, lambda _: 1e-3,
+            policy_model=train["policy_model"],
+        )
+        assert policy.features_extractor.fusion[0].in_features == 520
+        assert policy.predict(observations, deterministic=True)[0].shape == (2,)
+    finally:
+        env.close()
 
 
 def test_brick_reward_recipe_matches_provider_deltas_without_native_score() -> None:

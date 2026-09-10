@@ -2,8 +2,8 @@ defaults:
 - ../../../recipes/_presets/breakout-ball-state-ablation-ppo@_global_
 - _self_
 recipe_id: ppo
-description: Default Breakout custom PPO with batch size 512, ball-state inputs, and equal reward per destroyed brick.
-# Matches the 1B-step configuration of run gradlab-eed1961199d9123b5b6a2084c1ce6c44.
+description: Default Breakout custom PPO with batch size 512, ball-state and paddle-velocity inputs, and equal reward per destroyed brick.
+# Extends the 1B-step baseline with native paddle velocity from Breakout Turbo 0.5.12.
 train:
   timesteps: 1000000000
   backend:
@@ -17,6 +17,8 @@ train:
     env_config:
       n_envs: 64
     task:
+      signals:
+        policy_paddle_vx: paddle_vx_normalized
       model_inputs:
         schema_version: 1
         context:
@@ -40,6 +42,11 @@ train:
             signal: policy_paddle_x
             update: transition
             encoding: {kind: continuous, scale: 2.0, offset: -1.0, low: null, high: null, clip: false}
+          paddle_vx:
+            signal: policy_paddle_vx
+            update: transition
+            # Signed last-native-frame displacement / screen width; preserve inertia and edge clamping.
+            encoding: {kind: continuous, scale: 1.0, offset: 0.0, low: null, high: null, clip: false}
           paddle_width:
             signal: policy_paddle_width
             update: transition

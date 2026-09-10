@@ -457,7 +457,7 @@ class BreakoutTurboProviderTests(unittest.TestCase):
 
     def test_runtime_matches_turbo_api_v2_release(self) -> None:
         installed = Version(importlib.metadata.version("env-breakoutatari2600-turbo-native"))
-        self.assertEqual(installed, Version("0.5.11"))
+        self.assertEqual(installed, Version("0.5.12"))
 
     def test_string_all_info_filter_selects_every_configured_task_signal(self) -> None:
         task = self.config().task
