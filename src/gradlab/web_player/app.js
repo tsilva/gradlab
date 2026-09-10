@@ -10,6 +10,7 @@ import {
   panelSubscriptions,
 } from "./panels/catalog.js";
 import { episodeReport } from "./episode-report.js";
+import { episodeStepRange, zoomedStepRange, RecordedStepReader, EventOverview, timelineEventMarkers } from "./episode-timeline.js";
 import { eventColorFill, eventLabels } from "./event-colors.js";
 import { mountPlaybackSettings } from "./playback-settings.js";
 import { snapshotActivatesCheckpointSelection } from "./playback-transition.js";
@@ -27,7 +28,6 @@ import {
   DEFAULT_GRID_CELL_HEIGHT,
   viewportGridCellHeight,
 } from "./panels/layout-sizing.js";
-import { unavailableDiagnosticRows } from "./panels/diagnostic-availability.js";
 import { mountTrajectoryControls } from "./trajectory-controls.js";
 import { setSvgUseHref, text, timelineLabel } from "./panels/shared.js";
 import {
@@ -84,6 +84,11 @@ const state = {
   attributionPreference: { mode: "gradcam", interval: 1 },
   cnnCaptureCommand: null,
   timelineSequences: [],
+  timelineSpan: 0,
+  timelineWindow: null,
+  inspectionHistory: null,
+  eventOverview: new EventOverview(),
+  seekingStep: null,
   history: [],
   historyLimit: 4096,
   hasControl: false,
@@ -96,6 +101,7 @@ const state = {
   frameSequence: new Map(),
   receivedFrameSequence: new Map(),
   retainedEpisode: null,
+  recordedEpisodeId: null,
   mode: null,
   lastStatus: null,
   actionNamesKey: "",
@@ -233,6 +239,7 @@ function resetSession(epoch) {
   state.sessionEpoch = Number(epoch) || 0;
   state.backgroundPlaybackSnapshot = null;
   state.retainedEpisode = null;
+  state.recordedEpisodeId = null;
   state.inspectionSequence = null;
   state.inspectionPauseCommandId = null;
   state.attributionCommand = null;
@@ -414,6 +421,12 @@ function handleMessage(message) {
       && Number(message.session_epoch) !== state.sessionEpoch
     ) return;
     state.history = normalizedHistory(message.points);
+    if (message.timeline && (!state.recordedEpisodeId || message.timeline.episode_id === state.recordedEpisodeId)) {
+      state.eventOverview.load(message.timeline);
+    } else {
+      state.history.filter((point) => Number(point.episode) === state.retainedEpisode)
+        .forEach((point) => state.eventOverview.append(point));
+    }
     renderHistory();
     return;
   }
@@ -764,6 +777,7 @@ function normalizedHistory(points) {
 
 function ingestHistoryPoint(point) {
   if (!point || !Number.isFinite(Number(point.sequence))) return false;
+  if (Number(point.episode) === state.retainedEpisode) state.eventOverview.append(point);
   const key = historyKey(point);
   const index = state.history.findIndex((candidate) => historyKey(candidate) === key);
   if (index >= 0) {
@@ -776,6 +790,7 @@ function ingestHistoryPoint(point) {
 }
 
 function currentEpisodeHistory() {
+  if (state.inspectionSequence !== null && state.inspectionHistory) return state.inspectionHistory;
   const episode = episodeForSnapshot(state.liveSnapshot) ?? state.retainedEpisode;
   if (episode === null) return state.history;
   return state.history.filter((point) => Number(point.episode) === episode);
@@ -791,7 +806,7 @@ function panelView() {
   };
 }
 
-function pruneRetainedTrace(preserveSequence = null) {
+function pruneRetainedTrace(preserveSequence = state.inspectionSequence) {
   const sequences = [...state.snapshots.keys()].sort((a, b) => a - b);
   const remove = sequences
     .filter(
@@ -820,6 +835,11 @@ function pruneRetainedTrace(preserveSequence = null) {
 }
 
 function clearRetainedEpisode() {
+  state.eventOverview.reset(null);
+  recordedStepReader.invalidate();
+  state.inspectionHistory = null;
+  state.seekingStep = null;
+  state.timelineWindow = null;
   livePresentation.reset();
   panelRuntime?.resetFrames();
   state.snapshots.clear();
@@ -832,10 +852,17 @@ function clearRetainedEpisode() {
 function prepareRetainedEpisode(snapshot) {
   const episode = episodeForSnapshot(snapshot);
   if (episode === null) return;
-  if (state.retainedEpisode !== null && state.retainedEpisode !== episode) {
+  const episodeId = snapshot.trajectory?.episode_id ?? null;
+  if ((state.retainedEpisode !== null && state.retainedEpisode !== episode)
+      || (state.recordedEpisodeId !== null && state.recordedEpisodeId !== episodeId)) {
     clearRetainedEpisode();
+    stopInspectionReplay({ render: false });
+    state.inspectionSequence = null;
   }
   state.retainedEpisode = episode;
+  state.recordedEpisodeId = episodeId;
+  const overviewId = episodeId ?? `episode-${episode}`;
+  if (state.eventOverview.episodeId !== overviewId) state.eventOverview.reset(overviewId);
 }
 
 function hideGoExploreValuePanel(snapshot) {
@@ -1004,12 +1031,19 @@ function inspectionEpisodeSequences() {
 function canReplayInspection() {
   if (state.liveSnapshot?.trajectory?.imported) return false;
   if (state.liveSnapshot?.run_state !== "paused") return false;
+  if (state.liveSnapshot?.trajectory?.transitions > 0 && state.inspectionSequence !== null) {
+    return Number(state.snapshot?.transition?.step) < state.liveSnapshot.trajectory.last_step;
+  }
   const sequences = inspectionEpisodeSequences();
   const selectedIndex = sequences.indexOf(Number(state.inspectionSequence));
   return selectedIndex >= 0 && selectedIndex < sequences.length - 1;
 }
 
 function stopInspectionReplay({ render = true } = {}) {
+  if (state.replayingInspection) {
+    recordedStepReader.invalidate();
+    state.seekingStep = null;
+  }
   if (state.inspectionReplayTimer !== null) {
     window.clearTimeout(state.inspectionReplayTimer);
     state.inspectionReplayTimer = null;
@@ -1025,9 +1059,14 @@ function inspectionReplayDelay() {
 }
 
 function scheduleInspectionReplay() {
-  state.inspectionReplayTimer = window.setTimeout(() => {
+  state.inspectionReplayTimer = window.setTimeout(async () => {
     state.inspectionReplayTimer = null;
     if (!state.replayingInspection) return;
+    if (state.liveSnapshot?.trajectory?.transitions > 0) {
+      await inspectStep(Number(state.snapshot.transition.step) + 1, { preserveReplay: true });
+      if (state.replayingInspection) scheduleInspectionReplay();
+      return;
+    }
     const sequences = inspectionEpisodeSequences();
     const selectedIndex = sequences.indexOf(Number(state.inspectionSequence));
     const nextSequence = sequences[selectedIndex + 1];
@@ -1142,41 +1181,6 @@ function renderPlaybackEvidenceStatus(snapshot) {
   status.title = evidenceWarning ? report.disclaimer : "";
 }
 
-function renderUnavailableDiagnostics() {
-  const root = $("#unavailable-diagnostics");
-  const rows = unavailableDiagnosticRows(
-    $$("#dashboard .grid-stack-item")
-      .filter((gridItem) => gridItem.dataset.panel !== "game")
-      .map((gridItem) => ({
-        panel: panelLabel(gridItem.dataset.panel),
-        statuses: [...gridItem.querySelectorAll("[data-telemetry-status]")]
-          .map((element) => String(element.dataset.telemetryStatus || ""))
-          .filter(Boolean),
-      })),
-  );
-  root.hidden = !rows.length;
-  if (!root.hidden) {
-    root.querySelector("[data-unavailable-diagnostics-title]").textContent = (
-      `Unavailable diagnostics (${rows.length.toLocaleString()})`
-    );
-    root.querySelector("[data-unavailable-diagnostics-list]").replaceChildren(
-      ...rows.map((row) => {
-        const item = document.createElement("li");
-        const name = document.createElement("span");
-        name.textContent = row.panel;
-        const status = document.createElement("span");
-        status.className = `unavailable-diagnostics-status ${row.tone}`;
-        status.textContent = row.panel === "Action decision" && row.tone === "waiting"
-          ? "Waiting for first action decision"
-          : row.label;
-        item.append(name, status);
-        return item;
-      }),
-    );
-  }
-  fitGridToViewport();
-}
-
 function renderSnapshot() {
   const snapshot = state.snapshot;
   const session = snapshot.session || {};
@@ -1200,7 +1204,7 @@ function renderSnapshot() {
   }
   panelRuntime.renderSnapshot(snapshot, panelView());
   playbackSettings?.render(snapshot, panelView());
-  renderUnavailableDiagnostics();
+  fitGridToViewport();
   renderTimeline();
 }
 
@@ -1213,7 +1217,7 @@ function configureMode(mode) {
 
 function renderHistory() {
   panelRuntime.renderHistory(currentEpisodeHistory(), state.snapshot, panelView());
-  renderUnavailableDiagnostics();
+  fitGridToViewport();
   renderTimeline();
 }
 
@@ -1313,6 +1317,7 @@ function broadcastInspection(sequence) {
     sequence: Number(sequence),
     snapshot,
     frames: inspectionFrames(sequence),
+    points: state.inspectionHistory,
     source: state.windowId,
   });
 }
@@ -1381,6 +1386,8 @@ function setInspectionCursor(
   }
   if (
     Number(snapshot.session_epoch || 0) !== state.sessionEpoch
+    || (snapshot.trajectory?.episode_id && state.liveSnapshot?.trajectory?.episode_id
+      && snapshot.trajectory.episode_id !== state.liveSnapshot.trajectory.episode_id)
     || (
       state.retainedEpisode !== null
       && episodeForSnapshot(snapshot) !== state.retainedEpisode
@@ -1397,12 +1404,12 @@ function setInspectionCursor(
       );
     }
   });
-  state.snapshots.set(numericSequence, snapshot);
-  pruneRetainedTrace(numericSequence);
   if (!preserveReplay) stopInspectionReplay({ render: false });
   cancelInspectionFrameRequest();
   if (announce) maybePauseForInspection();
+  state.snapshots.set(numericSequence, snapshot);
   state.inspectionSequence = numericSequence;
+  pruneRetainedTrace(numericSequence);
   state.snapshot = snapshot;
   renderSnapshot();
   renderHistory();
@@ -1419,10 +1426,76 @@ function inspectSequence(sequence) {
     if (snapshot?.transition) command("seek", { step: snapshot.transition.step });
     return;
   }
+  if (state.liveSnapshot?.trajectory?.transitions > 0) {
+    const point = currentEpisodeHistory().find((item) => Number(item.sequence) === Number(sequence));
+    const snapshot = state.snapshots.get(Number(sequence));
+    const step = point?.step ?? snapshot?.transition?.step;
+    if (Number.isInteger(step)) void inspectStep(step);
+    return;
+  }
+  recordedStepReader.invalidate();
+  state.inspectionHistory = null;
   setInspectionCursor(sequence);
 }
 
+const recordedStepReader = new RecordedStepReader(async ({ epoch, episode_id, step }) => {
+  const query = new URLSearchParams({ epoch, episode_id, step });
+  const response = await fetch(`/api/playback/recorded-step?${query}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload.error || "Unable to load the recorded step");
+  return payload;
+});
+
+function recordedFrames(result) {
+  return result.frames.map(({ kind, generation, png }) => ({
+    kind, generation,
+    blob: new Blob([Uint8Array.from(atob(png), (character) => character.charCodeAt(0))], { type: "image/png" }),
+  }));
+}
+
+async function inspectStep(step, { preserveReplay = false } = {}) {
+  const trajectory = state.liveSnapshot?.trajectory;
+  if (!Number.isInteger(step)) return;
+  if (trajectory?.imported) { command("seek", { step }); return; }
+  if (!preserveReplay) stopInspectionReplay({ render: false });
+  if (!trajectory?.episode_id || !trajectory?.transitions) {
+    const entry = [...state.snapshots.entries()].find(([, snapshot]) =>
+      Number(snapshot.transition?.step ?? snapshot.session?.step) === step);
+    if (entry?.[0] === Number(state.liveSnapshot?.sequence)) returnToLive();
+    else if (entry) inspectSequence(entry[0]);
+    return;
+  }
+  if (step < trajectory.first_step || step > trajectory.last_step) return;
+  if (step === trajectory.last_step && step === Number(state.liveSnapshot?.transition?.step)) {
+    returnToLive();
+    return;
+  }
+  maybePauseForInspection();
+  const epoch = state.sessionEpoch;
+  const episodeId = trajectory.episode_id;
+  state.seekingStep = step;
+  renderTimeline();
+  try {
+    const result = await recordedStepReader.read({ epoch, episode_id: episodeId, step });
+    if (!result || epoch !== state.sessionEpoch || episodeId !== state.liveSnapshot?.trajectory?.episode_id) return;
+    state.seekingStep = null;
+    state.inspectionHistory = result.points;
+    const frames = recordedFrames(result);
+    setInspectionCursor(result.snapshot.sequence, { snapshot: result.snapshot, frames, preserveReplay });
+  } catch (error) {
+    state.seekingStep = null;
+    stopInspectionReplay({ render: false });
+    showToast(error.message, true);
+    renderTimeline();
+  }
+}
+
 function returnToLive({ announce = true } = {}) {
+  recordedStepReader.invalidate();
+  state.seekingStep = null;
+  state.inspectionHistory = null;
   stopInspectionReplay({ render: false });
   cancelInspectionFrameRequest();
   state.inspectionSequence = null;
@@ -1433,63 +1506,79 @@ function returnToLive({ announce = true } = {}) {
     void showFramesForSequence(Number(state.snapshot.sequence));
   }
   if (announce) broadcastInspection(null);
+  void restoreLatestRecordedPresentation();
+}
+
+async function restoreLatestRecordedPresentation() {
+  const live = state.liveSnapshot;
+  const trajectory = live?.trajectory;
+  if (!trajectory?.transitions || trajectory.imported || live.run_state !== "paused"
+      || live.transition?.step !== trajectory.last_step) return;
+  const epoch = state.sessionEpoch;
+  try {
+    const result = await recordedStepReader.read({ epoch, episode_id: trajectory.episode_id, step: trajectory.last_step });
+    if (!result || state.inspectionSequence !== null || epoch !== state.sessionEpoch
+        || state.liveSnapshot?.sequence !== live.sequence
+        || state.liveSnapshot?.trajectory?.episode_id !== trajectory.episode_id) return;
+    // Reconnection or cache eviction can lose the latest frame too. Restore only
+    // its captured presentation; live transport and configuration stay current.
+    const snapshot = { ...state.liveSnapshot, transition: result.snapshot.transition };
+    recordedFrames(result).forEach(({ kind, generation, blob }) =>
+      rememberFrame(kind, snapshot.sequence, generation, blob, snapshot.sequence));
+    state.snapshots.set(Number(snapshot.sequence), snapshot);
+    state.snapshot = snapshot;
+    renderSnapshot();
+    void showFramesForSequence(Number(snapshot.sequence));
+  } catch (error) {
+    showToast(error.message, true);
+  }
 }
 
 function renderTimeline() {
   const scrubber = $("#timeline-scrubber");
   if (!scrubber) return;
   const trajectory = state.liveSnapshot?.trajectory;
-  if (trajectory?.imported) {
-    scrubber.min = String(trajectory.first_step);
-    scrubber.max = String(trajectory.last_step);
-    scrubber.value = String(Math.max(trajectory.first_step, trajectory.current_step));
-    scrubber.disabled = !state.hasControl;
-    scrubber.setAttribute("aria-label", "Seek a recorded transition");
-    scrubber.style.setProperty("--timeline-progress", `${timelineProgress(
-      trajectory.current_step - trajectory.first_step,
-      trajectory.last_step - trajectory.first_step + 1,
-    )}%`);
-    $("#timeline-markers").replaceChildren();
-    renderWorkspaceStatus();
-    return;
-  }
   const currentEpisode = episodeForSnapshot(state.liveSnapshot);
-  state.timelineSequences = [...state.snapshots.entries()]
-    .filter(([, snapshot]) => (
-      currentEpisode === null || episodeForSnapshot(snapshot) === currentEpisode
-    ))
-    .map(([sequence]) => Number(sequence))
-    .sort((a, b) => a - b);
-  const sequences = state.timelineSequences;
-  scrubber.min = "0";
-  scrubber.max = String(Math.max(0, sequences.length - 1));
+  const snapshots = [...state.snapshots.values()].filter((snapshot) =>
+    currentEpisode === null || episodeForSnapshot(snapshot) === currentEpisode);
+  state.timelineSequences = snapshots.map((snapshot) => Number(snapshot.sequence)).sort((a, b) => a - b);
+  const fullRange = episodeStepRange(trajectory, snapshots);
+  const selected = state.seekingStep ?? Number(trajectory?.imported ? trajectory.current_step
+    : state.snapshot?.transition?.step ?? state.snapshot?.session?.step ?? fullRange?.first ?? 0);
+  const range = zoomedStepRange(fullRange, selected, state.timelineSpan, state.timelineWindow);
+  state.timelineWindow = range;
+  scrubber.min = String(range?.first ?? 0);
+  scrubber.max = String(range?.last ?? 0);
   scrubber.step = "1";
-  scrubber.disabled = sequences.length < 2;
-  const selected = state.inspectionSequence ?? sequences.at(-1);
-  const selectedIndex = sequences.indexOf(selected);
-  const scrubberIndex = selectedIndex < 0 ? Math.max(0, sequences.length - 1) : selectedIndex;
-  scrubber.value = String(scrubberIndex);
-  scrubber.style.setProperty(
-    "--timeline-progress",
-    `${timelineProgress(scrubberIndex, sequences.length)}%`,
-  );
+  scrubber.disabled = !range || range.first === range.last || Boolean(trajectory?.imported && !state.hasControl);
+  scrubber.value = String(selected);
+  scrubber.setAttribute("aria-label", "Inspect an episode step");
+  scrubber.setAttribute("aria-valuetext", `Step ${selected}`);
+  scrubber.style.setProperty("--timeline-progress", `${timelineProgress(
+    selected - (range?.first ?? 0), (range?.last ?? 0) - (range?.first ?? 0) + 1,
+  )}%`);
+  const stepInput = $("#timeline-step");
+  stepInput.min = String(fullRange?.first ?? 0);
+  stepInput.max = String(fullRange?.last ?? 0);
+  stepInput.disabled = !fullRange || Boolean(trajectory?.imported && !state.hasControl);
+  if (document.activeElement !== stepInput) stepInput.value = String(selected);
+  $("#timeline-go").disabled = stepInput.disabled;
+  $("#timeline-latest").disabled = !fullRange || (state.inspectionSequence === null && state.seekingStep === null && !trajectory?.imported);
+  $("#timeline-latest").hidden = Boolean(trajectory?.imported);
+  $("#timeline-range").textContent = state.seekingStep !== null ? `Loading step ${selected.toLocaleString()}…`
+    : range ? `${range.first.toLocaleString()}–${range.last.toLocaleString()}` : "";
+  $("#timeline").setAttribute("aria-busy", String(state.seekingStep !== null));
   renderWorkspaceStatus();
-
   const markers = $("#timeline-markers");
-  if (!sequences.length) { markers.replaceChildren(); return; }
-  const minimum = sequences[0];
-  const maximum = sequences.at(-1);
-  const range = Math.max(1, maximum - minimum);
-  const interesting = currentEpisodeHistory().filter((point) =>
-    Number(point.sequence) >= minimum
-    && Number(point.sequence) <= maximum
-    && (currentEpisode === null || Number(point.episode) === currentEpisode)
-    && (point.boundary || point.events?.length)
-  );
-  markers.replaceChildren(...interesting.slice(-120).map((point) => {
+  if (!range) { markers.replaceChildren(); return; }
+  const markerSlots = Math.max(1, Math.min(120, Math.floor(scrubber.clientWidth / 9)));
+  const interesting = timelineEventMarkers([...state.eventOverview.buckets.values()], range, markerSlots);
+  markers.replaceChildren(...interesting.map((point) => {
     const marker = document.createElement("span");
     marker.className = "timeline-marker";
-    marker.style.left = `${((Number(point.sequence) - minimum) / range) * 100}%`;
+    marker.style.left = `${point.position * 100}%`;
+    marker.dataset.step = String(point.step);
+    marker.dataset.count = String(point.count);
     marker.style.setProperty("--event-colors", eventColorFill(eventLabels(point)));
     return marker;
   }));
@@ -1728,7 +1817,7 @@ async function applyLayout() {
         { sequence, generation },
       );
     }
-    renderUnavailableDiagnostics();
+    fitGridToViewport();
   }
   requestAnimationFrame(() => panelRuntime.resize());
   syncAttributionToPanel();
@@ -2195,7 +2284,11 @@ function bindWorkspaceSync() {
         } else if (
           message.snapshot
           && Number(message.episode) === episodeForSnapshot(message.snapshot)
+          && message.snapshot.trajectory?.episode_id === state.liveSnapshot?.trajectory?.episode_id
         ) {
+          recordedStepReader.invalidate();
+          state.seekingStep = null;
+          state.inspectionHistory = Array.isArray(message.points) ? message.points : null;
           setInspectionCursor(Number(message.sequence), {
             announce: false,
             snapshot: message.snapshot,
@@ -2282,6 +2375,13 @@ function bindWorkspaceSync() {
 
 function bindTimeline() {
   const scrubber = $("#timeline-scrubber");
+  let trackWidth = 0;
+  const markerResizeObserver = new ResizeObserver(([entry]) => {
+    if (entry.contentRect.width === trackWidth) return;
+    trackWidth = entry.contentRect.width;
+    if (state.liveSnapshot) renderTimeline();
+  });
+  markerResizeObserver.observe(scrubber);
   $("#timeline-playback-toggle").addEventListener("click", (event) => {
     const action = event.currentTarget.dataset.action;
     if (action === "pause") {
@@ -2321,21 +2421,18 @@ function bindTimeline() {
     $("#playback-settings-toggle").setAttribute("aria-expanded", "false");
     scheduleTimelineOverlayHide();
   });
-  const selectIndex = (index) => {
-    if (state.liveSnapshot?.trajectory?.imported) {
-      state.inspectionSequence = null;
-      command("seek", { step: index });
-      return;
-    }
-    stopInspectionReplay({ render: false });
-    const sequence = state.timelineSequences[index];
-    if (sequence === undefined) return;
-    if (index === state.timelineSequences.length - 1) returnToLive();
-    else inspectSequence(sequence);
-  };
-  scrubber.addEventListener("input", (event) => {
-    selectIndex(Number(event.target.value));
+  const selectStep = (step) => { void inspectStep(step); };
+  scrubber.addEventListener("input", (event) => selectStep(Number(event.target.value)));
+  $("#timeline-go-form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    if ($("#timeline-step").reportValidity()) selectStep(Number($("#timeline-step").value));
   });
+  $("#timeline-zoom").addEventListener("change", (event) => {
+    state.timelineSpan = Number(event.target.value);
+    state.timelineWindow = null;
+    renderTimeline();
+  });
+  $("#timeline-latest").addEventListener("click", () => returnToLive());
   scrubber.addEventListener("keydown", (event) => {
     if (event.code !== "Space" || event.repeat) return;
     event.preventDefault();

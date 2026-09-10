@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import asyncio
 import io
 import json
@@ -1006,6 +1007,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             resolved_capture_context.get("execution", {})
         )
         self._trajectory_lock = threading.RLock()
+        self._inspection_history: tuple[str, int, int, list[dict[str, Any]]] | None = None
         self.recording: EpisodeRecording | None = None
         self.recording_enabled = False
         self._recording_options = dict(recording_options or {})
@@ -1094,6 +1096,13 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             **(self.recording.status() if self.recording is not None else {}),
         }
 
+    def history_payload(self) -> dict[str, Any]:
+        payload = super().history_payload()
+        with self._trajectory_lock:
+            if self.recording is not None:
+                payload["timeline"] = self.recording.event_overview()
+        return payload
+
     def close_recording(self) -> None:
         with self._trajectory_lock:
             if self.recording is not None:
@@ -1101,6 +1110,66 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 self.recording = None
             if self._checkpoint_root is not None:
                 shutil.rmtree(self._checkpoint_root, ignore_errors=True)
+
+    def inspect_recorded_step(self, episode_id: str, step: int) -> dict[str, Any]:
+        """Read an inspection window without touching the live policy or cursor."""
+        with self._trajectory_lock:
+            recording = self.recording
+            if recording is None or recording.metadata["episode_id"] != episode_id:
+                raise ValueError("the recorded episode has been replaced")
+            row = recording.transition(step)
+            snapshot = row["inspection_snapshot"]
+            snapshot["trajectory"] = self.recording_status()
+            snapshot["history_point"] = history_point_payload(snapshot["transition"])
+            last_step = recording.status()["last_step"]
+            cached = self._inspection_history
+            if not (
+                cached is not None
+                and cached[0] == episode_id
+                and cached[1] <= step <= cached[2]
+                and (step < cached[2] - 16 or cached[2] == last_step)
+            ):
+                first = max(recording.metadata["first_step"], step - 64)
+                last = min(last_step, step + 64)
+                points = [
+                    history_point_payload(
+                        recording.transition(index)["inspection_snapshot"]["transition"]
+                    )
+                    for index in range(first, last + 1)
+                ]
+                self._inspection_history = (episode_id, first, last, points)
+            else:
+                points = cached[3]
+            # Keep already-computed calibration annotations where available. A
+            # partial disk window must never invent a completed-episode return.
+            recent = {point["sequence"]: point for point in self.history}
+            points = [dict(recent.get(point["sequence"], point)) for point in points]
+            images = {
+                FRAME_GAME: row["after_image"],
+                FRAME_OBSERVATION: render_obs_stack(row["observation_frames"], 1)
+                if row["observation_frames"]
+                else None,
+                **row.get("inspection_images", {}),
+            }
+            frames = []
+            for kind, frame in images.items():
+                if frame is None:
+                    continue
+                kind = int(kind)
+                diagnostic = {FRAME_ATTRIBUTION: "attribution", FRAME_CNN_INSPECTION: "cnn"}.get(
+                    kind
+                )
+                generation = snapshot["transition"][diagnostic]["generation"] if diagnostic else 0
+                stream = io.BytesIO()
+                Image.fromarray(frame).save(stream, format="PNG", compress_level=1)
+                frames.append(
+                    {
+                        "kind": kind,
+                        "generation": generation,
+                        "png": base64.b64encode(stream.getvalue()).decode("ascii"),
+                    }
+                )
+            return {"snapshot": snapshot, "points": points, "frames": frames}
 
     def freeze_trajectory(self) -> str:
         with self._trajectory_lock:
@@ -1169,8 +1238,24 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 if field.name not in {"terminal_frame", "outcome"}
             }
         decision = transition.decision
+        inspection_snapshot = self._snapshot_payload(transition)
+        inspection_snapshot["sequence"] = transition.sequence
+        inspection_snapshot["session"].update(
+            episode=transition.episode,
+            step=transition.step,
+            total_reward=transition.total_reward,
+        )
+        inspection_images = {}
+        if transition.attribution is not None and transition.before_frames:
+            inspection_images[str(FRAME_ATTRIBUTION)] = render_attribution_stack(
+                transition.before_frames, transition.attribution
+            )
+        if transition.cnn_inspection is not None:
+            inspection_images[str(FRAME_CNN_INSPECTION)] = transition.cnn_inspection.atlas
         self.recording.append(
             {
+                "inspection_snapshot": portable_metadata(inspection_snapshot),
+                "inspection_images": inspection_images,
                 "sequence": transition.sequence,
                 "step": transition.step,
                 "seed": transition.seed,
@@ -1273,7 +1358,9 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         )
         if expected_selection and self.sampling_mode != expected_selection:
             reasons.append(
-                "deterministic trajectories are not sampled from the training policy"
+                "V(s) was trained with stochastic action selection and may be less accurate "
+                "in deterministic mode. Return comparisons are disabled because the "
+                "action-selection rules differ"
                 if (expected_selection == "stochastic" and self.sampling_mode == "deterministic")
                 else "active action selection differs from the critic training contract"
             )
@@ -3164,6 +3251,32 @@ class PlaybackWebServer:
             return web.json_response({"error": str(exc)}, status=502)
         return web.json_response(document)
 
+    async def inspect_recorded_step(self, request: web.Request) -> web.Response:
+        self._authorize_api(request)
+        try:
+            epoch = int(request.query["epoch"])
+            step = int(request.query["step"])
+            episode_id = request.query["episode_id"]
+            inspect = getattr(self.runner, "inspect_recorded_step", None)
+            if inspect is None:
+                raise ValueError("recorded inspection is unavailable for this source")
+            # Direct runners are used by embedded players; the application host
+            # additionally binds reads to the immutable Playback Session epoch.
+            if epoch != self._runner_epoch():
+                raise ValueError("the Playback Session has been replaced")
+            args = (
+                (episode_id, step)
+                if isinstance(self.runner, WebPlaybackRunner)
+                else (epoch, episode_id, step)
+            )
+            result = await asyncio.to_thread(inspect, *args)
+            if epoch != self._runner_epoch():
+                raise ValueError("the Playback Session has been replaced")
+            result["snapshot"]["session_epoch"] = epoch
+            return web.json_response(result, headers={"Cache-Control": "no-store"})
+        except (KeyError, ValueError, OSError, RuntimeError) as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+
     async def inspect_active_playback(self, request: web.Request) -> web.Response:
         self._authorize_api(request)
         from gradlab.contract_inspection import inspection_document
@@ -3965,6 +4078,7 @@ class PlaybackWebServer:
                     self.catalog_evaluate_checkpoints,
                 ),
                 web.get("/api/playback/inspection", self.inspect_active_playback),
+                web.get("/api/playback/recorded-step", self.inspect_recorded_step),
                 web.get("/api/publication/current", self.publication_current),
                 web.post("/api/publication/render", self.publication_render),
                 web.post("/api/publication/preflight", self.publication_preflight),

@@ -39,7 +39,7 @@ gradlab play --recipe gradlab__bandit/ppo
 `gradlab play` starts the local web player and prints its loopback URL.
 Use **Download episode** to save a self-contained trajectory, or **Import episode**
 to inspect its stored frames and exact Policy inputs without running the environment.
-Open an archive directly with `gradlab play --recording episode.gradtraj`.
+Open an archive directly with `gradlab play --recording episode.trj`.
 See the [trajectory format and controls](docs/player-trajectories.md).
 
 ## Gymnasium discrete environments

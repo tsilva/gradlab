@@ -20,8 +20,8 @@
         <nav id="source-breadcrumbs" class="source-breadcrumbs header-breadcrumbs" aria-label="Playback source" hidden></nav>
       </div>
       <div class="header-status">
-        <button id="trajectory-import" class="quiet" type="button">Import episode</button>
-        <input id="trajectory-file" type="file" accept=".gradtraj,.zip" aria-label="Episode trajectory archive" hidden>
+        <button id="trajectory-import" class="quiet icon-only" type="button" aria-label="Import episode" title="Import episode"><svg class="icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17v4h16v-4M12 3v12M7 8l5-5 5 5" /></svg></button>
+        <input id="trajectory-file" type="file" accept=".trj,.zip" aria-label="Episode trajectory archive" hidden>
         <nav id="checkpoint-navigation" class="checkpoint-navigation" aria-label="Checkpoint navigation" hidden>
           <button class="quiet checkpoint-navigation-button icon-only" type="button" aria-label="Previous checkpoint" data-checkpoint-previous><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-arrow-left"></use></svg></button>
           <span class="checkpoint-navigation-position" data-checkpoint-position aria-label="Checkpoint position" aria-live="polite">— / —</span>
@@ -81,7 +81,7 @@
     <main id="source-browser" class="source-browser" hidden></main>
     <section id="trajectory-controls" class="trajectory-controls" aria-label="Episode recording" hidden>
       <button id="trajectory-retry" class="quiet" type="button" hidden>Retry recording</button>
-      <button id="trajectory-download" class="quiet" type="button">Download episode</button>
+      <button id="trajectory-download" class="quiet icon-only" type="button" aria-label="Download episode" title="Download episode"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M5 16v4h14v-4"/></svg></button>
       <span id="trajectory-navigation" hidden>
         <button id="trajectory-previous" class="quiet icon-only" type="button" aria-label="Previous recorded transition"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-arrow-left"></use></svg></button>
         <label>Transition <input id="trajectory-seek" type="number" min="1" step="1" aria-label="Exact recorded transition"></label>
@@ -89,23 +89,32 @@
       </span>
       <span id="trajectory-status" role="status"></span>
     </section>
-    <section id="unavailable-diagnostics" class="unavailable-diagnostics" aria-label="Unavailable diagnostics" hidden>
-      <details>
-        <summary><span data-unavailable-diagnostics-title>Unavailable diagnostics</span></summary>
-        <ul data-unavailable-diagnostics-list></ul>
-      </details>
-    </section>
     <main id="dashboard" class="dashboard grid-stack"></main>
 
     <div id="timeline-home" hidden></div>
-    <section id="timeline" class="timeline" aria-label="Bounded trajectory inspection">
+    <section id="timeline" class="timeline" aria-label="Episode inspection">
       <div class="timeline-labels">
         <strong id="timeline-label">EPISODE — · STEP —</strong>
         <span id="playback-evidence-status" class="playback-evidence-status" role="status" hidden></span>
       </div>
+      <div class="timeline-navigation">
+        <form id="timeline-go-form">
+          <label for="timeline-step">Step</label>
+          <input id="timeline-step" type="number" min="0" max="0" step="1" value="0" required aria-label="Go to step">
+          <button id="timeline-go" type="submit" class="quiet">Go</button>
+        </form>
+        <label for="timeline-zoom">Zoom</label>
+        <select id="timeline-zoom" aria-label="Timeline zoom">
+          <option value="0">Full episode</option>
+          <option value="1000">1,000 steps</option>
+          <option value="100">100 steps</option>
+        </select>
+        <span id="timeline-range" role="status"></span>
+        <button id="timeline-latest" type="button" class="quiet">Return to latest</button>
+      </div>
       <div class="timeline-track">
         <div class="timeline-scrubber-track">
-          <input id="timeline-scrubber" type="range" min="0" max="0" step="1" value="0" aria-label="Inspect a retained transition one step at a time" title="Left/Right: move one step · Space: play or pause">
+          <input id="timeline-scrubber" type="range" min="0" max="0" step="1" value="0" aria-label="Inspect an episode step" title="Left/Right: move one step · Space: play or pause">
           <div id="timeline-markers" class="timeline-markers" aria-hidden="true"></div>
         </div>
         <div class="timeline-actions">
@@ -123,6 +132,21 @@
       </div>
       <div id="playback-settings-content"></div>
     </div>
+
+    <dialog id="trajectory-download-dialog" class="trajectory-download-dialog" aria-labelledby="trajectory-download-heading">
+      <h2 id="trajectory-download-heading">Download episode</h2>
+      <p>Save a <strong>.trj archive named by environment, checkpoint, and content hash</strong>, containing the recorded episode, images, policy inputs and decisions, and the exact checkpoint with its configuration.</p>
+      <p>The current episode is captured when you confirm. Playback can continue during preparation. Unfinished episodes include only what has been recorded so far.</p>
+      <div id="trajectory-download-progress" hidden>
+        <p role="status">Preparing your episode… Your download will start automatically.</p>
+        <progress aria-label="Preparing episode download"></progress>
+      </div>
+      <p id="trajectory-download-error" role="alert" hidden></p>
+      <div class="trajectory-download-actions">
+        <button id="trajectory-download-cancel" class="quiet" type="button">Cancel</button>
+        <button id="trajectory-download-confirm" type="button">Confirm</button>
+      </div>
+    </dialog>
 
     <dialog id="panel-editor" class="panel-editor" aria-labelledby="panel-editor-heading">
       <form id="panel-editor-form" method="dialog">

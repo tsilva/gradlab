@@ -31,11 +31,13 @@ import numpy as np
 from gradlab.file_utils import file_sha256
 from gradlab.policy_bundle import load_policy_bundle, write_canonical_json
 from gradlab.validation import is_secret_like_key
+from gradlab.play_timeline import EventOverview
 
 FORMAT_VERSION = 1
 MAX_RECORD_BYTES = 32 * 1024**2
 BUFFER_BYTES = 64 * 1024**2
 MAX_ARCHIVE_BYTES = 32 * 1024**3
+MAX_RECORDING_BYTES = 32 * 1024**3
 INDEX = struct.Struct("<QQ")
 HEADER = struct.Struct("<Q")
 TREE_COLUMNS = (
@@ -192,6 +194,7 @@ class EpisodeRecording:
         *,
         root: Path | None = None,
         buffer_bytes: int = BUFFER_BYTES,
+        max_bytes: int = MAX_RECORDING_BYTES,
         write_record=None,
     ):
         self.root = Path(tempfile.mkdtemp(prefix="gradlab-episode-", dir=root))
@@ -203,6 +206,9 @@ class EpisodeRecording:
             complete=False,
         )
         self.buffer_bytes = buffer_bytes
+        self._event_overview = EventOverview(self.metadata["episode_id"])
+        self.max_bytes = max_bytes
+        self._accepted_bytes = 0
         self._write_record = write_record or self._append
         self._condition = threading.Condition()
         self._pending: deque[bytes] = deque()
@@ -227,14 +233,28 @@ class EpisodeRecording:
                 "written": self._written,
                 "backlog_bytes": self._pending_bytes,
                 "buffer_bytes": self.buffer_bytes,
+                "storage_bytes": self._accepted_bytes,
+                "storage_limit_bytes": self.max_bytes,
                 "error": self._capture_error or self._error,
                 "complete": self.metadata["complete"],
                 "first_step": self.metadata["first_step"],
+                "last_step": self.metadata["first_step"] + self._accepted - 1,
                 "episode_id": self.metadata["episode_id"],
             }
 
+    def event_overview(self) -> dict[str, Any]:
+        with self._condition:
+            return self._event_overview.payload()
+
     def check_capacity(self) -> None:
         with self._condition:
+            # Reserve room for the largest possible next decision before advancing
+            # the environment. The captured prefix is never evicted to make space.
+            if self._accepted_bytes + MAX_RECORD_BYTES + HEADER.size + INDEX.size > self.max_bytes:
+                raise OSError(
+                    "Episode storage limit reached. Playback paused; captured steps retained. "
+                    "Download the episode before starting another episode."
+                )
             if self._capture_error:
                 raise ValueError(self._capture_error)
             if self._error:
@@ -263,10 +283,34 @@ class EpisodeRecording:
             self._pending.append(data)
             self._pending_bytes += len(data)
             self._accepted += 1
+            self._accepted_bytes += len(data) + INDEX.size
+            self._event_overview.append(
+                {
+                    "step": row["step"],
+                    "boundary": row["boundary"],
+                    "events": (row.get("presentation") or {}).get("events", []),
+                }
+            )
             self.metadata["complete"] = bool(row["boundary"])
             if self.metadata["classification"] != "counterfactual":
                 self.metadata["classification"] = row["classification"]
             self._condition.notify_all()
+
+    def transition(self, step: int) -> dict[str, Any]:
+        """Read a captured step without flushing or scanning the episode.
+
+        Pending records are readable even when the disk writer has failed. Holding
+        the condition pins the files against close and writer retry/truncation.
+        """
+        with self._condition:
+            if type(step) is not int:
+                raise ValueError("step must be an integer")
+            index = step - int(self.metadata["first_step"])
+            if index < 0 or index >= self._accepted or self._retired:
+                raise ValueError("step is outside the recorded episode")
+            if index >= self._written:
+                return unpack_record(self._pending[index - self._written])
+            return read_record(self.root, index)
 
     @staticmethod
     def _append(root: Path, data: bytes) -> None:
@@ -464,10 +508,13 @@ def export_trajectory(frozen: str | Path, destination: Path) -> Path:
         }
         with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_STORED) as archive:
             archive.writestr(
-                "manifest.json", json.dumps({"format_version": FORMAT_VERSION, "files": manifest})
+                zipfile.ZipInfo("manifest.json"),
+                json.dumps({"format_version": FORMAT_VERSION, "files": manifest}),
             )
             for path in paths:
-                archive.write(path, str(path.relative_to(root)))
+                info = zipfile.ZipInfo(str(path.relative_to(root)))
+                with path.open("rb") as source, archive.open(info, "w", force_zip64=True) as target:
+                    shutil.copyfileobj(source, target, length=1024**2)
         return destination
     except BaseException:
         destination.unlink(missing_ok=True)

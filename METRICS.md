@@ -104,6 +104,12 @@ attribution. Frame skip remains run config. W&B uses three explicit axes:
 - `eval/checkpoint/step`: step of the checkpoint represented by an evaluation row.
 - `ops/event_sequence`: durable supervisor delivery order.
 
+Across frame-skip ablations, equal `train/global_step` means equal policy-transition counts,
+not equal simulated game time. Nominal native-frame exposure is `train/global_step * frame_skip`;
+this estimate excludes reset work and may differ from actual frames when action repeats end early.
+Similar learning curves on this axis establish similar observed policy-transition efficiency,
+not native-frame efficiency or wall-clock efficiency.
+
 Each axis is configured with a W&B `max` summary reducer. W&B's public API may therefore expose
 its summary value as a reducer mapping such as `{"max": 5046272}` rather than as a bare number.
 Catalog and report consumers must unwrap the configured reducer value; a recipe's requested
@@ -136,6 +142,13 @@ mature windows and the actual optimizer diagnostics. A later plateau also does n
 resuming as its cause without a matched uninterrupted continuation.
 
 ## Research interpretation
+
+- Player disk-backed inspection reads original step rewards, cumulative returns,
+  and recorded Policy decisions. Seeking does not add samples or recompute Policy
+  diagnostics. History charts show a bounded window around the selected step;
+  a partial window does not establish a realized full-episode critic return.
+  Timeline event dots use a separate bounded episode-wide overview and may group
+  nearby events for display; they are not individual scientific metric samples.
 
 - Playback `V(s)` is the critic's expectation of discounted future policy-facing return under the
   checkpoint policy, while realized `G(s)` is one completed trajectory sample from that
@@ -265,7 +278,17 @@ resuming as its cause without a matched uninterrupted continuation.
   include warm-up before the window is full and are online behavior-policy training proxies rather
   than frozen-checkpoint evaluation evidence. Breakout ranks runs first by the rolling mean
   terminal `bricks_destroyed` count, then by higher rolling maximum target-origin bricks,
-  then by lower rolling mean episode length across all origins. Criteria are lexicographic:
+  then by lower rolling mean episode length across all origins. A low rolling minimum can persist
+  while the mean improves because a single low-progress episode determines the minimum until it
+  leaves the window. For an illustrative fixed policy with independent episodes and probability
+  `p` of finishing below a chosen brick threshold, a 100-episode window contains such an episode
+  with probability `1 - (1 - p)^100`; even `p = 0.01` gives about 63.4%. Online windows overlap
+  and policies change, so this calculation is intuition, not a failure-rate estimate from history.
+  The median of logged rolling minima is not an episode percentile, and the fraction of logged
+  windows below a threshold is not the fraction of episodes below it. Mean/minimum/maximum
+  aggregates alone do not identify episode variance or lower-tail quantiles; use individual
+  episode evidence for those measures. Displaying or ranking by a metric does not add that
+  metric to the learner's reward objective. Criteria are lexicographic:
   later criteria apply only when earlier values tie, without a tolerance band.
   `leaders runs` applies the complete configured training ranking to individual runs and excludes
   runs missing any criterion. Recipe cohorts retain their separate cross-seed aggregation order;
