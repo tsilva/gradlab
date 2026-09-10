@@ -109,6 +109,32 @@ def _worker_main(
                         {"ok": False, "error_type": type(exc).__name__, "error": str(exc)}
                     )
                     continue
+            elif operation == "reward_history":
+                try:
+                    value = host.reward_history(
+                        request["epoch"],
+                        request["episode_id"],
+                        request.get("first"),
+                        request.get("last"),
+                    )
+                except (ValueError, OSError) as exc:
+                    connection.send(
+                        {"ok": False, "error_type": type(exc).__name__, "error": str(exc)}
+                    )
+                    continue
+            elif operation == "event_history":
+                try:
+                    value = host.event_history(
+                        request["epoch"],
+                        request["episode_id"],
+                        request.get("first"),
+                        request.get("last"),
+                    )
+                except (ValueError, OSError) as exc:
+                    connection.send(
+                        {"ok": False, "error_type": type(exc).__name__, "error": str(exc)}
+                    )
+                    continue
             elif operation == "inspect_recorded_step":
                 try:
                     value = host.inspect_recorded_step(
@@ -372,6 +398,16 @@ class IsolatedPlaybackHost:
     def chart_history(self, epoch, episode_id, first=None, last=None):
         return dict(
             self._rpc("chart_history", epoch=epoch, episode_id=episode_id, first=first, last=last)
+        )
+
+    def reward_history(self, epoch, episode_id, first=None, last=None):
+        return dict(
+            self._rpc("reward_history", epoch=epoch, episode_id=episode_id, first=first, last=last)
+        )
+
+    def event_history(self, epoch, episode_id, first=None, last=None):
+        return dict(
+            self._rpc("event_history", epoch=epoch, episode_id=episode_id, first=first, last=last)
         )
 
     def inspect_recorded_step(self, epoch: int, episode_id: str, step: int) -> dict[str, Any]:
