@@ -1,6 +1,14 @@
 import { createPanel } from "./shared.js";
 import { eventColor, eventColorFill, eventLabels } from "../event-colors.js";
 
+export function eventAtCursor(point, view) {
+  if (Number.isInteger(view.selectedStep)) {
+    return point.step === view.selectedStep
+      && (view.selectedEpisode == null || point.episode === view.selectedEpisode);
+  }
+  return view.selectedSequence != null && point.sequence === view.selectedSequence;
+}
+
 export function mount({ definition, services }) {
   const element = createPanel({
     id: definition.id,
@@ -21,7 +29,8 @@ export function mount({ definition, services }) {
   let disposed = false;
   let latestView = {};
   let currentPoints = [];
-  let selectedSequence = null;
+  let selectedCursor = null;
+  let cursorPoint = null;
 
   async function load(append = false) {
     if (pending || !identity || disposed) return;
@@ -65,9 +74,10 @@ export function mount({ definition, services }) {
   element.addEventListener("scroll", loadAtBottom, { passive: true });
 
   function draw(visible, view, recorded) {
-    const selected = view.inspection
-      ? visible.find((point) => Number(point.sequence) === Number(view.selectedSequence))
-      : null;
+    if (cursorPoint && !visible.some((point) => eventAtCursor(point, view))) {
+      visible = [...visible, cursorPoint].sort((a, b) => b.step - a.step);
+    }
+    const selected = visible.find((point) => eventAtCursor(point, view));
     if (!visible.length) {
       const empty = document.createElement("li");
       empty.className = "empty-state";
@@ -78,8 +88,7 @@ export function mount({ definition, services }) {
     list.replaceChildren(...visible.map((point) => {
       const labels = eventLabels(point);
       const item = document.createElement("li");
-      const isSelected = selected
-        && Number(point.sequence) === Number(selected.sequence);
+      const isSelected = point === selected;
       item.className = [
         "event-item",
         point.boundary ? "boundary" : "",
@@ -117,7 +126,11 @@ export function mount({ definition, services }) {
   return {
     element,
     renderHistory(history, snapshot = null, view = {}) {
+      view = { ...view, selectedStep: snapshot?.transition?.step,
+        selectedEpisode: snapshot?.transition?.episode ?? snapshot?.session?.episode };
       latestView = view;
+      cursorPoint = history.find((point) => eventAtCursor(point, view)
+        && (point.boundary || point.events?.length)) || null;
       const episodeId = services.getState?.().liveSnapshot?.trajectory?.episode_id;
       const key = episodeId ? `${view.sessionEpoch}:${episodeId}` : null;
       status.hidden = !key;
@@ -133,8 +146,9 @@ export function mount({ definition, services }) {
         list.replaceChildren();
       }
       if (key) {
-        if (selectedSequence !== view.selectedSequence) {
-          selectedSequence = view.selectedSequence;
+        const cursor = JSON.stringify([view.selectedStep, view.selectedEpisode, view.selectedSequence]);
+        if (selectedCursor !== cursor) {
+          selectedCursor = cursor;
           draw(currentPoints, view, true);
         }
         if (element.scrollTop === 0 && Date.now() - updated >= 1000) void load();

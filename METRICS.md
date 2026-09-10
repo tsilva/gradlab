@@ -127,14 +127,17 @@ does not read, project, or preserve noncurrent W&B or R2 schemas.
 
 Recent training return, progress, episode-length, and success statistics (including compact
 names without `rolling`) use the run-configured
-`metrics_episode_window_size`, currently 100. During warm-up they reduce all eligible observations
-seen so far; metrics whose meaning requires complete start coverage are withheld until every start
-has filled the window. The window size lives once in config rather than being duplicated in every
+`metrics_episode_window_size`, currently 100. Return, progress, episode-length, and boundary-event
+statistics reduce eligible observations during warm-up. A per-start recent success rate is withheld
+until that start fills its window; all-start recent success aggregates are withheld until every
+configured start fills its window. The window size lives once in config rather than being duplicated in every
 metric path. `lifetime` and `total` explicitly mean all eligible observations seen so far. Boundary-event
 paths retain `rolling` to distinguish window counts from lifetime counts.
 
 A checkpoint continuation preserves the learner's cumulative step counter but creates fresh
-episode metric windows and fresh environment episodes. Its initial mean progress and length
+episode metric windows and fresh environment episodes. The episode reducer's cumulative episode,
+reason, and success counters also start fresh; their `total` and `lifetime` names do not imply that
+loading a model checkpoint reconstructs counts from the preceding learner execution. Its initial mean progress and length
 therefore describe only newly completed episodes, not the preceding run's last window. Short
 episodes can finish first after the reset, transiently biasing the initial window toward shorter,
 lower-progress outcomes. A boundary dip alone does not establish lost policy weights; compare
@@ -275,7 +278,8 @@ resuming as its cause without a matched uninterrupted continuation.
 - GradLab does not currently emit separate actor, critic, shared-trunk, pre-clipping, or
   post-clipping gradient norms for SB3 actor-critic updates. SB3 backpropagates one combined policy,
   entropy, and value objective and clips the norm over the complete policy parameter set, so
-  `update/policy_gradient_loss` and `update/value_loss` are not proxies for their respective
+  `train/{algorithm}/policy_loss` and `train/{algorithm}/value_loss`, with `algorithm` equal to
+  `ppo` or `a2c`, are not proxies for their respective
   gradient magnitudes.
 - For reward-transform ablations, first compare `train/reward/pre_transform/*` with
   `train/reward/shaped/*`. `task.reward.reward_scale` is a finite multiplier from zero through one,
@@ -377,6 +381,14 @@ resuming as its cause without a matched uninterrupted continuation.
   ViZDoom Deathmatch's optional `sample-factory-v0` shape
   exposes `kill`, `death`, `hit`, `damage`, `health`, `armor`, `weapon`, `ammo`, and `weapon_hold`
   components; their sum is the pre-transform task reward and excludes the replaced provider reward.
+- Current reward-telemetry gaps: a bare identity task with no reward wrappers returns its rewards
+  with an empty task-metric map. The training reward accumulator consumes only task-metric records,
+  so its registered shaped-reward statistics and native-component statistics are absent on that
+  path, even though episode returns still accumulate. Applicability inventory entries alone do
+  not establish that these series are emitted. With an active reward transform, pre-transform
+  statistics are suppressed independently for each flushed rollout when its finite samples match
+  the shaped samples; their absence does not prove that the transform contract is an identity,
+  and an earlier last summary can remain stale during such a gap.
 - The player's protocol-v8 Reward analysis ledger is local playback telemetry, not a W&B metric.
   It shows raw component values, multiplies each impact by the unit-interval reward scale,
   accounts for unattributed raw reward and per-transition clipping, and reports both signed
@@ -441,6 +453,12 @@ already the row's `eval/checkpoint/step` axis and is therefore not duplicated in
 
 Episode-level evidence stays in R2. Confidence intervals and start-by-reason scalar products
 are intentionally computed offline rather than added to W&B history.
+
+Current implementation gap: the generic evaluator computes registered `eval/return_max`, but
+`acceptance_aggregates` omits it when recomputing authoritative checkpoint results. Consequently,
+normal acceptance projections omit that diagnostic and its `leader/return_max` projection; an
+acceptance rule requiring it lacks its decisive aggregate. Registration alone does not guarantee
+that this field is populated by the authoritative evaluation path.
 
 An acceptance contract may reject fail-fast only when the first failed outcome proves its rule
 cannot pass. That rejection is complete evidence of failure, but not a complete 100-episode
@@ -520,7 +538,7 @@ unevaluated for future explicit user action. dstack process exit alone is never 
 | `train/all/boundary_event/{reason}/rolling/count` | Recent failure {reason} count | Unsuccessful completed episodes whose terminal record contains the reason among the most recent 100 genuine completed episodes, including warm-up before the window is full; reason presence is counted at most once per episode. | episodes | rollout | history | last | train/global_step | training | - | - |
 | `train/all/boundary_event/{reason}/rolling/rate` | Recent failure {reason} rate | Recent unsuccessful completed episodes whose terminal record contains the reason divided by all recent completed episodes; reason presence is boolean per episode. | fraction | rollout | history | last | train/global_step | training | - | - |
 | `train/target/success/by_start/{start}/episodes_total` | Successful target episodes from {start} | Cumulative successful genuine target-origin episodes from one start. | episodes | rollout | history | last | train/global_step | training | - | - |
-| `train/target/success/by_start/{start}/rate` | Recent success rate from {start} | Success fraction over recent genuine target-origin attempts from one start. | fraction | rollout | history | last | train/global_step | training | - | - |
+| `train/target/success/by_start/{start}/rate` | Recent success rate from {start} | Success fraction over recent genuine target-origin attempts from one start, emitted only after that start fills the configured episode window. | fraction | rollout | history | last | train/global_step | training | - | - |
 | `train/target/success/observed_start_rate_lifetime_min` | Observed-start success rate min | Minimum cumulative target-origin success rate across starts with at least one genuine attempt. | fraction | rollout | history | last | train/global_step | training | - | - |
 | `train/target/success/observed_start_rate_lifetime_mean` | Observed-start success rate mean | Mean cumulative target-origin success rate across starts with at least one genuine attempt. | fraction | rollout | history | last | train/global_step | training | - | - |
 | `train/target/success/start_rate_min` | Recent all-start success rate min | Minimum recent target-origin success rate, emitted after every configured start fills the episode window. | fraction | rollout | history | last | train/global_step | training | - | - |
@@ -540,8 +558,8 @@ unevaluated for future explicit user action. dstack process exit alone is never 
 | `train/ppo/approx_kl` | PPO approximate KL | Approximate KL divergence for the PPO update. | scalar | rollout | history | last | train/global_step | training | - | - |
 | `train/ppo/clip_fraction` | PPO clip fraction | Fraction of sampled policy ratios outside PPO's clipping interval. | fraction | rollout | history | last | train/global_step | training | - | - |
 | `train/jerk/retained/count` | JERK retained sequences | Distinct action sequences retained by JERK search. | sequences | rollout | history | last | train/global_step | training | - | - |
-| `train/jerk/best/return/mean` | JERK best return mean | Mean observed return of JERK's highest-ranked retained sequence. | return | rollout | history | last | train/global_step | training | - | - |
-| `train/jerk/best/program/steps` | JERK best program steps | Action length of JERK's highest-ranked retained sequence. | steps | rollout | history | last | train/global_step | training | - | - |
+| `train/jerk/best/return/mean` | JERK best return mean | Mean observed return of JERK's highest-ranked candidate, selected from retained sequences and live exploration prefixes; a live prefix contributes one return observation. | return | rollout | history | last | train/global_step | training | - | - |
+| `train/jerk/best/program/steps` | JERK best program steps | Action length of JERK's highest-ranked candidate, which may be a retained sequence or a live exploration prefix. | steps | rollout | history | last | train/global_step | training | - | - |
 | `train/go-explore/archive/cell/count` | Go-Explore archive cells | Semantic cells currently retained by Go-Explore. | cells | interval | history | last | train/global_step | training | - | - |
 | `train/go-explore/archive/blob/bytes` | Go-Explore archive bytes | Uncompressed bytes in distinct retained provider-state blobs. | bytes | interval | history | last | train/global_step | training | - | - |
 | `train/go-explore/archive/visit/count` | Go-Explore archive visits | Cumulative semantic-cell visits. | visits | interval | history | last | train/global_step | training | - | - |
@@ -553,8 +571,8 @@ unevaluated for future explicit user action. dstack process exit alone is never 
 | `train/{algorithm}/policy_loss` | {algorithm} policy-gradient loss | Actor-critic policy-gradient loss. | scalar | rollout | history | last | train/global_step | training | - | - |
 | `train/{algorithm}/value_loss` | {algorithm} value loss | Actor-critic value loss. | scalar | rollout | history | last | train/global_step | training | - | - |
 | `train/{algorithm}/learning_rate` | {algorithm} learning rate | Current actor-critic learning rate. | scalar | rollout | history | last | train/global_step | training | - | - |
-| `train/{algorithm}/entropy` | {algorithm} policy entropy | Positive actor-critic policy entropy. | nats | rollout | history | last | train/global_step | training | - | - |
-| `train/{algorithm}/action_std` | {algorithm} policy distribution std | Continuous-action distribution standard deviation. | scalar | rollout | history | last | train/global_step | training | - | - |
+| `train/{algorithm}/entropy` | {algorithm} policy entropy | Actor-critic policy entropy with the entropy-loss sign reversed, averaged over the update samples. Discrete entropy is nonnegative; continuous differential entropy can be negative. | nats | rollout | history | last | train/global_step | training | - | - |
+| `train/{algorithm}/action_std` | {algorithm} policy distribution std | Arithmetic mean of exp(policy.log_std) over its parameter entries; this summarizes continuous-policy scale parameters, not the empirical standard deviation of sampled or executed actions. | scalar | rollout | history | last | train/global_step | training | - | - |
 | `train/{algorithm}/dominant_action_rate` | {algorithm} dominant action rate | Largest empirical frequency among sampled discrete rollout actions; not a per-state maximum policy probability. | fraction | rollout | history | last | train/global_step | training | - | - |
 | `train/{algorithm}/rollout_value/mean` | {algorithm} value prediction mean | Mean rollout value prediction. | scalar | rollout | history | last | train/global_step | training | - | - |
 | `train/{algorithm}/rollout_value/std` | {algorithm} value prediction std | Standard deviation of rollout value predictions. | scalar | rollout | history | last | train/global_step | training | - | - |
@@ -589,10 +607,10 @@ unevaluated for future explicit user action. dstack process exit alone is never 
 | `ops/event_sequence` | Orchestration event sequence | Monotonic local outbox event sequence used as W&B delivery order. | events | frame | history | max | ops/event_sequence | operational | - | - |
 | `ops/outbox/pending` | Pending outbox frames | Metric outbox frames not yet acknowledged by the W&B SDK. | events | supervisor sample | history | last | ops/event_sequence | operational | - | - |
 | `ops/outbox/oldest_age_seconds` | Oldest unpublished age | Age of the oldest metric frame not yet acknowledged by the W&B SDK. | seconds | supervisor sample | history | last | ops/event_sequence | operational | - | - |
-| `ops/outbox/visibility_lag_seconds` | Remote visibility lag | Age of the newest local metric event not yet observed through the W&B API. | seconds | remote visibility probe | history | last | ops/event_sequence | operational | - | - |
+| `ops/outbox/visibility_lag_seconds` | Remote visibility lag | Age of the oldest local metric frame beyond the W&B API's observed event-sequence high-water mark, sampled at the last successful remote probe. | seconds | remote visibility probe | history | last | ops/event_sequence | operational | - | - |
 | `ops/checkpoints_pending` | Pending checkpoints | Ready local checkpoints not yet verified in public model R2. | checkpoints | supervisor sample | history | last | ops/event_sequence | operational | - | - |
 | `ops/evals_pending` | Pending evaluations | Persisted evaluation intents pending submission or a verified result; intents deferred after acceptance are excluded. | evaluations | supervisor sample | history | last | ops/event_sequence | operational | - | - |
-| `ops/drain/gpu_idle_seconds` | GPU idle drain time | Time the training container retained its GPU after the learner exited. | seconds | terminal drain | history | last | ops/event_sequence | operational | - | - |
+| `ops/drain/gpu_idle_seconds` | GPU idle drain time | Elapsed wall time since learner exit, sampled after the first terminal drain. This is not measured GPU utilization and excludes subsequent publication and terminal work. | seconds | terminal drain | history | last | ops/event_sequence | operational | - | - |
 | `ops/scratch/used_fraction` | Scratch used | Fraction of the task scratch filesystem currently used. | fraction | supervisor sample | history | last | ops/event_sequence | operational | - | - |
 | `ops/terminal/state` | Terminal run state | Receipt-backed terminal run state. | text | terminal receipt | summary | none | ops/event_sequence | operational | - | - |
 | `ops/terminal/reason` | Terminal run reason | Receipt-backed terminal reason when the run did not succeed. | text | terminal receipt | summary | none | ops/event_sequence | operational | - | - |
@@ -638,14 +656,23 @@ minimum bricks remains diagnostic and does not participate in ranking.
 ## Reward discount overlay in Playback
 
 The standard Step reward panel shows a dashed amber overlay of shaped reward contributions
-using the same selected transition and discount: `gamma**(reward_step - selected_step) *
-reward_shaped`. Past rewards are excluded and dimmed; the selected action has delay zero.
-Hovering does not change the reference state. The compact table shows up to five nearby
+using a separately pinned reference step and recorded discount: `gamma**(reward_step - reference_step) *
+reward_shaped`. Rewards before the reference are excluded and dimmed; the reference has delay zero.
+The reference initializes at the first displayed transition of each episode and changes only
+when the user presses “Set return reference to cursor”.
+Hovering does not change the reference state, table rows, values, or highlighted row.
+The compact table stays anchored to the selected Playback step and shows up to five current and future
 recorded samples with native (`reward_provider`) and shaped (`reward_shaped`) rewards,
-step delay, discount weight, and discounted shaped contribution. It prioritizes nonzero
-reward samples and always includes the inspected sample; the exact selected transition
-is eligible when inside the chart window. Clicking a table step seeks the shared Playback
-cursor and therefore changes the discount reference. Missing values and past contributions
+step delay, discount weight, discounted shaped contribution, Return G, and Value V.
+Return G uses the authoritative full-episode `realized_return` for that row’s pre-action
+state, not a sum of sampled chart points or rewards from the pinned reference. Value V
+is the recorded pre-action `value` for the same state. G remains Pending until comparable
+episode evidence is available; comparison failures show Incomparable with their reasons.
+Truncated returns that include terminal-state value are explicitly marked bootstrapped.
+Rows before either the cursor or the return reference are excluded. It prioritizes nonzero
+reward samples and includes the exact selected transition when inside the chart window.
+The table refreshes when Playback selection or recorded chart history changes, including zoom. Clicking a table step seeks the shared Playback
+cursor without changing the discount reference. Missing values and past contributions
 are shown as unavailable, not zero; tiny nonzero values use scientific notation.
 The overlay uses the chart's recorded sample
 points and does not compute an episode return. These contributions describe discount

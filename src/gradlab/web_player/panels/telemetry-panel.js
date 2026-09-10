@@ -352,6 +352,34 @@ function makeLineBlock(block, services, definition) {
   let currentContext = { snapshot: null, history: [], view: {} };
   let chartGeometry = null;
   let hoverX = null;
+  let referenceStep = null;
+  let referenceEpisode = null;
+  const referenceControls = document.createElement("div");
+  referenceControls.className = "reward-reference-controls";
+  const referenceLabel = document.createElement("span");
+  const referenceButton = document.createElement("button");
+  referenceButton.type = "button";
+  referenceButton.textContent = "Set return reference to cursor";
+  referenceControls.append(referenceLabel, referenceButton);
+  if (rewardLayout) section.insertBefore(referenceControls, canvas);
+  referenceButton.addEventListener("click", () => {
+    const step = currentContext.snapshot?.transition?.step;
+    if (!Number.isInteger(step)) return;
+    referenceStep = step;
+    renderReference();
+    renderChart(currentContext);
+  });
+  const renderReference = () => {
+    const { snapshot, history, view } = currentContext;
+    const transition = snapshot?.transition;
+    referenceButton.disabled = !Number.isInteger(transition?.step);
+    referenceLabel.textContent = `Return reference: ${referenceStep ?? "—"} · Cursor: ${transition?.step ?? "—"}`;
+    const selected = transition ? { step: transition.step, sequence: transition.sequence,
+      reward_provider: transition.reward?.provider, reward_shaped: transition.reward?.shaped,
+      ...(Number.isFinite(transition.decision?.value) ? { value: transition.decision.value } : {}) } : null;
+    const gamma = snapshot?.session?.value_discount ?? snapshot?.session?.critic_comparison?.discount;
+    inspector?.render(view?.chartHistory || history, selected, gamma, referenceStep);
+  };
 
   const renderChart = ({ history, view }) => {
     history = view?.chartHistory || history;
@@ -365,10 +393,10 @@ function makeLineBlock(block, services, definition) {
     const gamma = session?.value_discount ?? session?.critic_comparison?.discount;
     const validDiscount = typeof gamma === "number" && Number.isFinite(gamma) && gamma >= 0 && gamma <= 1;
     if (discountEnabled && validDiscount) {
-      series.push({ values: history.map(point => rewardContribution(point, selectedStep, gamma)?.contribution ?? NaN),
+      series.push({ values: history.map(point => rewardContribution(point, referenceStep, gamma)?.contribution ?? NaN),
         color: themeColor("seriesAmber"), dash: [4, 3] });
     }
-    const chartOptions = discountEnabled ? { cursorStep: selectedStep, dimBeforeStep: selectedStep, showStepTicks: true } : {};
+    const chartOptions = discountEnabled ? { cursorStep: selectedStep, referenceStep, dimBeforeStep: referenceStep, showStepTicks: true } : {};
     const defaultIndex = cursorIndex(history, view);
     const hoveredIndex = hoverX === null
       ? null
@@ -381,12 +409,6 @@ function makeLineBlock(block, services, definition) {
     if (correctedIndex !== null && correctedIndex !== displayedIndex) {
       displayedIndex = correctedIndex;
       chartGeometry = drawLines(canvas, series, { cursorIndex: displayedIndex, steps: history.map((point) => point.step), cursorStep: hoverX === null ? currentContext.snapshot?.transition?.step : null, ...chartOptions });
-    }
-    if (inspector) {
-      const transition = currentContext.snapshot?.transition;
-      const selected = transition ? { step: transition.step, sequence: transition.sequence,
-        reward_provider: transition.reward?.provider, reward_shaped: transition.reward?.shaped } : null;
-      inspector.render(history, selected, hoverX === null ? selectedStep : history[displayedIndex]?.step, gamma);
     }
     lineLegendPresentationAtIndex(descriptors, hoverX === null ? currentContext.history : history, hoverX === null ? cursorIndex(currentContext.history, view) : displayedIndex)
       .forEach(({ key, value }) => {
@@ -445,6 +467,16 @@ function makeLineBlock(block, services, definition) {
         foot.classList.toggle("warning", presentation.warning);
       }
       section.dataset.telemetryStatus = availability.status;
+      if (inspector) {
+        const episode = JSON.stringify([view?.sessionEpoch, snapshot?.trajectory?.episode_id,
+          snapshot?.transition?.episode ?? snapshot?.session?.episode]);
+        if (episode !== referenceEpisode) {
+          referenceEpisode = episode;
+          referenceStep = null;
+        }
+        if (referenceStep === null && Number.isInteger(snapshot?.transition?.step)) referenceStep = snapshot.transition.step;
+        renderReference();
+      }
       renderChart(currentContext);
     },
   };

@@ -487,6 +487,53 @@ def test_goal_variants_use_one_private_index_read_without_wandb(
     assert bucket.calls == [pointer_key, pointer["generation_key"]]
 
 
+@pytest.mark.parametrize("run_count", [6, 50, 51])
+def test_goal_activity_prefetches_a_full_page(
+    run_count: int,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    write_goal_catalog(tmp_path)
+    goal_path = tmp_path / "experiments" / "goals" / "Mario" / "Level1-1" / "_goal.yaml"
+    authored = load_goal_contract(goal_path, tmp_path)
+    descriptor = build_goal_variant_descriptor(
+        goal_slug="Mario/Level1-1",
+        source_sha="a" * 40,
+        authored_goal=authored,
+        effective_goal=goal_for_contract_validation(authored, label="stale fallback test"),
+    )
+    generation, pointer = goal_catalog_documents(
+        descriptor,
+        [{"run_id": f"gradlab-{index:032x}", "state": "running"}
+         for index in range(run_count)],
+    )
+    pointer_key = goal_catalog_pointer_key("Mario/Level1-1")
+
+    class FailingAfterWarmBucket:
+        available = True
+
+        def get_json_optional(self, key: str):
+            if not self.available:
+                raise TimeoutError("simulated control-plane outage")
+            if key == pointer_key:
+                return pointer
+            if key == pointer["generation_key"]:
+                return generation
+            raise AssertionError(key)
+
+    bucket = FailingAfterWarmBucket()
+    monkeypatch.setattr(
+        "gradlab.catalog_jobs.enqueue_catalog_projection",
+        lambda **_kwargs: {},
+    )
+    catalog = PlayCatalog(repo_root=tmp_path, control_bucket=bucket)
+
+    activity = catalog.goal_activity(environment_id="Mario", goal_id="Level1-1")
+    variant = next(item for item in activity["items"] if item["run_count"])
+    assert len(variant["recent_runs"]) == min(run_count, 50)
+    assert variant["has_more_runs"] is (run_count > 50)
+
+
 def test_goal_activity_never_falls_back_to_a_stale_generation(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -1872,3 +1919,28 @@ def test_progressive_goals_do_not_read_remote_evidence_until_enrichment(
     assert enriched.source == page.source
     assert enriched.items[0]["evidence_status"] == "ready"
     assert enriched.items[0]["success_badges"] == ("train/success",)
+
+
+def test_checkpoint_training_history_publishes_each_metric_before_fetching_next():
+    from gradlab.play_catalog import _checkpoint_training_metric_history
+
+    published = []
+    first = "train/target/return_mean"
+    second = "train/all/episode_steps_mean"
+
+    class Run:
+        def scan_history(self, *, keys, page_size):
+            if keys[1] == second:
+                assert published == [(first, ((10, 2.0), (20, 3.0)))]
+                return []
+            return [
+                {"train/global_step": 20, first: 3},
+                {"train/global_step": 10, first: 2},
+            ]
+
+    _checkpoint_training_metric_history(
+        Run(),
+        [{"metric": first, "evidence": "training"}, {"metric": second, "evidence": "training"}],
+        lambda metric, samples: published.append((metric, samples)),
+    )
+    assert published[-1] == (second, ())

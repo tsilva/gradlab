@@ -262,6 +262,11 @@ export function telemetryPanelProcessing(config) {
     if (block.kind === "namespace-explorer") {
       processing.add(block.namespace === "reward-component" ? "reward-accounting" : "signals");
     }
+    if (block.kind === "line" && block.metrics?.includes("reward/provider")
+        && block.metrics?.includes("reward/shaped")) {
+      processing.add("policy");
+      processing.add("critic-calibration");
+    }
     const metrics = block.kind === "stats" || block.kind === "line"
       ? block.metrics
       : [block.metric];

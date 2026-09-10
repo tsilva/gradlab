@@ -744,7 +744,7 @@ test("goal configurations render as a master-detail browser with exact changes",
   assert.match(source, /button\("View goal YAML"/);
   assert.doesNotMatch(source, /role", "treegrid"/);
   assert.doesNotMatch(styles, /\.goal-configuration-table/);
-  assert.match(styles, /\.goal-configuration-layout \{[^}]*grid-template-columns: minmax\(18rem, 26rem\) minmax\(0, 1fr\);/);
+  assert.match(styles, /\.goal-configuration-layout \{[^}]*grid-template-columns: 19rem minmax\(0, 1fr\);/);
   assert.match(styles, /\.goal-configuration-option\.selected \{/);
   assert.match(styles, /@media \(max-width: 1100px\)[\s\S]*\.goal-configuration-layout \{ grid-template-columns: 1fr; \}/);
   assert.match(source, /\["Operation", "Exact contract path", "Before", "After"\]/);
@@ -766,7 +766,7 @@ test("goal configurations render as a master-detail browser with exact changes",
   );
 });
 
-test("goal activity renders recent runs as action-oriented evidence cards", async () => {
+test("goal activity renders recent runs as a compact success table", async () => {
   const source = await readFile(
     new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
     "utf8",
@@ -778,20 +778,18 @@ test("goal activity renders recent runs as action-oriented evidence cards", asyn
   assert.doesNotMatch(source, /Goal diff request failed/);
   assert.doesNotMatch(source, /activityHasActiveRuns/);
   assert.doesNotMatch(source, /setInterval/);
-  assert.match(source, /heading\.className = "goal-configuration-runs-header";/);
-  assert.match(source, /title\.textContent = `Runs \(\$\{runCount\.toLocaleString\(\)\}\)`;/);
   assert.doesNotMatch(source, /goal-configuration-run-sort/);
   assert.doesNotMatch(source, /goalVariantRunSort/);
-  assert.match(source, /const baseItems = page\?\.items\?\.length\s*\? page\.items\s*:\s*variant\.recent_runs;/);
-  assert.match(source, /list\.className = "goal-configuration-run-list";/);
-  assert.match(source, /navigate\.className = "goal-configuration-run-card";/);
+  assert.match(source, /const baseItems = page\?\.loaded\s*\? page\.items\s*:\s*variant\.recent_runs;/);
+  assert.match(source, /table\.className = "goal-configuration-run-table";/);
+  assert.match(source, /navigate\.className = "goal-configuration-run-identity";/);
   assert.match(source, /const presentation = runStatePresentation\(run\);/);
   assert.match(source, /runTrainingEvidenceStatus\(run\)/);
   assert.match(source, /runEvaluationEvidenceStatus\(run\)/);
-  assert.match(source, /addEvidence\("Training target"/);
-  assert.match(source, /addEvidence\("Evaluation evidence"/);
-  assert.match(source, /action\.append\(document\.createTextNode\("View checkpoints"\), icon\("arrow-right"\)\);/);
-  assert.match(source, /page\?\.nextCursor \? "Load more" : "Load older runs"/);
+  assert.match(source, /addEvidence\("train\/success"/);
+  assert.match(source, /addEvidence\("eval\/success"/);
+  assert.match(source, /state\.append\(icon\(presentation\.iconName\)\);/);
+  assert.match(source, /button\("Load more runs"/);
 
   const styles = await readFile(
     new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
@@ -799,12 +797,9 @@ test("goal activity renders recent runs as action-oriented evidence cards", asyn
   );
   assert.match(
     styles,
-    /\.goal-configuration-runs\s*\{[^}]*padding: 1\.15rem;/,
+    /\.goal-configuration-runs\s*\{[^}]*padding: 1\.15rem 0;/,
   );
-  assert.match(styles, /\.goal-configuration-run-card \{/);
-  assert.match(styles, /\.goal-configuration-run-evidence \{[^}]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\);/);
-  assert.match(styles, /\.goal-run-evidence\.not-evaluated \{/);
-  assert.doesNotMatch(styles, /\.goal-configuration-run-table/);
+  assert.match(styles, /\.goal-configuration-run-table \{/);
 });
 
 test("catalog pages refresh only on explicit request", async () => {
@@ -1056,9 +1051,9 @@ test("catalog refresh animates and disables only the header refresh control", as
   assert.doesNotMatch(source, /source-list-loading-indicator/);
   assert.match(source, /const refresh = button\("", \{ iconName: "refresh", quiet: true \}\)/);
   assert.match(source, /refresh\.classList\.add\("icon-only"\)/);
-  assert.match(source, /if \(this\.loading\) refresh\.classList\.add\("refreshing"\)/);
-  assert.match(source, /refresh\.setAttribute\("aria-label", this\.loading \? "Refreshing" : "Refresh"\)/);
-  assert.match(source, /refresh\.disabled = this\.loading/);
+  assert.match(source, /if \(refreshing\) refresh\.classList\.add\("refreshing"\)/);
+  assert.match(source, /refresh\.setAttribute\("aria-label", refreshing \? "Refreshing" : "Refresh"\)/);
+  assert.match(source, /refresh\.disabled = refreshing/);
   assert.match(
     source,
     /if \(this\.loading && !this\.items\.length && !this\.query\.trim\(\)\) \{\s*if \(this\.route\.level === "goals"\) body\.append\(this\.renderGoals\(\)\);\s*return body;/,
@@ -2263,4 +2258,70 @@ test("goal evidence fills pending rows and ignores obsolete responses", async (c
   globalThis.fetch = async () => { throw new Error("offline"); };
   await browser.loadGoalEvidence("goals", 2, null);
   assert.equal(environmentSuccessStatus(browser.items[0], "eval/success").label, "Unavailable");
+});
+
+
+test("embedded runs use the fetched cursor after exhausting older runs", () => {
+  const browser = Object.create(SourceBrowser.prototype);
+  browser.goalVariantRunPages = new Map();
+  const variant = { variant_id: "variant", has_more_runs: true };
+  assert.equal(browser.embeddedGoalRunsHaveMore(variant), true);
+  browser.goalVariantRunPages.set("variant", { loading: true });
+  assert.equal(browser.embeddedGoalRunsHaveMore(variant), true);
+  browser.goalVariantRunPages.set("variant", { loaded: true, nextCursor: "next" });
+  assert.equal(browser.embeddedGoalRunsHaveMore(variant), true);
+  browser.goalVariantRunPages.set("variant", { loaded: true, nextCursor: null });
+  assert.equal(browser.embeddedGoalRunsHaveMore(variant), false);
+  browser.goalVariantRunPages.clear();
+  assert.equal(browser.embeddedGoalRunsHaveMore({ ...variant, has_more_runs: false }), false);
+});
+
+
+test("checkpoint evidence renders partial cells before completion and clears loading", async (t) => {
+  let stream;
+  t.mock.method(globalThis, "fetch", async () => new Response(new ReadableStream({
+    start(controller) { stream = controller; },
+  })));
+  const browser = Object.create(SourceBrowser.prototype);
+  Object.assign(browser, {
+    route: { run_id: "gradlab-test" }, routeKey: () => "run", query: "", token: "test",
+    checkpointTrainingSerial: 0, catalogRequestTimeoutMs: 1000,
+    sourceItems: [{ checkpoint_id: "top", metrics: {} }, { checkpoint_id: "bottom", metrics: {} }],
+    catalogWarnings: [], renderView() {},
+  });
+  const loading = browser.loadCheckpointTraining("run");
+  assert.ok(browser.checkpointTrainingController);
+  assert.ok(browser.sourceItems.every((item) => item.training_pending));
+  const encode = (event) => new TextEncoder().encode(JSON.stringify(event) + "\n");
+  const update = encode({ type: "metrics", items: [{ checkpoint_id: "top", metrics: { bricks: 42 } }] });
+  // The network may split a JSON record across arbitrary chunks.
+  stream.enqueue(update.slice(0, 12));
+  stream.enqueue(update.slice(12));
+  await new Promise(setImmediate);
+  assert.equal(browser.items[0].metrics.bricks, 42);
+  assert.deepEqual(browser.items[0].training_loaded_metrics, ["bricks"]);
+  assert.deepEqual(browser.items[1].training_loaded_metrics, []);
+  assert.ok(browser.checkpointTrainingController);
+  stream.enqueue(encode({ type: "complete", items: browser.items, warnings: [] }));
+  stream.close();
+  await loading;
+  assert.equal(browser.checkpointTrainingController, null);
+  assert.ok(browser.items.every((item) => !item.training_pending));
+});
+
+test("interrupted checkpoint evidence keeps received values and releases refresh", async (t) => {
+  const events = [{ type: "metrics", items: [{ checkpoint_id: "top", metrics: { bricks: 7 } }] }];
+  t.mock.method(globalThis, "fetch", async () => new Response(events.map(JSON.stringify).join("\n") + "\n"));
+  const browser = Object.create(SourceBrowser.prototype);
+  Object.assign(browser, {
+    route: { run_id: "gradlab-test" }, routeKey: () => "run", query: "", token: "test",
+    checkpointTrainingSerial: 0, catalogRequestTimeoutMs: 1000,
+    sourceItems: [{ checkpoint_id: "top", metrics: {} }], catalogWarnings: [], renderView() {},
+  });
+  await browser.loadCheckpointTraining("run");
+  assert.equal(browser.items[0].metrics.bricks, 7);
+  assert.equal(browser.items[0].training_pending, false);
+  assert.equal(browser.checkpointTrainingController, null);
+  assert.equal(browser.freshness, "partial");
+  assert.match(browser.catalogWarnings[0].message, /ended before completion/);
 });

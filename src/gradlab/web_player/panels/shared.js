@@ -200,7 +200,7 @@ export function lineCursorIndex(plot, x, pointCount) {
   return Math.round(fraction * Math.max(0, pointCount - 1));
 }
 
-export function drawLines(canvas, series, { cursorIndex = null, steps = null, cursorStep = null, cursorLabel = null, dimBeforeStep = null, showStepTicks = false } = {}) {
+export function drawLines(canvas, series, { cursorIndex = null, steps = null, cursorStep = null, cursorLabel = null, referenceStep = null, dimBeforeStep = null, showStepTicks = false } = {}) {
   if (steps?.length) canvas.setAttribute("aria-description", `Episode steps ${steps[0]}–${steps.at(-1)}. Drag to zoom; double-click to reset.`);
   const { context, ratio, width, height } = resizeCanvas(canvas);
   const chartSurface = themeColor("chartSurface");
@@ -288,6 +288,27 @@ export function drawLines(canvas, series, { cursorIndex = null, steps = null, cu
     const end = Math.min(plot.right, plot.left + (dimBeforeStep - steps[0]) / Math.max(1, steps.at(-1) - steps[0]) * (plot.right - plot.left));
     context.save(); context.globalAlpha = 0.7; context.fillStyle = chartSurface;
     context.fillRect(plot.left, plot.top, end - plot.left, plot.bottom - plot.top); context.restore();
+  }
+  if (steps?.length && Number.isFinite(referenceStep)
+      && referenceStep >= steps[0] && referenceStep <= steps.at(-1)) {
+    const x = Math.max(plot.left + 1, Math.min(plot.right - 1,
+      plot.left + (referenceStep - steps[0]) / Math.max(1, steps.at(-1) - steps[0]) * (plot.right - plot.left)));
+    context.save();
+    context.strokeStyle = themeColor("seriesViolet");
+    context.fillStyle = themeColor("seriesViolet");
+    context.lineWidth = 2;
+    context.setLineDash([]);
+    context.beginPath();
+    context.moveTo(x, plot.top);
+    context.lineTo(x, plot.bottom);
+    context.stroke();
+    context.beginPath();
+    context.moveTo(x - 5, plot.top);
+    context.lineTo(x + 5, plot.top);
+    context.lineTo(x, plot.top + 7);
+    context.closePath();
+    context.fill();
+    context.restore();
   }
   const pointCount = Math.max(0, ...series.map((item) => item.values.length));
   let cursorX = null;
