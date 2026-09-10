@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { episodeStepRange, zoomedStepRange, RecordedStepReader, EventOverview, timelineEventMarkers } from "../../src/gradlab/web_player/episode-timeline.js";
+import { episodeStepRange, RecordedStepReader, EventOverview, timelineEventMarkers } from "../../src/gradlab/web_player/episode-timeline.js";
 
 test("episode range retains the first recorded step after cache eviction", () => {
   const snapshots = [{ transition: { step: 13910 } }, { transition: { step: 18005 } }];
@@ -10,15 +10,6 @@ test("episode range retains the first recorded step after cache eviction", () =>
     { first: 90, last: 189 });
   assert.deepEqual(episodeStepRange({ imported: true, first_step: 1, last_step: 18005 }, []),
     { first: 1, last: 18005 });
-});
-
-test("zoom clamps at episode ends and keeps the track stable during dragging", () => {
-  const full = { first: 1, last: 18005 };
-  assert.deepEqual(zoomedStepRange(full, 1, 100), { first: 1, last: 100, span: 100 });
-  assert.deepEqual(zoomedStepRange(full, 18005, 100), { first: 17906, last: 18005, span: 100 });
-  const window = zoomedStepRange(full, 500, 100);
-  assert.equal(zoomedStepRange(full, 501, 100, window), window);
-  assert.equal(zoomedStepRange(full, 500, 0, window), full);
 });
 
 test("rapid scrubbing coalesces reads and suppresses stale responses", async () => {

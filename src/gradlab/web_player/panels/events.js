@@ -60,7 +60,7 @@ export function mount({ definition, services }) {
         }));
         const meta = document.createElement("div");
         meta.className = "event-meta";
-        meta.textContent = `seq ${point.sequence} · ep ${point.episode} · step ${point.step}`;
+        meta.textContent = `ep ${point.episode} · step ${point.step}`;
         jump.setAttribute(
           "aria-label",
           `Inspect ${labels.join(" · ")} at episode ${point.episode}, step ${point.step}`,

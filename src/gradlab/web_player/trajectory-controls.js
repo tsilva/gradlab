@@ -104,16 +104,11 @@ export function mountTrajectoryControls({ command, getState, request, toast }) {
     const trajectory = snapshot?.trajectory || {};
     const imported = Boolean(trajectory.imported);
     const available = trajectory.available || imported;
-    document.querySelector("#trajectory-controls").hidden = !available;
-    if (available) {
-      download.after(importButton);
-    } else {
-      document.querySelector(".header-status").prepend(importButton);
-    }
+    document.querySelector("#trajectory-controls").hidden = !available || (!imported && !trajectory.error);
     document.querySelector("#trajectory-navigation").hidden = !imported;
     retry.hidden = !trajectory.error;
     retry.disabled = !state.hasControl;
-    download.hidden = imported;
+    download.hidden = !available || imported;
     download.disabled = preparing || !trajectory.transitions;
     importButton.disabled = importing || !state.hasControl;
     const status = document.querySelector("#trajectory-status");

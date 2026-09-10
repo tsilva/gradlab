@@ -20,6 +20,7 @@
         <nav id="source-breadcrumbs" class="source-breadcrumbs header-breadcrumbs" aria-label="Playback source" hidden></nav>
       </div>
       <div class="header-status">
+        <button id="trajectory-download" class="quiet icon-only" type="button" aria-label="Download episode" title="Download episode" hidden><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M5 16v4h14v-4"/></svg></button>
         <button id="trajectory-import" class="quiet icon-only" type="button" aria-label="Import episode" title="Import episode"><svg class="icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 17v4h16v-4M12 3v12M7 8l5-5 5 5" /></svg></button>
         <input id="trajectory-file" type="file" accept=".trj,.zip" aria-label="Episode trajectory archive" hidden>
         <nav id="checkpoint-navigation" class="checkpoint-navigation" aria-label="Checkpoint navigation" hidden>
@@ -81,7 +82,6 @@
     <main id="source-browser" class="source-browser" hidden></main>
     <section id="trajectory-controls" class="trajectory-controls" aria-label="Episode recording" hidden>
       <button id="trajectory-retry" class="quiet" type="button" hidden>Retry recording</button>
-      <button id="trajectory-download" class="quiet icon-only" type="button" aria-label="Download episode" title="Download episode"><svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-5-5 5 5 5-5M5 16v4h14v-4"/></svg></button>
       <span id="trajectory-navigation" hidden>
         <button id="trajectory-previous" class="quiet icon-only" type="button" aria-label="Previous recorded transition"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-arrow-left"></use></svg></button>
         <label>Transition <input id="trajectory-seek" type="number" min="1" step="1" aria-label="Exact recorded transition"></label>
@@ -96,21 +96,6 @@
       <div class="timeline-labels">
         <strong id="timeline-label">EPISODE — · STEP —</strong>
         <span id="playback-evidence-status" class="playback-evidence-status" role="status" hidden></span>
-      </div>
-      <div class="timeline-navigation">
-        <form id="timeline-go-form">
-          <label for="timeline-step">Step</label>
-          <input id="timeline-step" type="number" min="0" max="0" step="1" value="0" required aria-label="Go to step">
-          <button id="timeline-go" type="submit" class="quiet">Go</button>
-        </form>
-        <label for="timeline-zoom">Zoom</label>
-        <select id="timeline-zoom" aria-label="Timeline zoom">
-          <option value="0">Full episode</option>
-          <option value="1000">1,000 steps</option>
-          <option value="100">100 steps</option>
-        </select>
-        <span id="timeline-range" role="status"></span>
-        <button id="timeline-latest" type="button" class="quiet">Return to latest</button>
       </div>
       <div class="timeline-track">
         <div class="timeline-scrubber-track">

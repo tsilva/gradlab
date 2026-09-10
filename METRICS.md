@@ -143,6 +143,13 @@ resuming as its cause without a matched uninterrupted continuation.
 
 ## Research interpretation
 
+- Player event labels show `ep` for the episode number and `step` for the transition
+  number within that episode. The internal `sequence` identifies playback transitions
+  across episodes and supports inspection navigation. Each executed environment step
+  advances `sequence`; an episode boundary resets the next episode's `step` to 1
+  while `sequence` continues. These are playback coordinates,
+  not event counts or the learner's training step counter.
+
 - Player disk-backed inspection reads original step rewards, cumulative returns,
   and recorded Policy decisions. Seeking does not add samples or recompute Policy
   diagnostics. History charts show a bounded window around the selected step;

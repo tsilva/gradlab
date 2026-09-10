@@ -8,14 +8,6 @@ export function episodeStepRange(trajectory, snapshots) {
   return steps.length ? { first: Math.min(...steps), last: Math.max(...steps) } : null;
 }
 
-export function zoomedStepRange(range, selected, span, previous = null) {
-  if (!range || !span || range.last - range.first < span) return range;
-  if (previous && previous.span === span && selected >= previous.first && selected <= previous.last
-      && previous.first >= range.first && previous.last <= range.last) return previous;
-  const first = Math.max(range.first, Math.min(range.last - span + 1, selected - Math.floor(span / 2)));
-  return { first, last: first + span - 1, span };
-}
-
 // Event positions belong to the episode, never to the chart's inspection page.
 export class EventOverview {
   constructor(limit = 4096) {
