@@ -31,7 +31,7 @@ export function formatRewardCell(value, digits = 3) {
   return value.toFixed(digits);
 }
 
-export function createRewardInspector(legend, services) {
+export function createRewardLegend(legend) {
   legend.classList.add("reward-history-legend");
   legend.replaceChildren(...[
     ["Native reward", "seriesViolet"],
@@ -44,6 +44,9 @@ export function createRewardInspector(legend, services) {
     if (index === 2) item.className = "discounted-series";
     return item;
   }));
+}
+
+export function createRewardInspector(services) {
   const scroll = document.createElement("div");
   scroll.className = "reward-history-scroll";
   const table = document.createElement("table");
@@ -62,9 +65,10 @@ export function createRewardInspector(legend, services) {
   let referenceSample = null;
   return {
     element: scroll,
-    render(history, selected, gamma, referenceStep = selected?.step) {
+    render(history, selected, gamma, referenceStep = selected?.step, sample = null) {
       if (referenceSample?.step !== referenceStep) referenceSample = null;
-      if (selected?.step === referenceStep) referenceSample = selected;
+      if (sample?.step === referenceStep) referenceSample = sample;
+      else if (selected?.step === referenceStep) referenceSample = selected;
       const referenceRows = rewardInspectionRows(history, referenceSample, gamma, 5, referenceStep);
       const rows = referenceRows.map(point => ({ ...point, inspected: point.step === selected?.step }));
       const next = JSON.stringify([rows, selected?.step, gamma, referenceStep]);

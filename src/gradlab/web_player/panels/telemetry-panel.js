@@ -1,5 +1,5 @@
 import { rewardContribution } from "./reward-discount.js";
-import { createRewardInspector } from "./reward-inspector.js";
+import { createRewardInspector, createRewardLegend } from "./reward-inspector.js";
 import { bindChartRange } from "../chart-range.js";
 import {
   createPanel,
@@ -347,13 +347,11 @@ function makeLineBlock(block, services, definition) {
     && block.metrics.includes("reward/provider") && block.metrics.includes("reward/shaped");
   section.classList.toggle("reward-history", rewardLayout);
   const legendValues = rewardLayout ? new Map() : setLegend(legend, descriptors);
-  const inspector = rewardLayout ? createRewardInspector(legend, services) : null;
-  if (inspector) section.append(inspector.element);
+  if (rewardLayout) createRewardLegend(legend);
   let currentContext = { snapshot: null, history: [], view: {} };
   let chartGeometry = null;
   let hoverX = null;
   let referenceStep = null;
-  let referenceEpisode = null;
   const referenceControls = document.createElement("div");
   referenceControls.className = "reward-reference-controls";
   const referenceButton = document.createElement("button");
@@ -364,19 +362,11 @@ function makeLineBlock(block, services, definition) {
   referenceButton.addEventListener("click", () => {
     const step = currentContext.snapshot?.transition?.step;
     if (!Number.isInteger(step)) return;
-    referenceStep = step;
-    renderReference();
-    renderChart(currentContext);
+    services.setRewardReference(step);
   });
   const renderReference = () => {
-    const { snapshot, history, view } = currentContext;
-    const transition = snapshot?.transition;
+    const transition = currentContext.snapshot?.transition;
     referenceButton.disabled = !Number.isInteger(transition?.step);
-    const selected = transition ? { step: transition.step, sequence: transition.sequence,
-      reward_provider: transition.reward?.provider, reward_shaped: transition.reward?.shaped,
-      ...(Number.isFinite(transition.decision?.value) ? { value: transition.decision.value } : {}) } : null;
-    const gamma = snapshot?.session?.value_discount ?? snapshot?.session?.critic_comparison?.discount;
-    inspector?.render(view?.chartHistory || history, selected, gamma, referenceStep);
   };
 
   const renderChart = ({ history, view }) => {
@@ -465,14 +455,8 @@ function makeLineBlock(block, services, definition) {
         foot.classList.toggle("warning", presentation.warning);
       }
       section.dataset.telemetryStatus = availability.status;
-      if (inspector) {
-        const episode = JSON.stringify([view?.sessionEpoch, snapshot?.trajectory?.episode_id,
-          snapshot?.transition?.episode ?? snapshot?.session?.episode]);
-        if (episode !== referenceEpisode) {
-          referenceEpisode = episode;
-          referenceStep = null;
-        }
-        if (referenceStep === null && Number.isInteger(snapshot?.transition?.step)) referenceStep = snapshot.transition.step;
+      if (rewardLayout) {
+        referenceStep = view?.rewardReference?.step ?? null;
         renderReference();
       }
       renderChart(currentContext);
@@ -1289,7 +1273,42 @@ function makeRewardBreakdownBlock(block, definition, services) {
   return { element: section, render };
 }
 
+function makeRewardTableBlock(services) {
+  const section = document.createElement("section");
+  section.className = "telemetry-block reward-table-block";
+  const context = document.createElement("p");
+  context.className = "panel-foot";
+  const button = document.createElement("button");
+  button.type = "button";
+  button.textContent = "Set return reference to cursor";
+  let cursor = null;
+  button.addEventListener("click", () => services.setRewardReference(cursor));
+  let inspector = createRewardInspector(services);
+  let episode = null;
+  section.append(context, button, inspector.element);
+  return {
+    element: section,
+    render({ snapshot, history, view }) {
+      const reference = view?.rewardReference;
+      if (episode !== reference?.episode) {
+        episode = reference?.episode;
+        const next = createRewardInspector(services);
+        inspector.element.replaceWith(next.element);
+        inspector = next;
+      }
+      cursor = snapshot?.transition?.step;
+      button.disabled = !Number.isInteger(cursor);
+      const range = view?.chartRange;
+      context.textContent = `Cursor ${cursor ?? "unavailable"} · Reference ${reference?.step ?? "unavailable"} · ${range ? `Steps ${range.first}–${range.last}` : "Full episode"}`;
+      const points = view?.chartHistory || history;
+      const gamma = snapshot?.session?.value_discount ?? snapshot?.session?.critic_comparison?.discount;
+      inspector.render(points, { step: cursor }, gamma, reference?.step, reference?.sample);
+    },
+  };
+}
+
 function makeBlock(block, definition, services) {
+  if (block.kind === "reward-table") return makeRewardTableBlock(services);
   if (block.kind === "stats") return makeStatsBlock(block);
   if (block.kind === "line") return makeLineBlock(block, services, definition);
   if (block.kind === "histogram") return makeHistogramBlock(block);

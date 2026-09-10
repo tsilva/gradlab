@@ -1,3 +1,4 @@
+import { rewardReferenceStore } from "./panels/reward-reference.js";
 import { chartWithLiveTail } from "./chart-live-tail.js";
 import { bindTimelineRange } from "./chart-range.js";
 import {
@@ -58,6 +59,7 @@ const SAVED_LAYOUTS_KEY = "gradlab.player.workspace.saved.v7";
 const STATS_WINDOW_ID = "stats";
 const workspaceId = localStorage.getItem(WORKSPACE_ID_KEY) || crypto.randomUUID();
 localStorage.setItem(WORKSPACE_ID_KEY, workspaceId);
+const rewardReferences = rewardReferenceStore(localStorage, workspaceId);
 const windowId = panelName ? `panel-${panelName}` : (workspaceWindowName || "main");
 
 function defaultLayout() {
@@ -818,6 +820,12 @@ function currentEpisodeHistory() {
   return state.history.filter((point) => Number(point.episode) === episode);
 }
 
+function setRewardReference(step) {
+  if (!Number.isInteger(step) || step !== state.snapshot?.transition?.step) return;
+  rewardReferences.set(state.snapshot, state.sessionEpoch);
+  panelRuntime?.renderHistory(currentEpisodeHistory(), state.snapshot, panelView());
+}
+
 function panelView() {
   return {
     history: currentEpisodeHistory(),
@@ -828,6 +836,7 @@ function panelView() {
       { episode: episodeForSnapshot(state.liveSnapshot), range: state.chartRange,
         throughStep: state.snapshot?.transition?.step ?? 0 },
     ) : null,
+    rewardReference: rewardReferences.get(state.snapshot, state.sessionEpoch),
     chartRange: state.chartRange,
     inspection: state.inspectionSequence !== null,
     sessionEpoch: state.sessionEpoch,
@@ -2356,6 +2365,11 @@ function reclaimWindow(closedWindow) {
 }
 
 function bindWorkspaceSync() {
+  window.addEventListener("storage", (event) => {
+    if (event.key === `gradlab-reward-reference-${workspaceId}`) {
+      panelRuntime?.renderHistory(currentEpisodeHistory(), state.snapshot, panelView());
+    }
+  });
   if (workspaceChannel) {
     workspaceChannel.addEventListener("message", (event) => {
       const message = event.data || {};
@@ -2700,6 +2714,7 @@ panelRuntime = new PanelRuntime({
       return result;
     },
     inspectStep,
+    setRewardReference,
     setChartRange,
     showToast,
     setAttributionPreference: (config) => {

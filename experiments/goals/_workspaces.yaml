@@ -142,7 +142,7 @@ sections:
       - train/progress/score/max
     - id: serve_stall_count
       kind: line
-      y_title: episodes (last 100)
+      y_title: fraction (last 100 episodes)
       x: train/step
       y:
       - train/unsuccessful/serve_stall/fraction
