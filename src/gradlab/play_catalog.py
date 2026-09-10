@@ -7,7 +7,7 @@ import re
 import secrets
 import threading
 import time
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import asdict, dataclass, replace
@@ -705,6 +705,7 @@ def filter_checkpoint_summaries(
 def _checkpoint_training_metric_history(
     run: Any,
     columns: Sequence[Mapping[str, Any]],
+    on_metric: Callable[[str, tuple[tuple[int, float], ...]], None] | None = None,
 ) -> dict[str, tuple[tuple[int, float], ...]]:
     history: dict[str, tuple[tuple[int, float], ...]] = {}
     for column in columns:
@@ -725,6 +726,8 @@ def _checkpoint_training_metric_history(
                 samples[step] = value
         if samples:
             history[metric] = tuple(sorted(samples.items()))
+        if on_metric is not None:
+            on_metric(metric, history.get(metric, ()))
     return history
 
 
@@ -2238,9 +2241,9 @@ class PlayCatalog:
             )
             best = [dict(run) for run in recent]
             _rank_run_summaries(best, primary=metric_specs, fallback=fallback_specs)
-            variant["recent_runs"] = recent[:5]
+            variant["recent_runs"] = recent[:CATALOG_PAGE_SIZE]
             variant["best_runs"] = best[:5]
-            variant["has_more_runs"] = int(variant.get("run_count") or 0) > 5
+            variant["has_more_runs"] = int(variant.get("run_count") or 0) > len(variant["recent_runs"])
         revision = compact_json_sha256(
             {
                 "repository_goal_sha256": current["effective_goal_contract_sha256"],
@@ -2983,6 +2986,7 @@ class PlayCatalog:
         run_id: str,
         metric_contract: CheckpointMetricContract,
         include_wandb: bool,
+        on_training_metric: Callable[[str, tuple[tuple[int, float], ...]], None] | None = None,
     ) -> _CheckpointEvaluationData:
         def validate_wandb_config(config: Mapping[str, Any]) -> None:
             schema_version = require_current_metrics_schema(config.get("metrics_schema_version"))
@@ -3129,6 +3133,7 @@ class PlayCatalog:
                     training_metric_history = _checkpoint_training_metric_history(
                         run,
                         metric_contract.columns,
+                        on_training_metric,
                     )
                 except Exception as exc:
                     warning = {
@@ -3259,6 +3264,7 @@ class PlayCatalog:
             training_metric_history = _checkpoint_training_metric_history(
                 run,
                 metric_contract.columns,
+                on_training_metric,
             )
         except Exception as exc:
             # Public checkpoints remain playable when W&B history is unavailable.
@@ -3294,6 +3300,7 @@ class PlayCatalog:
         query: str = "",
         goal_variant_id: str = "",
         include_wandb: bool = True,
+        on_training_progress: Callable[[Mapping[str, Any]], None] | None = None,
     ) -> CheckpointPage:
         if RUN_ID_PATTERN.fullmatch(run_id) is None:
             raise ValueError("run id must match gradlab-<32 lowercase hex>")
@@ -3406,11 +3413,32 @@ class PlayCatalog:
                     "checkpoint effective goal contract does not match its run variant"
                 )
 
+        def training_progress(metric: str, samples: tuple[tuple[int, float], ...]) -> None:
+            if on_training_progress is None:
+                return
+            # Publish each completed metric immediately, in checkpoint table order.
+            ordered = sorted(manifests, key=lambda item: (item.step, item.sha256), reverse=True)
+            sample_index = len(samples) - 1
+            updates = []
+            for manifest in ordered:
+                while sample_index >= 0 and samples[sample_index][0] > manifest.step:
+                    sample_index -= 1
+                updates.append({
+                    "checkpoint_id": manifest.checkpoint_id,
+                    "metrics": {metric: samples[sample_index][1] if sample_index >= 0 else None},
+                })
+                if len(updates) == 20:
+                    on_training_progress({"type": "metrics", "items": updates})
+                    updates = []
+            if updates:
+                on_training_progress({"type": "metrics", "items": updates})
+
         evaluation_data = (
             self._checkpoint_evaluations(
                 run_id=run_id,
                 metric_contract=metric_contract,
                 include_wandb=include_wandb,
+                on_training_metric=training_progress if on_training_progress else None,
             )
             if metric_contract is not None
             else _CheckpointEvaluationData({}, None, None, {})

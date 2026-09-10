@@ -71,3 +71,12 @@ test("event rows and timeline markers share the same label-derived fill", () => 
   assert.match(styles, /\.event-item::before \{[^}]*background: var\(--event-colors/);
   assert.match(styles, /\.timeline-marker \{[^}]*background: var\(--event-colors/);
 });
+
+test("events match the cursor's exact episode and step without inspection mode", async () => {
+  const { eventAtCursor } = await import("../../src/gradlab/web_player/panels/events.js");
+  const event = { episode: 1, step: 977, sequence: 1000 };
+  assert.equal(eventAtCursor(event, { selectedStep: 977, selectedEpisode: 1, inspection: false, selectedSequence: 9999 }), true);
+  assert.equal(eventAtCursor(event, { selectedStep: 978, selectedEpisode: 1 }), false);
+  assert.equal(eventAtCursor(event, { selectedStep: 977, selectedEpisode: 2 }), false);
+  assert.equal(eventAtCursor(event, {}), false);
+});

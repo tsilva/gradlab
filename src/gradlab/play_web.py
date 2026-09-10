@@ -16,7 +16,7 @@ import time
 import uuid
 import webbrowser
 from collections import deque
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
 from typing import Any
@@ -3448,14 +3448,54 @@ class PlaybackWebServer:
     async def catalog_checkpoints(self, request: web.Request) -> web.Response:
         return await self._catalog_checkpoints(request, include_wandb=False)
 
-    async def catalog_checkpoint_training(self, request: web.Request) -> web.Response:
-        return await self._catalog_checkpoints(request, include_wandb=True)
+    async def catalog_checkpoint_training(self, request: web.Request) -> web.StreamResponse:
+        if request.query.get("stream") != "1":
+            return await self._catalog_checkpoints(request, include_wandb=True)
+        self._authorize_api(request)
+        if self.catalog is None:
+            raise web.HTTPNotFound()
+        response = web.StreamResponse(headers={
+            "Content-Type": "application/x-ndjson",
+            "Cache-Control": "no-store",
+            "X-Accel-Buffering": "no",
+        })
+        await response.prepare(request)
+        loop = asyncio.get_running_loop()
+        events: asyncio.Queue[Mapping[str, Any]] = asyncio.Queue()
+
+        def progress(event: Mapping[str, Any]) -> None:
+            if not worker.done():
+                loop.call_soon_threadsafe(events.put_nowait, event)
+
+        async def produce() -> None:
+            try:
+                result = await self._catalog_checkpoints(
+                    request, include_wandb=True, on_training_progress=progress,
+                )
+                payload = json.loads(result.body)
+                await events.put({"type": "complete" if result.status == 200 else "error", **payload})
+            except Exception as exc:
+                await events.put({"type": "error", "error": str(exc)})
+
+        worker = asyncio.create_task(produce())
+        try:
+            while True:
+                event = await events.get()
+                await response.write((json.dumps(event) + "\n").encode())
+                if event["type"] in {"complete", "error"}:
+                    break
+            await response.write_eof()
+        finally:
+            worker.cancel()
+            await asyncio.gather(worker, return_exceptions=True)
+        return response
 
     async def _catalog_checkpoints(
         self,
         request: web.Request,
         *,
         include_wandb: bool,
+        on_training_progress: Callable[[Mapping[str, Any]], None] | None = None,
     ) -> web.Response:
         self._authorize_api(request)
         if self.catalog is None:
@@ -3475,6 +3515,7 @@ class PlaybackWebServer:
                 query="",
                 goal_variant_id=request.query.get("goal_variant_id", ""),
                 include_wandb=include_wandb,
+                **({"on_training_progress": on_training_progress} if on_training_progress else {}),
             )
             items = list(page.items)
             metric_columns = list(page.metric_columns)

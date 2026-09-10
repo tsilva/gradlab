@@ -20,6 +20,8 @@ This specification applies to the public checkpoint browser and interactive web 
 - Checkpoint lists must show the exact Goal Variant's Acceptance and ranking measures with applicable Training Success proxies.
 - Training Success proxies must remain visibly distinct from authoritative checkpoint-evaluation evidence.
 - Interactive Playback must provide independently arranged and synchronized views of frames, Policy inputs and decisions, transition facts, and bounded histories.
+- Selecting a step in the reward panel, Events panel, or playbar must move the shared Playback cursor and synchronize the frame and matching row highlights; Events must highlight only an event at the exact cursor step.
+- The reference step for discounted reward inspection must remain separate from the Playback cursor and change only through an explicit user action, so users can scrub without changing the calculation reference.
 - Users must be able to change the active Policy’s supported action-selection mode at any point, taking effect on the next Policy decision without resetting or otherwise altering the existing trajectory.
 - History charts must show the full recorded episode by default. Dragging with the primary mouse button selects a shared step window across history panels; the playbar must show the selected window offsets, and users must be able to reset to the full episode. Seeking must preserve the selected chart window.
 - Inspection must not alter the active trajectory or Policy randomness.

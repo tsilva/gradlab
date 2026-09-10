@@ -2371,14 +2371,22 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 next_cursor=None,
             )
 
+        training_continue = threading.Event()
+
         @classmethod
-        def checkpoints(cls, *, run_id, query, goal_variant_id, include_wandb):
+        def checkpoints(cls, *, run_id, query, goal_variant_id, include_wandb, on_training_progress=None):
             assert (
                 run_id,
                 query,
                 goal_variant_id,
             ) == ("gradlab-" + "a" * 32, "", "")
             cls.checkpoint_modes.append(include_wandb)
+            if on_training_progress:
+                on_training_progress({"type": "metrics", "items": [{
+                    "checkpoint_id": "checkpoint-1-" + "b" * 16,
+                    "metrics": {"train/target/return_mean": 120.0},
+                }]})
+                assert cls.training_continue.wait(timeout=5)
             return CheckpointPage(
                 items=(
                     {
@@ -2670,6 +2678,16 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 assert training.status == 200
                 assert (await training.json())["training_enrichment"] == "complete"
                 assert FakeCatalog.checkpoint_modes == [False, True]
+                streamed = await client.get(
+                    f"{server.origin}/api/catalog/runs/gradlab-{'a' * 32}/checkpoint-training?stream=1",
+                    headers={"Authorization": f"Bearer {server.token}"},
+                )
+                assert streamed.status == 200
+                first_record = json.loads(await asyncio.wait_for(streamed.content.readline(), timeout=2))
+                FakeCatalog.training_continue.set()
+                records = [first_record, *[json.loads(line) for line in (await streamed.text()).splitlines()]]
+                assert [record["type"] for record in records] == ["metrics", "complete"]
+                assert records[0]["items"][0]["metrics"]["train/target/return_mean"] == 120.0
                 run_inspection = await client.get(
                     f"{server.origin}/api/catalog/runs/gradlab-{'a' * 32}/inspection",
                     headers={"Authorization": f"Bearer {server.token}"},
