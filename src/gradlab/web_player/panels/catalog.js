@@ -4,11 +4,6 @@ export const FRAME_ATTRIBUTION = 3;
 export const FRAME_CNN_INSPECTION = 4;
 
 export const PANEL_TYPES = Object.freeze({
-  "discounted-rewards": {
-    module: "./discounted-rewards.js", minimum: { w: 4, h: 8 },
-    subscriptions: [], processing: ["rewards", "history", "critic-calibration"],
-    frameKinds: [], singleton: true, switchable: true,
-  },
   game: {
     module: "./game.js",
     minimum: { w: 4, h: 8 },
@@ -84,7 +79,6 @@ export const PANEL_TYPES = Object.freeze({
 });
 
 const ALL_PANELS_LAYOUT = Object.freeze({
-  "discounted-rewards": { x: 0, y: 60, w: 6, h: 12, visible: true, window: "main" },
   game: { x: 0, y: 0, w: 8, h: 15, visible: true, window: "main" },
   controls: { x: 8, y: 0, w: 2, h: 15, visible: false, window: "main" },
   policy: { x: 8, y: 0, w: 4, h: 15, visible: true, window: "main" },
@@ -101,7 +95,6 @@ const ALL_PANELS_LAYOUT = Object.freeze({
 });
 
 const PAIRED_LAYOUT = Object.freeze({
-  "discounted-rewards": { x: 0, y: 60, w: 12, h: 12, visible: true, window: "stats" },
   game: { x: 0, y: 0, w: 12, h: 15, visible: true, window: "main" },
   controls: { x: 9, y: 0, w: 3, h: 15, visible: false, window: "main" },
   policy: { x: 0, y: 0, w: 6, h: 8, visible: true, window: "stats" },
@@ -118,7 +111,6 @@ const PAIRED_LAYOUT = Object.freeze({
 });
 
 export const BUILTIN_PANEL_PRESETS = Object.freeze({
-  "discounted-rewards": { type: "discounted-rewards", title: "Discounted future rewards", config: {} },
   game: {
     type: "game",
     title: "Game",

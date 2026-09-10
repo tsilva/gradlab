@@ -101,7 +101,10 @@
       <div class="timeline-track">
         <div class="timeline-scrubber-track">
           <input id="timeline-scrubber" type="range" min="0" max="0" step="1" value="0" aria-label="Inspect an episode step" title="Left/Right: move one step · Space: play or pause">
-          <div id="timeline-zoom-band" hidden aria-hidden="true"></div>
+          <div id="timeline-zoom-band" hidden>
+            <button type="button" class="timeline-range-handle" data-edge="first" role="slider" aria-label="Chart window start" title="Drag to adjust chart window start"></button>
+            <button type="button" class="timeline-range-handle" data-edge="last" role="slider" aria-label="Chart window end" title="Drag to adjust chart window end"></button>
+          </div>
           <div id="timeline-markers" class="timeline-markers" aria-hidden="true"></div>
         </div>
         <div class="timeline-actions">

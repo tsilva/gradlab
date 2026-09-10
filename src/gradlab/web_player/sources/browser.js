@@ -868,6 +868,14 @@ export function environmentEvidenceRank(item) {
 }
 
 export function environmentSuccessStatus(item, badge) {
+  if (["pending", "unavailable"].includes(item?.evidence_status)) {
+    const pending = item.evidence_status === "pending";
+    return {
+      label: pending ? "Loading…" : "Unavailable",
+      className: "not-applicable",
+      description: pending ? "Loading success evidence" : "Success evidence unavailable; refresh to retry",
+    };
+  }
   if (successBadgeLabels(item).includes(badge)) {
     return {
       label: "✅",
@@ -1383,6 +1391,7 @@ export class SourceBrowser {
     this.requestController?.abort();
     this.requestController = null;
     this.requestSerial += 1;
+    this.goalEvidenceEpoch = (this.goalEvidenceEpoch || 0) + 1;
     this.checkpointTrainingController?.abort();
     this.checkpointTrainingController = null;
     this.checkpointTrainingSerial += 1;
@@ -1749,7 +1758,7 @@ export class SourceBrowser {
     this.catalogSource = catalog.catalogSource ? { ...catalog.catalogSource } : null;
     this.generatedAt = catalog.generatedAt;
     this.selectionFence = catalog.selectionFence;
-    this.loadedKey = this.routeKey();
+    this.loadedKey = this.items.some((item) => item.evidence_status === "pending") ? "" : this.routeKey();
     return true;
   }
 
@@ -1759,6 +1768,7 @@ export class SourceBrowser {
     if (cursor) query.set("cursor", cursor);
     if (force) query.set("refresh", "1");
     if (this.route.level === "goals") {
+      if (!this.query.trim()) query.set("evidence", "0");
       return `/api/catalog/environments/${encodeURIComponent(this.route.environment_id)}/goals?${query}`;
     }
     if (this.route.level === "goal_variants") {
@@ -1787,6 +1797,7 @@ export class SourceBrowser {
     this.requestController = controller;
     const cursor = append ? this.nextCursor : null;
     const serial = ++this.requestSerial;
+    if (!append) this.goalEvidenceEpoch = (this.goalEvidenceEpoch || 0) + 1;
     this.loading = true;
     this.loadingKey = key;
     let timedOut = false;
@@ -1869,6 +1880,9 @@ export class SourceBrowser {
       this.error = "";
       this.rememberEnvironmentCatalog();
       this.rememberGoalCatalog();
+      if (this.route.level === "goals" && received.some((item) => item.evidence_status === "pending")) {
+        void this.loadGoalEvidence(key, this.goalEvidenceEpoch, cursor, received);
+      }
       if (
         !append
         && payload.training_enrichment === "pending"
@@ -1917,6 +1931,32 @@ export class SourceBrowser {
         }
       }
     }
+  }
+
+  async loadGoalEvidence(expectedKey, epoch, cursor, received = this.sourceItems) {
+    const pendingIds = new Set(received.map((item) => item.goal_id));
+    const endpoint = this.endpoint(cursor).replace("evidence=0", "evidence=1");
+    try {
+      const response = await fetch(endpoint, {
+        headers: { Authorization: `Bearer ${this.token}` },
+        cache: "no-store",
+        signal: AbortSignal.timeout(this.catalogRequestTimeoutMs),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Success evidence unavailable");
+      if (epoch !== this.goalEvidenceEpoch || expectedKey !== this.routeKey()) return;
+      const evidence = new Map((payload.items || []).map((item) => [item.goal_id, item]));
+      this.sourceItems = this.sourceItems.map((item) => evidence.has(item.goal_id)
+        ? { ...item, ...evidence.get(item.goal_id), evidence_status: "ready" }
+        : item);
+    } catch {
+      if (epoch !== this.goalEvidenceEpoch || expectedKey !== this.routeKey()) return;
+      this.sourceItems = this.sourceItems.map((item) => item.evidence_status === "pending" && pendingIds.has(item.goal_id)
+        ? { ...item, evidence_status: "unavailable" } : item);
+    }
+    this.items = [...this.sourceItems];
+    this.rememberGoalCatalog();
+    this.renderView();
   }
 
   async loadCheckpointTraining(expectedKey) {
@@ -2171,9 +2211,8 @@ export class SourceBrowser {
     head.append(titleBlock);
 
     if (this.app.phase === "selecting") {
-      const labelsRefresh = this.route.level === "goal_variants";
-      const refresh = button(labelsRefresh ? "Refresh" : "", { iconName: "refresh", quiet: true });
-      if (!labelsRefresh) refresh.classList.add("icon-only");
+      const refresh = button("", { iconName: "refresh", quiet: true });
+      refresh.classList.add("icon-only");
       if (this.loading) refresh.classList.add("refreshing");
       refresh.setAttribute("aria-label", this.loading ? "Refreshing" : "Refresh");
       refresh.title = this.loading ? "Refreshing this list" : "Refresh this list";
@@ -2467,7 +2506,10 @@ export class SourceBrowser {
       body.classList.add("loading");
       if (!this.items.length) body.classList.add("loading-empty");
     }
-    if (this.loading && !this.items.length && !this.query.trim()) return body;
+    if (this.loading && !this.items.length && !this.query.trim()) {
+      if (this.route.level === "goals") body.append(this.renderGoals());
+      return body;
+    }
     if (!this.items.length) {
       const empty = document.createElement("div");
       empty.className = "source-empty";

@@ -3209,6 +3209,8 @@ class PlaybackWebServer:
                 environment_id=request.match_info["environment_id"],
                 query=normalize_search_query(request.query.get("q")),
                 cursor=request.query.get("cursor"),
+                include_evidence=request.query.get("evidence") != "0",
+                progressive="evidence" in request.query,
             )
         except Exception as exc:
             problem = self._catalog_error_response(exc)

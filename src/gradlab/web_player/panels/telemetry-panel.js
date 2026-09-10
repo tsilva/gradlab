@@ -1,3 +1,5 @@
+import { rewardContribution } from "./reward-discount.js";
+import { createRewardInspector } from "./reward-inspector.js";
 import { bindChartRange } from "../chart-range.js";
 import {
   createPanel,
@@ -326,7 +328,7 @@ export function policyDecisionPresentation(snapshot, history, view) {
   };
 }
 
-function makeLineBlock(block, services) {
+function makeLineBlock(block, services, definition) {
   const section = document.createElement("section");
   section.className = "telemetry-block telemetry-plot";
   const descriptors = block.metrics.map(descriptorFor).filter(Boolean);
@@ -340,7 +342,13 @@ function makeLineBlock(block, services) {
   legend.className = "legend";
   section.append(canvas, legend);
   const foot = appendFoot(section, block.foot, { force: true });
-  const legendValues = setLegend(legend, descriptors);
+  const rewardLayout = definition.id === "step-reward"
+    && block.metrics.length === 2
+    && block.metrics.includes("reward/provider") && block.metrics.includes("reward/shaped");
+  section.classList.toggle("reward-history", rewardLayout);
+  const legendValues = rewardLayout ? new Map() : setLegend(legend, descriptors);
+  const inspector = rewardLayout ? createRewardInspector(legend, services) : null;
+  if (inspector) section.append(inspector.element);
   let currentContext = { snapshot: null, history: [], view: {} };
   let chartGeometry = null;
   let hoverX = null;
@@ -351,18 +359,34 @@ function makeLineBlock(block, services) {
       values: seriesForMetric(descriptor.key, history),
       color: themeColor(descriptor.color || "chartBar"),
     }));
+    const discountEnabled = rewardLayout;
+    const selectedStep = currentContext.snapshot?.transition?.step;
+    const session = currentContext.snapshot?.session;
+    const gamma = session?.value_discount ?? session?.critic_comparison?.discount;
+    const validDiscount = typeof gamma === "number" && Number.isFinite(gamma) && gamma >= 0 && gamma <= 1;
+    if (discountEnabled && validDiscount) {
+      series.push({ values: history.map(point => rewardContribution(point, selectedStep, gamma)?.contribution ?? NaN),
+        color: themeColor("seriesAmber"), dash: [4, 3] });
+    }
+    const chartOptions = discountEnabled ? { cursorStep: selectedStep, dimBeforeStep: selectedStep, showStepTicks: true } : {};
     const defaultIndex = cursorIndex(history, view);
     const hoveredIndex = hoverX === null
       ? null
       : lineCursorIndex(chartGeometry?.plot, hoverX, chartGeometry?.pointCount);
     let displayedIndex = hoveredIndex ?? defaultIndex;
-    chartGeometry = drawLines(canvas, series, { cursorIndex: displayedIndex, steps: history.map((point) => point.step), cursorStep: hoverX === null ? currentContext.snapshot?.transition?.step : null });
+    chartGeometry = drawLines(canvas, series, { cursorIndex: displayedIndex, steps: history.map((point) => point.step), cursorStep: hoverX === null ? currentContext.snapshot?.transition?.step : null, ...chartOptions });
     const correctedIndex = hoverX === null
       ? null
       : lineCursorIndex(chartGeometry?.plot, hoverX, chartGeometry?.pointCount);
     if (correctedIndex !== null && correctedIndex !== displayedIndex) {
       displayedIndex = correctedIndex;
-      chartGeometry = drawLines(canvas, series, { cursorIndex: displayedIndex, steps: history.map((point) => point.step), cursorStep: hoverX === null ? currentContext.snapshot?.transition?.step : null });
+      chartGeometry = drawLines(canvas, series, { cursorIndex: displayedIndex, steps: history.map((point) => point.step), cursorStep: hoverX === null ? currentContext.snapshot?.transition?.step : null, ...chartOptions });
+    }
+    if (inspector) {
+      const transition = currentContext.snapshot?.transition;
+      const selected = transition ? { step: transition.step, sequence: transition.sequence,
+        reward_provider: transition.reward?.provider, reward_shaped: transition.reward?.shaped } : null;
+      inspector.render(history, selected, hoverX === null ? selectedStep : history[displayedIndex]?.step, gamma);
     }
     lineLegendPresentationAtIndex(descriptors, hoverX === null ? currentContext.history : history, hoverX === null ? cursorIndex(currentContext.history, view) : displayedIndex)
       .forEach(({ key, value }) => {
@@ -1237,7 +1261,7 @@ function makeRewardBreakdownBlock(block, definition, services) {
 
 function makeBlock(block, definition, services) {
   if (block.kind === "stats") return makeStatsBlock(block);
-  if (block.kind === "line") return makeLineBlock(block, services);
+  if (block.kind === "line") return makeLineBlock(block, services, definition);
   if (block.kind === "histogram") return makeHistogramBlock(block);
   if (block.kind === "distribution") return makeDistributionBlock(block);
   if (block.kind === "reward-breakdown") {
@@ -1253,6 +1277,7 @@ export function mount({ definition, services }) {
   });
   const policyDecision = policyDecisionLayoutEnabled(definition);
   element.classList.toggle("policy-decision-panel", policyDecision);
+  element.classList.toggle("step-reward-panel", definition.id === "step-reward");
   const target = document.createElement("div");
   target.className = "telemetry-blocks";
   element.append(target);

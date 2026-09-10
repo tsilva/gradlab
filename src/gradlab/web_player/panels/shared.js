@@ -200,7 +200,7 @@ export function lineCursorIndex(plot, x, pointCount) {
   return Math.round(fraction * Math.max(0, pointCount - 1));
 }
 
-export function drawLines(canvas, series, { cursorIndex = null, steps = null, cursorStep = null } = {}) {
+export function drawLines(canvas, series, { cursorIndex = null, steps = null, cursorStep = null, cursorLabel = null, dimBeforeStep = null, showStepTicks = false } = {}) {
   if (steps?.length) canvas.setAttribute("aria-description", `Episode steps ${steps[0]}–${steps.at(-1)}. Drag to zoom; double-click to reset.`);
   const { context, ratio, width, height } = resizeCanvas(canvas);
   const chartSurface = themeColor("chartSurface");
@@ -227,7 +227,7 @@ export function drawLines(canvas, series, { cursorIndex = null, steps = null, cu
     left: Math.ceil(labelWidth) + 16,
     right: width - 12,
     top: 10,
-    bottom: height - 10,
+    bottom: height - (showStepTicks ? 28 : 10),
   };
   context.strokeStyle = chartGrid;
   context.lineWidth = 1;
@@ -243,11 +243,30 @@ export function drawLines(canvas, series, { cursorIndex = null, steps = null, cu
     context.stroke();
     context.fillText(labels[index], plot.left - 6, y);
   });
+  if (showStepTicks && steps?.length) {
+    const first = steps[0], last = steps.at(-1);
+    const interval = Math.max(1, niceTickStep(Math.max(1, last - first), Math.max(1, Math.floor((plot.right - plot.left) / 75))));
+    const ticks = [first];
+    for (let tick = Math.ceil(first / interval) * interval; tick <= last; tick += interval) {
+      if (tick > first && (tick - first) / Math.max(1, last - first) * (plot.right - plot.left) >= 42) ticks.push(tick);
+    }
+    if (last > first && ticks.at(-1) !== last) {
+      if (ticks.length > 1 && (last - ticks.at(-1)) / (last - first) * (plot.right - plot.left) < 42) ticks.pop();
+      ticks.push(last);
+    }
+    context.textBaseline = "top";
+    ticks.forEach((tick, index) => {
+      const x = plot.left + (tick - first) / Math.max(1, last - first) * (plot.right - plot.left);
+      context.textAlign = index === 0 ? "left" : x > plot.right - 24 ? "right" : "center";
+      context.fillText(String(tick), x, plot.bottom + 9);
+    });
+  }
   const fraction = (index, count) => steps?.length > 1
     ? (steps[index] - steps[0]) / Math.max(1, steps.at(-1) - steps[0])
     : index / Math.max(1, count - 1);
   if (steps?.length) plot.positions = steps.map((_, index) => plot.left + fraction(index, steps.length) * (plot.right - plot.left));
-  series.forEach(({ values: points, color }) => {
+  series.forEach(({ values: points, color, dash = [] }) => {
+    context.setLineDash(dash);
     context.strokeStyle = color;
     context.lineWidth = 1.5;
     context.beginPath();
@@ -264,6 +283,12 @@ export function drawLines(canvas, series, { cursorIndex = null, steps = null, cu
     });
     context.stroke();
   });
+  context.setLineDash([]);
+  if (Number.isFinite(dimBeforeStep) && steps?.length && dimBeforeStep > steps[0]) {
+    const end = Math.min(plot.right, plot.left + (dimBeforeStep - steps[0]) / Math.max(1, steps.at(-1) - steps[0]) * (plot.right - plot.left));
+    context.save(); context.globalAlpha = 0.7; context.fillStyle = chartSurface;
+    context.fillRect(plot.left, plot.top, end - plot.left, plot.bottom - plot.top); context.restore();
+  }
   const pointCount = Math.max(0, ...series.map((item) => item.values.length));
   let cursorX = null;
   if (steps?.length && Number.isFinite(cursorStep)) {
@@ -284,6 +309,10 @@ export function drawLines(canvas, series, { cursorIndex = null, steps = null, cu
     context.lineTo(x, plot.bottom);
     context.stroke();
     context.restore();
+    if (cursorLabel) {
+      context.fillStyle = themeColor("chartHighlight"); context.textAlign = x > (plot.left + plot.right) / 2 ? "right" : "left";
+      context.textBaseline = "top"; context.fillText(cursorLabel, x + (context.textAlign === "right" ? -4 : 4), plot.top + 2);
+    }
   }
   return { plot, pointCount };
 }
