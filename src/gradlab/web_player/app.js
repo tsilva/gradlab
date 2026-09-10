@@ -13,7 +13,7 @@ import { episodeReport } from "./episode-report.js";
 import { episodeStepRange, RecordedStepReader, EventOverview, timelineEventMarkers } from "./episode-timeline.js";
 import { eventColorFill, eventLabels } from "./event-colors.js";
 import { mountPlaybackSettings } from "./playback-settings.js";
-import { snapshotActivatesCheckpointSelection } from "./playback-transition.js";
+import { snapshotActivatesCheckpointSelection, snapshotFailsCheckpointSelection } from "./playback-transition.js";
 import { SynchronizedPresentation } from "./synchronized-presentation.js";
 import {
   playbackSourceTitle,
@@ -460,6 +460,10 @@ function handleMessage(message) {
   if (message.type === "snapshot") {
     const epoch = Number(message.session_epoch || 0);
     if (epoch !== state.sessionEpoch) resetSession(epoch);
+    if (snapshotFailsCheckpointSelection(state.checkpointLoad, message)) {
+      finishCheckpointLoad();
+      showToast(message.app.error || "Could not open checkpoint", true);
+    }
     if (
       state.sourceMode
       && state.backgroundPlaybackSnapshot
