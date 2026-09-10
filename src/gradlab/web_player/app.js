@@ -10,7 +10,7 @@ import {
   panelSubscriptions,
 } from "./panels/catalog.js";
 import { episodeReport } from "./episode-report.js";
-import { episodeStepRange, zoomedStepRange, RecordedStepReader, EventOverview, timelineEventMarkers } from "./episode-timeline.js";
+import { episodeStepRange, RecordedStepReader, EventOverview, timelineEventMarkers } from "./episode-timeline.js";
 import { eventColorFill, eventLabels } from "./event-colors.js";
 import { mountPlaybackSettings } from "./playback-settings.js";
 import { snapshotActivatesCheckpointSelection } from "./playback-transition.js";
@@ -84,8 +84,6 @@ const state = {
   attributionPreference: { mode: "gradcam", interval: 1 },
   cnnCaptureCommand: null,
   timelineSequences: [],
-  timelineSpan: 0,
-  timelineWindow: null,
   inspectionHistory: null,
   eventOverview: new EventOverview(),
   seekingStep: null,
@@ -839,7 +837,6 @@ function clearRetainedEpisode() {
   recordedStepReader.invalidate();
   state.inspectionHistory = null;
   state.seekingStep = null;
-  state.timelineWindow = null;
   livePresentation.reset();
   panelRuntime?.resetFrames();
   state.snapshots.clear();
@@ -1542,11 +1539,9 @@ function renderTimeline() {
   const snapshots = [...state.snapshots.values()].filter((snapshot) =>
     currentEpisode === null || episodeForSnapshot(snapshot) === currentEpisode);
   state.timelineSequences = snapshots.map((snapshot) => Number(snapshot.sequence)).sort((a, b) => a - b);
-  const fullRange = episodeStepRange(trajectory, snapshots);
+  const range = episodeStepRange(trajectory, snapshots);
   const selected = state.seekingStep ?? Number(trajectory?.imported ? trajectory.current_step
-    : state.snapshot?.transition?.step ?? state.snapshot?.session?.step ?? fullRange?.first ?? 0);
-  const range = zoomedStepRange(fullRange, selected, state.timelineSpan, state.timelineWindow);
-  state.timelineWindow = range;
+    : state.snapshot?.transition?.step ?? state.snapshot?.session?.step ?? range?.first ?? 0);
   scrubber.min = String(range?.first ?? 0);
   scrubber.max = String(range?.last ?? 0);
   scrubber.step = "1";
@@ -1557,16 +1552,6 @@ function renderTimeline() {
   scrubber.style.setProperty("--timeline-progress", `${timelineProgress(
     selected - (range?.first ?? 0), (range?.last ?? 0) - (range?.first ?? 0) + 1,
   )}%`);
-  const stepInput = $("#timeline-step");
-  stepInput.min = String(fullRange?.first ?? 0);
-  stepInput.max = String(fullRange?.last ?? 0);
-  stepInput.disabled = !fullRange || Boolean(trajectory?.imported && !state.hasControl);
-  if (document.activeElement !== stepInput) stepInput.value = String(selected);
-  $("#timeline-go").disabled = stepInput.disabled;
-  $("#timeline-latest").disabled = !fullRange || (state.inspectionSequence === null && state.seekingStep === null && !trajectory?.imported);
-  $("#timeline-latest").hidden = Boolean(trajectory?.imported);
-  $("#timeline-range").textContent = state.seekingStep !== null ? `Loading step ${selected.toLocaleString()}…`
-    : range ? `${range.first.toLocaleString()}–${range.last.toLocaleString()}` : "";
   $("#timeline").setAttribute("aria-busy", String(state.seekingStep !== null));
   renderWorkspaceStatus();
   const markers = $("#timeline-markers");
@@ -2423,16 +2408,6 @@ function bindTimeline() {
   });
   const selectStep = (step) => { void inspectStep(step); };
   scrubber.addEventListener("input", (event) => selectStep(Number(event.target.value)));
-  $("#timeline-go-form").addEventListener("submit", (event) => {
-    event.preventDefault();
-    if ($("#timeline-step").reportValidity()) selectStep(Number($("#timeline-step").value));
-  });
-  $("#timeline-zoom").addEventListener("change", (event) => {
-    state.timelineSpan = Number(event.target.value);
-    state.timelineWindow = null;
-    renderTimeline();
-  });
-  $("#timeline-latest").addEventListener("click", () => returnToLive());
   scrubber.addEventListener("keydown", (event) => {
     if (event.code !== "Space" || event.repeat) return;
     event.preventDefault();
