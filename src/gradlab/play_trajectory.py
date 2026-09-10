@@ -12,6 +12,7 @@ from collections.abc import Mapping
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import asdict, is_dataclass
+from functools import lru_cache
 import json
 import math
 import re
@@ -53,27 +54,42 @@ TREE_COLUMNS = (
 )
 
 
+@lru_cache(maxsize=4096)
+def _portable_metadata_key(key: str) -> bool:
+    # Cache field-name classification only, never values or mutable snapshots.
+    return not is_secret_like_key(key) and key not in {
+        "hostname",
+        "host",
+        "ssh",
+        "operator",
+        "endpoint",
+        "object_uri",
+    }
+
+
 def portable_metadata(value: Any) -> Any:
     """Remove private configuration fields without changing scientific numeric data."""
-    if is_dataclass(value) and not isinstance(value, type):
-        value = asdict(value)
+    kind = type(value)
+    if value is None or kind in (bool, int, float):
+        return value
+    if isinstance(value, str):
+        if value.startswith(("/", "~", "s3://", "r2://", "file://")) or (
+            "://" in value and any(part in value for part in ("?", "@"))
+        ):
+            return "[private location omitted]"
+        return value
     if isinstance(value, Mapping):
         return {
             str(key): portable_metadata(item)
             for key, item in value.items()
-            if not is_secret_like_key(str(key))
-            and str(key) not in {"hostname", "host", "ssh", "operator", "endpoint", "object_uri"}
+            if _portable_metadata_key(str(key))
         }
     if isinstance(value, tuple | list):
         return [portable_metadata(item) for item in value]
     if isinstance(value, Path):
         return "[local path omitted]"
-    if isinstance(value, str) and (
-        value.startswith(("/", "~", "s3://", "r2://", "file://"))
-        or "://" in value
-        and any(part in value for part in ("?", "@"))
-    ):
-        return "[private location omitted]"
+    if is_dataclass(value) and not isinstance(value, type):
+        return portable_metadata(asdict(value))
     return value
 
 
@@ -84,6 +100,13 @@ def encode_tree(value: Any) -> dict[str, Any]:
     def node(item: Any, depth: int = 0) -> Any:
         if depth > 32:
             raise ValueError("trajectory structure exceeds 32 levels")
+        # Most snapshot leaves are native JSON scalars. Avoid the NumPy and ABC
+        # dispatch for each leaf, but keep NumPy scalars on the exact-array path.
+        kind = type(item)
+        if item is None or kind in (str, bool, int):
+            return ["scalar", item]
+        if kind is float and math.isfinite(item):
+            return ["scalar", item]
         if isinstance(item, np.ndarray | np.generic):
             array = np.asarray(item)
             if array.dtype.kind not in "buifc" or array.ndim > 16:
@@ -568,6 +591,12 @@ class ImportedTrajectory:
                     raise ValueError("excessive or incompatible trajectory row group")
             if expanded_size > MAX_ARCHIVE_BYTES:
                 raise ValueError("excessive expanded trajectory data")
+            from gradlab.play_reward_summary import EpisodeRewardSummary
+
+            rewards = EpisodeRewardSummary()
+            reward_contract = self.metadata["initial_snapshot"]["session"].get(
+                "reward_accounting", {}
+            )
             previous = None
             classifications = set()
             for batch in parquet.iter_batches(batch_size=1):
@@ -576,6 +605,10 @@ class ImportedTrajectory:
                     row[name] = decode_tree(row[name])
                 row["presentation"] = json.loads(row["presentation"])
                 self._validate_row(row, previous)
+                # Rebuild derived totals from validated transition evidence during
+                # the existing streaming import, including archives without totals.
+                rewards.append(row["presentation"], reward_contract)
+                row["presentation"]["episode_rewards"] = rewards.payload(row["presentation"])
                 classifications.add(row["classification"])
                 EpisodeRecording._append(self.root, pack_record(row))
                 previous = row

@@ -95,11 +95,13 @@
     <section id="timeline" class="timeline" aria-label="Episode inspection">
       <div class="timeline-labels">
         <strong id="timeline-label">EPISODE — · STEP —</strong>
+        <button id="timeline-zoom" type="button" hidden></button>
         <span id="playback-evidence-status" class="playback-evidence-status" role="status" hidden></span>
       </div>
       <div class="timeline-track">
         <div class="timeline-scrubber-track">
           <input id="timeline-scrubber" type="range" min="0" max="0" step="1" value="0" aria-label="Inspect an episode step" title="Left/Right: move one step · Space: play or pause">
+          <div id="timeline-zoom-band" hidden aria-hidden="true"></div>
           <div id="timeline-markers" class="timeline-markers" aria-hidden="true"></div>
         </div>
         <div class="timeline-actions">

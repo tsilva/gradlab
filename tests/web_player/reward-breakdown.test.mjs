@@ -277,3 +277,30 @@ test("episode shaped sum must match the authoritative selected return", () => {
   assert.equal(result.status, "protocol-error");
   assert.match(result.message, /authoritative episode return/);
 });
+
+test("recorded prefixes survive history eviction and preserve cancelling activity", () => {
+  const selected = point({ sequence: 5000, raw: -6, final: -1, total: 0 });
+  const source = snapshot({ scale: 0.5, clip: [-1, 1] });
+  source.episode_rewards = {
+    status: "available", episode: 1, step: 5000, sequence: 5000,
+    raw: 0, preclip: 0, final: 0,
+    entries: {
+      native_reward: { raw: 0, impact: 0, magnitude: 6 },
+      clip_adjustment: { raw: null, impact: 0, magnitude: 4 },
+    },
+  };
+  const render = (history) => rewardBreakdownPresentation({ snapshot: source, history, view: { selectedSequence: 5000 } });
+  const first = render([selected]);
+  assert.equal(first.status, "available");
+  assert.equal(first.count, 5000);
+  assert.equal(first.final, 0);
+  assert.equal(first.positive, 5);
+  assert.equal(first.negative, -5);
+  assert.equal(rowById(first, "native_reward").magnitudeShare, 60);
+  assert.equal(rowById(first, "clip_adjustment").magnitudeShare, 40);
+  assert.deepEqual(render([point({ sequence: 4999 }), selected, point({ sequence: 5001 })]), first);
+  const step = rewardBreakdownPresentation({ snapshot: source, history: [selected], view: { selectedSequence: 5000 }, scope: "step" });
+  assert.equal(step.final, -1);
+  source.episode_rewards.sequence = 5001;
+  assert.equal(render([selected]).status, "protocol-error");
+});

@@ -146,6 +146,9 @@ def test_current_episode_download_import_preserves_exact_inputs_and_checkpoint(t
         command(imported, "seek", step=2)
         snapshot = imported.snapshot()
         assert snapshot["transition"]["reward"]["return"] == 1.0
+        assert snapshot["episode_rewards"]["final"] == 1.0
+        assert snapshot["episode_rewards"]["step"] == 2
+        assert [point["step"] for point in imported.history] == [1, 2]
         assert snapshot["transition"]["decision"]["value"] == 2.5
         assert snapshot["trajectory"]["complete"] is True
         assert snapshot["trajectory"]["scientific_evidence"] is False
@@ -325,9 +328,7 @@ def test_storage_backpressure_pauses_without_losing_a_transition(tmp_path, fail)
         assert "Recording storage" in snapshot["status_message"]
         assert snapshot["transition"]["step"] == 1
         if fail:
-            archive = export_trajectory(
-                runner.freeze_trajectory(), tmp_path / "failed-prefix.trj"
-            )
+            archive = export_trajectory(runner.freeze_trajectory(), tmp_path / "failed-prefix.trj")
             imported = TrajectoryPlaybackRunner(archive, runner.args)
             assert imported.recorded_transition(1)["reward"] == 0.5
             assert imported.metadata["transition_count"] == 1
@@ -489,9 +490,7 @@ def test_capture_owns_hidden_policy_inputs_and_never_records_autoreset_as_termin
             actions.append(provider.actions[0])
             assert runtime.calls == 1
             if enabled:
-                archive = export_trajectory(
-                    runner.freeze_trajectory(), tmp_path / "terminal.trj"
-                )
+                archive = export_trajectory(runner.freeze_trajectory(), tmp_path / "terminal.trj")
                 imported = TrajectoryPlaybackRunner(archive, runner.args)
                 row = imported.recorded_transition(1)
                 np.testing.assert_array_equal(
@@ -960,7 +959,9 @@ def test_cli_opens_recording_without_a_checkpoint_or_catalog(tmp_path, monkeypat
     monkeypatch.setattr(
         "gradlab.play_catalog_authority.start_catalog_authority_helper", unavailable_catalog
     )
-    monkeypatch.setattr("gradlab.play_catalog.PlayCatalog.initial_environments", unavailable_catalog)
+    monkeypatch.setattr(
+        "gradlab.play_catalog.PlayCatalog.initial_environments", unavailable_catalog
+    )
     monkeypatch.setattr("gradlab.play_web.run_web_player_application", inspect_player)
     assert main(["play", "--recording", str(archive), "--no-open"]) == 0
 
@@ -1006,3 +1007,28 @@ def test_download_filename_tracks_content_not_file_timestamps(tmp_path):
         assert changed.name != outputs[0].name
     finally:
         runner.stop()
+
+
+def test_import_rebuilds_reward_totals_from_transition_evidence(tmp_path, monkeypatch):
+    from gradlab.play_trajectory import export_trajectory
+    from gradlab.play_trajectory_runner import TrajectoryPlaybackRunner
+
+    runner = live_runner(tmp_path)
+    imported = None
+    try:
+        # Stored derived totals are not authoritative input during archive import.
+        monkeypatch.setattr(runner.episode_rewards, "payload", lambda _: {"final": 999})
+        command(runner, "step", count=3)
+        wait_step(runner, 3)
+        archive = export_trajectory(runner.freeze_trajectory(), tmp_path / "rebuild.trj")
+        imported = TrajectoryPlaybackRunner(archive, runner.args)
+        imported.start()
+        command(imported, "seek", step=2)
+        totals = imported.snapshot()["episode_rewards"]
+        assert totals["status"] == "available"
+        assert totals["final"] == 1
+        assert totals["step"] == 2
+    finally:
+        runner.stop()
+        if imported is not None:
+            imported.stop()

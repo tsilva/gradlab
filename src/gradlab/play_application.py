@@ -366,6 +366,15 @@ class PlaybackHost:
                 frames,
             )
 
+    def chart_history(self, epoch, episode_id, first=None, last=None):
+        with self._lock:
+            if epoch != self._session_epoch or self._active is None or self._phase != "active":
+                raise ValueError("the Playback Session has been replaced")
+            read = getattr(self._active.runner, "chart_history", None)
+            if read is None:
+                raise ValueError("episode chart history is unavailable")
+            return read(episode_id, first, last)
+
     def inspect_recorded_step(self, epoch: int, episode_id: str, step: int) -> dict[str, Any]:
         with self._lock:
             if epoch != self._session_epoch or self._active is None or self._phase != "active":

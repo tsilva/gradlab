@@ -40,6 +40,12 @@ class TrajectoryPlaybackRunner(DatasetPlaybackRunner):
         self.current_frame = first["before_image"]
         self.observation_frames = first["observation_frames"]
 
+    def chart_history(self, episode_id, first=None, last=None):
+        from gradlab.play_chart_history import chart_history
+
+        with self._snapshot_lock:
+            return chart_history(self, episode_id, first, last)
+
     def stop(self) -> None:
         super().stop()
         self.recording.close()
@@ -60,6 +66,7 @@ class TrajectoryPlaybackRunner(DatasetPlaybackRunner):
             interactive=False,
             status_message=self._status_message,
             transition=current,
+            episode_rewards=getattr(self, "_episode_rewards", None) if current else None,
             history_point=dict(self.history[-1]) if self.history else None,
             trajectory={
                 "imported": True,
@@ -138,6 +145,7 @@ class TrajectoryPlaybackRunner(DatasetPlaybackRunner):
         self.current_frame = row["after_image"]
         self.observation_frames = row["observation_frames"]
         self._transition = row["presentation"]
+        self._episode_rewards = row["presentation"].get("episode_rewards")
 
     def _apply(self, command) -> None:
         if command.name == "replay":
@@ -165,7 +173,10 @@ class TrajectoryPlaybackRunner(DatasetPlaybackRunner):
                 self._load_step(step)
                 assert self._transition is not None
                 self.history.clear()
-                self.history.append(history_point_payload(self._transition))
+                for index in range(max(self.first_step, step - 63), step + 1):
+                    self.history.append(
+                        history_point_payload(self.recorded_transition(index)["presentation"])
+                    )
                 self.remaining_steps = 0
                 self.continue_target = None
                 self._set_state("paused", message=f"Recorded transition {step}")

@@ -187,13 +187,21 @@ export function lineCursorIndex(plot, x, pointCount) {
   if (!plot || !Number.isFinite(x) || !Number.isInteger(pointCount) || pointCount <= 0) {
     return null;
   }
+  if (plot.positions?.length) {
+    let nearest = 0;
+    plot.positions.forEach((position, index) => {
+      if (Math.abs(position - x) < Math.abs(plot.positions[nearest] - x)) nearest = index;
+    });
+    return nearest;
+  }
   const span = plot.right - plot.left;
   if (!(span > 0)) return null;
   const fraction = Math.max(0, Math.min(1, (x - plot.left) / span));
   return Math.round(fraction * Math.max(0, pointCount - 1));
 }
 
-export function drawLines(canvas, series, { cursorIndex = null } = {}) {
+export function drawLines(canvas, series, { cursorIndex = null, steps = null, cursorStep = null } = {}) {
+  if (steps?.length) canvas.setAttribute("aria-description", `Episode steps ${steps[0]}–${steps.at(-1)}. Drag to zoom; double-click to reset.`);
   const { context, ratio, width, height } = resizeCanvas(canvas);
   const chartSurface = themeColor("chartSurface");
   const chartGrid = themeColor("chartGrid");
@@ -235,30 +243,38 @@ export function drawLines(canvas, series, { cursorIndex = null } = {}) {
     context.stroke();
     context.fillText(labels[index], plot.left - 6, y);
   });
+  const fraction = (index, count) => steps?.length > 1
+    ? (steps[index] - steps[0]) / Math.max(1, steps.at(-1) - steps[0])
+    : index / Math.max(1, count - 1);
+  if (steps?.length) plot.positions = steps.map((_, index) => plot.left + fraction(index, steps.length) * (plot.right - plot.left));
   series.forEach(({ values: points, color }) => {
     context.strokeStyle = color;
     context.lineWidth = 1.5;
     context.beginPath();
+    let connected = false;
     points.forEach((value, index) => {
-      if (!Number.isFinite(value)) return;
+      if (!Number.isFinite(value)) { connected = false; return; }
       const x = plot.left
-        + (index / Math.max(1, points.length - 1)) * (plot.right - plot.left);
+        + fraction(index, points.length) * (plot.right - plot.left);
       const y = plot.bottom
         - ((value - scale.min) / (scale.max - scale.min)) * (plot.bottom - plot.top);
-      if (index === 0) context.moveTo(x, y);
+      if (!connected) context.moveTo(x, y);
       else context.lineTo(x, y);
+      connected = true;
     });
     context.stroke();
   });
   const pointCount = Math.max(0, ...series.map((item) => item.values.length));
-  if (
-    Number.isInteger(cursorIndex)
-    && cursorIndex >= 0
-    && cursorIndex < pointCount
-  ) {
-    // Keep the dashed stroke inside the bitmap at both endpoints. A cursor at
-    // the final sample otherwise sits on the right clipping edge and vanishes.
-    const x = lineCursorX(plot, cursorIndex, pointCount);
+  let cursorX = null;
+  if (steps?.length && Number.isFinite(cursorStep)) {
+    if (cursorStep >= steps[0] && cursorStep <= steps.at(-1)) {
+      cursorX = plot.left + (cursorStep - steps[0]) / Math.max(1, steps.at(-1) - steps[0]) * (plot.right - plot.left);
+    }
+  } else if (Number.isInteger(cursorIndex) && cursorIndex >= 0 && cursorIndex < pointCount) {
+    cursorX = plot.positions?.[cursorIndex] ?? lineCursorX(plot, cursorIndex, pointCount);
+  }
+  if (cursorX !== null) {
+    const x = Math.max(plot.left + 1, Math.min(plot.right - 1, cursorX));
     context.save();
     context.strokeStyle = themeColor("chartHighlight");
     context.lineWidth = 1.5;

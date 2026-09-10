@@ -152,14 +152,22 @@ resuming as its cause without a matched uninterrupted continuation.
 
 - Player disk-backed inspection reads original step rewards, cumulative returns,
   and recorded Policy decisions. Seeking does not add samples or recompute Policy
-  diagnostics. History charts show a bounded window around the selected step;
-  a partial window does not establish a realized full-episode critic return.
+  diagnostics. History charts default to the full recorded episode with bounded,
+  extrema-preserving display samples. Drag zoom selects a shared episode-step range
+  across history charts, shown on the playbar; seeking does not change that range.
+  Exact inspection and action frequencies still use their own recorded windows;
+  chart downsampling must not supply samples for scientific calculations.
+  A partial window does not establish a realized full-episode critic return.
   Timeline event dots use a separate bounded episode-wide overview and may group
   nearby events for display; they are not individual scientific metric samples.
 
 - Playback `V(s)` is the critic's expectation of discounted future policy-facing return under the
   checkpoint policy, while realized `G(s)` is one completed trajectory sample from that
-  distribution. Exact pointwise agreement on one episode is not expected; assess calibration and
+  distribution. Its units follow the training reward, not raw score or undiscounted remaining
+  bricks. For example, with +1 per brick and gamma 0.99 per policy transition, a brick reward
+  discounted by 100 transitions contributes about 0.366, and by 300 about 0.049; many distant
+  bricks can therefore coexist with a small value estimate even for a strong policy.
+  Exact pointwise agreement on one episode is not expected; assess calibration and
   residual bias across many contract-comparable trajectories without conditioning only on
   successful outcomes. At a selected step, `G(s)` includes only discounted rewards from that step
   onward; it is neither the cumulative whole-episode return nor a success/survival flag. Near a
@@ -177,6 +185,25 @@ resuming as its cause without a matched uninterrupted continuation.
   bootstrap when it computes the diagnostic and withholds the comparison if the exact final-state
   critic value is unavailable; treating truncation as termination by substituting a zero bootstrap
   would fabricate a misleading residual.
+- Playback's Action decision panel separates the Policy's selected action and its probability
+  from `transition.effective_action`, the action after conditional overrides expressed in the
+  Policy action space. It labels that effective action as “Environment received” using the recorded
+  Policy action semantics and shows `action_override_rule_id` when present. The provider-native
+  encoding is recorded separately as `native_action`; it must not be decoded as a Policy index.
+  Missing effective-action evidence remains unavailable rather than falling back to the selected
+  action or pre-override `executed_action`. These are local transition diagnostics, not W&B metrics.
+- Playback reward analysis “Episode to cursor” sums steps 1 through the selected step using
+  recorded cumulative accounting, independent of the bounded inspection window. Positive and
+  negative activity and per-component absolute activity accumulate before cancellation; scaling,
+  unattributed task reward, and clip adjustments reconcile to the recorded shaped episode return.
+  A missing prefix, accounting error, or cursor mismatch remains explicitly unavailable.
+- Playback action frequencies use the selected episode's trailing 64 transitions through the
+  cursor (or steps 1 through the cursor for shorter prefixes), with step range and sample counts
+  displayed. “STEP” is the selected decision's probability distribution. “POLICY” counts recorded
+  Policy choices on Policy-driven transitions, excluding human input. “ENV” counts recorded
+  effective actions after overrides in Policy action space, including human input. Missing actions
+  or an incomplete window withhold the affected frequencies; future steps and other episodes are
+  excluded. These inspection statistics are local diagnostics, not W&B metrics.
 - Mario recipes disable automatic checkpoint evaluation and stop when
   `train/target/success/start_rate_min` first reaches one. For a single start,
   that means 100 consecutive genuine target-origin clears; for multiple starts, every configured

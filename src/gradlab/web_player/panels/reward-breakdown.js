@@ -163,8 +163,9 @@ function aggregateLedgers(ledgers, selected, scope) {
     preclip += ledger.preclip;
     final += ledger.final;
     for (const entry of ledger.entries) {
-      if (entry.impact > 0) positive += entry.impact;
-      if (entry.impact < 0) negative += entry.impact;
+      const magnitude = entry.magnitude ?? Math.abs(entry.impact);
+      positive += (magnitude + entry.impact) / 2;
+      negative += (entry.impact - magnitude) / 2;
       const current = rows.get(entry.id) || {
         id: entry.id,
         label: entry.label,
@@ -175,7 +176,7 @@ function aggregateLedgers(ledgers, selected, scope) {
       };
       if (entry.raw !== null) current.raw += entry.raw;
       current.impact += entry.impact;
-      current.magnitude += Math.abs(entry.impact);
+      current.magnitude += magnitude;
       rows.set(entry.id, current);
     }
   }
@@ -250,6 +251,52 @@ export function rewardBreakdownPresentation({
       status: "not-yet-observed",
       scope: normalizedScope,
       message: "No transition has been observed at the selected cursor.",
+    };
+  }
+  const recorded = snapshot?.episode_rewards;
+  if (normalizedScope === "episode" && recorded) {
+    const matches = ["episode", "step", "sequence"].every(
+      (key) => recorded[key] === selected[key],
+    );
+    if (!matches) return {
+      status: "protocol-error",
+      scope: normalizedScope,
+      message: "Recorded reward totals do not match the selected cursor.",
+    };
+    if (recorded.status !== "available") return {
+      status: recorded.status,
+      scope: normalizedScope,
+      message: recorded.message,
+    };
+    const entries = Object.entries(recorded.entries || {}).map(([id, entry]) => ({
+      ...entry, id, label: COMPONENT_LABELS[id],
+      kind: id === "unattributed" ? "residual" : id === "clip_adjustment" ? "transform" : "component",
+    }));
+    if (
+      [recorded.raw, recorded.preclip, recorded.final].some((value) => finite(value) === null)
+      || entries.some((entry) => !entry.label || finite(entry.impact) === null
+        || finite(entry.magnitude) === null
+        || entry.magnitude < Math.abs(entry.impact) - tolerance(entry.magnitude)
+        || (entry.id !== "clip_adjustment" && finite(entry.raw) === null))
+    ) {
+      return {
+        status: "protocol-error", scope: normalizedScope,
+        message: "Recorded reward totals are malformed.",
+      };
+    }
+    const aggregate = aggregateLedgers([{ ...recorded, entries }], selected, normalizedScope);
+    const impact = entries.reduce((sum, entry) => sum + entry.impact, 0);
+    if (aggregate.error || Math.abs(impact - recorded.final) > tolerance(aggregate.gross)) {
+      return {
+        status: "protocol-error", scope: normalizedScope,
+        message: aggregate.error || "Recorded components do not reconcile to final reward.",
+      };
+    }
+    return {
+      status: "available", scope: normalizedScope,
+      step: Number(selected.step), count: Number(selected.step),
+      contract: { rewardScale: Number(contract.reward_scale), clipBounds: contract.clip_bounds },
+      ...aggregate,
     };
   }
   const scoped = scopePoints(normalizedScope, history, selected);
