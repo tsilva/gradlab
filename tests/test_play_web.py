@@ -330,7 +330,11 @@ def test_critic_comparison_requires_stochastic_policy_and_terminal_boundary() ->
 
     assert runner._critic_comparison_reasons() == []
     runner.sampling_mode = "deterministic"
-    assert "deterministic trajectories" in runner._critic_comparison_reasons()[0]
+    assert runner._critic_comparison_reasons() == [
+        "V(s) was trained with stochastic action selection and may be less accurate "
+        "in deterministic mode. Return comparisons are disabled because the "
+        "action-selection rules differ"
+    ]
     runner.sampling_mode = "stochastic"
     truncated = argparse.Namespace(
         truncated=True,

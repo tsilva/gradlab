@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import re
 from pathlib import Path
 import secrets
 import shutil
@@ -11,7 +13,22 @@ import time
 
 from aiohttp import web
 
-from gradlab.play_trajectory import MAX_ARCHIVE_BYTES, export_trajectory
+from gradlab.play_trajectory import MAX_ARCHIVE_BYTES, export_trajectory, file_sha256
+from gradlab.policy_bundle import load_policy_bundle
+
+
+def prepare_archive(frozen: Path, root: Path) -> Path:
+    """Name an archive by its environment, checkpoint, and exact byte content."""
+    frozen = Path(frozen)
+    metadata = json.loads((frozen / "metadata.json").read_bytes())
+    environment = metadata["initial_snapshot"]["session"]["env_id"]
+    environment = re.sub(r"[^A-Za-z0-9_-]+", "-", environment).strip("-")[:64] or "environment"
+    bundle = load_policy_bundle(frozen / "checkpoint")
+    checkpoint = bundle.checkpoint_sha256[:16]
+    path = export_trajectory(frozen, root / "episode.trj")
+    named = root / f"{environment}-checkpoint-{checkpoint}-{file_sha256(path)}.trj"
+    path.rename(named)
+    return named
 
 
 async def finish_thread(function, *args, cancelled_result=None):
@@ -55,10 +72,10 @@ class TrajectoryTransfers:
                 self.runner.freeze_trajectory,
                 cancelled_result=lambda path: shutil.rmtree(path, ignore_errors=True),
             )
-            await finish_thread(export_trajectory, frozen, root / "episode.gradtraj")
+            path = await finish_thread(prepare_archive, frozen, root)
             ticket = secrets.token_urlsafe(32)
-            self.downloads[ticket] = (root, time.monotonic())
-            return web.json_response({"url": f"/api/trajectory/download/{ticket}"})
+            self.downloads[ticket] = (path, time.monotonic())
+            return web.json_response({"url": f"/api/trajectory/download/{ticket}", "filename": path.name})
         except (ValueError, OSError, RuntimeError) as exc:
             shutil.rmtree(root, ignore_errors=True)
             return web.json_response({"error": str(exc)}, status=400)
@@ -75,13 +92,13 @@ class TrajectoryTransfers:
         item = self.downloads.pop(request.match_info["ticket"], None)
         if item is None:
             raise web.HTTPNotFound()
-        root, _ = item
+        path, _ = item
+        root = path.parent
         try:
-            path = root / "episode.gradtraj"
             response = web.StreamResponse(
                 headers={
                     "Content-Type": "application/zip",
-                    "Content-Disposition": 'attachment; filename="episode.gradtraj"',
+                    "Content-Disposition": f'attachment; filename="{path.name}"',
                     "Content-Length": str(path.stat().st_size),
                     "Cache-Control": "no-store",
                 }
@@ -99,7 +116,7 @@ class TrajectoryTransfers:
         self.authorize_control(request)
         root = Path(tempfile.mkdtemp(prefix="gradlab-trajectory-upload-"))
         try:
-            path = root / "episode.gradtraj"
+            path = root / "episode.trj"
             size = 0
             with path.open("wb") as stream:
                 async for chunk in request.content.iter_chunked(1024**2):
@@ -119,12 +136,12 @@ class TrajectoryTransfers:
             shutil.rmtree(root, ignore_errors=True)
 
     def expire(self):
-        for ticket, (root, created) in list(self.downloads.items()):
+        for ticket, (path, created) in list(self.downloads.items()):
             if time.monotonic() - created > 300:
                 del self.downloads[ticket]
-                shutil.rmtree(root, ignore_errors=True)
+                shutil.rmtree(path.parent, ignore_errors=True)
 
     def close(self):
-        for root, _ in self.downloads.values():
-            shutil.rmtree(root, ignore_errors=True)
+        for path, _ in self.downloads.values():
+            shutil.rmtree(path.parent, ignore_errors=True)
         self.downloads.clear()

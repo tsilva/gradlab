@@ -140,7 +140,7 @@ def test_current_episode_download_import_preserves_exact_inputs_and_checkpoint(t
         command(runner, "step", count=3)
         wait_step(runner, 3)
         frozen = runner.freeze_trajectory()
-        archive = export_trajectory(frozen, tmp_path / "episode.gradtraj")
+        archive = export_trajectory(frozen, tmp_path / "episode.trj")
         imported = TrajectoryPlaybackRunner(archive, runner.args)
         imported.start()
         command(imported, "seek", step=2)
@@ -180,7 +180,7 @@ def test_unfinished_download_survives_replacement_and_opens_in_isolated_worker(t
         wait_step(runner, 4)
         command(runner, "next_episode")
         runner.stop()
-        archive = export_trajectory(frozen, tmp_path / "prefix.gradtraj")
+        archive = export_trajectory(frozen, tmp_path / "prefix.trj")
         host.start()
         host.import_trajectory(str(archive))
         host.submit(PlaybackCommand("seek", "test", "seek", {"step": 2}, None))
@@ -326,7 +326,7 @@ def test_storage_backpressure_pauses_without_losing_a_transition(tmp_path, fail)
         assert snapshot["transition"]["step"] == 1
         if fail:
             archive = export_trajectory(
-                runner.freeze_trajectory(), tmp_path / "failed-prefix.gradtraj"
+                runner.freeze_trajectory(), tmp_path / "failed-prefix.trj"
             )
             imported = TrajectoryPlaybackRunner(archive, runner.args)
             assert imported.recorded_transition(1)["reward"] == 0.5
@@ -358,7 +358,7 @@ def test_episode_longer_than_live_history_retains_its_first_transition(tmp_path)
         command(runner, "set_recording", enabled=True)
         command(runner, "play")
         wait_step(runner, HISTORY_LIMIT + 5)
-        archive = export_trajectory(runner.freeze_trajectory(), tmp_path / "long.gradtraj")
+        archive = export_trajectory(runner.freeze_trajectory(), tmp_path / "long.trj")
         imported = TrajectoryPlaybackRunner(archive, runner.args)
         imported.start()
         command(imported, "seek", step=1)
@@ -381,8 +381,8 @@ def test_import_rejects_unsafe_or_corrupt_archives(tmp_path, corruption):
         command(runner, "set_recording", enabled=True)
         command(runner, "step", count=1)
         wait_step(runner, 1)
-        archive = export_trajectory(runner.freeze_trajectory(), tmp_path / "episode.gradtraj")
-        damaged = tmp_path / "damaged.gradtraj"
+        archive = export_trajectory(runner.freeze_trajectory(), tmp_path / "episode.trj")
+        damaged = tmp_path / "damaged.trj"
         with zipfile.ZipFile(archive) as source, zipfile.ZipFile(damaged, "w") as target:
             for member in source.infolist():
                 data = source.read(member)
@@ -490,7 +490,7 @@ def test_capture_owns_hidden_policy_inputs_and_never_records_autoreset_as_termin
             assert runtime.calls == 1
             if enabled:
                 archive = export_trajectory(
-                    runner.freeze_trajectory(), tmp_path / "terminal.gradtraj"
+                    runner.freeze_trajectory(), tmp_path / "terminal.trj"
                 )
                 imported = TrajectoryPlaybackRunner(archive, runner.args)
                 row = imported.recorded_transition(1)
@@ -528,7 +528,7 @@ def test_import_rejects_semantically_invalid_but_rehashed_archives(tmp_path, cor
     try:
         command(runner, "step", count=1)
         wait_step(runner, 1)
-        archive = export_trajectory(runner.freeze_trajectory(), tmp_path / "valid.gradtraj")
+        archive = export_trajectory(runner.freeze_trajectory(), tmp_path / "valid.trj")
         with zipfile.ZipFile(archive) as source:
             files = {name: source.read(name) for name in source.namelist()}
         metadata = json.loads(files["metadata.json"])
@@ -558,7 +558,7 @@ def test_import_rejects_semantically_invalid_but_rehashed_archives(tmp_path, cor
                     "sha256": hashlib.sha256(data).hexdigest(),
                 }
         files["manifest.json"] = json.dumps(manifest).encode()
-        damaged = tmp_path / "invalid.gradtraj"
+        damaged = tmp_path / "invalid.trj"
         with zipfile.ZipFile(damaged, "w") as target:
             for name, data in files.items():
                 target.writestr(name, data)
@@ -601,7 +601,7 @@ def test_downloading_a_flushing_prefix_does_not_lock_live_stepping(tmp_path):
         command(runner, "step", count=1)
         wait_step(runner, 3)
         runner.stop()
-        archive = export_trajectory(frozen, tmp_path / "prefix.gradtraj")
+        archive = export_trajectory(frozen, tmp_path / "prefix.trj")
         imported = TrajectoryPlaybackRunner(archive, runner.args)
         assert imported.metadata["transition_count"] in (1, 2)
         assert imported.metadata["complete"] is False
@@ -632,7 +632,7 @@ def test_recording_preserves_training_overrides_and_later_critic_incomparability
         command(runner, "set_action_selection_mode", mode="deterministic")
         command(runner, "step", count=1)
         wait_step(runner, 2)
-        archive = export_trajectory(runner.freeze_trajectory(), tmp_path / "mode.gradtraj")
+        archive = export_trajectory(runner.freeze_trajectory(), tmp_path / "mode.trj")
         imported = TrajectoryPlaybackRunner(archive, runner.args)
         assert imported.recorded_transition(1)["classification"] == "faithful"
         imported.start()
@@ -722,7 +722,7 @@ def test_evaluation_reproduction_requires_the_recorded_evaluation_seed(
     try:
         command(runner, "step", count=1)
         wait_step(runner, 1)
-        archive = export_trajectory(runner.freeze_trajectory(), tmp_path / "seed.gradtraj")
+        archive = export_trajectory(runner.freeze_trajectory(), tmp_path / "seed.trj")
         imported = TrajectoryPlaybackRunner(archive, runner.args)
         assert imported.recorded_transition(1)["classification"] == expected
     finally:
@@ -748,7 +748,7 @@ def test_pre_episode_boundary_edits_are_recorded_and_one_transition_can_replay(t
         command(runner, "set_termination_conditions", enabled=["custom_boundary"])
         command(runner, "step", count=1)
         wait_step(runner, 1)
-        archive = export_trajectory(runner.freeze_trajectory(), tmp_path / "boundary.gradtraj")
+        archive = export_trajectory(runner.freeze_trajectory(), tmp_path / "boundary.trj")
         imported = TrajectoryPlaybackRunner(archive, runner.args)
         assert imported.metadata["resolved_environment"]["task"]["termination"] == [
             "custom_boundary"
@@ -796,7 +796,7 @@ def test_completed_evaluation_retains_its_seed_and_execution_provenance(tmp_path
     try:
         command(runner, "step", count=1)
         wait_step(runner, 1)
-        archive = export_trajectory(runner.freeze_trajectory(), tmp_path / "complete.gradtraj")
+        archive = export_trajectory(runner.freeze_trajectory(), tmp_path / "complete.trj")
         imported = TrajectoryPlaybackRunner(archive, runner.args)
         assert imported.metadata["classification"] == "evaluation_reproduction"
         assert imported.recorded_transition(1)["seed"] == 40000
@@ -918,7 +918,7 @@ def test_checkpoint_activation_keeps_download_available_after_candidate_cleanup(
         assert active.runner.snapshot()["trajectory"]["available"] is True
         command(active.runner, "step", count=1)
         wait_step(active.runner, 1)
-        archive = export_trajectory(active.runner.freeze_trajectory(), tmp_path / "loaded.gradtraj")
+        archive = export_trajectory(active.runner.freeze_trajectory(), tmp_path / "loaded.trj")
         imported = TrajectoryPlaybackRunner(archive, args)
         assert imported.checkpoint_path.read_bytes() == checkpoint_bytes
     finally:
@@ -937,7 +937,7 @@ def test_cli_opens_recording_without_a_checkpoint_or_catalog(tmp_path, monkeypat
     try:
         command(runner, "step", count=1)
         wait_step(runner, 1)
-        archive = export_trajectory(runner.freeze_trajectory(), tmp_path / "episode.gradtraj")
+        archive = export_trajectory(runner.freeze_trajectory(), tmp_path / "episode.trj")
     finally:
         runner.stop()
 
@@ -970,6 +970,39 @@ def test_cli_rejects_recording_with_another_playback_source(source, capsys):
     from gradlab.main import main
 
     with pytest.raises(SystemExit) as error:
-        main(["play", "--recording", "episode.gradtraj", source, "another-source"])
+        main(["play", "--recording", "episode.trj", source, "another-source"])
     assert error.value.code == 2
     assert "pass exactly one" in capsys.readouterr().err
+
+
+def test_download_filename_tracks_content_not_file_timestamps(tmp_path):
+    import os
+    from pathlib import Path
+    from gradlab.play_trajectory_http import prepare_archive
+    from gradlab.file_utils import file_sha256
+
+    runner = live_runner(tmp_path)
+    try:
+        command(runner, "step", count=1)
+        wait_step(runner, 1)
+        outputs = []
+        for index in range(2):
+            frozen = Path(runner.freeze_trajectory())
+            for member in frozen.rglob("*"):
+                if member.is_file():
+                    os.utime(member, (1000000000 + index * 60,) * 2)
+            root = tmp_path / str(index)
+            root.mkdir()
+            outputs.append(prepare_archive(frozen, root))
+        assert outputs[0].name == outputs[1].name
+        assert outputs[0].read_bytes() == outputs[1].read_bytes()
+        assert outputs[0].name.endswith(f"-{file_sha256(outputs[0])}.trj")
+        assert "-checkpoint-" in outputs[0].name
+        command(runner, "step", count=1)
+        wait_step(runner, 2)
+        root = tmp_path / "changed"
+        root.mkdir()
+        changed = prepare_archive(runner.freeze_trajectory(), root)
+        assert changed.name != outputs[0].name
+    finally:
+        runner.stop()

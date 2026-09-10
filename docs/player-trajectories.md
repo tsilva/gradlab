@@ -1,10 +1,29 @@
 # Player episode trajectories
 
-Use **Download episode** in Player to save the current episode as `episode.gradtraj`.
+Use the **Download episode** icon in Player to review the archive contents, then
+select **Confirm** to save the current episode as `<environment>-checkpoint-<checkpoint-hash>-<content-sha256>.trj`. A progress
+bar remains visible during preparation until the browser download starts.
 Capture starts automatically when an exact Checkpoint is loaded. Downloading fixes
 an immutable transition cutoff; live Playback may continue while the archive is
 prepared. A completed episode remains available until another episode or
 Checkpoint replaces it. An unfinished download does not invent a termination.
+
+The live timeline spans the current recorded episode, including steps older than
+the 4,096-transition memory cache. Scrubbing or **Go to step** loads recorded
+frames, decisions, and a bounded diagnostic history around the selected step from
+disk; it never reruns the Policy or rewinds the live environment. Use **Zoom** for
+100- or 1,000-step windows and **Return to latest** to return to the live cursor.
+Play while inspecting advances through the recorded steps before returning to
+latest. The episode remains available until it is replaced or the session closes.
+Event dots use a separate episode-wide overview, so scrubbing does not replace
+them with the chart's local history window. Nearby events share a dot when the
+track is dense; zooming separates them where the retained overview permits it.
+
+Each episode has a 32 GiB local recording budget. Playback reserves space for
+the next decision and pauses with a storage message when that budget is reached
+or the writer cannot keep up. Existing steps remain inspectable and downloadable,
+including queued steps after a writer failure. The timeline begins at the first
+captured step when recording was enabled partway through an episode.
 
 Use **Import episode** to open an archive in Player, including from its source
 selection screen. Imported Playback reads stored images, Policy inputs, decisions,
@@ -16,7 +35,7 @@ Other viewers in the same Playback Session share the imported cursor.
 Open a recording directly from the CLI with:
 
 ```bash
-gradlab play --recording episode.gradtraj
+gradlab play --recording episode.trj
 ```
 
 The import button is available immediately after the Player connects, before a
@@ -31,10 +50,12 @@ Promotion, or Training Success evidence. Heavy attribution maps, gradients, and
 activation tensors are omitted even when their live panels were enabled. Panels
 distinguish missing recordings, unsupported Policy capabilities, and scientific
 incomparability. Recording requests no additional Policy computations.
+The local inspection cache also retains already-computed attribution and CNN
+presentation images; those local-only fields are excluded from exported archives.
 
 ## Archive layout and versioning
 
-`.gradtraj` is a ZIP container with these exact members:
+`.trj` is a ZIP container with these exact members:
 
 ```text
 manifest.json
@@ -157,3 +178,5 @@ copy. This feature does not upload datasets or provide a training integration.
 
 See [capture measurements](player-trajectory-performance.md) for the activation
 choice and reproducible workload.
+
+Download filenames use a sanitized environment ID, the first 16 hexadecimal characters of the checkpoint SHA-256, and the full archive SHA-256. ZIP timestamps are fixed, so repeated exports of unchanged content retain the same name; changed content produces a different hash.

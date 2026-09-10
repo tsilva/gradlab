@@ -366,6 +366,17 @@ class PlaybackHost:
                 frames,
             )
 
+    def inspect_recorded_step(self, epoch: int, episode_id: str, step: int) -> dict[str, Any]:
+        with self._lock:
+            if epoch != self._session_epoch or self._active is None or self._phase != "active":
+                raise ValueError("the Playback Session has been replaced")
+            inspect = getattr(self._active.runner, "inspect_recorded_step", None)
+            if inspect is None:
+                raise ValueError("this Playback source does not support recorded inspection")
+            result = inspect(episode_id, step)
+            result["snapshot"].update(session_epoch=epoch, app=self._app_payload())
+            return result
+
     def poll_response(self):
         try:
             return self._responses.get_nowait()

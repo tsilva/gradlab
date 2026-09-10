@@ -268,7 +268,7 @@ export function descriptorAvailability(
     if (reasons.length) {
       return {
         status: "contract-incomparable",
-        message: `Contract-incomparable: ${reasons.join("; ")}.`,
+        message: `${reasons.join("; ")}.`,
       };
     }
     if (snapshot?.mode === "trajectory") {

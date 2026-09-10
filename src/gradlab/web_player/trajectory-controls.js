@@ -19,6 +19,11 @@ export function mountTrajectoryControls({ command, getState, request, toast }) {
   const seek = document.querySelector("#trajectory-seek");
   const previous = document.querySelector("#trajectory-previous");
   const next = document.querySelector("#trajectory-next");
+  const dialog = document.querySelector("#trajectory-download-dialog");
+  const confirm = document.querySelector("#trajectory-download-confirm");
+  const cancel = document.querySelector("#trajectory-download-cancel");
+  const progress = document.querySelector("#trajectory-download-progress");
+  const downloadError = document.querySelector("#trajectory-download-error");
   let preparing = false;
   let importing = false;
 
@@ -38,7 +43,8 @@ export function mountTrajectoryControls({ command, getState, request, toast }) {
     if (!archive) return;
     importing = true;
     importButton.disabled = true;
-    importButton.textContent = "Importing…";
+    importButton.setAttribute("aria-busy", "true");
+    importButton.setAttribute("aria-label", "Importing episode");
     try {
       await request("/api/trajectory/import", archive);
       toast("Episode imported. Playback uses stored observations and images.");
@@ -47,27 +53,47 @@ export function mountTrajectoryControls({ command, getState, request, toast }) {
     } finally {
       importing = false;
       file.value = "";
-      importButton.textContent = "Import episode";
+      importButton.removeAttribute("aria-busy");
+      importButton.setAttribute("aria-label", "Import episode");
       render();
     }
   });
-  download.addEventListener("click", async () => {
+  download.addEventListener("click", () => {
+    progress.hidden = true;
+    downloadError.hidden = true;
+    dialog.showModal();
+  });
+  cancel.addEventListener("click", () => dialog.close());
+  dialog.addEventListener("cancel", (event) => {
+    if (preparing) event.preventDefault();
+  });
+  confirm.addEventListener("click", async () => {
+    if (preparing) return;
     preparing = true;
     download.disabled = true;
-    download.textContent = "Preparing download…";
+    confirm.disabled = true;
+    cancel.disabled = true;
+    progress.hidden = false;
+    downloadError.hidden = true;
+    dialog.setAttribute("aria-busy", "true");
     try {
       const result = await request("/api/trajectory/download");
       const link = document.createElement("a");
       link.href = result.url;
-      link.download = "episode.gradtraj";
+      link.download = result.filename;
       document.body.append(link);
       link.click();
       link.remove();
+      dialog.close();
     } catch (error) {
-      toast(error.message, true);
+      downloadError.textContent = error.message;
+      downloadError.hidden = false;
     } finally {
       preparing = false;
-      download.textContent = "Download episode";
+      confirm.disabled = false;
+      cancel.disabled = false;
+      progress.hidden = true;
+      dialog.removeAttribute("aria-busy");
       render();
     }
   });
@@ -79,13 +105,21 @@ export function mountTrajectoryControls({ command, getState, request, toast }) {
     const imported = Boolean(trajectory.imported);
     const available = trajectory.available || imported;
     document.querySelector("#trajectory-controls").hidden = !available;
+    if (available) {
+      download.after(importButton);
+    } else {
+      document.querySelector(".header-status").prepend(importButton);
+    }
     document.querySelector("#trajectory-navigation").hidden = !imported;
     retry.hidden = !trajectory.error;
     retry.disabled = !state.hasControl;
     download.hidden = imported;
     download.disabled = preparing || !trajectory.transitions;
     importButton.disabled = importing || !state.hasControl;
-    document.querySelector("#trajectory-status").textContent = recordingDescription(trajectory);
+    const status = document.querySelector("#trajectory-status");
+    status.hidden = !imported && !trajectory.error;
+    status.textContent = status.hidden ? "" : recordingDescription(trajectory);
+    if (!preparing) confirm.disabled = imported || !trajectory.transitions;
     if (imported) {
       seek.min = String(trajectory.first_step);
       seek.max = String(trajectory.last_step);

@@ -268,7 +268,7 @@ def add_play_source_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--recording",
         type=Path,
-        help="Open a local .gradtraj episode archive without loading a Policy or environment.",
+        help="Open a local .trj episode archive without loading a Policy or environment.",
     )
     parser.add_argument(
         "--recipe",
