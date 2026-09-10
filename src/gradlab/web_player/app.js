@@ -2658,6 +2658,23 @@ panelRuntime = new PanelRuntime({
     send,
     command,
     inspectSequence,
+    async loadRewardHistory(episodeId, first, last) {
+      const query = new URLSearchParams({ epoch: state.sessionEpoch, episode_id: episodeId });
+      query.set("first", first);
+      if (last !== null) query.set("last", last);
+      const response = await fetch(`/api/playback/reward-history?${query}`, { headers: { Authorization: `Bearer ${token}` } });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Unable to load rewards");
+      return result;
+    },
+    async loadEvents(episodeId, last) {
+      const query = new URLSearchParams({ epoch: state.sessionEpoch, episode_id: episodeId });
+      if (last !== null) query.set("last", last);
+      const response = await fetch(`/api/playback/event-history?${query}`, { headers: { Authorization: `Bearer ${token}` } });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Unable to load events");
+      return result;
+    },
     inspectStep,
     setChartRange,
     showToast,

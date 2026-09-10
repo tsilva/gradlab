@@ -98,3 +98,41 @@ def test_worker_chart_history_is_bound_to_session_epoch(tmp_path, monkeypatch):
         assert host.chart_history(epoch, episode, 2, 2)["last"] == 2
     finally:
         host.stop()
+
+
+def test_event_pages_preserve_every_event_beyond_inspection_buffer(tmp_path):
+    from copy import deepcopy
+    from types import SimpleNamespace
+    from gradlab.play_event_history import event_history
+
+    runner = live_runner(tmp_path, length=2)
+    try:
+        runner._step_once()
+        transition = runner.snapshot()["transition"]
+        reads = []
+
+        def read(step):
+            reads.append(step)
+            point = deepcopy(transition)
+            point.update(step=step, sequence=step, events=["brick_destroyed"], boundary=False)
+            return {"inspection_snapshot": {"transition": point}}
+
+        recording = SimpleNamespace(
+            root=tmp_path,
+            metadata={"episode_id": "events", "first_step": 1, "episode": 1},
+            status=lambda: {"last_step": 4200},
+            transition=read,
+        )
+        source = SimpleNamespace(recording=recording, history=[])
+        steps = []
+        last = None
+        while True:
+            page = event_history(source, "events", None, last)
+            steps.extend(p["step"] for p in page["points"])
+            last = page["next_last"]
+            if last is None:
+                break
+        assert steps == list(range(4200, 0, -1))
+        assert len(reads) == 4200
+    finally:
+        runner.stop()

@@ -375,6 +375,24 @@ class PlaybackHost:
                 raise ValueError("episode chart history is unavailable")
             return read(episode_id, first, last)
 
+    def reward_history(self, epoch, episode_id, first=None, last=None):
+        with self._lock:
+            if epoch != self._session_epoch or self._active is None or self._phase != "active":
+                raise ValueError("the Playback Session has been replaced")
+            read = getattr(self._active.runner, "reward_history", None)
+            if read is None:
+                raise ValueError("episode reward history is unavailable")
+            return read(episode_id, first, last)
+
+    def event_history(self, epoch, episode_id, first=None, last=None):
+        with self._lock:
+            if epoch != self._session_epoch or self._active is None or self._phase != "active":
+                raise ValueError("the Playback Session has been replaced")
+            read = getattr(self._active.runner, "event_history", None)
+            if read is None:
+                raise ValueError("episode event history is unavailable")
+            return read(episode_id, first, last)
+
     def inspect_recorded_step(self, epoch: int, episode_id: str, step: int) -> dict[str, Any]:
         with self._lock:
             if epoch != self._session_epoch or self._active is None or self._phase != "active":

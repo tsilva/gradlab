@@ -2711,3 +2711,9 @@ body.recording #timeline { opacity: .72; }
 .telemetry-chart { cursor: crosshair; }
 
 .chart-drag-selection { position: absolute; pointer-events: none; background: var(--color-chart-selection); border: 1px solid var(--color-interaction-active); }
+
+.discounted-rewards-body { padding: 12px; }
+.discounted-rewards-body table { width: 100%; font-variant-numeric: tabular-nums; }
+.discounted-rewards-body th, .discounted-rewards-body td { text-align: right; padding: 6px; }
+.discounted-reward-timeline { position: relative; height: 48px; margin: 16px 8px; border-bottom: 1px solid var(--color-chart-grid); }
+.discounted-reward-marker { position: absolute; bottom: 0; width: 6px; padding: 0; transform: translateX(-50%); background: var(--color-series-teal); border: 0; cursor: pointer; }

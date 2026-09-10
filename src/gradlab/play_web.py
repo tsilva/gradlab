@@ -1120,6 +1120,18 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         with self._trajectory_lock:
             return chart_history(self, episode_id, first, last)
 
+    def reward_history(self, episode_id, first=None, last=None):
+        from gradlab.play_reward_history import reward_history
+
+        with self._trajectory_lock:
+            return reward_history(self, episode_id, first, last)
+
+    def event_history(self, episode_id, first=None, last=None):
+        from gradlab.play_event_history import event_history
+
+        with self._trajectory_lock:
+            return event_history(self, episode_id, first, last)
+
     def inspect_recorded_step(self, episode_id: str, step: int) -> dict[str, Any]:
         """Read an inspection window without touching the live policy or cursor."""
         with self._trajectory_lock:
@@ -3314,6 +3326,54 @@ class PlaybackWebServer:
         except (KeyError, ValueError, OSError, RuntimeError) as exc:
             return web.json_response({"error": str(exc)}, status=400)
 
+    async def reward_history(self, request: web.Request) -> web.Response:
+        self._authorize_api(request)
+        try:
+            epoch = int(request.query["epoch"])
+            episode_id = request.query["episode_id"]
+            first = int(request.query["first"]) if "first" in request.query else None
+            last = int(request.query["last"]) if "last" in request.query else None
+            if epoch != self._runner_epoch():
+                raise ValueError("the Playback Session has been replaced")
+            read = getattr(self.runner, "reward_history", None)
+            if read is None:
+                raise ValueError("episode reward history is unavailable")
+            args = (
+                (episode_id, first, last)
+                if isinstance(self.runner, (WebPlaybackRunner, DatasetPlaybackRunner))
+                else (epoch, episode_id, first, last)
+            )
+            result = await asyncio.to_thread(read, *args)
+            if epoch != self._runner_epoch():
+                raise ValueError("the Playback Session has been replaced")
+            return web.json_response(result, headers={"Cache-Control": "no-store"})
+        except (KeyError, ValueError, OSError, RuntimeError) as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+
+    async def event_history(self, request: web.Request) -> web.Response:
+        self._authorize_api(request)
+        try:
+            epoch = int(request.query["epoch"])
+            episode_id = request.query["episode_id"]
+            first = int(request.query["first"]) if "first" in request.query else None
+            last = int(request.query["last"]) if "last" in request.query else None
+            if epoch != self._runner_epoch():
+                raise ValueError("the Playback Session has been replaced")
+            read = getattr(self.runner, "event_history", None)
+            if read is None:
+                raise ValueError("episode event history is unavailable")
+            args = (
+                (episode_id, first, last)
+                if isinstance(self.runner, (WebPlaybackRunner, DatasetPlaybackRunner))
+                else (epoch, episode_id, first, last)
+            )
+            result = await asyncio.to_thread(read, *args)
+            if epoch != self._runner_epoch():
+                raise ValueError("the Playback Session has been replaced")
+            return web.json_response(result, headers={"Cache-Control": "no-store"})
+        except (KeyError, ValueError, OSError, RuntimeError) as exc:
+            return web.json_response({"error": str(exc)}, status=400)
+
     async def inspect_recorded_step(self, request: web.Request) -> web.Response:
         self._authorize_api(request)
         try:
@@ -4143,6 +4203,8 @@ class PlaybackWebServer:
                 web.get("/api/playback/inspection", self.inspect_active_playback),
                 web.get("/api/playback/recorded-step", self.inspect_recorded_step),
                 web.get("/api/playback/chart-history", self.chart_history),
+                web.get("/api/playback/event-history", self.event_history),
+                web.get("/api/playback/reward-history", self.reward_history),
                 web.get("/api/publication/current", self.publication_current),
                 web.post("/api/publication/render", self.publication_render),
                 web.post("/api/publication/preflight", self.publication_preflight),

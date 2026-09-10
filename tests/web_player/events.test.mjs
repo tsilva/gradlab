@@ -26,7 +26,7 @@ test("event rows inspect their retained transition", () => {
   assert.match(panel, /jump\.type = "button"/);
   assert.match(
     panel,
-    /jump\.addEventListener\("click", \(\) => services\.inspectSequence\(point\.sequence\)\)/,
+    /jump\.addEventListener\("click", \(\) => recorded\s*\? services\.inspectStep\(point\.step\)\s*: services\.inspectSequence\(point\.sequence\)\)/,
   );
   assert.match(panel, /jump\.setAttribute\("aria-current", "step"\)/);
   assert.match(app, /services: \{[\s\S]*?\n    inspectSequence,/);

@@ -625,3 +625,19 @@ reused until a new episode arrives; both retain their existing emission cadence.
 Breakout explicitly pins mean bricks, maximum bricks, minimum bricks, and mean episode steps
 in that display order. This four-chart display is independent of its three-criterion goal ranking;
 minimum bricks remains diagnostic and does not participate in ranking.
+
+## Discounted future rewards in Playback
+
+The Discounted future rewards panel reads exact recorded policy-facing rewards, independently
+of chart downsampling. Relative to selected transition t, reward at transition t+k contributes
+`gamma**k * reward_shaped`; the selected action's reward has exponent zero. The raw reward sum
+and discounted reward subtotal include all recorded transitions from the selected step onward,
+including negative rewards and rewards outside the displayed page. Zero rewards are omitted
+from the event list. These are playback diagnostics, not new W&B metrics.
+
+A true termination closes the recorded return. A growing or otherwise incomplete recording
+shows only a partial subtotal, never a full `G(s_t)`. At truncation, a recorded terminal-state
+critic bootstrap is shown separately with exponent `last_step - selected_step + 1`; the combined
+quantity is explicitly bootstrapped rather than fully realized. Missing discounts or rewards
+make the diagnostic unavailable. Recorded returns do not establish critic calibration when the
+recorded execution and training value contracts are incomparable.

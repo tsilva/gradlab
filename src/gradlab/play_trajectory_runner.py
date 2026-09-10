@@ -46,6 +46,18 @@ class TrajectoryPlaybackRunner(DatasetPlaybackRunner):
         with self._snapshot_lock:
             return chart_history(self, episode_id, first, last)
 
+    def reward_history(self, episode_id, first=None, last=None):
+        from gradlab.play_reward_history import reward_history
+
+        with self._snapshot_lock:
+            return reward_history(self, episode_id, first, last)
+
+    def event_history(self, episode_id, first=None, last=None):
+        from gradlab.play_event_history import event_history
+
+        with self._snapshot_lock:
+            return event_history(self, episode_id, first, last)
+
     def stop(self) -> None:
         super().stop()
         self.recording.close()
