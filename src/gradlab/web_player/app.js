@@ -1,3 +1,5 @@
+import { chartWithLiveTail } from "./chart-live-tail.js";
+import { bindTimelineRange } from "./chart-range.js";
 import {
   FRAME_ATTRIBUTION,
   FRAME_CNN_INSPECTION,
@@ -819,7 +821,13 @@ function currentEpisodeHistory() {
 function panelView() {
   return {
     history: currentEpisodeHistory(),
-    chartHistory: state.liveSnapshot?.trajectory?.episode_id ? (state.chartHistory || []) : null,
+    chartHistory: state.liveSnapshot?.trajectory?.episode_id ? chartWithLiveTail(
+      state.chartEpisode === `${state.sessionEpoch}:${state.liveSnapshot.trajectory.episode_id}`
+        ? state.chartHistory : null,
+      state.history,
+      { episode: episodeForSnapshot(state.liveSnapshot), range: state.chartRange,
+        throughStep: state.snapshot?.transition?.step ?? 0 },
+    ) : null,
     chartRange: state.chartRange,
     inspection: state.inspectionSequence !== null,
     sessionEpoch: state.sessionEpoch,
@@ -1643,6 +1651,13 @@ function renderTimeline() {
   if (state.chartRange && range) {
     const span = Math.max(1, range.last - range.first);
     zoomBand.style.left = `${100 * (state.chartRange.first - range.first) / span}%`;
+    for (const handle of zoomBand.querySelectorAll(".timeline-range-handle")) {
+      const start = handle.dataset.edge === "first";
+      handle.setAttribute("aria-valuemin", String(start ? range.first : state.chartRange.first + 1));
+      handle.setAttribute("aria-valuemax", String(start ? state.chartRange.last - 1 : range.last));
+      handle.setAttribute("aria-valuenow", String(state.chartRange[handle.dataset.edge]));
+      handle.setAttribute("aria-valuetext", `Step ${state.chartRange[handle.dataset.edge]}`);
+    }
     zoomBand.style.width = `${100 * (state.chartRange.last - state.chartRange.first) / span}%`;
   }
   const markers = $("#timeline-markers");
@@ -2456,6 +2471,10 @@ function bindWorkspaceSync() {
 }
 
 function bindTimeline() {
+  bindTimelineRange($("#timeline-zoom-band"), () => {
+    const scrubber = $("#timeline-scrubber");
+    return { first: Number(scrubber.min), last: Number(scrubber.max) };
+  }, () => state.chartRange, setChartRange);
   $("#timeline-zoom").addEventListener("click", () => setChartRange(null));
   const scrubber = $("#timeline-scrubber");
   let trackWidth = 0;

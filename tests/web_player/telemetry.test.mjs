@@ -851,7 +851,7 @@ test("clicking a line chart inspects its nearest retained playback sequence", ()
   );
   assert.match(
     telemetryPanelSource,
-    /if \(block\.kind === "line"\) return makeLineBlock\(block, services\);/,
+    /if \(block\.kind === "line"\) return makeLineBlock\(block, services, definition\);/,
   );
 });
 

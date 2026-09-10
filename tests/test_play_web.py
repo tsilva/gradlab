@@ -2202,7 +2202,9 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
             )
 
         @staticmethod
-        def goals(*, environment_id, query, cursor):
+        def goals(*, environment_id, query, cursor, include_evidence, progressive):
+            assert include_evidence is True
+            assert progressive is False
             assert (environment_id, query, cursor) == (
                 "Mario",
                 "",

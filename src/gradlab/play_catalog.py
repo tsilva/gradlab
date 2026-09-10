@@ -10,7 +10,7 @@ import time
 from collections.abc import Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import unquote, urlparse
@@ -2010,15 +2010,39 @@ class PlayCatalog:
         environment_id: str,
         query: str = "",
         cursor: str | None = None,
+        include_evidence: bool = True,
+        progressive: bool = False,
     ) -> CatalogPage:
+        if progressive and include_evidence:
+            page = self.goals(
+                environment_id=environment_id, query=query, cursor=cursor,
+                include_evidence=False,
+            )
+            goals = {
+                goal.goal_id: goal
+                for goal in self._repository_goals(environment_id=environment_id)
+            }
+            selected = [goals[item["goal_id"]] for item in page.items]
+            scopes = self._control_generation_scopes(selected)
+            enriched = []
+            for item, goal, scope in zip(page.items, selected, scopes, strict=True):
+                badges, run_count = self._current_goal_evidence(goal, generation_scope=scope)
+                enriched.append({
+                    **item, "success_badges": badges, "run_count": run_count,
+                    "evidence_status": "ready",
+                })
+            return replace(page, items=tuple(enriched))
         normalized = str(query or "").strip().casefold()
         items = []
         repository_goals = self._repository_goals(environment_id=environment_id)
-        generation_scopes = self._control_generation_scopes(repository_goals)
+        generation_scopes = (
+            self._control_generation_scopes(repository_goals)
+            if include_evidence else [None] * len(repository_goals)
+        )
         for goal, scope in zip(repository_goals, generation_scopes, strict=True):
-            badges, run_count = self._current_goal_evidence(
-                goal,
-                generation_scope=scope,
+            badges, run_count = (
+                self._current_goal_evidence(goal, generation_scope=scope)
+                if include_evidence else ((), 0)
             )
             if normalized and normalized not in _search_text(
                 goal.goal_id,
@@ -2040,6 +2064,10 @@ class PlayCatalog:
                     success_badges=badges,
                 ).to_dict()
             )
+        if not include_evidence:
+            for item in items:
+                item["evidence_status"] = "pending"
+                item["run_count"] = None
         return self._page(
             items,
             cursor,

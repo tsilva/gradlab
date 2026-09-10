@@ -1849,3 +1849,26 @@ def test_catalog_uses_training_seed_when_checkpoint_has_no_eval_result(
     assert row["evaluation"] is None
     assert row["playback_seed"] == 7
     assert row["playback_seed_source"] == "training"
+
+
+def test_progressive_goals_do_not_read_remote_evidence_until_enrichment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    write_indexed_goal_catalog(tmp_path)
+    catalog = PlayCatalog(repo_root=tmp_path)
+
+    def unexpected(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("metadata must not wait for remote evidence")
+
+    monkeypatch.setattr(catalog, "_control_generation_scopes", unexpected)
+    page = catalog.goals(environment_id="Mario", include_evidence=False)
+    assert page.items[0]["goal_id"] == "Level1-1"
+    assert page.items[0]["evidence_status"] == "pending"
+    assert page.items[0]["run_count"] is None
+
+    monkeypatch.setattr(catalog, "_control_generation_scopes", lambda goals: [None] * len(goals))
+    monkeypatch.setattr(catalog, "_current_goal_evidence", lambda *args, **kwargs: (("train/success",), 2))
+    enriched = catalog.goals(environment_id="Mario", progressive=True)
+    assert enriched.source == page.source
+    assert enriched.items[0]["evidence_status"] == "ready"
+    assert enriched.items[0]["success_badges"] == ("train/success",)

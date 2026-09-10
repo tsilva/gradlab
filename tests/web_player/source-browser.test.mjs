@@ -1054,15 +1054,14 @@ test("catalog refresh animates and disables only the header refresh control", as
   );
 
   assert.doesNotMatch(source, /source-list-loading-indicator/);
-  assert.match(source, /const labelsRefresh = this\.route\.level === "goal_variants";/);
-  assert.match(source, /const refresh = button\(labelsRefresh \? "Refresh" : "", \{ iconName: "refresh", quiet: true \}\)/);
-  assert.match(source, /if \(!labelsRefresh\) refresh\.classList\.add\("icon-only"\)/);
+  assert.match(source, /const refresh = button\("", \{ iconName: "refresh", quiet: true \}\)/);
+  assert.match(source, /refresh\.classList\.add\("icon-only"\)/);
   assert.match(source, /if \(this\.loading\) refresh\.classList\.add\("refreshing"\)/);
   assert.match(source, /refresh\.setAttribute\("aria-label", this\.loading \? "Refreshing" : "Refresh"\)/);
   assert.match(source, /refresh\.disabled = this\.loading/);
   assert.match(
     source,
-    /if \(this\.loading && !this\.items\.length && !this\.query\.trim\(\)\) return body;/,
+    /if \(this\.loading && !this\.items\.length && !this\.query\.trim\(\)\) \{\s*if \(this\.route\.level === "goals"\) body\.append\(this\.renderGoals\(\)\);\s*return body;/,
   );
   assert.doesNotMatch(source, /loadingState\("Loading catalog…"\)/);
   assert.doesNotMatch(source, /Some catalog evidence is unavailable/);
@@ -2233,4 +2232,35 @@ test("run efficiency labels training fallback without evaluation evidence", () =
   const leader = bestRunEfficiency(items, primary, fallback);
   assert.equal(leader.evidence, "training");
   assert.equal(leader.item.run_id, "faster");
+});
+
+test("goal evidence fills pending rows and ignores obsolete responses", async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => { globalThis.fetch = originalFetch; });
+  let finish;
+  globalThis.fetch = () => new Promise((resolve) => { finish = resolve; });
+  const browser = Object.create(SourceBrowser.prototype);
+  Object.assign(browser, {
+    token: "test", catalogRequestTimeoutMs: 1000, goalEvidenceEpoch: 1,
+    sourceItems: [{ goal_id: "goal", recipe_count: 8, evidence_status: "pending" }],
+    routeKey: () => "goals", endpoint: () => "/goals?evidence=0",
+    rememberGoalCatalog() {}, renderView() {},
+  });
+  const loading = browser.loadGoalEvidence("goals", 1, null);
+  assert.equal(environmentSuccessStatus(browser.sourceItems[0], "train/success").label, "Loading…");
+  finish({ ok: true, json: async () => ({ items: [{ goal_id: "goal", run_count: 1, success_badges: ["train/success"] }] }) });
+  await loading;
+  assert.equal(browser.items[0].recipe_count, 8);
+  assert.equal(environmentSuccessStatus(browser.items[0], "train/success").label, "✅");
+
+  const obsolete = browser.loadGoalEvidence("goals", 1, null);
+  browser.goalEvidenceEpoch = 2;
+  finish({ ok: true, json: async () => ({ items: [{ goal_id: "goal", run_count: 0, success_badges: [] }] }) });
+  await obsolete;
+  assert.equal(browser.items[0].run_count, 1);
+
+  browser.sourceItems = [{ goal_id: "goal", evidence_status: "pending" }];
+  globalThis.fetch = async () => { throw new Error("offline"); };
+  await browser.loadGoalEvidence("goals", 2, null);
+  assert.equal(environmentSuccessStatus(browser.items[0], "eval/success").label, "Unavailable");
 });

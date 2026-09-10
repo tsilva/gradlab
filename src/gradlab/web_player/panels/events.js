@@ -9,18 +9,12 @@ export function mount({ definition, services }) {
   });
   const list = element.querySelector("[data-list]");
 
-  const navigation = document.createElement("div");
-  const newer = document.createElement("button");
-  const older = document.createElement("button");
-  const status = document.createElement("span");
-  newer.textContent = "Newer events";
-  older.textContent = "Older events";
-  navigation.append(newer, status, older);
-  list.after(navigation);
+  const status = document.createElement("div");
+  status.setAttribute("role", "status");
+  list.after(status);
   let identity = null;
-  let pages = [null];
-  let cursor = 0;
   let nextLast = null;
+  let expanded = false;
   let pending = false;
   let revision = 0;
   let updated = 0;
@@ -29,40 +23,46 @@ export function mount({ definition, services }) {
   let currentPoints = [];
   let selectedSequence = null;
 
-  async function load() {
+  async function load(append = false) {
     if (pending || !identity || disposed) return;
     pending = true;
     const request = revision;
+    status.textContent = "Loading events…";
     const episodeId = identity.split(":").slice(1).join(":");
     try {
-      const result = await services.loadEvents(episodeId, pages[cursor]);
+      const result = await services.loadEvents(episodeId, append ? nextLast : null);
       if (request !== revision || disposed) return;
-      nextLast = result.next_last;
-      currentPoints = result.points;
+      if (append || !expanded) nextLast = result.next_last;
+      if (append) {
+        const steps = new Set(currentPoints.map((point) => point.step));
+        currentPoints.push(...result.points.filter((point) => !steps.has(point.step)));
+        expanded = true;
+      } else if (expanded) {
+        const points = new Map(currentPoints.map((point) => [point.step, point]));
+        for (const point of result.points) points.set(point.step, point);
+        currentPoints = [...points.values()].sort((a, b) => b.step - a.step);
+      } else {
+        currentPoints = result.points;
+      }
+      const scrollTop = element.scrollTop;
       draw(currentPoints, latestView, true);
-      status.textContent = ` Page ${cursor + 1} `;
+      element.scrollTop = scrollTop;
+      status.textContent = nextLast === null ? "" : "Scroll down for older events";
       updated = Date.now();
     } catch (error) {
       if (request === revision && !disposed) status.textContent = error.message;
     } finally {
       pending = false;
-      newer.disabled = cursor === 0;
-      older.disabled = nextLast === null;
       if (request !== revision && !disposed) void load();
     }
   }
-  newer.addEventListener("click", () => {
-    if (pending || cursor === 0) return;
-    cursor -= 1;
-    void load();
-  });
-  older.addEventListener("click", () => {
-    if (pending || nextLast === null) return;
-    pages = pages.slice(0, cursor + 1);
-    pages.push(nextLast);
-    cursor += 1;
-    void load();
-  });
+  function loadAtBottom() {
+    if (nextLast !== null && element.clientHeight > 0
+      && element.scrollHeight - element.scrollTop - element.clientHeight <= 1) {
+      void load(true);
+    }
+  }
+  element.addEventListener("scroll", loadAtBottom, { passive: true });
 
   function draw(visible, view, recorded) {
     const selected = view.inspection
@@ -120,12 +120,13 @@ export function mount({ definition, services }) {
       latestView = view;
       const episodeId = services.getState?.().liveSnapshot?.trajectory?.episode_id;
       const key = episodeId ? `${view.sessionEpoch}:${episodeId}` : null;
-      navigation.hidden = !key;
+      status.hidden = !key;
       if (key !== identity) {
         identity = key;
         revision += 1;
-        pages = [null];
-        cursor = 0;
+        expanded = false;
+        element.scrollTop = 0;
+        status.textContent = "";
         nextLast = null;
         updated = 0;
         currentPoints = [];
@@ -136,11 +137,15 @@ export function mount({ definition, services }) {
           selectedSequence = view.selectedSequence;
           draw(currentPoints, view, true);
         }
-        if (cursor === 0 && Date.now() - updated >= 1000) void load();
+        if (element.scrollTop === 0 && Date.now() - updated >= 1000) void load();
       } else {
         draw(history.filter((point) => point.boundary || point.events?.length).reverse(), view, false);
       }
     },
-    destroy() { disposed = true; revision += 1; },
+    destroy() {
+      disposed = true;
+      revision += 1;
+      element.removeEventListener("scroll", loadAtBottom);
+    },
   };
 }

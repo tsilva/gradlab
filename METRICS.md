@@ -157,6 +157,12 @@ resuming as its cause without a matched uninterrupted continuation.
   across history charts, shown on the playbar; seeking does not change that range.
   Exact inspection and action frequencies still use their own recorded windows;
   chart downsampling must not supply samples for scientific calculations.
+  The full-episode recorded chart refresh is throttled to roughly once per second.
+  Between refreshes, charts append bounded streamed transitions through the presented
+  playback step, respecting the selected episode and chart window without extra requests.
+  A line chart legend reports the hovered point while the pointer is over the chart;
+  otherwise it follows the selected playback transition. In inspection, that transition
+  can precede the end of the recorded curve, so its legend need not equal the last value.
   A partial window does not establish a realized full-episode critic return.
   Timeline event dots use a separate bounded episode-wide overview and may group
   nearby events for display; they are not individual scientific metric samples.
@@ -287,8 +293,11 @@ resuming as its cause without a matched uninterrupted continuation.
   evaluation performance. A threshold condition with `progress_baseline` additionally emits
   `train/early_stop/{condition}/target/progress` as the current metric's clamped fraction from that
   baseline to its threshold. Only goal-owned checkpoint evaluation may establish acceptance.
-- `train/all/episode_steps_mean` counts policy transitions; nominal native frames
-  per step follow the run's recorded `frame_skip` (two in the ball-state recipe). It combines target- and archive-origin
+- `train/all/episode_steps_mean` is the only emitted episode-length reduction; episode-length
+  minimum and maximum are not currently emitted. It averages the configured recent completed-episode
+  window (currently 100), including warm-up; still-running episodes do not enter the window.
+  It counts policy transitions; nominal native frames
+  per step follow the run's recorded `frame_skip`. It combines target- and archive-origin
   episodes and is therefore not a clean survival comparison when archive curricula differ. Within
   identical start, frame-skip, reset, and termination contracts, increasing length can indicate
   better ball defense when target return or progress also improves and failure-reason rates do not;
@@ -626,18 +635,18 @@ Breakout explicitly pins mean bricks, maximum bricks, minimum bricks, and mean e
 in that display order. This four-chart display is independent of its three-criterion goal ranking;
 minimum bricks remains diagnostic and does not participate in ranking.
 
-## Discounted future rewards in Playback
+## Reward discount overlay in Playback
 
-The Discounted future rewards panel reads exact recorded policy-facing rewards, independently
-of chart downsampling. Relative to selected transition t, reward at transition t+k contributes
-`gamma**k * reward_shaped`; the selected action's reward has exponent zero. The raw reward sum
-and discounted reward subtotal include all recorded transitions from the selected step onward,
-including negative rewards and rewards outside the displayed page. Zero rewards are omitted
-from the event list. These are playback diagnostics, not new W&B metrics.
-
-A true termination closes the recorded return. A growing or otherwise incomplete recording
-shows only a partial subtotal, never a full `G(s_t)`. At truncation, a recorded terminal-state
-critic bootstrap is shown separately with exponent `last_step - selected_step + 1`; the combined
-quantity is explicitly bootstrapped rather than fully realized. Missing discounts or rewards
-make the diagnostic unavailable. Recorded returns do not establish critic calibration when the
-recorded execution and training value contracts are incomparable.
+The standard Step reward panel shows a dashed amber overlay of shaped reward contributions
+using the same selected transition and discount: `gamma**(reward_step - selected_step) *
+reward_shaped`. Past rewards are excluded and dimmed; the selected action has delay zero.
+Hovering does not change the reference state. The compact table shows up to five nearby
+recorded samples with native (`reward_provider`) and shaped (`reward_shaped`) rewards,
+step delay, discount weight, and discounted shaped contribution. It prioritizes nonzero
+reward samples and always includes the inspected sample; the exact selected transition
+is eligible when inside the chart window. Clicking a table step seeks the shared Playback
+cursor and therefore changes the discount reference. Missing values and past contributions
+are shown as unavailable, not zero; tiny nonzero values use scientific notation.
+The overlay uses the chart's recorded sample
+points and does not compute an episode return. These contributions describe discount
+accounting, not causal action credit. Episode return remains undiscounted reward accumulated through each step.
