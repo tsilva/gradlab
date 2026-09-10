@@ -12,9 +12,8 @@ from gradlab.callbacks import CallbackHelper
 from gradlab.file_utils import atomic_write_json
 from gradlab.metric_names import (
     TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN,
-    TRAIN_OUTCOME_SUCCESS_STARTS_OBSERVED_CUMULATIVE_RATE_MEAN,
 )
-
+from gradlab.training_metrics import LOCAL_COMPLETION_FRACTION
 
 SB3_HUMAN_OUTPUT_MAX_LENGTH = 512
 SB3_ROLLOUT_MEAN_RETURN = "rollout/ep_rew_mean"
@@ -37,9 +36,7 @@ class CompactTrainingOutputFormat(HumanOutputFormat):
         if mean_return is not None:
             output["mean return"] = float(mean_return)
 
-        completion_rate = key_values.get(
-            TRAIN_OUTCOME_SUCCESS_STARTS_OBSERVED_CUMULATIVE_RATE_MEAN
-        )
+        completion_rate = key_values.get(LOCAL_COMPLETION_FRACTION)
         if completion_rate is not None:
             output["completion rate"] = f"{100.0 * float(completion_rate):.2f}%"
 
@@ -109,6 +106,7 @@ class Sb3HumanOutputFormatHelper(CallbackHelper):
             compact=self.compact,
             suppress=self.suppress,
         )
+
 
 class GracefulStopHelper(CallbackHelper):
     def __init__(

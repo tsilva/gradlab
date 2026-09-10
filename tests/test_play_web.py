@@ -2384,7 +2384,7 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
             if on_training_progress:
                 on_training_progress({"type": "metrics", "items": [{
                     "checkpoint_id": "checkpoint-1-" + "b" * 16,
-                    "metrics": {"train/target/return_mean": 120.0},
+                    "metrics": {"train/return/mean": 120.0},
                 }]})
                 assert cls.training_continue.wait(timeout=5)
             return CheckpointPage(
@@ -2394,8 +2394,8 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                         "checkpoint_id": "checkpoint-1-" + "b" * 16,
                         "sha256": "b" * 64,
                         "metrics": {
-                            "train/target/progress/kills/mean": 8.5,
-                            "train/target/return_mean": 120.0,
+                            "train/progress/kills/mean": 8.5,
+                            "train/return/mean": 120.0,
                         },
                         "evaluation": {
                             "status": "accepted",
@@ -2428,7 +2428,7 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                         ],
                     },
                     {
-                        "metric": "train/target/progress/kills/mean",
+                        "metric": "train/progress/kills/mean",
                         "direction": "max",
                         "label": "Recent target kills mean",
                         "evidence": "training",
@@ -2444,7 +2444,7 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                         "rank_index": 1,
                     },
                     {
-                        "metric": "train/target/return_mean",
+                        "metric": "train/return/mean",
                         "direction": "max",
                         "label": "Recent target return mean",
                         "evidence": "training",
@@ -2636,7 +2636,7 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                         ],
                     },
                     {
-                        "metric": "train/target/progress/kills/mean",
+                        "metric": "train/progress/kills/mean",
                         "direction": "max",
                         "label": "Recent target kills mean",
                         "evidence": "training",
@@ -2652,7 +2652,7 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                         "rank_index": 1,
                     },
                     {
-                        "metric": "train/target/return_mean",
+                        "metric": "train/return/mean",
                         "direction": "max",
                         "label": "Recent target return mean",
                         "evidence": "training",
@@ -2661,15 +2661,15 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 ]
                 assert checkpoint_payload["items"][0]["metrics"] == {
                     "eval/progress/kills/mean": 11.0,
-                    "train/target/progress/kills/mean": 8.5,
+                    "train/progress/kills/mean": 8.5,
                     "eval/progress/kills/max": 16.0,
-                    "train/target/return_mean": 120.0,
+                    "train/return/mean": 120.0,
                 }
                 assert checkpoint_payload["items"][0]["best_metrics"] == [
                     "eval/progress/kills/mean",
-                    "train/target/progress/kills/mean",
+                    "train/progress/kills/mean",
                     "eval/progress/kills/max",
-                    "train/target/return_mean",
+                    "train/return/mean",
                 ]
                 training = await client.get(
                     (f"{server.origin}/api/catalog/runs/gradlab-{'a' * 32}/checkpoint-training"),
@@ -2687,7 +2687,7 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 FakeCatalog.training_continue.set()
                 records = [first_record, *[json.loads(line) for line in (await streamed.text()).splitlines()]]
                 assert [record["type"] for record in records] == ["metrics", "complete"]
-                assert records[0]["items"][0]["metrics"]["train/target/return_mean"] == 120.0
+                assert records[0]["items"][0]["metrics"]["train/return/mean"] == 120.0
                 run_inspection = await client.get(
                     f"{server.origin}/api/catalog/runs/gradlab-{'a' * 32}/inspection",
                     headers={"Authorization": f"Bearer {server.token}"},

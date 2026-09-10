@@ -116,6 +116,30 @@ def chart_history(runner, episode_id: str, first: int | None, last: int | None):
                     if identity not in extrema or better(value, extrema[identity][0]):
                         extrema[identity] = (value, point)
         flush()
+        # Use every transition, including those outside the displayed window.
+        gamma = recording.metadata.get("discount")
+        initial = recording.metadata.get("initial_snapshot", {}).get("session", {})
+        if (isinstance(gamma, (int, float)) and not isinstance(gamma, bool)
+                and 0 <= gamma <= 1 and not initial.get("critic_comparison", {}).get("reasons")):
+            selected = {point["step"]: point for point in points}
+            estimate = None
+            for step, payload in db.execute(
+                "SELECT step, payload FROM points WHERE step >= ? ORDER BY step DESC", (first,)
+            ):
+                point = json.loads(payload)
+                candidate = point.get("value" if step == end else "reward_shaped")
+                if (isinstance(candidate, bool) or not isinstance(candidate, (int, float))
+                        or not math.isfinite(candidate)
+                        or point.get("boundary") or point.get("terminated") or point.get("truncated")
+                        or point.get("value_comparison_reasons")
+                        or point.get("action_source") not in (None, "policy")
+                        or point.get("policy_sampled") is False):
+                    break
+                # Tail V is pre-action: its own reward must not be added.
+                estimate = candidate if step == end else candidate + gamma * estimate
+                if step in selected:
+                    selected[step]["estimated_return"] = estimate
+                    selected[step]["return_estimate_step"] = end
     result = {
         "episode_id": episode_id,
         "first": first,

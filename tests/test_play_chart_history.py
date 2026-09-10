@@ -136,3 +136,29 @@ def test_event_pages_preserve_every_event_beyond_inspection_buffer(tmp_path):
         assert len(reads) == 4200
     finally:
         runner.stop()
+
+
+def test_live_return_estimate_uses_full_suffix_and_pre_action_tail(tmp_path):
+    from types import SimpleNamespace
+    from unittest.mock import patch
+    from gradlab.play_chart_history import chart_history
+
+    data = {
+        1: dict(step=1, reward_shaped=2, value=99),
+        2: dict(step=2, reward_shaped=3, value=99),
+        3: dict(step=3, reward_shaped=100, value=8),
+    }
+    recording = SimpleNamespace(
+        root=tmp_path,
+        metadata=dict(episode_id="live", episode=1, first_step=1, discount=0.5),
+        status=lambda: dict(last_step=3),
+        transition=lambda step: dict(presentation=data[step]),
+    )
+    runner = SimpleNamespace(recording=recording, history=[])
+    with patch("gradlab.play_web.history_point_payload", side_effect=lambda point: point):
+        result = chart_history(runner, "live", 1, 1)
+        assert result["points"][0]["estimated_return"] == 5.5
+        assert result["points"][0]["return_estimate_step"] == 3
+        assert "realized_return" not in result["points"][0]
+        result = chart_history(runner, "live", 3, 3)
+        assert result["points"][0]["estimated_return"] == 8

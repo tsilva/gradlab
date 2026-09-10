@@ -9,7 +9,7 @@ tags:
 title: GradLab native-vector bandit smoke
 objective:
   rank:
-  - max(eval/return_mean)
+  - max(eval/return/mean)
   - min(leader/step)
 train:
   checkpoint_freq: 128
@@ -48,7 +48,7 @@ train:
 eval:
   episodes: 256
   acceptance:
-  - metric: eval/return_mean
+  - metric: eval/return/mean
     operator: '>='
     threshold: 0.9
   policy:

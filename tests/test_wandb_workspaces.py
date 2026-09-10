@@ -86,31 +86,33 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
         }
         self.assertFalse(any("/a2c/" in metric for metric in breakout_metrics))
         self.assertIn(
-            "train/target/progress/score/mean",
+            "train/progress/score/mean",
             breakout_metrics,
         )
         self.assertIn(
-            "train/target/progress/score/max",
+            "train/progress/score/max",
             breakout_metrics,
         )
         self.assertIn(
-            "train/target/progress/bricks_destroyed_normalized/max",
+            "train/progress/bricks_destroyed_normalized/max",
             breakout_metrics,
         )
         self.assertIn(
-            "train/target/progress/bricks_destroyed_normalized/mean",
+            "train/progress/bricks_destroyed_normalized/mean",
             breakout_metrics,
         )
         self.assertIn(
-            "train/all/boundary_event/serve_stall/rolling/count",
+            "train/unsuccessful/serve_stall/fraction",
             breakout_metrics,
         )
         self.assertNotIn(
-            "train/reward/event/serve_wait/nonzero/rate",
+            "train/reward/event/serve_wait/fraction",
             breakout_metrics,
         )
         breakout_workspace = build_wandb_workspace(breakout, entity="entity")
-        self.assertEqual(breakout_workspace.runset_settings.filters, "Config('metrics_schema_version') = 21")
+        self.assertEqual(
+            breakout_workspace.runset_settings.filters, "Config('metrics_schema_version') = 22"
+        )
         mario = next(spec for spec in first if spec.project == "SuperMarioBros-Nes-v0")
         mario_metrics = {
             metric
@@ -118,7 +120,8 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
             for panel in section.panels
             for metric in (*panel.y, *panel.metric_templates)
         }
-        self.assertTrue(any("/a2c/" in metric for metric in mario_metrics))
+        self.assertIn("train/value_loss/mean", mario_metrics)
+        self.assertFalse(any("/a2c/" in metric or "/ppo/" in metric for metric in mario_metrics))
 
     def test_every_declared_panel_metric_is_registered_history(self) -> None:
         spec = compile_workspace_specs(ROOT, project="Bandit-v0")[0]
@@ -201,9 +204,7 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
 
     def test_project_override_rejects_unknown_excluded_metric(self) -> None:
         document = yaml.safe_load(MANIFEST.read_text(encoding="utf-8"))
-        document["projects"]["Breakout-Atari2600-v0"]["exclude_metrics"] = [
-            "train/not_registered"
-        ]
+        document["projects"]["Breakout-Atari2600-v0"]["exclude_metrics"] = ["train/not_registered"]
 
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "_workspaces.yaml"
@@ -243,23 +244,27 @@ class WandbWorkspaceRenderingTests(unittest.TestCase):
         workspace = build_wandb_workspace(self.spec, entity="entity")
 
         self.assertFalse(workspace.auto_generate_panels)
-        self.assertEqual(workspace.settings.x_axis, "train/global_step")
+        self.assertEqual(workspace.settings.x_axis, "train/step")
         self.assertEqual(workspace.settings.smoothing_type, "none")
         self.assertEqual(workspace.settings.max_runs, 25)
         self.assertEqual(
             workspace.runset_settings.filters,
-            "Config('metrics_schema_version') = 21",
+            "Config('metrics_schema_version') = 22",
         )
         self.assertEqual(len(workspace.sections), 2)
-        self.assertEqual(self.spec.sections[0].panels[0].y, ("eval/return_mean",))
-        self.assertEqual(self.spec.sections[0].panels[0].x, "eval/checkpoint/step")
+        self.assertEqual(self.spec.sections[0].panels[0].y, ("eval/return/mean",))
+        self.assertEqual(self.spec.sections[0].panels[0].x, "eval/step")
         self.assertEqual(len(workspace.sections[0].panels), 1)
         self.assertEqual(len(workspace.sections[1].panels), 11)
         for section_spec, section in zip(self.spec.sections, workspace.sections, strict=True):
             self.assertTrue(section.pinned)
             self.assertTrue(section.is_open)
-            for index, (panel_spec, panel) in enumerate(zip(section_spec.panels, section.panels, strict=True)):
-                self.assertEqual(panel.title, " · ".join((*panel_spec.y, *panel_spec.metric_templates)))
+            for index, (panel_spec, panel) in enumerate(
+                zip(section_spec.panels, section.panels, strict=True)
+            ):
+                self.assertEqual(
+                    panel.title, " · ".join((*panel_spec.y, *panel_spec.metric_templates))
+                )
                 self.assertEqual(panel.x, panel_spec.x)
                 self.assertEqual(panel.y, [])
                 for metric in panel_spec.y:
@@ -267,8 +272,10 @@ class WandbWorkspaceRenderingTests(unittest.TestCase):
                 for template in panel_spec.metric_templates:
                     concrete_metric = re.sub(r"\{[a-z_]+\}", "example", template)
                     self.assertIsNotNone(re.fullmatch(panel.metric_regex, concrete_metric))
-                self.assertEqual((panel.layout.x, panel.layout.y, panel.layout.w, panel.layout.h),
-                                 ((index % 2) * 12, (index // 2) * 8, 12, 8))
+                self.assertEqual(
+                    (panel.layout.x, panel.layout.y, panel.layout.w, panel.layout.h),
+                    ((index % 2) * 12, (index // 2) * 8, 12, 8),
+                )
         _adopt_managed_identity(workspace, self.spec, entity="entity")
         self.assertRegex(workspace._to_model().name, r"^nw-[a-f0-9]{11}-v$")
 

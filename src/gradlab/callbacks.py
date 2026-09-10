@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import math
 import time
-from collections import deque
 from dataclasses import dataclass
 from numbers import Integral
 from pathlib import Path
@@ -23,8 +22,6 @@ from gradlab.early_stop import (
 from gradlab.env import EnvConfig
 from gradlab.file_utils import atomic_write_json
 from gradlab.metric_names import (
-    canonical_training_scalars,
-    TRAIN_ARTIFACT_SAVE_SECONDS,
     TRAIN_ARCHIVE_ADMISSION_ACCEPTED_COUNT,
     TRAIN_ARCHIVE_ADMISSION_CANDIDATE_COUNT,
     TRAIN_ARCHIVE_CAPTURE_CALL_COUNT,
@@ -39,16 +36,15 @@ from gradlab.metric_names import (
     TRAIN_ARCHIVE_SAMPLING_EFFECTIVE_CELL_COUNT,
     TRAIN_ARCHIVE_SAMPLING_PROBABILITY_MAX,
     TRAIN_ARCHIVE_TRANSITION_SHARE,
-    TRAIN_REWARD_ROOT,
+    TRAIN_ARTIFACT_SAVE_SECONDS,
+    canonical_training_scalars,
     stat_metric,
     train_algorithm_metric,
     train_early_stop_metric,
-    train_reward_component_metric,
-    train_reward_event_metric,
-    validate_metric_name,
 )
-from gradlab.policy_execution import compile_policy_execution_contract
 from gradlab.metric_store import MetricStore
+from gradlab.policy_execution import compile_policy_execution_contract
+from gradlab.reward_metrics import RewardStatsAccumulator
 from gradlab.state_archive import state_archive_artifact_summary
 from gradlab.train_config import wandb_publication_enabled
 from gradlab.training_lifecycle import LoggerMetricFrameSink
@@ -389,13 +385,9 @@ class MetricEarlyStopHelper(CallbackHelper):
             values = {
                 train_early_stop_metric(
                     condition_id,
-                    "patience/progress",
+                    "fraction",
                 ): observation.patience_progress,
             }
-            if observation.target_progress is not None:
-                values[train_early_stop_metric(condition_id, "target/progress")] = (
-                    observation.target_progress
-                )
             for name, value in values.items():
                 self.logger.record(name, value)
         if update.stop_decision is None:
@@ -690,174 +682,6 @@ class ArchiveCurriculumFeedbackHelper(CallbackHelper):
         self._fragments.clear()
 
 
-@dataclass
-class _RewardMoments:
-    """Merge finite batch moments without retaining a rollout's samples."""
-
-    size: int = 0
-    mean: float = 0.0
-    m2: float = 0.0
-    nonzero: int = 0
-    absolute_sum: float = 0.0
-
-    def update(self, value: Any, *, reserve: int) -> np.ndarray:
-        del reserve
-        values = np.asarray(value, dtype=np.float64).reshape(-1)
-        values = values[np.isfinite(values)]
-        if not values.size:
-            return values
-        count = int(values.size)
-        batch_mean = float(np.mean(values))
-        delta = batch_mean - self.mean
-        total = self.size + count
-        self.m2 += float(np.sum((values - batch_mean) ** 2)) + delta * delta * self.size * count / total
-        self.mean += delta * count / total
-        self.size = total
-        self.nonzero += int(np.count_nonzero(values))
-        self.absolute_sum += float(np.sum(np.abs(values)))
-        return values
-
-    def flush(self) -> _RewardMoments:
-        result = _RewardMoments(self.size, self.mean, self.m2, self.nonzero, self.absolute_sum)
-        self.size = self.nonzero = 0
-        self.mean = self.m2 = self.absolute_sum = 0.0
-        return result
-
-    @property
-    def std(self) -> float:
-        return math.sqrt(max(0.0, self.m2 / self.size)) if self.size else 0.0
-
-    @property
-    def nonzero_rate(self) -> float:
-        return self.nonzero / self.size if self.size else 0.0
-
-
-class RewardStatsAccumulator:
-    component_info_keys = {
-        "native": "native_reward_component",
-        "cell_novelty": "cell_novelty_reward_component",
-        "event": "event_reward_component",
-        "progress": "progress_reward_component",
-        "score": "score_reward_component",
-        "completion": "completion_reward_component",
-        "death": "death_penalty_component",
-        "time": "time_penalty_component",
-        "kill": "kill_reward_component",
-        "hit": "hit_reward_component",
-        "damage": "damage_reward_component",
-        "health": "health_reward_component",
-        "armor": "armor_reward_component",
-        "weapon": "weapon_reward_component",
-        "ammo": "ammo_reward_component",
-        "weapon_hold": "weapon_hold_reward_component",
-    }
-
-    def __init__(
-        self,
-        *,
-        active_components: Sequence[str] = (),
-    ) -> None:
-        self.shaped = _RewardMoments()
-        self.raw = _RewardMoments()
-        self.active_components = tuple(
-            component for component in active_components if component in self.component_info_keys
-        )
-        self.components = {component: _RewardMoments() for component in self.active_components}
-        self.event_rewards: dict[str, _RewardMoments] = {}
-        # Only unmatched finite samples are retained when providers deliver the two
-        # streams in different batches. Normal paired vector records drain immediately.
-        self._pending_shaped: deque[np.ndarray] = deque()
-        self._pending_raw: deque[np.ndarray] = deque()
-        self._rewards_differ = False
-
-    def consume(self, metrics: Mapping[str, Any], *, reserve: int) -> None:
-        if (value := metrics.get("shaped_reward")) is not None:
-            values = self.shaped.update(value, reserve=reserve)
-            if values.size and not self._rewards_differ:
-                self._pending_shaped.append(values)
-        if (value := metrics.get("raw_reward")) is not None:
-            values = self.raw.update(value, reserve=reserve)
-            if values.size and not self._rewards_differ:
-                self._pending_raw.append(values)
-        while self._pending_shaped and self._pending_raw:
-            shaped, raw = self._pending_shaped[0], self._pending_raw[0]
-            count = min(shaped.size, raw.size)
-            if not np.array_equal(shaped[:count], raw[:count]):
-                self._rewards_differ = True
-                self._pending_shaped.clear()
-                self._pending_raw.clear()
-                break
-            for pending, values in ((self._pending_shaped, shaped), (self._pending_raw, raw)):
-                pending.popleft()
-                if values.size > count:
-                    pending.appendleft(values[count:])
-        for component, accumulator in self.components.items():
-            info_key = self.component_info_keys[component]
-            value = metrics.get(info_key)
-            if value is not None:
-                accumulator.update(value, reserve=reserve)
-        event_prefix = "event_reward_component/"
-        for info_key, value in metrics.items():
-            if not isinstance(info_key, str) or not info_key.startswith(event_prefix):
-                continue
-            event = info_key.removeprefix(event_prefix)
-            train_reward_event_metric(event, "mean")
-            accumulator = self.event_rewards.setdefault(event, _RewardMoments())
-            accumulator.update(value, reserve=reserve)
-
-    @staticmethod
-    def _distribution(prefix: str, values: _RewardMoments, stats: Sequence[str]) -> dict[str, float]:
-        if values.size == 0:
-            return {}
-        calculations = {
-            "mean": lambda: values.mean,
-            "std": lambda: values.std,
-            "nonzero_rate": lambda: values.nonzero_rate,
-        }
-        return {
-            (
-                validate_metric_name(f"{prefix}/nonzero/rate")
-                if stat == "nonzero_rate"
-                else stat_metric(prefix, stat)
-            ): calculations[stat]()
-            for stat in stats
-        }
-
-    def flush(self) -> dict[str, float]:
-        shaped = self.shaped.flush()
-        raw = self.raw.flush()
-        payload = self._distribution(
-            f"{TRAIN_REWARD_ROOT}/shaped",
-            shaped,
-            ("mean", "std", "nonzero_rate"),
-        )
-        if raw.size > 0 and (shaped.size != raw.size or self._rewards_differ):
-            payload.update(self._distribution(f"{TRAIN_REWARD_ROOT}/pre_transform", raw, ("mean", "std")))
-        self._rewards_differ = False
-        self._pending_shaped.clear()
-        self._pending_raw.clear()
-        abs_sums: dict[str, float] = {}
-        for component, accumulator in self.components.items():
-            values = accumulator.flush()
-            if values.size == 0:
-                continue
-            payload[train_reward_component_metric(component, "mean")] = values.mean
-            payload[train_reward_component_metric(component, "nonzero_rate")] = values.nonzero_rate
-            abs_sums[component] = values.absolute_sum
-        total_abs_sum = sum(abs_sums.values())
-        for component, abs_sum in abs_sums.items():
-            payload[train_reward_component_metric(component, "share")] = (
-                abs_sum / total_abs_sum if total_abs_sum > 0.0 else 0.0
-            )
-        for event, accumulator in self.event_rewards.items():
-            values = accumulator.flush()
-            if values.size == 0:
-                continue
-            payload[train_reward_event_metric(event, "mean")] = values.mean
-            payload[train_reward_event_metric(event, "nonzero_rate")] = values.nonzero_rate
-        return payload
-
-
 class RuntimeMetricsHelper(CallbackHelper):
     """Reduce runtime records and publish one scalar payload per rollout."""
 
@@ -870,17 +694,22 @@ class RuntimeMetricsHelper(CallbackHelper):
         progress_fields: Sequence[str] = (),
         track_success: bool = False,
         session: Any | None = None,
+        task: Mapping[str, Any] | None = None,
+        required_metrics: Sequence[str] = (),
     ) -> None:
         super().__init__()
         self.session = session
         self.reward_stats = RewardStatsAccumulator(
             active_components=active_reward_components,
+            task=task,
+            required_metrics=required_metrics,
         )
         self.episode_metrics = EpisodeMetricsReducer(
             event_names=event_names,
             configured_starts=configured_starts,
             progress_fields=progress_fields,
             track_success=track_success,
+            required_metrics=required_metrics,
         )
         self.pending_metrics: dict[str, int | float] = {}
 

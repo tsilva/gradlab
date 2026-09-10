@@ -16,6 +16,7 @@ from gradlab.eval_metrics import episode_is_complete, episode_start_state, progr
 from gradlab.env_registry import ENVIRONMENT_SPECS, environment_spec, resolve_env_provider
 from gradlab.metric_names import (
     EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
+    EVAL_FULL_EPISODE_RETURN_SHAPED_MAX,
     EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MEAN,
     EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MIN,
     eval_full_progress_metric,
@@ -444,6 +445,7 @@ def acceptance_aggregates(
             if not all(math.isfinite(value) for value in returns):
                 raise ValueError("acceptance episode returns must be finite")
             result[EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN] = sum(returns) / len(returns)
+            result[EVAL_FULL_EPISODE_RETURN_SHAPED_MAX] = max(returns)
         environment = contract.get("environment")
         if isinstance(environment, Mapping):
             provider_id = environment.get("env_provider")

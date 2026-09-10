@@ -157,17 +157,17 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must be one of modal, none"):
             validate_and_normalize_train_config({"checkpoint_eval_backend": "local"})
 
-    def test_metrics_schema_version_accepts_only_active_v21(self) -> None:
+    def test_metrics_schema_version_accepts_only_active_v22(self) -> None:
         self.assertEqual(
-            validate_and_normalize_train_config({"metrics_schema_version": 21})[
+            validate_and_normalize_train_config({"metrics_schema_version": 22})[
                 "metrics_schema_version"
             ],
-            21,
+            22,
         )
-        with self.assertRaisesRegex(ValueError, "must be >= 21"):
+        with self.assertRaisesRegex(ValueError, "must be >= 22"):
             validate_and_normalize_train_config({"metrics_schema_version": 19})
-        with self.assertRaisesRegex(ValueError, "must be <= 21"):
-            validate_and_normalize_train_config({"metrics_schema_version": 22})
+        with self.assertRaisesRegex(ValueError, "must be <= 22"):
+            validate_and_normalize_train_config({"metrics_schema_version": 23})
 
     def test_episode_progress_fields_must_reference_task_signals(self) -> None:
         normalized = validate_and_normalize_train_config(
@@ -194,7 +194,7 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
                     "early_stop": {
                         "conditions": {
                             "invalid": {
-                                "metric": "eval/success/start_rate_min",
+                                "metric": "eval/success/min",
                                 "trigger": "threshold",
                                 "operator": ">=",
                                 "threshold": 1.0,
@@ -214,7 +214,7 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
                 "early_stop": {
                     "conditions": {
                         "clear": {
-                            "metric": "train/target/success/start_rate_min",
+                            "metric": "train/success/min",
                             "trigger": "threshold",
                             "operator": ">=",
                             "threshold": 1.0,
@@ -232,7 +232,7 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
             {
                 "conditions": {
                     "clear": {
-                        "metric": "train/target/success/start_rate_min",
+                        "metric": "train/success/min",
                         "trigger": "threshold",
                         "outcome": "success",
                         "action": "stop",
@@ -247,7 +247,7 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
 
     def test_eval_acceptance_allows_training_success_as_a_learner_stop(self) -> None:
         failure_condition = {
-            "metric": "train/target/return_mean",
+            "metric": "train/return/mean",
             "trigger": "no_improvement",
             "direction": "maximize",
             "min_delta": 0.01,
@@ -259,7 +259,7 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
         }
         acceptance = [
             {
-                "metric": "eval/success/start_rate_min",
+                "metric": "eval/success/min",
                 "operator": ">=",
                 "threshold": 1.0,
             }
@@ -276,7 +276,7 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
         )
 
         success_condition = {
-            "metric": "train/target/success/start_rate_min",
+            "metric": "train/success/min",
             "trigger": "threshold",
             "operator": ">=",
             "threshold": 1.0,

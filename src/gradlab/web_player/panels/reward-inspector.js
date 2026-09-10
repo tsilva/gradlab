@@ -2,25 +2,20 @@ import { rewardContribution } from "./reward-discount.js";
 import { themeColor } from "./shared.js";
 
 // Keep the table bounded even when the episode chart contains thousands of samples.
-// Anchor rows to playback selection, never pointer hover.
-// Include the exact selected transition when chart downsampling omitted it.
+// Anchor row membership to the return reference; seeking only changes highlights.
+// Restore the exact reference transition when chart downsampling omitted it.
 export function rewardInspectionRows(history, selected, gamma, limit = 5, referenceStep = selected?.step) {
   const points = new Map(history.map((point) => [point.step, point]));
-  if (selected && history.length && selected.step >= history[0].step
+  if (selected && selected.step === referenceStep && history.length && selected.step >= history[0].step
       && selected.step <= history.at(-1).step) points.set(selected.step, { ...points.get(selected.step), ...selected });
-  const firstStep = Math.max(selected?.step ?? -Infinity, referenceStep ?? -Infinity);
+  const firstStep = referenceStep ?? -Infinity;
   const candidates = [...points.values()].filter((point) => (
-    point.step >= firstStep && (point.step === selected?.step
+    point.step >= firstStep && (point.step === referenceStep
     || [point.reward_provider, point.reward_shaped].some((value) => Number.isFinite(value) && value !== 0))
   )).sort((a, b) => a.step - b.step);
   if (!candidates.length) return [];
   const focus = selected?.step;
-  let nearest = 0;
-  candidates.forEach((point, index) => {
-    if (Math.abs(point.step - focus) < Math.abs(candidates[nearest].step - focus)) nearest = index;
-  });
-  const start = Math.max(0, Math.min(nearest - Math.floor(limit / 2), candidates.length - limit));
-  return candidates.slice(start, start + limit).map((point) => {
+  return candidates.slice(0, limit).map((point) => {
     const result = rewardContribution(point, referenceStep, gamma);
     const delay = Number.isInteger(referenceStep) ? point.step - referenceStep : null;
     const weight = delay !== null && delay >= 0 && Number.isFinite(gamma) && gamma >= 0 && gamma <= 1
@@ -53,9 +48,9 @@ export function createRewardInspector(legend, services) {
   scroll.className = "reward-history-scroll";
   const table = document.createElement("table");
   table.className = "reward-history-table";
-  table.setAttribute("aria-label", "Recorded rewards near the selected playback step");
+  table.setAttribute("aria-label", "Recorded rewards from the return reference step");
   const head = table.createTHead().insertRow();
-  ["Step", "Native", "Shaped", "Delay", "Weight", "Contribution", "Return G", "Value V"].forEach((label) => {
+  ["Step", "Native", "Shaped", "Delay", "Weight", "Contribution", "G(s)", "V(s)"].forEach((label) => {
     const cell = document.createElement("th");
     cell.scope = "col";
     cell.textContent = label;
@@ -64,10 +59,14 @@ export function createRewardInspector(legend, services) {
   const body = table.createTBody();
   scroll.append(table);
   let signature = "";
+  let referenceSample = null;
   return {
     element: scroll,
     render(history, selected, gamma, referenceStep = selected?.step) {
-      const rows = rewardInspectionRows(history, selected, gamma, 5, referenceStep);
+      if (referenceSample?.step !== referenceStep) referenceSample = null;
+      if (selected?.step === referenceStep) referenceSample = selected;
+      const referenceRows = rewardInspectionRows(history, referenceSample, gamma, 5, referenceStep);
+      const rows = referenceRows.map(point => ({ ...point, inspected: point.step === selected?.step }));
       const next = JSON.stringify([rows, selected?.step, gamma, referenceStep]);
       if (next === signature) return;
       signature = next;
@@ -96,8 +95,8 @@ export function createRewardInspector(legend, services) {
           point.delay ?? "—", formatRewardCell(point.weight, 5), formatRewardCell(point.contribution, 5),
           point.value_comparison_reasons?.length ? "Incomparable"
             : Number.isFinite(point.realized_return)
-              ? `${formatRewardCell(point.realized_return)}${point.realized_return_bootstrapped ? " (bootstrapped)" : ""}`
-              : "Pending",
+              ? `${formatRewardCell(point.realized_return)}${point.realized_return_bootstrapped ? " ⚠" : ""}`
+              : Number.isFinite(point.estimated_return) ? `${formatRewardCell(point.estimated_return)} ⚠` : "Pending",
           formatRewardCell(point.value)];
         values.forEach((value, index) => {
           const cell = document.createElement("td");
@@ -106,7 +105,11 @@ export function createRewardInspector(legend, services) {
             ? "Past reward: excluded from future contribution"
             : "Unavailable: required recorded data is missing";
           if (index === 5) cell.title = point.value_comparison_reasons?.join("; ")
-            || "Discounted return from this row’s step; pending until comparable episode evidence is available. Bootstrapped returns include the final state value.";
+            || (Number.isFinite(point.estimated_return) && !Number.isFinite(point.realized_return)
+              ? `Provisional estimate: recorded rewards followed by discounted V(s) at step ${point.return_estimate_step}. Not realized return or calibration evidence.`
+              : point.realized_return_bootstrapped ? "Bootstrapped return includes the final state value."
+                : "Realized discounted return from this state; pending until comparable evidence is available.");
+          if (index === 5 && String(value).includes("⚠")) cell.setAttribute("aria-label", `${value}: ${cell.title}`);
           if (index === 6) cell.title = "Recorded pre-action critic prediction V(s) for this row’s state";
           row.append(cell);
         });

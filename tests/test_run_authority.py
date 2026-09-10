@@ -323,7 +323,7 @@ class RunAuthorityTests(unittest.TestCase):
         )
         self.authority.create_attempt_terminal(
             receipt,
-            metrics={"train/global_step": 100.0},
+            metrics={"train/step": 100.0},
         )
         terminal_generation = self.authority.catalog_generation(manifest.goal_slug)
         assert terminal_generation is not None
@@ -331,10 +331,10 @@ class RunAuthorityTests(unittest.TestCase):
         self.assertEqual(updated["state"], "failed")
         self.assertEqual(updated["stop_reason"], "training_cap_without_acceptance")
         self.assertEqual(updated["final_step"], 100)
-        self.assertEqual(updated["metrics"], {"train/global_step": 100.0})
+        self.assertEqual(updated["metrics"], {"train/step": 100.0})
         terminal_run = terminal_generation["terminal_runs"][0]
         self.assertEqual(terminal_run["state"], "failed")
-        self.assertEqual(terminal_run["metrics"], {"train/global_step": 100.0})
+        self.assertEqual(terminal_run["metrics"], {"train/step": 100.0})
 
     def test_same_goal_variant_from_multiple_source_commits_shares_catalog_entry(self) -> None:
         first = self.manifest(new_run_id(), new_attempt_id())

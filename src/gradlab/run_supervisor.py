@@ -1829,6 +1829,9 @@ class RunSupervisor:
             schema_version=METRICS_SCHEMA_VERSION,
             checkpoint_step=int(row["checkpoint_step"]),
             episodes_planned=episodes_planned,
+            required_metrics=frozenset(
+                rule["metric"] for rule in row["intent"]["execution_contract"]["acceptance"]
+            ),
         )
         self.store.append_metrics(
             metrics,

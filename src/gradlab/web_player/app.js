@@ -2053,6 +2053,7 @@ function bindPanelElement(panel, name) {
 
 function bindPanelLayout() {
   gridStack = window.GridStack.init({
+    alwaysShowResizeHandle: true,
     animate: false,
     cellHeight: DEFAULT_GRID_CELL_HEIGHT,
     column: 12,

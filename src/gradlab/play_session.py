@@ -356,7 +356,10 @@ def build_parser() -> argparse.ArgumentParser:
             "The provider must support the recorded game and constructor arguments."
         ),
     )
-    parser.add_argument("--fps", type=float, default=0.0)
+    parser.add_argument(
+        "--fps", type=float, default=30.0,
+        help="Playback display FPS (default: 30; 0: unlimited). Policy inference is unthrottled.",
+    )
     parser.add_argument(
         "--port",
         type=nonnegative_int_arg,

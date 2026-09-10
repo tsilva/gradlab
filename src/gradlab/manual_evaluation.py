@@ -567,6 +567,9 @@ class ManualEvaluationSupervisor:
             schema_version=metrics_schema_version,
             checkpoint_step=context.checkpoint.step,
             episodes_planned=episodes_planned,
+            required_metrics=frozenset(
+                rule["metric"] for rule in context.intent.execution_contract["acceptance"]
+            ),
         )
         ledger.append_metrics(
             metrics,
@@ -1097,11 +1100,7 @@ class ManualEvaluationSupervisor:
         self._ensure_intents(contexts, job_id=job_id)
         ledger = SupervisorLedger(self.work_root / job_id / "supervisor.sqlite3", clock=self.clock)
         ledger.init()
-        event_seq_offset = (
-            self._event_seq_offset(manifest, terminal)
-            if terminal is not None
-            else 0
-        )
+        event_seq_offset = self._event_seq_offset(manifest, terminal) if terminal is not None else 0
         statuses = [
             self._status(
                 context,
@@ -1325,10 +1324,7 @@ class ManualEvaluationQueue:
         checkpoint_map = planner._checkpoint_map(run_id)
         observed_fence = evaluation_selection_fence(
             run_id=run_id,
-            checkpoints=[
-                checkpoint.to_dict()
-                for checkpoint in checkpoint_map.values()
-            ],
+            checkpoints=[checkpoint.to_dict() for checkpoint in checkpoint_map.values()],
         )
         if observed_fence != normalized_fence:
             raise EvaluationSelectionChanged(
