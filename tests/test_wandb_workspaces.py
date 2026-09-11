@@ -30,7 +30,7 @@ MANIFEST = ROOT / DEFAULT_WORKSPACE_MANIFEST
 
 
 def _fake_api():
-    return SimpleNamespace(client=SimpleNamespace(app_url="https://wandb.example"))
+    return SimpleNamespace(client=SimpleNamespace(app_url="https://wandb.example"), create_custom_chart=lambda **kwargs: "test/chart")
 
 
 class WandbWorkspaceDeclarationTests(unittest.TestCase):
@@ -76,6 +76,9 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
                 "ppo_clip_fraction",
                 "loop_throughput",
                 "provider_step_throughput",
+                "occupancy_recent",
+                "occupancy_history",
+                "curriculum_distribution",
             ],
         )
         breakout_metrics = {

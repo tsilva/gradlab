@@ -6,7 +6,7 @@ import tempfile
 import time
 import traceback
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import asdict, replace
 from typing import Any, Mapping, Sequence
 
 import numpy as np
@@ -355,6 +355,7 @@ def bind_native_provider(
     capture_step_diagnostics: bool = False,
     state_archive: Mapping[str, Any] | None = None,
     state_archive_root: str | os.PathLike[str] | None = None,
+    occupancy: Mapping[str, Any] | None = None,
 ) -> BatchRuntime:
     """Transfer a constructed provider into the task runtime or close it on failure."""
 
@@ -390,6 +391,8 @@ def bind_native_provider(
             capture_step_diagnostics=capture_step_diagnostics,
             state_archive=state_archive,
             state_archive_root=state_archive_root,
+            occupancy=occupancy,
+            occupancy_environment=asdict(config),
         )
         return runtime
     except BaseException:
@@ -503,6 +506,7 @@ def make_vec_envs(
     rom_binding: RomRuntimeBinding | None = None,
     state_archive: Mapping[str, Any] | None = None,
     state_archive_root: str | os.PathLike[str] | None = None,
+    occupancy: Mapping[str, Any] | None = None,
     native_kwargs_overrides: Mapping[str, Any] | None = None,
 ) -> Any:
     from gradlab.training.sb3_vec_env import GradLabVecEnv
@@ -516,6 +520,7 @@ def make_vec_envs(
         rom_binding=rom_binding,
         state_archive=state_archive,
         state_archive_root=state_archive_root,
+        occupancy=occupancy,
         native_kwargs_overrides=native_kwargs_overrides,
     )
     vec_env = GradLabVecEnv(runtime)
@@ -534,30 +539,29 @@ def make_training_batch_runtime(
     rom_binding: RomRuntimeBinding | None = None,
     state_archive: Mapping[str, Any] | None = None,
     state_archive_root: str | os.PathLike[str] | None = None,
+    occupancy: Mapping[str, Any] | None = None,
     native_kwargs_overrides: Mapping[str, Any] | None = None,
 ) -> BatchRuntime:
     os.environ.setdefault("STABLE_RETRO_DISABLE_AUDIO", "1")
-    if state_archive is not None:
+    if state_archive is not None or occupancy is not None:
         from gradlab.state_archive import normalize_state_archive_config
 
-        normalized_archive = normalize_state_archive_config(
-            state_archive,
-            n_envs=n_envs,
-        )
-        assert normalized_archive is not None
-        cell = normalized_archive["recorder"].get("cell")
-        sources = {
-            str(dimension["source"])
-            for dimension in (cell or {}).get("dimensions", ())
-            if isinstance(dimension, Mapping) and "source" in dimension
-        }
+        normalized_archive = normalize_state_archive_config(state_archive, n_envs=n_envs)
+        cell = (normalized_archive or {}).get("recorder", {}).get("cell") or {}
+        dimensions = list(cell.get("dimensions", ()))
+        if occupancy is not None:
+            from gradlab.occupancy import normalize_occupancy_config
+
+            occupancy = normalize_occupancy_config(occupancy)
+            dimensions.extend(occupancy["cell"]["dimensions"])
+        sources = {str(item["source"]) for item in dimensions if "source" in item}
         if sources:
             env_args = dict(config.env_args)
             configured_filter = env_args.get("info_filter")
             configured_keys: set[str] = set()
             if isinstance(configured_filter, Mapping):
                 if str(configured_filter.get("mode", "all")) != "all":
-                    raise ValueError("state archive cell sources require info_filter mode='all'")
+                    raise ValueError("state cell sources require info_filter mode='all'")
                 keys = configured_filter.get("keys")
                 if keys is not None:
                     if isinstance(keys, str | bytes) or not isinstance(
@@ -567,7 +571,7 @@ def make_training_batch_runtime(
                         raise ValueError("info_filter.keys must be a sequence")
                     configured_keys.update(str(key) for key in keys)
             elif configured_filter is not None and str(configured_filter) != "all":
-                raise ValueError("state archive cell sources require info_filter='all'")
+                raise ValueError("state cell sources require info_filter='all'")
             task = config.task if isinstance(config.task, Mapping) else {}
             signals = task.get("signals")
             if isinstance(signals, Mapping):
@@ -602,6 +606,7 @@ def make_training_batch_runtime(
         capture_step_diagnostics=capture_step_diagnostics,
         state_archive=state_archive,
         state_archive_root=state_archive_root,
+        occupancy=occupancy,
     )
 
 
@@ -733,6 +738,7 @@ def make_training_vec_env(
     rom_binding: RomRuntimeBinding | None = None,
     state_archive: Mapping[str, Any] | None = None,
     state_archive_root: str | os.PathLike[str] | None = None,
+    occupancy: Mapping[str, Any] | None = None,
     native_kwargs_overrides: Mapping[str, Any] | None = None,
 ) -> Any:
     return make_vec_envs(
@@ -743,6 +749,7 @@ def make_training_vec_env(
         rom_binding=rom_binding,
         state_archive=state_archive,
         state_archive_root=state_archive_root,
+        occupancy=occupancy,
         native_kwargs_overrides=native_kwargs_overrides,
     )
 

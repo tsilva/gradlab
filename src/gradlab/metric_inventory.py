@@ -178,6 +178,8 @@ def resolve_metric_inventory(config: Mapping[str, Any]) -> MetricInventory:
             continue
         if name.startswith("train/success/") and not success:
             continue
+        if name.startswith("train/occupancy/") and not config.get("occupancy"):
+            continue
         if name.startswith("train/curriculum/") and not curriculum:
             continue
         if name == "train/unique_cells/mean" and not reward.get("cell_novelty"):

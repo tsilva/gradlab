@@ -280,7 +280,9 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
         rom_binding=context.rom_binding,
         state_archive=common_config["state_archive"],
         state_archive_root=context.run_dir / "state-archive",
+        occupancy=common_config.get("occupancy"),
     )
+    occupancy_reporter = None
     try:
         runtime.validate_archive_signal(str(backend_config["progress_signal"]))
         if not isinstance(runtime.action_space, spaces.Discrete):
@@ -325,6 +327,12 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
             step_quantum=n_envs,
             progress_fields=GO_EXPLORE_PROGRESS_FIELDS,
         )
+        if common_config.get("occupancy") is not None:
+            from gradlab.occupancy import OccupancyReporter
+
+            occupancy_reporter = OccupancyReporter(
+                runtime, context, initial_step=search.global_step
+            )
         context.mark_ready()
         reward_stats = RewardStatsAccumulator(
             task=config.task,
@@ -396,7 +404,11 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
             )
             if np.any(observation.restart_mask) and not stop_for_completion:
                 entry_ids = search.restart(observation.restart_mask)
-                runtime.restore_archive_entries(observation.restart_mask, entry_ids)
+                runtime.restore_archive_entries(
+                    observation.restart_mask, entry_ids, origin="search"
+                )
+            if occupancy_reporter is not None and runtime.occupancy.completed:
+                occupancy_reporter.flush()
             step = search.global_step
             context.session.advance(
                 step,
@@ -515,7 +527,11 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
             model_kind=terminal_kind,
         )
     finally:
-        runtime.close()
+        try:
+            if occupancy_reporter is not None:
+                occupancy_reporter.flush(final=True)
+        finally:
+            runtime.close()
 
 
 class GoExploreBackend:

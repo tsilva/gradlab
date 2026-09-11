@@ -945,101 +945,130 @@ class RunAuthority:
         attempt_id: str,
         archive_root: Path,
     ) -> dict[str, Any]:
-        closure_path = archive_root / "closure.json"
-        if not closure_path.is_file():
-            raise FileNotFoundError(f"state archive has no closure: {closure_path}")
-        closure = json.loads(closure_path.read_text(encoding="utf-8"))
-        if (
-            not isinstance(closure, Mapping)
-            or closure.get("semantic_id") != "state-archive-v1"
-            or int(closure.get("schema_version", 0)) != 1
-        ):
-            raise ValueError("state archive closure schema is unsupported")
-        raw_files = closure.get("files")
-        if isinstance(raw_files, str | bytes) or not isinstance(raw_files, Sequence):
-            raise ValueError("state archive closure files must be a sequence")
-        prior_objects: dict[str, str] = {}
-        prior = self.state_archive_closure(run_id=run_id)
-        if prior is not None:
-            prior_generation = self.control.get_json(str(prior["generation_key"]))
-            for raw_object in prior_generation.get("objects") or []:
-                if isinstance(raw_object, Mapping):
-                    prior_objects[str(raw_object["sha256"])] = str(raw_object["object_key"])
-        objects: list[dict[str, Any]] = []
-        seen_paths: set[str] = set()
-        for raw_file in raw_files:
-            if not isinstance(raw_file, Mapping):
-                raise ValueError("state archive closure file entry must be an object")
-            relative = Path(str(raw_file["path"]))
+        from gradlab.state_archive import archive_lock
+
+        with archive_lock(archive_root, exclusive=False):
+            closure_path = archive_root / "closure.json"
+            if not closure_path.is_file():
+                raise FileNotFoundError(f"state archive has no closure: {closure_path}")
+            closure = json.loads(closure_path.read_text(encoding="utf-8"))
             if (
-                relative.is_absolute()
-                or ".." in relative.parts
-                or relative.as_posix() in seen_paths
+                not isinstance(closure, Mapping)
+                or closure.get("semantic_id") != "state-archive-v1"
+                or int(closure.get("schema_version", 0)) != 1
             ):
-                raise ValueError("state archive closure contains an unsafe or duplicate path")
-            seen_paths.add(relative.as_posix())
-            source = archive_root / relative
-            payload = source.read_bytes()
-            digest = hashlib.sha256(payload).hexdigest()
-            if digest != str(raw_file["sha256"]) or len(payload) != int(raw_file["size_bytes"]):
-                raise ValueError(f"state archive file failed closure verification: {relative}")
-            object_key = prior_objects.get(digest) or (
-                f"{self.run_prefix(run_id)}/state-archive/objects/{digest[:2]}/{digest[2:]}"
-            )
-            if digest not in prior_objects:
-                self.control.put_bytes(
-                    object_key,
-                    payload,
-                    create_only=True,
-                    metadata={"sha256": digest},
+                raise ValueError("state archive closure schema is unsupported")
+            raw_files = closure.get("files")
+            if isinstance(raw_files, str | bytes) or not isinstance(raw_files, Sequence):
+                raise ValueError("state archive closure files must be a sequence")
+            prior_objects: dict[str, str] = {}
+            prior = self.state_archive_closure(run_id=run_id)
+            if prior is not None:
+                prior_generation = self.control.get_json(str(prior["generation_key"]))
+                for raw_object in prior_generation.get("objects") or []:
+                    if isinstance(raw_object, Mapping):
+                        prior_objects[str(raw_object["sha256"])] = str(raw_object["object_key"])
+            objects: list[dict[str, Any]] = []
+            seen_paths: set[str] = set()
+            for raw_file in raw_files:
+                if not isinstance(raw_file, Mapping):
+                    raise ValueError("state archive closure file entry must be an object")
+                relative = Path(str(raw_file["path"]))
+                if (
+                    relative.is_absolute()
+                    or ".." in relative.parts
+                    or relative.as_posix() in seen_paths
+                ):
+                    raise ValueError("state archive closure contains an unsafe or duplicate path")
+                seen_paths.add(relative.as_posix())
+                source = archive_root / relative
+                payload = source.read_bytes()
+                digest = hashlib.sha256(payload).hexdigest()
+                if digest != str(raw_file["sha256"]) or len(payload) != int(raw_file["size_bytes"]):
+                    raise ValueError(f"state archive file failed closure verification: {relative}")
+                object_key = prior_objects.get(digest) or (
+                    f"{self.run_prefix(run_id)}/state-archive/objects/{digest[:2]}/{digest[2:]}"
                 )
-            objects.append(
-                {
-                    "path": relative.as_posix(),
-                    "sha256": digest,
-                    "size_bytes": len(payload),
-                    "object_key": object_key,
-                }
+                if digest not in prior_objects:
+                    self.control.put_bytes(
+                        object_key,
+                        payload,
+                        create_only=True,
+                        metadata={"sha256": digest},
+                    )
+                objects.append(
+                    {
+                        "path": relative.as_posix(),
+                        "sha256": digest,
+                        "size_bytes": len(payload),
+                        "object_key": object_key,
+                    }
+                )
+            objects.sort(key=lambda row: str(row["path"]))
+            generation = {
+                "semantic_id": "state-archive-generation-v1",
+                "schema_version": 1,
+                "run_id": run_id,
+                "attempt_id": attempt_id,
+                "step": int(closure["step"]),
+                "status": str(closure["status"]),
+                "inventory_sha256": str(closure["inventory_sha256"]),
+                "archive": dict(closure["archive"]),
+                "closure": dict(closure),
+                "objects": objects,
+            }
+            generation_sha256 = self._archive_document_sha256(generation)
+            generation_key = (
+                f"{self.run_prefix(run_id)}/state-archive/generations/"
+                f"{int(closure['step']):020d}-{generation_sha256}.json"
             )
-        objects.sort(key=lambda row: str(row["path"]))
-        generation = {
-            "semantic_id": "state-archive-generation-v1",
-            "schema_version": 1,
-            "run_id": run_id,
-            "attempt_id": attempt_id,
-            "step": int(closure["step"]),
-            "status": str(closure["status"]),
-            "inventory_sha256": str(closure["inventory_sha256"]),
-            "archive": dict(closure["archive"]),
-            "closure": dict(closure),
-            "objects": objects,
-        }
-        generation_sha256 = self._archive_document_sha256(generation)
-        generation_key = (
-            f"{self.run_prefix(run_id)}/state-archive/generations/"
-            f"{int(closure['step']):020d}-{generation_sha256}.json"
-        )
-        self.control.put_json(generation_key, generation, create_only=True)
-        latest = {
-            "semantic_id": "state-archive-publication-v1",
-            "schema_version": 1,
-            "run_id": run_id,
-            "attempt_id": attempt_id,
-            "step": int(closure["step"]),
-            "status": str(closure["status"]),
-            "generation_key": generation_key,
-            "generation_sha256": generation_sha256,
-            "inventory_sha256": str(closure["inventory_sha256"]),
-            "file_count": len(objects),
-            "size_bytes": sum(int(row["size_bytes"]) for row in objects),
-            "archive": dict(closure["archive"]),
-        }
-        self.control.put_json(
-            f"{self.run_prefix(run_id)}/state-archive/latest.json",
-            latest,
-            create_only=False,
-        )
-        return latest
+            self.control.put_json(generation_key, generation, create_only=True)
+            latest = {
+                "semantic_id": "state-archive-publication-v1",
+                "schema_version": 1,
+                "run_id": run_id,
+                "attempt_id": attempt_id,
+                "step": int(closure["step"]),
+                "status": str(closure["status"]),
+                "generation_key": generation_key,
+                "generation_sha256": generation_sha256,
+                "inventory_sha256": str(closure["inventory_sha256"]),
+                "file_count": len(objects),
+                "size_bytes": sum(int(row["size_bytes"]) for row in objects),
+                "archive": dict(closure["archive"]),
+            }
+            self.control.put_json(
+                f"{self.run_prefix(run_id)}/state-archive/latest.json",
+                latest,
+                create_only=False,
+            )
+            return latest
+
+    def prune_state_archive(self, lease: Lease) -> Lease:
+        """Reclaim obsolete recovery bytes under the exclusive Run writer lease.
+
+        Recovery acquires this same lease before reading a generation, so its
+        current inventory cannot be retired concurrently. Checkpoint-owned exports
+        use other prefixes and are never candidates for this reclamation.
+        """
+        lease = self.renew_lease(lease)
+        publication = self.state_archive_closure(run_id=lease.run_id)
+        if publication is None:
+            return lease
+        generation_key = str(publication["generation_key"])
+        generation = self.control.get_json(generation_key)
+        retained = {generation_key, *(str(row["object_key"]) for row in generation["objects"])}
+        prefix = f"{self.run_prefix(lease.run_id)}/state-archive"
+        obsolete = [
+            key
+            for directory in ("objects", "generations")
+            for key in self.control.iter_keys(f"{prefix}/{directory}")
+            if key not in retained
+        ]
+        for key in obsolete:
+            lease = self.renew_lease(lease)
+            self.control.delete(key)
+        return lease
 
     def restore_state_archive(
         self,

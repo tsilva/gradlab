@@ -3,6 +3,39 @@ view_id: training
 default_profile: training
 
 sections:
+  occupancy:
+    title: Collected experience
+    pinned: false
+    open: true
+    columns: 1
+    panels:
+    - id: occupancy_recent
+      kind: occupancy_recent
+      x: train/step
+      y:
+      - train/occupancy/table
+      width: 24
+      height: 12
+    - id: occupancy_history
+      kind: occupancy
+      x: train/step
+      y:
+      - train/occupancy/table
+      width: 24
+      height: 12
+  curriculum_inventory:
+    title: Curriculum representatives and starts
+    pinned: false
+    open: true
+    columns: 1
+    panels:
+    - id: curriculum_distribution
+      kind: curriculum
+      x: train/step
+      y:
+      - train/curriculum/distribution
+      width: 24
+      height: 12
   training_essentials:
     title: Training essentials
     pinned: true
@@ -161,6 +194,8 @@ profiles:
     max_runs: 25
     sections:
     - training_essentials
+    - occupancy
+    - curriculum_inventory
   breakout_training:
     display_name: GradLab Training
     primary_metrics: none
@@ -170,6 +205,8 @@ profiles:
     - breakout_primary
     - breakout_secondary
     - training_essentials
+    - occupancy
+    - curriculum_inventory
 
 # Every W&B project resolved from a checked-in active goal inherits the default profile.
 # Project overrides may select another complete profile or omit panels whose metrics do not apply.

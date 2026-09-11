@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 
 import pytest
+from pathlib import Path
 
 from gradlab.goal_variants import (
     build_goal_variant_descriptor,
@@ -13,6 +14,42 @@ from gradlab.goal_variants import (
     goal_variant_projection,
     validate_goal_variant_descriptor,
 )
+
+
+def test_enabled_restoration_has_explicit_variant_while_capture_only_does_not():
+    import json
+    from gradlab.recipe_documents import compose_resolved_train_documents
+    from tests.test_state_archive import archive_config
+
+    root = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1")
+    archive = archive_config(n_envs=16)
+    archive["curriculum"].update(restore_entries=False, archive_share=0.2, strategy="coverage")
+    cell = {"dimensions": [{"signal": "x", "bucket_size": 256}]}
+    archive["recorder"]["cell"] = cell
+    occupancy = {"cell": cell, "domains": [list(range(32))], "units": ["pixels"]}
+
+    def resolve():
+        return compose_resolved_train_documents(
+            root / "_goal.yaml",
+            root / "recipes/ppo.yaml",
+            recipe_overrides=[
+                "train.state_archive=" + json.dumps(archive),
+                "train.occupancy=" + json.dumps(occupancy),
+            ],
+        )
+
+    captured = resolve()
+    assert captured.effective["goal_variant"] == captured.base["goal_variant"]
+    archive["curriculum"]["restore_entries"] = True
+    restored = resolve()
+    assert (
+        restored.effective["goal_variant"]["variant_id"]
+        != restored.base["goal_variant"]["variant_id"]
+    )
+    semantics = restored.effective["goal"]["train"]["state_archive"]
+    assert semantics["restore_semantics"] == "continuation"
+    assert semantics["curriculum"]["archive_share"] == 0.2
+    assert semantics["occupancy"]["window_transitions"] == 100000
 
 
 def goal_document() -> dict[str, object]:
