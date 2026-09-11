@@ -1277,8 +1277,6 @@ function makeRewardBreakdownBlock(block, definition, services) {
 function makeRewardTableBlock(services) {
   const section = document.createElement("section");
   section.className = "telemetry-block reward-table-block";
-  const context = document.createElement("p");
-  context.className = "panel-foot";
   const button = document.createElement("button");
   button.type = "button";
   button.textContent = "Set return reference to cursor";
@@ -1286,7 +1284,7 @@ function makeRewardTableBlock(services) {
   button.addEventListener("click", () => services.setRewardReference(cursor));
   let inspector = createRewardInspector(services);
   let episode = null;
-  section.append(context, button, inspector.element);
+  section.append(button, inspector.element);
   return {
     element: section,
     render({ snapshot, history, view }) {
@@ -1299,8 +1297,6 @@ function makeRewardTableBlock(services) {
       }
       cursor = snapshot?.transition?.step;
       button.disabled = !Number.isInteger(cursor);
-      const range = view?.chartRange;
-      context.textContent = `Cursor ${cursor ?? "unavailable"} · Reference ${reference?.step ?? "unavailable"} · ${range ? `Steps ${range.first}–${range.last}` : "Full episode"}`;
       const points = chartPoints(history, view);
       const gamma = snapshot?.session?.value_discount ?? snapshot?.session?.critic_comparison?.discount;
       inspector.render(points, { step: cursor }, gamma, reference?.step, reference?.sample);

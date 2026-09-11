@@ -2911,8 +2911,8 @@ class PlayCatalog:
             "updated_at": str(projected.get("updated_at") or ""),
         }
 
-    def latest_run_route(self) -> dict[str, str]:
-        """Select by run creation time from verified catalog projections, never activity."""
+    def latest_run_routes(self) -> list[dict[str, str]]:
+        """Order newest first by run creation time from verified catalog projections, never activity."""
         if self.control_bucket is None:
             raise CatalogUnavailable(
                 self.control_error or "--latest requires control-catalog authority for run discovery",
@@ -2920,7 +2920,7 @@ class PlayCatalog:
             )
         goals = self._repository_goals()
         scopes = self._control_generation_scopes(goals)
-        selected = None
+        candidates = []
         for goal, scope in zip(goals, scopes, strict=True):
             if scope is None:
                 continue
@@ -2940,18 +2940,17 @@ class PlayCatalog:
                 except (KeyError, ValueError) as exc:
                     raise CatalogIntegrityError("run has an invalid creation time") from exc
                 key = (created, str(run["run_id"]))
-                if selected is None or key > selected[0]:
-                    selected = (key, {
-                        "level": "runs",
-                        "environment_id": goal.environment_id,
-                        "goal_id": goal.goal_id,
-                        "goal_variant_id": str(run["goal_variant_id"]),
-                        "run_id": str(run["run_id"]),
-                        "checkpoint_id": "",
-                    })
-        if selected is None:
+                candidates.append((key, {
+                    "level": "runs",
+                    "environment_id": goal.environment_id,
+                    "goal_id": goal.goal_id,
+                    "goal_variant_id": str(run["goal_variant_id"]),
+                    "run_id": str(run["run_id"]),
+                    "checkpoint_id": "",
+                }))
+        if not candidates:
             raise CatalogUnavailable("No runs are available in the player catalog", code="no_runs")
-        return selected[1]
+        return [route for _, route in sorted(candidates, key=lambda item: item[0], reverse=True)]
 
     def public_run_route(self, *, run_id: str) -> dict[str, str]:
         """Return the hierarchical checkpoint-browser route proven by a public run."""

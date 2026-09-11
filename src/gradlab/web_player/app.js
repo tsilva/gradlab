@@ -57,7 +57,7 @@ const pairedWorkspace = new URLSearchParams(location.search).get("workspace") ==
 const token = new URLSearchParams(location.hash.slice(1)).get("token") || "";
 const WORKSPACE_ID_KEY = "gradlab.player.workspace.v7.id";
 const LAYOUT_KEY = pairedWorkspace
-  ? "gradlab.player.workspace.v7.paired"
+  ? "gradlab.player.workspace.v8.paired"
   : "gradlab.player.workspace.v7.single";
 const SAVED_LAYOUTS_KEY = "gradlab.player.workspace.saved.v7";
 const STATS_WINDOW_ID = "stats";
@@ -133,10 +133,7 @@ let gridCellHeight = DEFAULT_GRID_CELL_HEIGHT;
 let syncingGrid = false;
 let panelManager = null;
 let playbackSettings = null;
-const TIMELINE_HIDE_DELAY_MS = 1600;
 const INSPECTION_FRAME_REQUEST_DELAY_MS = 50;
-let timelineHideTimer = null;
-let timelineOverlayEvents = null;
 let youtubeOAuthPopup = null;
 
 const workspaceChannel = "BroadcastChannel" in window
@@ -1581,65 +1578,20 @@ function renderTimeline() {
   }));
 }
 
-function timelineInteractionActive() {
-  const timeline = $("#timeline");
-  const stage = timeline?.closest(".game-stage");
-  const settingsMenu = $("#playback-settings-menu");
-  const settingsOpen = Boolean(settingsMenu && !settingsMenu.hidden);
-  return Boolean(
-    stage?.matches(":hover")
-    || timeline?.matches(":hover")
-    || timeline?.contains(document.activeElement)
-    || settingsOpen
-  );
-}
-
-function revealTimelineOverlay() {
-  const timeline = $("#timeline");
-  if (!timeline?.classList.contains("game-timeline-overlay")) return;
-  clearTimeout(timelineHideTimer);
-  timelineHideTimer = null;
-  timeline.classList.add("visible");
-}
-
-function scheduleTimelineOverlayHide() {
-  const timeline = $("#timeline");
-  clearTimeout(timelineHideTimer);
-  timelineHideTimer = null;
-  if (!timeline?.classList.contains("game-timeline-overlay")) return;
-  timelineHideTimer = window.setTimeout(() => {
-    timelineHideTimer = null;
-    if (!timelineInteractionActive()) timeline.classList.remove("visible");
-  }, TIMELINE_HIDE_DELAY_MS);
-}
-
 function restoreTimelineHome() {
-  timelineOverlayEvents?.abort();
-  timelineOverlayEvents = null;
-  clearTimeout(timelineHideTimer);
-  timelineHideTimer = null;
   const timeline = $("#timeline");
   const home = $("#timeline-home");
-  timeline?.classList.remove("game-timeline-overlay", "visible");
+  timeline?.classList.remove("game-timeline-docked", "visible");
   if (timeline && home && timeline.previousElementSibling !== home) home.after(timeline);
 }
 
-function syncTimelineOverlay() {
+function syncTimelineDock() {
   restoreTimelineHome();
   const timeline = $("#timeline");
   const stage = $(".game-panel .game-stage");
   if (!timeline || !stage) return;
   stage.append(timeline);
-  timeline.classList.add("game-timeline-overlay", "visible");
-  timelineOverlayEvents = new AbortController();
-  const options = { signal: timelineOverlayEvents.signal };
-  ["pointerenter", "pointermove", "pointerdown", "focusin"].forEach((name) => {
-    stage.addEventListener(name, revealTimelineOverlay, options);
-  });
-  stage.addEventListener("pointerleave", scheduleTimelineOverlayHide, options);
-  timeline.addEventListener("focusout", scheduleTimelineOverlayHide, options);
-  timeline.addEventListener("input", revealTimelineOverlay, options);
-  scheduleTimelineOverlayHide();
+  timeline.classList.add("game-timeline-docked");
 }
 
 function maxPanelRow(targetWindow = state.windowId) {
@@ -1677,7 +1629,7 @@ function fitGridToViewport() {
   const nextCellHeight = viewportGridCellHeight({
     viewportHeight: window.innerHeight,
     dashboardTop: dashboard.getBoundingClientRect().top,
-    timelineHeight: timeline.hidden || timeline.classList.contains("game-timeline-overlay")
+    timelineHeight: timeline.hidden || timeline.classList.contains("game-timeline-docked")
       ? 0
       : timeline.getBoundingClientRect().height,
     rows: maxPanelRow(),
@@ -1775,7 +1727,7 @@ async function applyLayout() {
     syncingGrid = false;
   }
   updateWorkspaceEditing();
-  syncTimelineOverlay();
+  syncTimelineDock();
   fitGridToViewport();
   syncGridNodes();
   refreshPanels();
@@ -2229,7 +2181,6 @@ function bindWorkspaceMenus() {
       $("#playback-settings-menu").hidden = true;
       $("#playback-settings-toggle").setAttribute("aria-expanded", "false");
     }
-    scheduleTimelineOverlayHide();
   });
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
@@ -2240,7 +2191,6 @@ function bindWorkspaceMenus() {
     $("#panels-toggle").setAttribute("aria-expanded", "false");
     $("#playback-settings-menu").hidden = true;
     $("#playback-settings-toggle").setAttribute("aria-expanded", "false");
-    scheduleTimelineOverlayHide();
   });
 }
 
@@ -2426,16 +2376,12 @@ function bindTimeline() {
     menu.hidden = true;
     event.currentTarget.setAttribute("aria-expanded", String(opening));
     if (opening) {
-      revealTimelineOverlay();
       positionMenu(menu, event.currentTarget);
-    } else {
-      scheduleTimelineOverlayHide();
     }
   });
   $("#playback-settings-close").addEventListener("click", () => {
     $("#playback-settings-menu").hidden = true;
     $("#playback-settings-toggle").setAttribute("aria-expanded", "false");
-    scheduleTimelineOverlayHide();
   });
   const selectStep = (step) => { void inspectStep(step); };
   scrubber.addEventListener("input", (event) => selectStep(Number(event.target.value)));

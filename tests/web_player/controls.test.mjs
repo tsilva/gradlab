@@ -197,26 +197,12 @@ test("the player has no view selector", () => {
   assert.doesNotMatch(styles, /workspace-preset|data-workspace-view="(?:watch|explain|debug)"/);
 });
 
-test("the all-panels workspace overlays an idle-hiding transport on the game stage", () => {
-  assert.match(page, /id="timeline-home" hidden/);
-  assert.equal((page.match(/id="timeline"/g) || []).length, 1);
-  assert.match(app, /const TIMELINE_HIDE_DELAY_MS = 1600/);
+test("the game stage reserves space for an always-visible transport", () => {
   assert.match(app, /stage\.append\(timeline\)/);
-  assert.match(app, /timeline\.classList\.add\("game-timeline-overlay", "visible"\)/);
-  assert.match(app, /\["pointerenter", "pointermove", "pointerdown", "focusin"\]/);
-  assert.match(app, /stage\.addEventListener\("pointerleave", scheduleTimelineOverlayHide/);
-  assert.match(app, /timeline\.addEventListener\("focusout", scheduleTimelineOverlayHide/);
-  assert.match(app, /timeline\?\.contains\(document\.activeElement\)/);
-  assert.match(app, /settingsOpen/);
-  assert.doesNotMatch(app, /state\.layout\?\.preset !== "debug"/);
-  assert.match(
-    styles,
-    /\.game-stage > \.timeline\.game-timeline-overlay \{[^}]*position: absolute;[^}]*inset: auto 0 0;[^}]*opacity: 0;[^}]*pointer-events: none;/,
-  );
-  assert.match(
-    styles,
-    /\.timeline\.game-timeline-overlay\.visible,[\s\S]*\.timeline\.game-timeline-overlay:focus-within \{[^}]*opacity: 1;[^}]*pointer-events: auto;/,
-  );
+  assert.match(app, /timeline\.classList\.add\("game-timeline-docked"\)/);
+  assert.doesNotMatch(app, /TIMELINE_HIDE_DELAY_MS|scheduleTimelineOverlayHide/);
+  assert.match(styles, /\.game-stage \{[^}]*grid-template-rows: minmax\(0, 1fr\) auto/);
+  assert.doesNotMatch(styles, /game-timeline-overlay/);
 });
 
 test("timeline controls use accessible icons and distinct action colors", () => {

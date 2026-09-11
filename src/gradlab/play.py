@@ -9,6 +9,7 @@ from gradlab.play_session import build_parser
 
 def main(argv: list[str] | None = None) -> int:
     from gradlab.model_sources import (
+        NoDefaultPublicRunCheckpointError,
         is_huggingface_model_ref,
         is_public_checkpoint_manifest_ref,
         public_checkpoint_manifest,
@@ -93,11 +94,17 @@ def main(argv: list[str] | None = None) -> int:
     initial_source: PlaySourceSpec | None = None
     if args.latest:
         try:
-            initial_route = catalog.latest_run_route()
-            run_id = str(initial_route["run_id"])
-            manifest_url = public_run_checkpoint_manifest_url(
-                run_id, public_base_url=args.public_models_base_url, latest=True,
-            )
+            for initial_route in catalog.latest_run_routes():
+                run_id = str(initial_route["run_id"])
+                try:
+                    manifest_url = public_run_checkpoint_manifest_url(
+                        run_id, public_base_url=args.public_models_base_url, latest=True,
+                    )
+                except NoDefaultPublicRunCheckpointError:
+                    continue
+                break
+            else:
+                raise ValueError("No runs in the player catalog have a published checkpoint yet")
             checkpoint = public_checkpoint_manifest(manifest_url)
             initial_route["checkpoint_id"] = checkpoint.checkpoint_id
             initial_source = PlaySourceSpec(

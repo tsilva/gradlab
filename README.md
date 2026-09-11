@@ -38,8 +38,8 @@ gradlab play --recipe gradlab__bandit/ppo
 
 `gradlab play` starts the local web player and prints its loopback URL.
 Use `gradlab play --latest` to open the highest-step published checkpoint from the
-newest run in the player catalog. It starts paused; click **Play** to begin inference.
-If that run has no published checkpoint yet, the command reports it.
+newest run in the player catalog that has a published checkpoint. It starts paused; click **Play** to begin inference.
+Runs without published checkpoints are skipped; the command reports when none are available.
 Use **Download episode** to save a self-contained trajectory, or **Import episode**
 to inspect its stored frames and exact Policy inputs without running the environment.
 Open an archive directly with `gradlab play --recording episode.trj`.

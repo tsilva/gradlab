@@ -96,20 +96,20 @@ const ALL_PANELS_LAYOUT = Object.freeze({
 });
 
 const PAIRED_LAYOUT = Object.freeze({
-  game: { x: 0, y: 0, w: 12, h: 15, visible: true, window: "main" },
-  controls: { x: 9, y: 0, w: 3, h: 15, visible: false, window: "main" },
-  policy: { x: 0, y: 0, w: 6, h: 8, visible: true, window: "stats" },
-  value: { x: 6, y: 0, w: 6, h: 8, visible: true, window: "stats" },
-  "step-reward": { x: 0, y: 8, w: 6, h: 7, visible: true, window: "stats" },
+  "game": { x: 0, y: 0, w: 8, h: 15, visible: true, window: "main" },
+  "observation": { x: 8, y: 0, w: 4, h: 4, visible: true, window: "main" },
+  "policy": { x: 8, y: 4, w: 4, h: 11, visible: true, window: "main" },
+  "step-reward": { x: 0, y: 0, w: 6, h: 8, visible: true, window: "stats" },
+  "reward-table": { x: 6, y: 0, w: 6, h: 8, visible: true, window: "stats" },
+  "value": { x: 0, y: 8, w: 6, h: 7, visible: true, window: "stats" },
   "episode-return": { x: 6, y: 8, w: 6, h: 7, visible: true, window: "stats" },
-  "reward-table": { x: 0, y: 15, w: 12, h: 7, visible: true, window: "stats" },
-  observation: { x: 0, y: 22, w: 6, h: 8, visible: true, window: "stats" },
-  signals: { x: 6, y: 22, w: 3, h: 8, visible: true, window: "stats" },
-  events: { x: 9, y: 22, w: 3, h: 8, visible: true, window: "stats" },
-  raw: { x: 0, y: 30, w: 12, h: 7, visible: false, window: "stats" },
-  "reward-analysis": { x: 0, y: 30, w: 12, h: 15, visible: true, window: "stats" },
-  attribution: { x: 0, y: 45, w: 4, h: 15, visible: false, window: "stats" },
-  cnn: { x: 4, y: 45, w: 8, h: 15, visible: false, window: "stats" },
+  "reward-analysis": { x: 0, y: 15, w: 6, h: 8, visible: true, window: "stats" },
+  "events": { x: 6, y: 15, w: 2, h: 8, visible: true, window: "stats" },
+  "signals": { x: 8, y: 15, w: 4, h: 8, visible: true, window: "stats" },
+  "controls": { x: 8, y: 23, w: 4, h: 7, visible: false, window: "stats" },
+  "raw": { x: 0, y: 30, w: 12, h: 7, visible: false, window: "stats" },
+  "attribution": { x: 0, y: 37, w: 4, h: 15, visible: false, window: "stats" },
+  "cnn": { x: 4, y: 37, w: 8, h: 15, visible: false, window: "stats" },
 });
 
 export const BUILTIN_PANEL_PRESETS = Object.freeze({

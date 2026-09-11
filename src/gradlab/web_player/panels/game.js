@@ -74,25 +74,30 @@ export function mount({ definition, services }) {
   element.dataset.panel = definition.id;
   element.innerHTML = `
     <div id="game-stage" class="game-stage">
-      <div id="game-frame" class="game-frame">
-        <canvas id="game-canvas" tabindex="0" aria-label="Live game frame. Focus it for human controls: arrows move, Z is B, X is A, Enter is Start, and Shift is Select."></canvas>
+      <div class="game-viewport">
+        <div id="game-frame" class="game-frame">
+          <canvas id="game-canvas" tabindex="0" aria-label="Live game frame. Focus it for human controls: arrows move, Z is B, X is A, Enter is Start, and Shift is Select."></canvas>
+        </div>
+        <div id="game-empty" class="game-empty empty-state">This environment has no RGB renderer.</div>
       </div>
-      <div id="game-empty" class="game-empty empty-state">This environment has no RGB renderer.</div>
       <div class="game-frame-status">
         <div class="game-frame-phase" data-frame-phase>Initial observation</div>
-        <div class="game-render-speed" data-render-speed>Render — FPS</div>
         <div class="game-frame-boundary" data-frame-boundary hidden></div>
         <div class="game-frame-detail" data-frame-detail hidden></div>
       </div>
+      <div class="game-overlay-tools">
       <div class="game-actions panel-actions">
         <button data-drag-handle class="icon-button icon-only panel-drag" type="button" aria-label="Move game panel" title="Move game panel"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-grip-vertical"></use></svg></button>
         <button data-fullscreen class="icon-button icon-only" type="button" aria-label="Fullscreen game" title="Fullscreen game"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-maximize"></use></svg></button>
         <button data-panel-menu="game" class="icon-button icon-only" type="button" aria-label="Game panel options" title="Game panel options"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-dots-vertical"></use></svg></button>
       </div>
+      <div class="game-render-speed" data-render-speed></div>
+      </div>
     </div>
   `;
 
   const stage = element.querySelector(".game-stage");
+  const viewport = element.querySelector(".game-viewport");
   const frame = element.querySelector(".game-frame");
   const canvas = element.querySelector("canvas");
   const empty = element.querySelector(".game-empty");
@@ -120,8 +125,8 @@ export function mount({ definition, services }) {
     focused: hasFocus,
   });
   const fit = () => {
-    const width = stage.clientWidth;
-    const height = stage.clientHeight;
+    const width = viewport.clientWidth;
+    const height = viewport.clientHeight;
     if (!width || !height) return;
     const fittedWidth = Math.min(width, height * aspect);
     const fittedHeight = fittedWidth / aspect;
@@ -129,6 +134,8 @@ export function mount({ definition, services }) {
     frame.style.height = `${Math.max(1, Math.floor(fittedHeight))}px`;
     frame.style.aspectRatio = String(aspect);
   };
+  const resizeObserver = new ResizeObserver(fit);
+  resizeObserver.observe(viewport);
   const loseFocus = () => {
     if (!focused && !pressed.size) return;
     focused = false;
@@ -287,6 +294,7 @@ export function mount({ definition, services }) {
     resize: fit,
     destroy() {
       mounted = false;
+      resizeObserver.disconnect();
       renderSpeed.destroy();
       bitmapRequest += 1;
       clearPrepared();
