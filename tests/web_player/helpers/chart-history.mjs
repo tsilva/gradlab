@@ -1,6 +1,5 @@
 import { createChartHistory } from '../../../src/gradlab/web_player/chart-history.js';
 
-export const point = (step, episode = 1) => ({ step, episode, sequence: step, reward_shaped: step });
 export const full = (steps = [1, 10], revision = 'a') => ({
   format: 'chart-columns-v1', revision, base: null, removed: [],
   fields: [['step'], ['sequence'], ['reward_shaped']], constants: [[['episode'], 1]],
