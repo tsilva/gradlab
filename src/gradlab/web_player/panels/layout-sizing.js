@@ -8,9 +8,10 @@ export function viewportGridCellHeight({
   dashboardTop,
   timelineHeight,
   rows,
+  maxFillRows = VIEWPORT_FILL_MAX_ROWS,
 }) {
   const visibleRows = Math.max(0, Number(rows) || 0);
-  if (!visibleRows || visibleRows > VIEWPORT_FILL_MAX_ROWS) {
+  if (!visibleRows || visibleRows > maxFillRows) {
     return DEFAULT_GRID_CELL_HEIGHT;
   }
   const availableHeight = (

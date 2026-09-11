@@ -88,6 +88,7 @@ export function mount({ definition, services }) {
       <div class="game-overlay-tools">
       <div class="game-actions panel-actions">
         <button data-drag-handle class="icon-button icon-only panel-drag" type="button" aria-label="Move game panel" title="Move game panel"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-grip-vertical"></use></svg></button>
+        <button data-rgb-toggle class="icon-button icon-only" type="button" aria-label="Hide RGB and play at maximum speed" title="Hide RGB and play at maximum speed" aria-pressed="true"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-eye"></use></svg></button>
         <button data-fullscreen class="icon-button icon-only" type="button" aria-label="Fullscreen game" title="Fullscreen game"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-maximize"></use></svg></button>
         <button data-panel-menu="game" class="icon-button icon-only" type="button" aria-label="Game panel options" title="Game panel options"><svg class="icon" aria-hidden="true"><use href="/assets/tabler-icons.svg#ti-dots-vertical"></use></svg></button>
       </div>
@@ -96,6 +97,8 @@ export function mount({ definition, services }) {
     </div>
   `;
 
+  const rgbToggle = element.querySelector("[data-rgb-toggle]");
+  rgbToggle.addEventListener("click", () => services.setRgbEnabled(services.getState().rgbEnabled === false));
   const stage = element.querySelector(".game-stage");
   const viewport = element.querySelector(".game-viewport");
   const frame = element.querySelector(".game-frame");
@@ -234,6 +237,7 @@ export function mount({ definition, services }) {
 
   const prepareFrame = async (kind, blob, metadata = {}) => {
     if (kind !== FRAME_GAME) return false;
+    if (services.getState().rgbEnabled === false) return true;
     const incomingSequence = Number(metadata.sequence);
     if (incomingSequence === frameSequence) {
       clearPrepared();
@@ -264,6 +268,23 @@ export function mount({ definition, services }) {
   return {
     element,
     render(nextSnapshot) {
+      const rgbEnabled = services.getState().rgbEnabled !== false;
+      rgbToggle.disabled = !services.getState().hasControl;
+      rgbToggle.setAttribute("aria-pressed", String(rgbEnabled));
+      const label = rgbEnabled ? "Hide RGB and play at maximum speed" : "Show RGB and restore configured speed";
+      rgbToggle.title = label;
+      rgbToggle.setAttribute("aria-label", label);
+      rgbToggle.querySelector("use").setAttribute("href", `/assets/tabler-icons.svg#ti-${rgbEnabled ? "eye" : "eye-off"}`);
+      canvas.hidden = !rgbEnabled;
+      if (!rgbEnabled) {
+        bitmapRequest += 1;
+        clearPrepared();
+        renderSpeed.reset();
+        empty.textContent = "RGB hidden · Maximum playback speed";
+        empty.hidden = false;
+        commitSnapshot(nextSnapshot);
+        return;
+      }
       targetSnapshot = nextSnapshot;
       targetSequence = Number(nextSnapshot?.sequence);
       if (frameSequence === targetSequence) commitSnapshot(nextSnapshot);
@@ -272,6 +293,7 @@ export function mount({ definition, services }) {
     prepareFrame,
     async renderFrame(kind, blob, metadata = {}) {
       if (kind !== FRAME_GAME) return false;
+      if (services.getState().rgbEnabled === false) return true;
       const incomingSequence = Number(metadata.sequence);
       if (incomingSequence !== targetSequence) return true;
       const frameSnapshot = targetSnapshot;

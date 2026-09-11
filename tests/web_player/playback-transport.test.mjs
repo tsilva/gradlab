@@ -243,3 +243,16 @@ test("rapid pause, play, pause sends the final pause even before the server ackn
   assert.equal(h.transport.playbackIsRunning(), false);
   assert.equal(h.timers.size, 0);
 });
+
+test("hiding RGB bypasses configured replay FPS and restoring RGB restores pacing", async () => {
+  const h = harness();
+  h.select(10);
+  h.state.rgbEnabled = false;
+  h.transport.playFromCurrentPosition();
+  assert.equal([...h.timers.values()][0].delay, 0);
+  await h.tick();
+  assert.equal(h.state.liveSnapshot.session.target_fps, 30);
+  h.state.rgbEnabled = true;
+  await h.tick();
+  assert.equal([...h.timers.values()][0].delay, 1000 / 30);
+});

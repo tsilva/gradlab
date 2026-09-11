@@ -55,7 +55,7 @@ export function createPlaybackTransport({
 
   function scheduleInspectionReplay() {
     const generation = replayGeneration;
-    const fps = Number(state.liveSnapshot?.session?.target_fps || 0);
+    const fps = state.rgbEnabled === false ? 0 : Number(state.liveSnapshot?.session?.target_fps || 0);
     const interval = fps > 0 ? 1000 / fps : 0;
     const scheduledAt = now();
     nextReplayAt = nextReplayAt === null || replayFps !== fps

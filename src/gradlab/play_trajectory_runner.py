@@ -105,6 +105,7 @@ class TrajectoryPlaybackRunner(DatasetPlaybackRunner):
             step=self.first_step + self.transition_index - 1,
             episode=self.metadata["episode"],
             target_fps=self.target_fps,
+            rgb_enabled=getattr(self, "rgb_enabled", True),
             total_reward=current["reward"]["return"] if current else session.get("total_reward", 0),
             awaiting_next_episode=self.transition_index >= len(self.rows) - 1,
             can_start_next_episode=False,
@@ -130,7 +131,7 @@ class TrajectoryPlaybackRunner(DatasetPlaybackRunner):
 
     def _publish(self) -> None:
         frames = {
-            FRAME_GAME: self.current_frame,
+            FRAME_GAME: self.current_frame if getattr(self, "rgb_enabled", True) else None,
             FRAME_OBSERVATION: render_obs_stack(self.observation_frames, 1)
             if self.observation_frames
             else None,

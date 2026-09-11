@@ -201,7 +201,12 @@ resuming as its cause without a matched uninterrupted continuation.
 
 - Playback `V(s)` is the critic's expectation of discounted future policy-facing return under the
   checkpoint policy, while realized `G(s)` is one completed trajectory sample from that
-  distribution. Its units follow the training reward, not raw score or undiscounted remaining
+  distribution. It is a state-value estimate from the pre-action policy input, not an
+  action-conditioned `Q(s, a)` or the probability of catching a ball or surviving. The large
+  after-action observation shows the resulting frame; the displayed decision and value belong
+  to the input before that transition. A positive value followed by a miss alone does not
+  establish critic overestimation: compare against the remaining discounted reward under the
+  recorded reward and episode-boundary contract. Its units follow the training reward, not raw score or undiscounted remaining
   bricks. For example, with +1 per brick and gamma 0.99 per policy transition, a brick reward
   discounted by 100 transitions contributes about 0.366, and by 300 about 0.049; many distant
   bricks can therefore coexist with a small value estimate even for a strong policy.
@@ -426,6 +431,12 @@ resuming as its cause without a matched uninterrupted continuation.
   Run, segment, and cell contract. They cover the latest collection segment,
   not experience before an unrecovered continuation. Empty origins remain
   unavailable. Runs without occupancy enabled have no occupancy chart data.
+  These shares weight collected policy transitions, not episodes or wall-clock
+  seconds. Low occupancy can mean infrequent arrival or quick traversal; high
+  occupancy can mean frequent arrival or long residence. Equal progress-width
+  buckets need not receive equal experience, and occupancy alone does not
+  determine appropriate replay or curriculum weights. Compare recent exposure
+  with cumulative totals to separate current behavior from early training.
 - `train/curriculum/distribution` lists retained representatives separately from exposure.
   Its table records the publishing Run identity; charts separate Runs rather than adding their
   inventories or probabilities together.

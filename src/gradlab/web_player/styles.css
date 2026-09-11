@@ -2700,9 +2700,7 @@ body.recording #timeline { opacity: .72; }
 .policy-decision-amount.environment,
 .action-comparison-legend .environment { color: var(--color-series-amber); text-align: right; }
 .action-comparison-track.environment .action-comparison-fill { background: var(--color-series-amber); }
-.reward-scope-range { color: var(--color-text-muted); font-size: var(--font-size-sm); }
 
-.action-window-scope { margin: 0; color: var(--color-text-muted); font-size: var(--font-size-xs); line-height: 1.5; }
 
 #timeline-zoom { color: var(--color-interaction-active); font-family: inherit; font-size: inherit; cursor: pointer; background: transparent; border: 0; }
 #timeline-zoom-band { position: absolute; top: 0; bottom: 0; background: var(--color-chart-selection); border-inline: 2px solid var(--color-interaction-active); pointer-events: none; }

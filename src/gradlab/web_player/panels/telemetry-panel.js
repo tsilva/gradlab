@@ -317,7 +317,6 @@ export function policyDecisionPresentation(snapshot, history, view) {
     stepProbability: selected?.stepProbability ?? null,
     selectedIsHighest: selected?.highest ?? null,
     rows: comparison.rows,
-    windowScope: comparison.history.message,
     stats: POLICY_DECISION_FOOTER_METRICS
       .map((key) => policyDecisionMetric(key, snapshot, point))
       .filter(({ availability: metricAvailability }) => (
@@ -764,12 +763,10 @@ function makePolicyDecisionBlock(statsBlock, distributionBlock) {
   comparisonRows.setAttribute("role", "rowgroup");
   comparison.append(comparisonHeader, comparisonRows);
 
-  const windowScope = document.createElement("p");
-  windowScope.className = "action-window-scope";
   const footerStats = document.createElement("div");
   footerStats.className = "policy-decision-stats";
   const foot = appendFoot(discrete, "", { force: true });
-  discrete.append(hero, windowScope, comparison, footerStats);
+  discrete.append(hero, comparison, footerStats);
   discrete.append(foot);
 
   const fallback = document.createElement("div");
@@ -797,8 +794,6 @@ function makePolicyDecisionBlock(statsBlock, distributionBlock) {
         return;
       }
       section.dataset.telemetryStatus = "available";
-      windowScope.textContent = presentation.windowScope;
-      windowScope.hidden = !presentation.windowScope;
       action.textContent = presentation.action;
       effectiveAction.textContent = presentation.effectiveAction;
       overrideReason.textContent = presentation.overrideRuleId
@@ -1186,9 +1181,7 @@ function makeRewardBreakdownBlock(block, definition, services) {
   );
   scope.value = block.scope === "step" ? "step" : "episode";
   scopeLabel.append(scope);
-  const scopeRange = document.createElement("span");
-  scopeRange.className = "reward-scope-range";
-  toolbar.append(scopeLabel, scopeRange);
+  toolbar.append(scopeLabel);
 
   const state = document.createElement("div");
   state.className = "reward-analysis-state empty-state";
@@ -1230,9 +1223,6 @@ function makeRewardBreakdownBlock(block, definition, services) {
     });
     section.dataset.telemetryStatus = presentation.status;
     const available = presentation.status === "available";
-    scopeRange.textContent = available
-      ? `${presentation.scope === "episode" ? `Steps 1–${presentation.step}` : `Step ${presentation.step}`} · n=${presentation.count}`
-      : "";
     state.hidden = available;
     content.hidden = !available;
     foot?.classList.toggle(

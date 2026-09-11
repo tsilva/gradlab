@@ -125,3 +125,34 @@ def test_action_program_runtime_exposes_cursor_without_fabricated_distribution()
     assert first.entropy is None
     assert first.log_probability is None
     assert first.sampled is None
+
+
+def test_sampling_temperature_scales_actual_decision_probabilities():
+    import torch
+
+    runtime, observation = _actor_critic_runtime(gym.spaces.Discrete(3))
+    with torch.no_grad():
+        runtime.model.policy.action_net.weight.zero_()
+        runtime.model.policy.action_net.bias.copy_(torch.tensor([0.0, 1.0, 2.0]))
+    for temperature in (0.5, 1.0, 2.0):
+        result = runtime.decide(observation, sampling_temperature=temperature)
+        expected = torch.softmax(torch.tensor([0.0, 1.0, 2.0]) / temperature, dim=0).numpy()
+        for decision in result.decisions:
+            np.testing.assert_allclose(decision.probabilities, expected, rtol=1e-6)
+            assert decision.sampling_temperature == temperature
+        torch.manual_seed(12)
+        detailed = runtime.decide(observation, sampling_temperature=temperature)
+        torch.manual_seed(12)
+        fast = runtime.decide(
+            observation, sampling_temperature=temperature, include_diagnostics=False
+        )
+        np.testing.assert_array_equal(detailed.actions, fast.actions)
+
+
+def test_sampling_temperature_rejects_invalid_values():
+    import pytest
+
+    runtime, observation = _actor_critic_runtime(gym.spaces.Discrete(3))
+    for temperature in (0, -1, float("nan"), float("inf")):
+        with pytest.raises(ValueError, match="temperature"):
+            runtime.decide(observation, sampling_temperature=temperature)
