@@ -55,9 +55,7 @@ def _write_wandb_identity(run, run_dir: str) -> None:
 
 
 def wandb_delivery_high_water(summary: Mapping[str, Any]) -> int:
-    reducer_high_water = int(
-        summary_metric_value(summary, ORCHESTRATION_EVENT_SEQUENCE) or 0
-    )
+    reducer_high_water = int(summary_metric_value(summary, ORCHESTRATION_EVENT_SEQUENCE) or 0)
     history_high_water = int(summary_value(summary.get("_step")) or 0)
     return max(reducer_high_water, history_high_water)
 
@@ -275,9 +273,7 @@ class WandbProjector:
         )
         thread.start()
         if not finished.wait(timeout_seconds):
-            raise TimeoutError(
-                f"W&B did not finish uploading within {timeout_seconds:g} seconds"
-            )
+            raise TimeoutError(f"W&B did not finish uploading within {timeout_seconds:g} seconds")
         if errors:
             raise errors[0]
 
@@ -288,6 +284,7 @@ def _publish_frame(
     *,
     event_seq_offset: int = 0,
     metrics_schema_version: int = METRICS_SCHEMA_VERSION,
+    occupancy_page=None,
 ) -> None:
     if run is None:
         raise RuntimeError("W&B run is unavailable")
@@ -321,6 +318,30 @@ def _publish_frame(
             metrics_schema_version=metrics_schema_version,
         )
         run.log(payload, step=event_seq)
+        return
+
+    if kind == "curriculum_distribution":
+        from gradlab.curriculum_reporting import TABLE, distribution_table
+
+        converted = {
+            "train/step": step,
+            ORCHESTRATION_EVENT_SEQUENCE: event_seq,
+            TABLE: distribution_table(payload, run_id=run.id),
+        }
+        configure_wandb_metric_axes(run, converted, metrics_schema_version=metrics_schema_version)
+        run.log(converted, step=event_seq)
+        return
+
+    if kind == "occupancy":
+        from gradlab.occupancy import OCCUPANCY_TABLE, occupancy_table
+
+        converted = {
+            "train/step": step,
+            ORCHESTRATION_EVENT_SEQUENCE: event_seq,
+            OCCUPANCY_TABLE: occupancy_table(payload, page=occupancy_page),
+        }
+        configure_wandb_metric_axes(run, converted, metrics_schema_version=metrics_schema_version)
+        run.log(converted, step=event_seq)
         return
 
     if kind == "eval_by_start":
@@ -380,6 +401,11 @@ def publish_pending_frames(
                 row,
                 event_seq_offset=event_seq_offset,
                 metrics_schema_version=metrics_schema_version,
+                occupancy_page=(
+                    store.occupancy_page(json.loads(str(row["payload_json"])))
+                    if row["kind"] == "occupancy"
+                    else None
+                ),
             )
         except Exception as exc:
             store.mark_metric_frame_failed(frame_id, repr(exc))
@@ -453,13 +479,11 @@ def promotion_summary_matches(
         selection_rank,
         metrics_schema_version=metrics_schema_version,
     )
-    if str(summary_value(summary.get(LEADER_CHECKPOINT_ARTIFACT_REF)) or "") != str(
-        checkpoint_url
-    ):
+    if str(summary_value(summary.get(LEADER_CHECKPOINT_ARTIFACT_REF)) or "") != str(checkpoint_url):
         return False
     try:
         remote_step = int(summary_value(summary.get(LEADER_CHECKPOINT_STEP)))
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return False
     if remote_step != int(checkpoint_step):
         return False

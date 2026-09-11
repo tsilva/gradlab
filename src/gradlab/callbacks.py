@@ -600,6 +600,15 @@ ARCHIVE_CURRICULUM_METRIC_MAP = {
 }
 
 
+class OccupancyHelper(CallbackHelper):
+    def __init__(self, reporter):
+        super().__init__()
+        self.reporter = reporter
+
+    def _on_rollout_end(self) -> None:
+        self.reporter.flush()
+
+
 class ArchiveCurriculumFeedbackHelper(CallbackHelper):
     """Attribute raw rollout GAE to true archive-origin episodes."""
 

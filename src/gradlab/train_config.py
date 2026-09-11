@@ -407,6 +407,9 @@ def validate_and_normalize_train_config(
 
     normalized = dict(train_config)
     validate_train_config_fields(normalized, label=label, required_keys=required_keys)
+    from gradlab.occupancy import resolve_cell_spaces
+
+    resolve_cell_spaces(normalized)
     if "obs_resize" in normalized:
         normalized["obs_resize"] = normalize_obs_resize(
             normalized["obs_resize"],
@@ -516,6 +519,8 @@ def validate_and_normalize_train_config(
 
 
 TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
+    _field("cell_spaces", type_name="json", default=None, mapping_value=True, source_section="train"),
+    _field("occupancy", type_name="json", default=None, mapping_value=True, source_section="train"),
     _field(
         "timesteps",
         type_name="int",
