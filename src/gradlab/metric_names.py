@@ -84,6 +84,7 @@ def train_algorithm_metric(algorithm_id: str, suffix: str) -> str:
         "policy_loss": "policy_loss/mean",
         "value_loss": "value_loss/mean",
         "learning_rate": "learning_rate",
+        "gamma": "gamma",
         "entropy": "entropy/mean",
         "action_std": "noise/std/mean",
         "dominant_action_rate": "action/fraction/max",
@@ -450,6 +451,7 @@ SB3_SHARED_ACTOR_CRITIC_SCALAR_MAP = {
     "train/policy_loss": ("policy_loss", 1.0),
     "train/value_loss": ("value_loss", 1.0),
     "train/learning_rate": ("learning_rate", 1.0),
+    "train/gamma": ("gamma", 1.0),
     "train/std": ("action_std", 1.0),
 }
 SB3_PPO_SCALAR_MAP = {

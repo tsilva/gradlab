@@ -1396,7 +1396,12 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             reasons.append("checkpoint has no training value contract")
         else:
             expected_discount = self.value_contract.get("discount")
-            if (
+            if self.value_contract.get("discount_schedule") is not None:
+                reasons.append(
+                    "critic was trained with a changing discount; "
+                    "fixed-discount calibration is unavailable"
+                )
+            elif (
                 self.value_discount is None
                 or isinstance(expected_discount, bool)
                 or not isinstance(expected_discount, int | float)

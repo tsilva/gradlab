@@ -987,12 +987,14 @@ def _environment_actions(
 
 
 def _entropy_coefficient(config: Mapping[str, Any], step: int, total: int) -> float:
-    final = config["ent_coef_final"]
-    if final is None:
-        return float(config["ent_coef"])
-    duration = int(config["ent_coef_schedule_timesteps"] or total)
-    progress = min(max(int(step) / duration, 0.0), 1.0)
-    return float(config["ent_coef"]) + (float(final) - float(config["ent_coef"])) * progress
+    from gradlab.schedules import scheduled_scalar
+
+    return scheduled_scalar(
+        config["ent_coef"],
+        config["ent_coef_final"],
+        step,
+        int(config["ent_coef_schedule_timesteps"] or total),
+    )
 
 
 def run_gradlab_ppo(
@@ -1001,6 +1003,8 @@ def run_gradlab_ppo(
     progress_fields: Sequence[ProgressField] = (),
 ) -> TrainingResult:
     from stable_baselines3.common.utils import set_random_seed
+
+    from gradlab.schedules import apply_rollout_gamma
 
     from gradlab.device import resolve_sb3_device
     from gradlab.env import make_training_vec_env, preflight_state_archive_provider
@@ -1156,6 +1160,7 @@ def run_gradlab_ppo(
             if context.stop_flag.requested:
                 graceful_stop.acknowledge_safe_boundary(num_timesteps=int(model.num_timesteps))
                 break
+            apply_rollout_gamma(model, backend_config, int(common_config["timesteps"]))
             buffer.reset()
             curriculum.begin()
             model.policy.set_training_mode(False)
@@ -1307,6 +1312,7 @@ def run_gradlab_ppo(
             rollout_metrics = dict(curriculum_metrics)
             rollout_metrics.update(reward_stats.flush())
             rollout_metrics.update(update_metrics)
+            rollout_metrics["train/gamma"] = float(model.gamma)
             progress_metrics = {
                 "train/approx_kl": update_metrics[TRAIN_PPO_APPROX_KL],
                 "train/entropy_loss": -update_metrics[TRAIN_PPO_POLICY_ENTROPY],

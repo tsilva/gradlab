@@ -446,6 +446,10 @@ def policy_lineage_contract(
         },
         "reward": deepcopy(task.get("reward")),
         "discount": deepcopy(value_contract.get("discount")),
+        **(
+            {"discount_schedule": deepcopy(value_contract["discount_schedule"])}
+            if "discount_schedule" in value_contract else {}
+        ),
         "signals": deepcopy(task.get("signals")),
         "events": deepcopy(task.get("events")),
         "starts": {

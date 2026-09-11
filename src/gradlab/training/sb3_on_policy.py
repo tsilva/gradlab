@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -88,15 +89,18 @@ _INTEGER_FIELDS = (
     "learning_rate_schedule_timesteps",
     "n_steps",
     "ent_coef_schedule_timesteps",
+    "gamma_schedule_timesteps",
 )
 _NON_NEGATIVE_INTEGER_FIELDS = (
     "learning_rate_schedule_timesteps",
     "ent_coef_schedule_timesteps",
+    "gamma_schedule_timesteps",
 )
 _NUMBER_FIELDS = (
     "learning_rate",
     "learning_rate_final",
     "gamma",
+    "gamma_final",
     "gae_lambda",
     "ent_coef",
     "ent_coef_final",
@@ -129,6 +133,14 @@ def normalize_on_policy_config(
             continue
         if not isinstance(value, int | float) or isinstance(value, bool):
             raise ValueError(f"{label}.{key} must be a number or null")
+    for key in ("gamma", "gamma_final"):
+        value = normalized[key]
+        if key == "gamma_final" and value is None:
+            continue
+        if value is None or not math.isfinite(value) or not 0 <= value <= 1:
+            raise ValueError(f"{label}.{key} must be finite and between zero and one")
+    if normalized["gamma_final"] is None and normalized["gamma_schedule_timesteps"]:
+        raise ValueError(f"{label}.gamma_schedule_timesteps requires gamma_final")
     if normalized["device"] not in {"auto", "cpu", "cuda", "mps"}:
         raise ValueError(f"{label}.device must be one of auto, cpu, cuda, mps")
     if not isinstance(normalized["normalize_advantage"], bool):
@@ -149,7 +161,6 @@ def normalize_on_policy_config(
     ):
         raise ValueError(f"{label}.resume requires a pinned approval hash and byte manifest")
     return normalized
-
 
 
 def validate_action_space(action_space, *, algorithm_id: str) -> None:
@@ -272,7 +283,7 @@ def run_sb3_on_policy(
     from gradlab.file_utils import file_sha256
     from gradlab.metric_store import metric_store_path
     from gradlab.policy_bundle import write_canonical_json
-    from gradlab.schedules import EntropyCoefficientScheduleHelper
+    from gradlab.schedules import EntropyCoefficientScheduleHelper, GammaScheduleHelper
     from gradlab.training.sb3_helpers import (
         GracefulStopHelper,
         Sb3HumanOutputFormatHelper,
@@ -394,6 +405,7 @@ def run_sb3_on_policy(
                     checkpoint_coordinator=context.session.checkpoints,
                 )
             )
+        components.append(GammaScheduleHelper(backend_config, int(common_config["timesteps"])))
         if backend_config["ent_coef_final"] is not None:
             components.append(
                 EntropyCoefficientScheduleHelper(

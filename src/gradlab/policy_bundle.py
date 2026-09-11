@@ -1014,6 +1014,15 @@ def _derive_critic_value_contract(
         and 0.0 <= float(gamma) <= 1.0
         else None
     )
+    schedule = None
+    if backend_config.get("gamma_final") is not None and backend_config["gamma_final"] != gamma:
+        schedule = {
+            "initial": gamma,
+            "final": backend_config["gamma_final"],
+            "timesteps": backend_config.get("gamma_schedule_timesteps", 0)
+            or train_config.get("timesteps"),
+        }
+        discount = None
     from gradlab.policy_registry import (
         backend_provenance_algorithm,
         default_action_selection_mode,
@@ -1027,6 +1036,7 @@ def _derive_critic_value_contract(
         "policy_environment_hash": policy_environment_hash,
         "reward_stream": "task",
         "discount": discount,
+        **({"discount_schedule": schedule} if schedule is not None else {}),
         "action_sampling": default_action_selection_mode(algorithm_id),
         "truncation_bootstrap": "terminal-value",
     }
