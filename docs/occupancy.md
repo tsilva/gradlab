@@ -55,7 +55,9 @@ Named definitions also resolve in `state_archive.recorder.cell` and in semantic-
 Managed Breakout and Mario workspaces include recent and historical occupancy panels,
 including for runs enabled through launch overrides. Open a panel full screen for
 larger domains. Each table contains up to eight consecutive windows from one segment.
-The recent panel shows the latest page; the historical panel opens the first table.
+The recent panel shows the latest page. The historical panel starts at publication
+index zero, which can be empty when another metric was logged there; choose an
+index containing an occupancy table.
 In the historical panel, choose **Edit panel → Query → index** to select any recorded
 table using W&B's history index. This is a publication-history coordinate, not a
 training-step value; other logged events can occupy intervening indices. The
@@ -63,6 +65,11 @@ synthetic validation's indices 8 and 120 show complete early and late pages.
 A retry starts a new page; inspect its bounds and segment in
 the hover values. Every table version is addressable, including versions beyond 100.
 The default unindexed W&B history query samples versions and is deliberately unused.
+
+The main Breakout workspace also has **Total experience by bucket**, showing each
+cell's cumulative count divided by the cumulative denominator in the latest
+collection segment. Runs, segments, and cell contracts stay separate. Hover a bar
+to see exact counts. Runs without occupancy enabled contribute no data.
 
 Click a window to select its distribution. Under **Edit panel → Chart fields**, set
 `origin` to `combined` (the default), `normal`, `archive`, or `search`. Set `grouping`

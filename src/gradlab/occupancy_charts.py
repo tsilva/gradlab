@@ -195,6 +195,95 @@ def workspace_panel(wr, *, entity, layout, recent=False):
     )
 
 
+def cumulative_chart_spec():
+    def field(name, kind="quantitative", **kwargs):
+        return {"field": "${field:" + name + "}", "type": kind, **kwargs}
+
+    return {
+        "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+        "data": {"name": "wandb"},
+        "transform": [
+            {"filter": "datum['${field:origin}'] === '${string:origin}'"},
+            {
+                "joinaggregate": [{"op": "max", "field": "${field:end_step}", "as": "latest_end"}],
+                "groupby": ["${field:run_id}", "${field:segment}", "${field:cell_space_hash}"],
+            },
+            {"filter": "datum['${field:end_step}'] === datum.latest_end"},
+            {
+                "calculate": "datum['${field:cumulative_denominator}'] > 0 ? datum['${field:cumulative_count}'] / datum['${field:cumulative_denominator}'] : null",
+                "as": "share",
+            },
+            {
+                "calculate": "datum['${field:run_id}'] + ' · ' + substring(datum['${field:segment}'], 0, 8) + ' · ' + substring(datum['${field:cell_space_hash}'], 0, 8)",
+                "as": "series",
+            },
+        ],
+        "title": "Cumulative experience by cell — latest collection segment",
+        "mark": "bar",
+        "width": 650,
+        "height": 220,
+        "encoding": {
+            "y": field("label", "nominal", title="Cell"),
+            "x": {
+                "field": "share",
+                "type": "quantitative",
+                "title": "Share of collected policy transitions",
+                "scale": {"domain": [0, 1]},
+                "axis": {"format": ".0%"},
+            },
+            "row": {
+                "field": "series",
+                "type": "nominal",
+                "title": "Run / segment / contract",
+                "header": {"labelLimit": 140},
+            },
+            "tooltip": [
+                field("label", "nominal"),
+                {"field": "share", "type": "quantitative", "format": ".3%"},
+                field("cumulative_count", format=","),
+                field("cumulative_denominator", format=","),
+                field("end_step", format=","),
+                field("origin", "nominal"),
+                field("run_id", "nominal"),
+                field("segment", "nominal"),
+                field("cell_space_hash", "nominal"),
+            ],
+        },
+    }
+
+
+def cumulative_chart_name():
+    return f"gradlab-occupancy-cumulative-v1-{canonical_json_sha256(cumulative_chart_spec())[:12]}"
+
+
+def ensure_cumulative_chart(api, *, entity):
+    from wandb.errors import CommError
+
+    try:
+        return api.create_custom_chart(
+            entity=entity,
+            name=cumulative_chart_name(),
+            display_name="Cumulative cell occupancy",
+            spec_type="vega2",
+            access="private",
+            spec=cumulative_chart_spec(),
+        )
+    except CommError as error:
+        if "HTTP 409:" not in str(error):
+            raise
+        return f"{entity}/{cumulative_chart_name()}"
+
+
+def cumulative_workspace_panel(wr, *, entity, layout):
+    return wr.CustomChart(
+        query={"id": {}, "name": {}, "summaryTable": {"tableKey": OCCUPANCY_TABLE}},
+        chart_name=f"{entity}/{cumulative_chart_name()}",
+        chart_strings={"origin": "combined"},
+        chart_fields={name: name for name in (*WINDOW_FIELDS, *ROW_FIELDS)},
+        layout=layout,
+    )
+
+
 def curriculum_chart_spec():
     return {
         "$schema": "https://vega.github.io/schema/vega-lite/v5.json",

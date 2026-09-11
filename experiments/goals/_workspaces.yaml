@@ -3,6 +3,19 @@ view_id: training
 default_profile: training
 
 sections:
+  occupancy_totals:
+    title: Total experience by bucket
+    pinned: false
+    open: true
+    columns: 1
+    panels:
+    - id: occupancy_cumulative
+      kind: occupancy_cumulative
+      x: train/step
+      y:
+      - train/occupancy/table
+      width: 24
+      height: 10
   occupancy:
     title: Collected experience
     pinned: false
@@ -205,6 +218,7 @@ profiles:
     - breakout_primary
     - breakout_secondary
     - training_essentials
+    - occupancy_totals
     - occupancy
     - curriculum_inventory
 

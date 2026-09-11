@@ -80,12 +80,22 @@ def _section_panels(wr, section, *, entity=None):
                         y=row_y,
                     )
                 )
-            elif panel.kind in {"occupancy", "occupancy_recent", "curriculum"}:
-                from gradlab.occupancy_charts import workspace_panel, curriculum_workspace_panel
-
-                factory = (
-                    curriculum_workspace_panel if panel.kind == "curriculum" else workspace_panel
+            elif panel.kind in {
+                "occupancy",
+                "occupancy_recent",
+                "occupancy_cumulative",
+                "curriculum",
+            }:
+                from gradlab.occupancy_charts import (
+                    workspace_panel,
+                    curriculum_workspace_panel,
+                    cumulative_workspace_panel,
                 )
+
+                factory = {
+                    "curriculum": curriculum_workspace_panel,
+                    "occupancy_cumulative": cumulative_workspace_panel,
+                }.get(panel.kind, workspace_panel)
 
                 panels.append(
                     factory(
@@ -93,7 +103,7 @@ def _section_panels(wr, section, *, entity=None):
                         entity=entity,
                         **(
                             {"recent": panel.kind == "occupancy_recent"}
-                            if panel.kind != "curriculum"
+                            if panel.kind in {"occupancy", "occupancy_recent"}
                             else {}
                         ),
                         layout=wr.Layout(
@@ -298,6 +308,16 @@ def sync_workspaces(
         from gradlab.occupancy_charts import ensure_chart
 
         ensure_chart(api, entity=entity)
+
+    if any(
+        panel.kind == "occupancy_cumulative"
+        for spec in specs
+        for section in spec.sections
+        for panel in section.panels
+    ):
+        from gradlab.occupancy_charts import ensure_cumulative_chart
+
+        ensure_cumulative_chart(api, entity=entity)
 
     if any(
         panel.kind == "curriculum"
