@@ -34,3 +34,14 @@ This specification applies to the public checkpoint browser and interactive web 
 - Unsupported, missing, and scientifically incomparable diagnostics must remain visibly distinct without fabricated values.
 - Live-Policy attribution must be disabled by default and must be switchable from the web player without restarting or changing the shared trajectory.
 - Value calibration may compare predicted values with realized returns only when environment, reward, discount, action-selection, and episode-boundary rules match.
+
+## Chart History
+
+- History charts must match the active Playback Session, episode, and selected range. Changing any of these must immediately replace obsolete plots with loading; refreshing the same selection must retain valid data with visible status.
+- Episode replacement must reset the chart window to the full episode. Seeking and chart navigation must preserve the independent reward reference and must not advance Playback or Policy inference.
+- Recorded history must preserve its annotations and sampling. Eligible live points may extend only its tail, without duplicates or backfilling sampled gaps; the inspection cursor must limit only the live tail.
+- Transient chart failures must retry three times after delays of 1, 2, and 4 seconds, including while paused. An unusable revision must receive one full-history recovery attempt without its unusable base; reconstruction failures must not create an unbounded loop.
+- Exhausted recovery and permanent failures must leave a persistent error and Retry action inside affected panels, without repeated toasts. Live updates must not restart exhausted recovery; explicit Retry, a changed selection, or returning chart visibility may start a fresh attempt.
+- Affected panels in one window must share data and recovery state. Retry in one panel must update every affected panel without duplicate requests.
+- Hiding, disabling, or suspending the last eligible chart panel must cancel requests and timers; restoring demand must refresh automatically while paused. Cancelled, replaced, or disposed work must not publish obsolete data or errors or interfere with current work.
+- Windows must share the selected zoom range with session and episode isolation while independently managing chart requests and retaining only their current selection's cached history.
