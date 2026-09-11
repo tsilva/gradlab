@@ -25,6 +25,7 @@ GOAL_TRAIN_FIELDS = frozenset(
         "early_stop",
         "environment",
         "episode_progress_fields",
+        "state_archive",
     }
 )
 GOAL_EVAL_FIELDS = frozenset({"acceptance", "environment", "episodes", "policy"})

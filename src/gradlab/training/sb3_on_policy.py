@@ -318,7 +318,9 @@ def run_sb3_on_policy(
         rom_binding=getattr(context, "rom_binding", None),
         state_archive=common_config.get("state_archive"),
         state_archive_root=context.run_dir / "state-archive",
+        occupancy=common_config.get("occupancy"),
     )
+    occupancy_reporter = None
     try:
         store_path = metric_store_path(context.run_dir)
         set_random_seed(int(common_config["seed"]))
@@ -350,6 +352,16 @@ def run_sb3_on_policy(
             model,
             graceful_stop=graceful_stop,
         )
+        if (
+            common_config.get("occupancy") is not None
+            or (common_config.get("state_archive") or {}).get("curriculum") is not None
+        ):
+            from gradlab.occupancy import OccupancyReporter
+            from gradlab.callbacks import OccupancyHelper
+
+            occupancy_reporter = OccupancyReporter(
+                env.runtime, context, initial_step=model.num_timesteps
+            )
         components: list[Any] = [
             graceful_stop,
             Sb3HumanOutputFormatHelper(
@@ -357,6 +369,8 @@ def run_sb3_on_policy(
             ),
             ThroughputHelper(),
         ]
+        if occupancy_reporter is not None:
+            components.append(OccupancyHelper(occupancy_reporter))
         if common_config.get("state_archive") is not None:
             archive_config = common_config.get("state_archive")
             if isinstance(archive_config, Mapping) and archive_config.get("curriculum") is not None:
@@ -490,4 +504,8 @@ def run_sb3_on_policy(
             model_kind=terminal_kind,
         )
     finally:
-        env.close()
+        try:
+            if occupancy_reporter is not None:
+                occupancy_reporter.flush(final=True)
+        finally:
+            env.close()

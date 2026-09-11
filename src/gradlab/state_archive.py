@@ -1,19 +1,27 @@
 from __future__ import annotations
 
 import hashlib
+import copy
+import fcntl
+from contextlib import contextmanager
 import json
 import math
 import re
 import shutil
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping, Sequence
 
 import numpy as np
 
+from gradlab.cells import (
+    ArchiveCellConfig as ArchiveCellConfig,
+    ArchiveCellDetector as ArchiveCellDetector,
+    normalize_archive_cell_config as normalize_archive_cell_config,
+)
 from gradlab.file_utils import atomic_write_bytes, atomic_write_json
-from gradlab.json_utils import canonical_json_bytes, canonical_json_sha256, json_safe
+from gradlab.json_utils import canonical_json_sha256, json_safe
 
 
 STATE_ARCHIVE_SEMANTIC_ID = "state-archive-v1"
@@ -23,6 +31,18 @@ RESTORE_SEMANTICS = frozenset({"episode_start", "continuation"})
 STATE_ARCHIVE_PERSISTENCE = frozenset({"durable", "ephemeral"})
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _VIEW_ID = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
+
+
+@contextmanager
+def archive_lock(root: Path, *, exclusive: bool):
+    """Coordinate the learner's mutable archive with its supervisor's upload."""
+    root.mkdir(parents=True, exist_ok=True)
+    with (root / ".publication.lock").open("a+b") as lock:
+        fcntl.flock(lock.fileno(), fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
 
 
 def _require_sha256(value: str, *, label: str) -> str:
@@ -678,61 +698,75 @@ class StateArchive:
         *,
         referenced_entry_ids: Sequence[str],
     ) -> dict[str, Any]:
-        normalized = self._normalized_view_id(view_id)
-        references = sorted(set(str(entry_id) for entry_id in referenced_entry_ids))
-        for entry_id in references:
-            self.entry(entry_id)
-        safe_document = dict(json_safe(document))
-        view = {
-            "semantic_id": STATE_ARCHIVE_SEMANTIC_ID,
-            "schema_version": 1,
-            "view_id": normalized,
-            "document_sha256": canonical_json_sha256(safe_document),
-            "referenced_entry_ids": references,
-            "document": safe_document,
+        with archive_lock(self.root, exclusive=True):
+            (self.root / "closure.json").unlink(missing_ok=True)
+            normalized = self._normalized_view_id(view_id)
+            references = sorted(set(str(entry_id) for entry_id in referenced_entry_ids))
+            for entry_id in references:
+                self.entry(entry_id)
+            safe_document = dict(json_safe(document))
+            view = {
+                "semantic_id": STATE_ARCHIVE_SEMANTIC_ID,
+                "schema_version": 1,
+                "view_id": normalized,
+                "document_sha256": canonical_json_sha256(safe_document),
+                "referenced_entry_ids": references,
+                "document": safe_document,
+            }
+            validated = self._validate_view(normalized, view)
+            atomic_write_json(self.views_root / f"{normalized}.json", validated)
+            self._views[normalized] = validated
+            return dict(validated)
+
+    def retained_size(self, entry_ids: Sequence[str]) -> int:
+        entries = [self.entry(entry_id) for entry_id in set(entry_ids)]
+        blobs = {
+            entry.provider_snapshot.ref.blob_sha256: entry.provider_snapshot.ref.size_bytes
+            for entry in entries
         }
-        validated = self._validate_view(normalized, view)
-        atomic_write_json(self.views_root / f"{normalized}.json", validated)
-        self._views[normalized] = validated
-        return dict(validated)
+        return sum(blobs.values()) + sum(
+            (self.entries_root / f"{entry.entry_id}.json").stat().st_size for entry in entries
+        )
 
     def retain_entries(self, entry_ids: Sequence[str]) -> dict[str, int]:
-        retained = set(str(entry_id) for entry_id in entry_ids)
-        for entry_id in retained:
-            self.entry(entry_id)
-        view_references = {
-            str(entry_id)
-            for view in self._views.values()
-            for entry_id in view["referenced_entry_ids"]
-        }
-        missing_view_references = sorted(view_references - retained)
-        if missing_view_references:
-            raise ValueError(
-                "cannot prune state archive entries referenced by a view: "
-                f"{missing_view_references[:8]}"
-            )
-        removed_entries = set(self._entries) - retained
-        retained_blobs = {
-            self._entries[entry_id].provider_snapshot.ref.blob_sha256 for entry_id in retained
-        }
-        removed_blobs = {
-            self._entries[entry_id].provider_snapshot.ref.blob_sha256
-            for entry_id in removed_entries
-        } - retained_blobs
-        for entry_id in removed_entries:
-            (self.entries_root / f"{entry_id}.json").unlink(missing_ok=True)
-            self._untrack_entry_blob(self._entries[entry_id])
-            del self._entries[entry_id]
-        for blob_sha256 in removed_blobs:
-            self.blobs.discard(blob_sha256)
-        self.handles.retain(retained_blobs)
-        (self.root / "closure.json").unlink(missing_ok=True)
-        return {
-            "removed_entries": len(removed_entries),
-            "removed_blobs": len(removed_blobs),
-            "retained_entries": len(retained),
-            "retained_blobs": len(retained_blobs),
-        }
+        with archive_lock(self.root, exclusive=True):
+            (self.root / "closure.json").unlink(missing_ok=True)
+            retained = set(str(entry_id) for entry_id in entry_ids)
+            for entry_id in retained:
+                self.entry(entry_id)
+            view_references = {
+                str(entry_id)
+                for view in self._views.values()
+                for entry_id in view["referenced_entry_ids"]
+            }
+            missing_view_references = sorted(view_references - retained)
+            if missing_view_references:
+                raise ValueError(
+                    "cannot prune state archive entries referenced by a view: "
+                    f"{missing_view_references[:8]}"
+                )
+            removed_entries = set(self._entries) - retained
+            retained_blobs = {
+                self._entries[entry_id].provider_snapshot.ref.blob_sha256 for entry_id in retained
+            }
+            removed_blobs = {
+                self._entries[entry_id].provider_snapshot.ref.blob_sha256
+                for entry_id in removed_entries
+            } - retained_blobs
+            for entry_id in removed_entries:
+                (self.entries_root / f"{entry_id}.json").unlink(missing_ok=True)
+                self._untrack_entry_blob(self._entries[entry_id])
+                del self._entries[entry_id]
+            for blob_sha256 in removed_blobs:
+                self.blobs.discard(blob_sha256)
+            self.handles.retain(retained_blobs)
+            (self.root / "closure.json").unlink(missing_ok=True)
+            return {
+                "removed_entries": len(removed_entries),
+                "removed_blobs": len(removed_blobs),
+                "retained_entries": len(retained),
+                "retained_blobs": len(retained_blobs),
+            }
 
     def view_document(self, view_id: str) -> Mapping[str, Any] | None:
         normalized = self._normalized_view_id(view_id)
@@ -752,6 +786,7 @@ class StateArchive:
             "entry_count": len(self._entries),
             "blob_count": len(self._blob_ref_counts),
             "blob_bytes": self._blob_bytes,
+            "physical_bytes": self.retained_size(tuple(self._entries)),
             "view_ids": sorted(self._views),
         }
 
@@ -762,46 +797,47 @@ class StateArchive:
         status: str,
         referenced_entry_ids: Sequence[str] | None = None,
     ) -> dict[str, Any]:
-        if int(step) < 0:
-            raise ValueError("state archive closure step must be non-negative")
-        if status not in {"recoverable", "closed"}:
-            raise ValueError("state archive closure status must be recoverable or closed")
-        retained = (
-            set(self._entries)
-            if referenced_entry_ids is None
-            else set(str(entry_id) for entry_id in referenced_entry_ids)
-        )
-        for entry_id in retained:
-            self.entry(entry_id)
-        retained_blobs = {
-            self.entry(entry_id).provider_snapshot.ref.blob_sha256 for entry_id in retained
-        }
-        paths = [
-            *(self.entries_root / f"{entry_id}.json" for entry_id in sorted(retained)),
-            *(self.blobs.path_for(blob_sha256) for blob_sha256 in sorted(retained_blobs)),
-            *(candidate for candidate in self.views_root.glob("*.json")),
-        ]
-        files: list[dict[str, Any]] = []
-        for path in sorted(paths):
-            payload = path.read_bytes()
-            files.append(
-                {
-                    "path": path.relative_to(self.root).as_posix(),
-                    "sha256": hashlib.sha256(payload).hexdigest(),
-                    "size_bytes": len(payload),
-                }
+        with archive_lock(self.root, exclusive=True):
+            if int(step) < 0:
+                raise ValueError("state archive closure step must be non-negative")
+            if status not in {"recoverable", "closed"}:
+                raise ValueError("state archive closure status must be recoverable or closed")
+            retained = (
+                set(self._entries)
+                if referenced_entry_ids is None
+                else set(str(entry_id) for entry_id in referenced_entry_ids)
             )
-        closure = {
-            "semantic_id": STATE_ARCHIVE_SEMANTIC_ID,
-            "schema_version": 1,
-            "status": status,
-            "step": int(step),
-            "archive": self.summary(),
-            "files": files,
-        }
-        closure["inventory_sha256"] = canonical_json_sha256(files)
-        atomic_write_json(self.root / "closure.json", closure)
-        return closure
+            for entry_id in retained:
+                self.entry(entry_id)
+            retained_blobs = {
+                self.entry(entry_id).provider_snapshot.ref.blob_sha256 for entry_id in retained
+            }
+            paths = [
+                *(self.entries_root / f"{entry_id}.json" for entry_id in sorted(retained)),
+                *(self.blobs.path_for(blob_sha256) for blob_sha256 in sorted(retained_blobs)),
+                *(candidate for candidate in self.views_root.glob("*.json")),
+            ]
+            files: list[dict[str, Any]] = []
+            for path in sorted(paths):
+                payload = path.read_bytes()
+                files.append(
+                    {
+                        "path": path.relative_to(self.root).as_posix(),
+                        "sha256": hashlib.sha256(payload).hexdigest(),
+                        "size_bytes": len(payload),
+                    }
+                )
+            closure = {
+                "semantic_id": STATE_ARCHIVE_SEMANTIC_ID,
+                "schema_version": 1,
+                "status": status,
+                "step": int(step),
+                "archive": self.summary(),
+                "files": files,
+            }
+            closure["inventory_sha256"] = canonical_json_sha256(files)
+            atomic_write_json(self.root / "closure.json", closure)
+            return closure
 
     def close(self) -> None:
         self.handles.clear()
@@ -813,6 +849,11 @@ _CURRICULUM_DEFAULTS: dict[str, Any] = {
     "restore_entries": False,
     "entries_per_cell": 4,
     "max_entries": 1024,
+    "max_bytes": 1073741824,
+    "strategy": "value_error",
+    "coverage_windows": 5,
+    "coverage_smoothing": 1.0,
+    "coverage_exponent": 0.5,
     "feedback_ema_alpha": 0.10,
     "staleness_weight": 0.30,
     "rank_temperature": 1.0,
@@ -828,222 +869,6 @@ _CURRICULUM_KEYS = frozenset(
         *_CURRICULUM_DEFAULTS,
     }
 )
-_CELL_KEYS = frozenset({"dimensions"})
-_CELL_DIMENSION_KEYS = frozenset({"signal", "source", "bucket_size", "clamp", "equals"})
-
-
-def _finite_number(value: Any, *, label: str) -> float:
-    if (
-        not isinstance(value, int | float | np.number)
-        or isinstance(value, bool | np.bool_)
-        or not math.isfinite(float(value))
-    ):
-        raise ValueError(f"{label} must be a finite number")
-    return float(value)
-
-
-def normalize_archive_cell_config(
-    value: Any,
-    *,
-    label: str,
-) -> dict[str, Any]:
-    """Normalize the shared YAML-defined archive cell detector."""
-
-    if not isinstance(value, Mapping):
-        raise ValueError(f"{label} must be an object")
-    unexpected = sorted(set(value) - _CELL_KEYS)
-    if unexpected:
-        raise ValueError(f"{label} has unexpected fields: {unexpected}")
-    dimensions = value.get("dimensions")
-    if (
-        isinstance(dimensions, str | bytes)
-        or not isinstance(dimensions, Sequence)
-        or not dimensions
-    ):
-        raise ValueError(f"{label}.dimensions must be a non-empty sequence")
-    if len(dimensions) > 32:
-        raise ValueError(f"{label}.dimensions must contain at most 32 entries")
-
-    normalized_dimensions: list[dict[str, Any]] = []
-    seen_selectors: set[tuple[str, str]] = set()
-    for index, raw_dimension in enumerate(dimensions):
-        dimension_label = f"{label}.dimensions[{index}]"
-        if not isinstance(raw_dimension, Mapping):
-            raise ValueError(f"{dimension_label} must be an object")
-        unexpected_dimension = sorted(set(raw_dimension) - _CELL_DIMENSION_KEYS)
-        if unexpected_dimension:
-            raise ValueError(f"{dimension_label} has unexpected fields: {unexpected_dimension}")
-        selector_fields = set(raw_dimension) & {"signal", "source"}
-        if len(selector_fields) != 1:
-            raise ValueError(f"{dimension_label} must define exactly one of signal or source")
-        selector_kind = next(iter(selector_fields))
-        selector_name = str(raw_dimension.get(selector_kind) or "").strip()
-        if not selector_name:
-            raise ValueError(f"{dimension_label}.{selector_kind} must be a non-empty string")
-        selector = (selector_kind, selector_name)
-        if selector in seen_selectors:
-            raise ValueError(
-                f"{label}.dimensions contains duplicate {selector_kind} {selector_name!r}"
-            )
-        seen_selectors.add(selector)
-
-        has_equals = "equals" in raw_dimension
-        has_bucket = "bucket_size" in raw_dimension
-        has_clamp = "clamp" in raw_dimension
-        if has_equals and (has_bucket or has_clamp):
-            raise ValueError(
-                f"{dimension_label}.equals cannot be combined with bucket_size or clamp"
-            )
-        normalized_dimension: dict[str, Any] = {selector_kind: selector_name}
-        if has_equals:
-            normalized_dimension["equals"] = _finite_number(
-                raw_dimension["equals"],
-                label=f"{dimension_label}.equals",
-            )
-        else:
-            bucket_size = _finite_number(
-                raw_dimension.get("bucket_size"),
-                label=f"{dimension_label}.bucket_size",
-            )
-            if bucket_size <= 0.0:
-                raise ValueError(f"{dimension_label}.bucket_size must be positive")
-            normalized_dimension["bucket_size"] = bucket_size
-            if has_clamp:
-                clamp = raw_dimension["clamp"]
-                if (
-                    isinstance(clamp, str | bytes)
-                    or not isinstance(clamp, Sequence)
-                    or len(clamp) != 2
-                ):
-                    raise ValueError(f"{dimension_label}.clamp must be [minimum, maximum]")
-                minimum = _finite_number(
-                    clamp[0],
-                    label=f"{dimension_label}.clamp[0]",
-                )
-                maximum = _finite_number(
-                    clamp[1],
-                    label=f"{dimension_label}.clamp[1]",
-                )
-                if minimum > maximum:
-                    raise ValueError(f"{dimension_label}.clamp minimum must not exceed maximum")
-                normalized_dimension["clamp"] = [minimum, maximum]
-        normalized_dimensions.append(normalized_dimension)
-    return {"dimensions": normalized_dimensions}
-
-
-@dataclass(frozen=True)
-class ArchiveCellDimension:
-    signal: str | None = None
-    source: str | None = None
-    bucket_size: float | None = None
-    clamp: tuple[float, float] | None = None
-    equals: float | None = None
-
-    @property
-    def selector(self) -> tuple[str, str]:
-        if self.signal is not None:
-            return ("signal", self.signal)
-        assert self.source is not None
-        return ("source", self.source)
-
-    def bucket(self, value: Any) -> int:
-        kind, name = self.selector
-        label = f"archive cell {kind} {name!r}"
-        if isinstance(value, str | bytes):
-            raise ValueError(f"{label} must be numeric")
-        try:
-            numeric = float(value)
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"{label} must be numeric") from exc
-        if not math.isfinite(numeric):
-            raise ValueError(f"{label} must be finite")
-        if self.equals is not None:
-            return int(numeric == self.equals)
-        if self.clamp is not None:
-            numeric = min(max(numeric, self.clamp[0]), self.clamp[1])
-        assert self.bucket_size is not None
-        quotient = math.floor(numeric / self.bucket_size)
-        if quotient < np.iinfo(np.int64).min or quotient > np.iinfo(np.int64).max:
-            raise ValueError("state archive cell index exceeds signed int64")
-        return int(quotient)
-
-
-@dataclass(frozen=True)
-class ArchiveCellConfig:
-    dimensions: tuple[ArchiveCellDimension, ...]
-
-    @classmethod
-    def from_mapping(cls, value: Mapping[str, Any], *, label: str) -> "ArchiveCellConfig":
-        normalized = normalize_archive_cell_config(value, label=label)
-        return cls(
-            dimensions=tuple(
-                ArchiveCellDimension(
-                    signal=(str(dimension["signal"]) if "signal" in dimension else None),
-                    source=(str(dimension["source"]) if "source" in dimension else None),
-                    bucket_size=(
-                        float(dimension["bucket_size"]) if "bucket_size" in dimension else None
-                    ),
-                    clamp=(
-                        (
-                            float(dimension["clamp"][0]),
-                            float(dimension["clamp"][1]),
-                        )
-                        if "clamp" in dimension
-                        else None
-                    ),
-                    equals=(float(dimension["equals"]) if "equals" in dimension else None),
-                )
-                for dimension in normalized["dimensions"]
-            )
-        )
-
-    @property
-    def signals(self) -> tuple[str, ...]:
-        return tuple(
-            dimension.signal for dimension in self.dimensions if dimension.signal is not None
-        )
-
-    @property
-    def sources(self) -> tuple[str, ...]:
-        return tuple(
-            dimension.source for dimension in self.dimensions if dimension.source is not None
-        )
-
-
-class ArchiveCellDetector:
-    """Encode semantic signals or provider sources into deterministic cell keys."""
-
-    def __init__(self, config: ArchiveCellConfig):
-        self.config = config
-
-    def keys(
-        self,
-        values_by_selector: Mapping[tuple[str, str], Any],
-        *,
-        n_envs: int,
-    ) -> tuple[bytes, ...]:
-        rows: list[list[int]] = [[] for _ in range(n_envs)]
-        for dimension in self.config.dimensions:
-            selector = dimension.selector
-            kind, name = selector
-            if selector not in values_by_selector:
-                raise ValueError(f"archive cell {kind} {name!r} was not resolved")
-            values = np.asarray(values_by_selector[selector])
-            if values.shape != (n_envs,):
-                raise ValueError(
-                    f"archive cell {kind} {name!r} must have shape ({n_envs},), got {values.shape}"
-                )
-            for lane in range(n_envs):
-                rows[lane].append(dimension.bucket(values[lane]))
-        if len(self.config.dimensions) == 1:
-            dimension = self.config.dimensions[0]
-            if (
-                dimension.signal is not None
-                and dimension.clamp is None
-                and dimension.equals is None
-            ):
-                return tuple(f"{dimension.signal}:{row[0]}".encode("ascii") for row in rows)
-        return tuple(canonical_json_bytes(row) for row in rows)
 
 
 def archive_lane_count(archive_share: float, n_envs: int) -> int:
@@ -1091,7 +916,7 @@ def normalize_archive_curriculum_config(
     normalized.update({key: value[key] for key in _CURRICULUM_DEFAULTS if key in value})
     if not isinstance(normalized["restore_entries"], bool):
         raise ValueError(f"{label}.restore_entries must be a boolean")
-    integer_fields = ("entries_per_cell", "max_entries")
+    integer_fields = ("entries_per_cell", "max_entries", "max_bytes", "coverage_windows")
     for key in integer_fields:
         item = normalized[key]
         if not isinstance(item, int) or isinstance(item, bool) or item < 1:
@@ -1101,7 +926,15 @@ def normalize_archive_curriculum_config(
         raise ValueError(f"{label}.max_entries must be >= entries_per_cell")
     if normalized["max_entries"] > 16384:
         raise ValueError(f"{label}.max_entries must be <= 16384")
+    if normalized["strategy"] not in {"value_error", "coverage"}:
+        raise ValueError(f"{label}.strategy must be value_error or coverage")
+    if normalized["coverage_windows"] > 32:
+        raise ValueError(f"{label}.coverage_windows must be <= 32")
+    if normalized["strategy"] == "coverage" and normalized["archive_share"] != 0.2:
+        raise ValueError("coverage curriculum requires the initial 20% archive allocation")
     ranges = {
+        "coverage_smoothing": (0.0, math.inf, False),
+        "coverage_exponent": (0.0, 2.0, False),
         "feedback_ema_alpha": (0.0, 1.0, False),
         "staleness_weight": (0.0, 1.0, True),
         "rank_temperature": (0.0, math.inf, False),
@@ -1198,6 +1031,8 @@ def normalize_state_archive_config(
             raise ValueError(f"{label}.curriculum requires recorder.mode='cell_transition'")
         if not isinstance(curriculum, Mapping):
             raise ValueError(f"{label}.curriculum must be an object or null")
+        if restore_semantics != "continuation":
+            raise ValueError("archive curriculum requires continuation restore semantics")
         normalized_curriculum = normalize_archive_curriculum_config(
             {**dict(curriculum), "cell": normalized_cell},
             label=f"{label}.curriculum",
@@ -1257,6 +1092,12 @@ def validate_state_archive_runtime_contract(
     curriculum = normalized["curriculum"]
     if curriculum is None:
         return
+    if curriculum["strategy"] == "coverage":
+        occupancy = common_config.get("occupancy")
+        if not isinstance(occupancy, Mapping) or occupancy.get("cell") != cell:
+            raise ValueError(
+                "coverage curriculum requires identical occupancy and archive cell definitions"
+            )
     supported = frozenset(str(metric).strip() for metric in supported_priority_metrics)
     if curriculum["priority_metric"] not in supported:
         raise ValueError(
@@ -1272,6 +1113,11 @@ class ArchiveCurriculumConfig:
     restore_entries: bool
     entries_per_cell: int
     max_entries: int
+    max_bytes: int
+    strategy: str
+    coverage_windows: int
+    coverage_smoothing: float
+    coverage_exponent: float
     feedback_ema_alpha: float
     staleness_weight: float
     rank_temperature: float
@@ -1292,6 +1138,11 @@ class ArchiveCurriculumConfig:
             restore_entries=bool(normalized["restore_entries"]),
             entries_per_cell=int(normalized["entries_per_cell"]),
             max_entries=int(normalized["max_entries"]),
+            max_bytes=int(normalized["max_bytes"]),
+            strategy=str(normalized["strategy"]),
+            coverage_windows=int(normalized["coverage_windows"]),
+            coverage_smoothing=float(normalized["coverage_smoothing"]),
+            coverage_exponent=float(normalized["coverage_exponent"]),
             feedback_ema_alpha=float(normalized["feedback_ema_alpha"]),
             staleness_weight=float(normalized["staleness_weight"]),
             rank_temperature=float(normalized["rank_temperature"]),
@@ -1349,6 +1200,9 @@ class ArchiveCurriculum:
         self._probabilities: dict[str, float] = {}
         self._sampled_this_rollout: set[str] = set()
         self._metrics: dict[str, float] = {}
+        self._admission_backup = None
+        self._coverage: dict[str, int] = {}
+        self._deferred_admission = False
         self.begin_rollout()
 
     @property
@@ -1368,6 +1222,8 @@ class ArchiveCurriculum:
 
     @property
     def ready(self) -> bool:
+        if self.config.strategy == "coverage" and self.config.restore_entries:
+            return bool(self._probabilities)
         return self.entry_count > 0
 
     def begin_rollout(self) -> None:
@@ -1419,7 +1275,12 @@ class ArchiveCurriculum:
             cell
             for cell in self._cells.values()
             if cell.cell_id != excluding
-            and cell.feedback_score is not None
+            and (
+                cell.feedback_score is not None
+                or not self.config.restore_entries
+                or self.config.strategy == "coverage"
+            )
+            and (self.config.strategy != "coverage" or cell.cell_id not in self._probabilities)
             and cell.active_count == 0
             and cell.pending_feedback == 0
         ]
@@ -1447,6 +1308,8 @@ class ArchiveCurriculum:
         cell = self._cells.get(cell_id)
         if cell is None:
             if not self._make_room():
+                if self.config.strategy == "coverage":
+                    self._deferred_admission = True
                 return False
             self._admission_counter += 1
             cell = _Cell(cell_id=cell_id, admission_index=self._admission_counter)
@@ -1457,14 +1320,151 @@ class ArchiveCurriculum:
                 return False
             cell.representatives.append(entry_id)
             self._metrics["admission_accepted_count"] += 1.0
-            self._rebuild_probabilities()
+            if self.config.strategy != "coverage":
+                self._rebuild_probabilities()
             return True
         replacement = self._representative_index(cell_id, cell.seen)
         if replacement >= self.config.entries_per_cell:
             return False
+        if cell.active_count or cell.pending_feedback:
+            return False
         cell.representatives[int(replacement)] = entry_id
         self._metrics["admission_accepted_count"] += 1.0
         return True
+
+    def plan_admissions(self, candidates: Mapping[int, str]) -> dict[int, str]:
+        """Run the reservoir first; only surviving reservations need serialization."""
+        self._admission_backup = (
+            copy.deepcopy(self._cells),
+            self._admission_counter,
+            dict(self._probabilities),
+            dict(self._metrics),
+        )
+        before = self._metrics["admission_accepted_count"]
+        for lane, cell_id in sorted(candidates.items()):
+            self.admit(cell_id, f"pending:{lane}")
+        self._metrics["admission_accepted_count"] = before
+        selected = {}
+        for cell in self._cells.values():
+            for entry_id in cell.representatives:
+                if entry_id.startswith("pending:"):
+                    selected[int(entry_id.split(":")[1])] = cell.cell_id
+        if not selected:
+            self._admission_backup = None
+        return selected
+
+    def commit_admissions(self, entries: Mapping[int, str]) -> None:
+        if not entries and self._admission_backup is not None:
+            self._cells, self._admission_counter, self._probabilities, self._metrics = (
+                self._admission_backup
+            )
+            self._admission_backup = None
+            return
+        for cell in self._cells.values():
+            retained = []
+            for entry_id in cell.representatives:
+                if entry_id.startswith("pending:"):
+                    replacement = entries.get(int(entry_id.split(":")[1]))
+                    if replacement is not None:
+                        retained.append(replacement)
+                        self._metrics["admission_accepted_count"] += 1
+                else:
+                    retained.append(entry_id)
+            cell.representatives = retained
+        self._cells = {key: cell for key, cell in self._cells.items() if cell.representatives}
+
+    def retained_entry_ids(self) -> tuple[str, ...]:
+        return tuple(
+            sorted({entry for cell in self._cells.values() for entry in cell.representatives})
+        )
+
+    def persist(self, archive: StateArchive) -> None:
+        """Bound retained snapshot bytes, then publish a recoverable archive view."""
+        retained = self.retained_entry_ids()
+        while archive.retained_size(retained) > self.config.max_bytes:
+            if (
+                self.config.strategy == "coverage"
+                and self._probabilities
+                and any(
+                    cell.cell_id not in self._probabilities
+                    and archive.retained_size(cell.representatives) <= self.config.max_bytes
+                    for cell in self._cells.values()
+                )
+            ):
+                self._deferred_admission = True
+            candidates = [
+                cell
+                for cell in self._cells.values()
+                if not cell.active_count
+                and not cell.pending_feedback
+                and (self.config.strategy != "coverage" or cell.cell_id not in self._probabilities)
+            ]
+            if not candidates and self._admission_backup is not None:
+                self._cells, self._admission_counter, self._probabilities, self._metrics = (
+                    self._admission_backup
+                )
+                self._admission_backup = None
+                retained = self.retained_entry_ids()
+                continue
+            if not candidates:
+                raise RuntimeError(
+                    "active archive representatives exceed the configured byte budget"
+                )
+            victim = min(
+                candidates,
+                key=lambda cell: (self._probabilities.get(cell.cell_id, 0), cell.cell_id),
+            )
+            del self._cells[victim.cell_id]
+            self._probabilities.pop(victim.cell_id, None)
+            self._metrics["evicted_count"] += 1
+            retained = self.retained_entry_ids()
+        archive.write_view(
+            "curriculum",
+            {
+                "schema_version": 1,
+                "config": asdict(self.config),
+                "run_seed": self.run_seed,
+                "completed_rollout": self.completed_rollout,
+                "generation": self.generation,
+                "admission_counter": self._admission_counter,
+                "coverage": self._coverage,
+                "deferred_admission": self._deferred_admission,
+                "cells": [asdict(cell) for cell in self._cells.values()],
+            },
+            referenced_entry_ids=retained,
+        )
+        archive.retain_entries(retained)
+        self._admission_backup = None
+
+    def recover(self, archive: StateArchive) -> None:
+        value = archive.view_document("curriculum")
+        if value is None:
+            return
+        if (
+            value.get("schema_version") != 1
+            or value.get("config") != asdict(self.config)
+            or value.get("run_seed") != self.run_seed
+        ):
+            raise ValueError("archive curriculum recovery contract mismatch")
+        cells = {}
+        for raw in value["cells"]:
+            cell = _Cell(**raw)
+            for entry_id in cell.representatives:
+                entry = archive.entry(entry_id)
+                if entry.restore_semantics != "continuation":
+                    raise ValueError("curriculum recovery requires continuation entries")
+            # Learner recovery restarts lanes; earlier in-flight trajectories have no feedback.
+            cell.active_count = cell.pending_feedback = 0
+            cells[cell.cell_id] = cell
+        if sum(len(cell.representatives) for cell in cells.values()) > self.config.max_entries:
+            raise ValueError("recovered curriculum exceeds its entry budget")
+        self._cells = cells
+        self.completed_rollout = int(value["completed_rollout"])
+        self.generation = int(value["generation"])
+        self._admission_counter = int(value["admission_counter"])
+        self._deferred_admission = bool(value.get("deferred_admission", False))
+        self.update_coverage(value.get("coverage", {}))
+        self._rebuild_probabilities()
 
     def schedule_activation(self) -> bool:
         if (
@@ -1525,7 +1525,12 @@ class ArchiveCurriculum:
 
     def sample(self, *, lane: int, episode_index: int) -> ArchiveSelection:
         cold = sorted(
-            (cell for cell in self._cells.values() if not cell.cold_dispatched),
+            (
+                cell
+                for cell in self._cells.values()
+                if not cell.cold_dispatched
+                and (self.config.strategy != "coverage" or cell.cell_id in self._probabilities)
+            ),
             key=lambda cell: (cell.admission_index, cell.cell_id),
         )
         if cold:
@@ -1573,7 +1578,8 @@ class ArchiveCurriculum:
             else (1.0 - alpha) * cell.feedback_score + alpha * value
         )
         self._metrics["feedback_trajectory_count"] += 1.0
-        self._rebuild_probabilities()
+        if self.config.strategy != "coverage":
+            self._rebuild_probabilities()
 
     @staticmethod
     def _rank_weights(
@@ -1630,7 +1636,55 @@ class ArchiveCurriculum:
                     break
         return result
 
+    def update_coverage(self, counts: Mapping[str, int]) -> None:
+        if any(type(value) is not int or value < 0 for value in counts.values()):
+            raise ValueError("coverage feedback requires nonnegative exact counts")
+        self._coverage = dict(counts)
+
+    def distribution_report(self):
+        probabilities = self.distribution()
+        return {
+            "rows": [
+                [
+                    cell.cell_id,
+                    len(cell.representatives),
+                    probabilities.get(cell.cell_id),
+                    not cell.cold_dispatched,
+                    self.config.strategy,
+                    self.completed_rollout,
+                    self.config.resolved_archive_lanes if self.config.restore_entries else 0,
+                    self.n_envs
+                    - (self.config.resolved_archive_lanes if self.config.restore_entries else 0),
+                    self._coverage.get(cell.cell_id)
+                    if self.config.strategy == "coverage"
+                    else None,
+                ]
+                for cell in self._cells.values()
+                if cell.representatives
+            ]
+        }
+
+    def distribution(self) -> dict[str, float]:
+        return dict(self._probabilities)
+
     def _rebuild_probabilities(self) -> None:
+        if self.config.strategy == "coverage":
+            weights = {
+                cell.cell_id: (self._coverage.get(cell.cell_id, 0) + self.config.coverage_smoothing)
+                ** -self.config.coverage_exponent
+                for cell in self._cells.values()
+                if cell.representatives
+            }
+            total = sum(weights.values())
+            self._probabilities = (
+                self._cap_probabilities(
+                    {key: value / total for key, value in weights.items()},
+                    max(self.config.max_cell_probability, 1 / len(weights)),
+                )
+                if weights
+                else {}
+            )
+            return
         scored = {
             cell.cell_id: float(cell.feedback_score)
             for cell in self._cells.values()
@@ -1667,8 +1721,26 @@ class ArchiveCurriculum:
             if cell is not None:
                 cell.last_sample_rollout = self.completed_rollout
         self._sampled_this_rollout.clear()
-        transition_count = self._metrics["transition_count"]
         probabilities = tuple(self._probabilities.values())
+        if self.config.strategy == "coverage" and self._deferred_admission:
+            # Admit a later crossing into one newly available slot next rollout.
+            # Only the boundary can retire frozen probability mass; active or
+            # unreported trajectories remain protected across this boundary.
+            candidates = [
+                cell
+                for cell in self._cells.values()
+                if cell.active_count == 0 and cell.pending_feedback == 0
+            ]
+            if candidates:
+                victim = min(
+                    candidates,
+                    key=lambda cell: (self._probabilities.get(cell.cell_id, 0.0), cell.cell_id),
+                )
+                del self._cells[victim.cell_id]
+                self._probabilities.pop(victim.cell_id, None)
+                self._metrics["evicted_count"] += 1
+                self._deferred_admission = False
+        transition_count = self._metrics["transition_count"]
         payload = {
             **self._metrics,
             "archive_cell_count": float(self.cell_count),

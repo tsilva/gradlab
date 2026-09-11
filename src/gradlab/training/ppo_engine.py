@@ -1053,8 +1053,10 @@ def run_gradlab_ppo(
             rom_binding=getattr(context, "rom_binding", None),
             state_archive=common_config.get("state_archive"),
             state_archive_root=context.run_dir / "state-archive",
+            occupancy=common_config.get("occupancy"),
         )
     runtime = env.runtime
+    occupancy_reporter = None
     try:
         set_random_seed(int(common_config["seed"]))
         validate_action_space(env.action_space, algorithm_id="ppo")
@@ -1116,6 +1118,15 @@ def run_gradlab_ppo(
                 "training-loop eval disabled; async checkpoint eval handles promotion metrics"
             )
 
+        if (
+            common_config.get("occupancy") is not None
+            or (common_config.get("state_archive") or {}).get("curriculum") is not None
+        ):
+            from gradlab.occupancy import OccupancyReporter
+
+            occupancy_reporter = OccupancyReporter(
+                runtime, context, initial_step=model.num_timesteps
+            )
         observations = runtime.reset(seed=int(common_config["seed"]))
         _preflight_cuda_memory(
             observations,
@@ -1157,6 +1168,8 @@ def run_gradlab_ppo(
         context.mark_ready()
 
         while int(model.num_timesteps) < budget.execution_total:
+            if occupancy_reporter is not None:
+                occupancy_reporter.flush()
             if context.stop_flag.requested:
                 graceful_stop.acknowledge_safe_boundary(num_timesteps=int(model.num_timesteps))
                 break
@@ -1370,4 +1383,8 @@ def run_gradlab_ppo(
             model_kind=terminal_kind,
         )
     finally:
-        env.close()
+        try:
+            if occupancy_reporter is not None:
+                occupancy_reporter.flush(final=True)
+        finally:
+            env.close()

@@ -151,6 +151,9 @@ def normalize_training_backend(
         label=f"{label}.config",
     )
     backend.validate(common_config, normalized)
+    from gradlab.occupancy import validate_tracking_runtime
+
+    validate_tracking_runtime(common_config, backend_id=backend_id)
     from gradlab.state_archive import validate_state_archive_runtime_contract
 
     validate_state_archive_runtime_contract(

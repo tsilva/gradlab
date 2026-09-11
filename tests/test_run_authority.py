@@ -705,6 +705,43 @@ class RunAuthorityTests(unittest.TestCase):
         )
         self.assertRegex(publication["generation_sha256"], r"^[0-9a-f]{64}$")
 
+        # Replaced recovery snapshots do not accumulate remotely. Other artifact
+        # ownership remains outside this Run's recovery prefix.
+        self.authority.models.put_bytes("checkpoint/snapshot", b"checkpoint-owned")
+        source.write_bytes(b"new-provider-state")
+        files[0].update(
+            sha256=hashlib.sha256(source.read_bytes()).hexdigest(), size_bytes=source.stat().st_size
+        )
+        closure = json.loads((archive_root / "closure.json").read_text())
+        closure.update(
+            files=files,
+            step=128,
+            inventory_sha256=hashlib.sha256(
+                json.dumps(files, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest(),
+        )
+        (archive_root / "closure.json").write_text(json.dumps(closure))
+        latest = self.authority.publish_state_archive(
+            run_id=run_id, attempt_id=attempt_id, archive_root=archive_root
+        )
+        lease = self.authority.acquire_lease(
+            run_id=run_id, attempt_id=attempt_id, holder_id="retention-test"
+        )
+        lease = self.authority.prune_state_archive(lease)
+        prefix = f"runs/{run_id}/state-archive"
+        self.assertEqual(len(list(self.authority.control.iter_keys(f"{prefix}/objects"))), 1)
+        self.assertEqual(len(list(self.authority.control.iter_keys(f"{prefix}/generations"))), 1)
+        self.assertEqual(
+            self.authority.models.get_bytes("checkpoint/snapshot"), b"checkpoint-owned"
+        )
+        self.assertEqual(
+            self.authority.restore_state_archive(
+                run_id=run_id, destination=Path(self.temporary.name) / "latest-archive"
+            ),
+            latest,
+        )
+        self.authority.release_lease(lease)
+
     def test_eval_intent_is_deterministic_and_private(self) -> None:
         run_id = new_run_id()
         key = eval_idempotency_key(

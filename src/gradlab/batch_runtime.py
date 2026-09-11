@@ -472,6 +472,8 @@ class BatchRuntime:
         capture_step_diagnostics: bool = False,
         state_archive: Mapping[str, Any] | None = None,
         state_archive_root: str | Path | None = None,
+        occupancy: Mapping[str, Any] | None = None,
+        occupancy_environment: Mapping[str, Any] | None = None,
     ):
         self.provider = provider
         self.descriptor = descriptor
@@ -572,6 +574,7 @@ class BatchRuntime:
                     run_seed=self.run_seed,
                     global_lane_ids=self.global_lane_ids,
                 )
+                self.archive_curriculum.recover(self.state_archive)
         if self.state_archive is not None:
             if not descriptor.supports_live_snapshots or not callable(
                 getattr(provider, "capture_snapshots", None)
@@ -584,6 +587,45 @@ class BatchRuntime:
                     f"provider {descriptor.provider_id!r} does not declare deterministic "
                     "live snapshot continuation"
                 )
+        self.curriculum_reports = []
+        self.occupancy = None
+        if occupancy is not None:
+            from gradlab.occupancy import OccupancyCollector
+
+            self.occupancy = OccupancyCollector(
+                occupancy,
+                n_envs=self.num_envs,
+                environment=occupancy_environment
+                or {"provider": descriptor.provider_id, "actions": self.action_contract},
+            )
+            for dimension in self.occupancy.detector.config.dimensions:
+                kind, name = dimension.selector
+                if kind == "signal":
+                    kernel.validate_archive_signal(name)
+                else:
+                    spec = descriptor.signal_schema.get(name)
+                    if (
+                        spec is None
+                        or spec.shape
+                        or not spec.available_on_reset
+                        or not spec.available_on_step
+                    ):
+                        raise ValueError(
+                            f"occupancy source {name!r} requires scalar reset/step data"
+                        )
+        if (
+            self.archive_curriculum is not None
+            and self.archive_curriculum.config.strategy == "coverage"
+        ):
+            if (
+                self.occupancy is None
+                or self.occupancy.detector.config != self.archive_cell_detector.config
+            ):
+                raise ValueError(
+                    "coverage curriculum requires identical occupancy and archive cell definitions"
+                )
+            self.occupancy.retain_recent_windows(self.archive_curriculum.config.coverage_windows)
+
         self.reset_infos: list[dict[str, Any]] = [{} for _ in range(self.num_envs)]
         self._reset_info_dtypes: dict[str, np.dtype[Any]] = {}
         self._episode_returns = np.zeros(self.num_envs, dtype=np.float64)
@@ -772,6 +814,7 @@ class BatchRuntime:
         self._episode_seeds = list(normalized_seeds)
         if self.archive_curriculum is not None:
             self._set_curriculum_reset_baselines(infos, mask)
+        self._assign_occupancy(infos, mask=mask, origin="normal")
         return initial_observations
 
     def _reset_options(
@@ -868,16 +911,25 @@ class BatchRuntime:
         mask: np.ndarray | None,
         source: str,
     ) -> tuple[bytes, ...]:
+        values = self._cell_values(detector, infos, mask=mask, source=source)
+        if mask is None:
+            return detector.keys(values, n_envs=self.num_envs)
+        keys = iter(
+            detector.keys_from_indices(detector.indices(values, n_envs=self.num_envs, mask=mask))
+        )
+        return tuple(next(keys) if active else b"" for active in mask)
+
+    def _cell_values(self, detector, infos, *, mask, source):
         selected = (
             np.ones(self.num_envs, dtype=np.bool_)
             if mask is None
             else np.asarray(mask, dtype=np.bool_)
         )
         values: dict[tuple[str, str], np.ndarray] = {}
-        for dimension in detector.config.dimensions:
-            selector_kind, selector_name = dimension.selector
+        for selector in detector.selectors:
+            selector_kind, selector_name = selector
             if selector_kind == "signal":
-                values[dimension.selector] = self.archive_signal_values(
+                values[selector] = self.archive_signal_values(
                     selector_name,
                     infos,
                     mask=selected,
@@ -901,8 +953,31 @@ class BatchRuntime:
                     raise ValueError(
                         f"archive cell source {selector_name!r} is absent for active lanes"
                     )
-            values[dimension.selector] = raw_values
-        return detector.keys(values, n_envs=self.num_envs)
+            values[selector] = raw_values
+        return values
+
+    def _assign_occupancy(self, infos, *, mask=None, origin=None):
+        if self.occupancy is None or (mask is not None and not np.any(mask)):
+            return
+        values = self._cell_values(self.occupancy.detector, infos, mask=mask, source="occupancy")
+        self.occupancy.assign(values, mask=mask, origin=origin)
+
+    def drain_occupancy(self, *, final=False):
+        return () if self.occupancy is None else self.occupancy.drain(final=final)
+
+    def occupancy_state(self, *, recovery_cursor):
+        if self.occupancy is None:
+            raise RuntimeError("occupancy tracking is disabled")
+        return self.occupancy.export_state(recovery_cursor=recovery_cursor)
+
+    def restore_occupancy(self, state, *, recovery_cursor, initial_step=0):
+        if self.occupancy is None:
+            raise RuntimeError("occupancy tracking is disabled")
+        return self.occupancy.restore_state(
+            state,
+            recovery_cursor=recovery_cursor,
+            initial_step=initial_step,
+        )
 
     def policy_cell_keys(
         self,
@@ -1110,6 +1185,8 @@ class BatchRuntime:
         self,
         mask: np.ndarray,
         entry_ids: Sequence[str | None],
+        *,
+        origin: str = "archive",
     ) -> Any:
         archive = self.state_archive
         if archive is None:
@@ -1196,6 +1273,7 @@ class BatchRuntime:
                 int(np.count_nonzero(selected)),
                 reset_seconds,
             )
+        self._assign_occupancy(infos, mask=selected, origin=origin)
         return self._observation_buffers[self._current_observation_buffer]
 
     def _capture_curriculum_candidates(
@@ -1229,28 +1307,46 @@ class BatchRuntime:
         curriculum.note_candidates(candidate_count)
         if candidate_count == 0:
             return
-        entry_ids = self.capture_archive_entries(
-            candidate_mask,
-            metadata_by_lane={
-                int(lane): {"cell_id": str(cells[int(lane)])}
-                for lane in np.flatnonzero(candidate_mask)
-            },
+        planned = curriculum.plan_admissions(
+            {int(lane): str(cells[int(lane)]) for lane in np.flatnonzero(candidate_mask)}
         )
-        for lane in np.flatnonzero(candidate_mask):
-            lane_index = int(lane)
-            entry_id = entry_ids[lane_index]
-            assert entry_id is not None
-            curriculum.admit(str(cells[lane_index]), entry_id)
+        candidate_mask[:] = False
+        for lane in planned:
+            candidate_mask[lane] = True
+        if not planned:
+            return
+        try:
+            entry_ids = self.capture_archive_entries(
+                candidate_mask,
+                metadata_by_lane={lane: {"cell_id": cell} for lane, cell in planned.items()},
+            )
+        except Exception:
+            curriculum.commit_admissions({})
+            curriculum.persist(self.state_archive)
+            raise
+        curriculum.commit_admissions({lane: entry_ids[lane] for lane in planned})
+        curriculum.persist(self.state_archive)
 
     def curriculum_begin_rollout(self) -> None:
         if self.archive_curriculum is not None:
+            if self.archive_curriculum.config.strategy == "coverage":
+                self.archive_curriculum.update_coverage(self.occupancy.recent_counts())
             self.archive_curriculum.begin_rollout()
+            if len(self.curriculum_reports) >= 64:
+                raise RuntimeError(
+                    "curriculum reports require a logging boundary before further collection"
+                )
+            self.curriculum_reports.append(
+                (self._transition_count_total, self.archive_curriculum.distribution_report())
+            )
 
     def curriculum_complete_rollout(self) -> dict[str, float]:
         curriculum = self.archive_curriculum
         if curriculum is None:
             return {}
         payload = curriculum.complete_rollout()
+        curriculum.persist(self.state_archive)
+        self.state_archive.seal(step=self._transition_count_total, status="recoverable")
         if curriculum.schedule_activation():
             self.request_resets(
                 curriculum.archive_lane_mask,
@@ -1388,6 +1484,8 @@ class BatchRuntime:
     def step(self, actions: Any) -> BatchStep:
         if not self._observation_buffers:
             raise RuntimeError("BatchRuntime.reset() must be called before step()")
+        if self.occupancy is not None and len(self.occupancy.completed) >= 64:
+            raise RuntimeError("drain occupancy summaries before collecting more transitions")
         native_actions = self.kernel.map_actions(actions)
         started_at = time.perf_counter()
         observations, native_rewards, provider_terminated, provider_truncated, infos = (
@@ -1451,6 +1549,10 @@ class BatchRuntime:
                 num_envs=self.num_envs,
                 metrics=_copy_tree(task_step.metrics),
             )
+        if self.occupancy is not None:
+            selected = ~dones if any_done else self.occupancy.all_lanes
+            values = self._cell_values(self.occupancy.detector, infos, mask=selected, source="step")
+            self.occupancy.collect(values, mask=selected if any_done else None)
         forced_reset_mask = self._pending_reset_mask
         forced_only_mask = self._pending_reset_mask
         if self._has_pending_resets:
@@ -1729,6 +1831,11 @@ class BatchRuntime:
                     self._start_origins[lane_index] = "curriculum"
                     self._curriculum_cell_ids[lane_index] = selection.cell_id
                     self._curriculum_generations[lane_index] = selection.generation
+            self._assign_occupancy(reset_infos, mask=dones, origin="normal")
+            if archive_selections and self.occupancy is not None:
+                archive_mask = np.zeros(self.num_envs, dtype=np.bool_)
+                archive_mask[list(archive_selections)] = True
+                self._assign_occupancy(reset_infos, mask=archive_mask, origin="archive")
             self._pending_reset_mask[dones] = False
             self._pending_start_ids[dones] = None
             self._pending_reset_reasons[dones] = None
@@ -1853,6 +1960,7 @@ class BatchRuntime:
             return
         self._closed = True
         if self.archive_curriculum is not None:
+            self.archive_curriculum.persist(self.state_archive)
             self.archive_curriculum.close()
         if (
             self.state_archive is not None
