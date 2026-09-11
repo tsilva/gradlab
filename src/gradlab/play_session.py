@@ -362,7 +362,9 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
-        "--fps", type=float, default=30.0,
+        "--fps",
+        type=float,
+        default=30.0,
         help="Playback display FPS (default: 30; 0: unlimited). Policy inference is unthrottled.",
     )
     parser.add_argument(
@@ -1153,6 +1155,7 @@ class _PlaybackSession:
         *,
         deterministic: bool = False,
         action_selection_mode: str | None = None,
+        sampling_temperature: float = 1.0,
     ) -> _PlaybackTransition:
         if self.policy_runtime is None:
             raise RuntimeError(f"policy runtime is unavailable: {self._policy_runtime_error}")
@@ -1162,6 +1165,7 @@ class _PlaybackSession:
         batch = self.policy_runtime.decide(
             self.model_obs,
             action_selection_mode=requested_mode,
+            sampling_temperature=sampling_temperature,
             include_diagnostics=bool(self.processing_features & {"policy", "raw"}),
             execution_context=(
                 self.env.policy_execution_context(self.model)

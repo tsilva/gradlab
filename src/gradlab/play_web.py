@@ -332,6 +332,7 @@ def _decision_payload(decision: PolicyDecision | None) -> dict[str, Any] | None:
         "distribution": decision.distribution_kind,
         "requested_action_selection_mode": decision.requested_action_selection_mode,
         "action_selection_mode": decision.action_selection_mode,
+        "sampling_temperature": decision.sampling_temperature,
         "raw_action": _json_value(decision.raw_action),
         "executed_action": _json_value(decision.executed_action),
         "value": decision.value,
@@ -424,6 +425,7 @@ def transition_payload(
                 transition.decision.requested_action_selection_mode
             ),
             "action_selection_mode": transition.decision.action_selection_mode,
+            "sampling_temperature": transition.decision.sampling_temperature,
             "sampled": transition.decision.sampled,
             "selected_action": transition.decision.selected_discrete_action,
         }
@@ -831,6 +833,10 @@ class _PlaybackRunnerProtocol:
             self._episode_start_frames: dict[int, tuple[int, bytes]] = {}
             self._thread = threading.Thread(target=self._run, name=thread_name)
 
+    @property
+    def effective_fps(self) -> float:
+        return self.target_fps if getattr(self, "rgb_enabled", True) else 0.0
+
     def set_processing(self, features: Iterable[object]) -> None:
         self.processing_features = normalize_player_processing(features)
         session = getattr(self, "session", None)
@@ -981,6 +987,12 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         )
         if not self.supported_action_selection_modes:
             self.supported_action_selection_modes = ("stochastic", "deterministic")
+        self.supports_sampling_temperature = bool(
+            getattr(getattr(session, "policy_runtime", None), "supports_sampling_temperature",
+                    "stochastic" in self.supported_action_selection_modes)
+        )
+        self.sampling_temperature = 1.0
+        self.temperature_changed = False
         default_mode = str(action_selection.get("default_mode") or "")
         self.sampling_mode = default_mode or (
             self.supported_action_selection_modes[0]
@@ -1015,6 +1027,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         # diagnostic and never block behind an in-flight environment decision.
         self._diagnostic_lock = threading.RLock()
         from gradlab.play_diagnostics import DiagnosticQueries
+
         self._diagnostics = DiagnosticQueries()
         self._inspection_history: tuple[str, int, int, list[dict[str, Any]]] | None = None
         self.recording: EpisodeRecording | None = None
@@ -1076,6 +1089,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
     def _recording_classification(self, seed: int | None = None) -> str:
         if (
             self.session.interactive
+            or self.temperature_changed
             or self.driver == "human"
             or self.contract_details.get("mode") == "counterfactual"
             or self.sampling_mode
@@ -1157,7 +1171,8 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             first = cached[1] if reuse else max(status["first_step"], ((step - 1) // 64) * 64 - 63)
             last = cached[2] if reuse else min(status["last_step"], first + 127)
             recent = {
-                point["sequence"]: dict(point) for point in list(self.history)
+                point["sequence"]: dict(point)
+                for point in list(self.history)
                 if first <= point["step"] <= last
             }
             descriptor = recording.reserve_read()
@@ -1170,9 +1185,11 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             if reuse:
                 points = cached[3]
             else:
-                previous = {
-                    point["step"]: point for point in cached[3]
-                } if cached is not None and cached[0] == episode_id else {}
+                previous = (
+                    {point["step"]: point for point in cached[3]}
+                    if cached is not None and cached[0] == episode_id
+                    else {}
+                )
                 points = []
                 for index in range(first, last + 1):
                     point = previous.get(index)
@@ -1184,7 +1201,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             # Preserve calibration amendments without inventing completed returns.
             points = [dict(recent.get(point["sequence"], point)) for point in points]
             images = {
-                FRAME_GAME: row["after_image"],
+                FRAME_GAME: row["after_image"] if getattr(self, "rgb_enabled", True) else None,
                 FRAME_OBSERVATION: render_obs_stack(row["observation_frames"], 1)
                 if row["observation_frames"]
                 else None,
@@ -1251,6 +1268,8 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         presentation["episode_rewards"] = self.episode_rewards.payload(full)
         presentation["recorded_session"] = {
             "sampling_mode": self.sampling_mode,
+            "sampling_temperature": getattr(self, "sampling_temperature", 1.0),
+            "temperature_changed": getattr(self, "temperature_changed", False),
             "critic_comparison": {
                 "available": not reasons,
                 "reasons": reasons,
@@ -1365,6 +1384,9 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         if active_task != base_task:
             self.capture.abort("episode termination differs from the faithful playback contract")
             return
+        if self.temperature_changed:
+            self.capture.abort("sampling temperature differs from faithful playback")
+            return
         expected = str((self.capture.context or {}).get("expected_sampling_mode") or "")
         if expected and self.sampling_mode != expected:
             self.capture.abort("action selection differs from the faithful playback contract")
@@ -1415,6 +1437,8 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             if self.value_contract is not None
             else ""
         )
+        if self.temperature_changed:
+            reasons.append("sampling temperature changed from the training contract")
         if expected_selection and self.sampling_mode != expected_selection:
             reasons.append(
                 "V(s) was trained with stochastic action selection and may be less accurate "
@@ -1519,6 +1543,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                         )
                         else None
                     ),
+                    "supports_temperature": self.supports_sampling_temperature,
                     "requested_mode": self.sampling_mode,
                     "effective_mode": (
                         current.get("decision", {}).get("action_selection_mode")
@@ -1551,8 +1576,11 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 "event_names": event_names,
                 "env_id": self.environment_id,
                 "sampling_mode": self.sampling_mode,
+                "sampling_temperature": getattr(self, "sampling_temperature", 1.0),
+                "temperature_changed": getattr(self, "temperature_changed", False),
                 "value_discount": self.value_discount,
                 "target_fps": self.target_fps,
+                "rgb_enabled": getattr(self, "rgb_enabled", True),
                 "episodes_limit": int(self.args.episodes),
                 "awaiting_next_episode": self.awaiting_next_episode,
                 "can_start_next_episode": self._can_start_next_episode(),
@@ -1626,10 +1654,10 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         # Keep every history point, but only prepare live frames at display speed.
         # Commands and terminal transitions bypass pacing so they remain visible.
         now = time.perf_counter()
-        if paced and self.target_fps > 0 and now < self._next_presentation_at:
+        if paced and self.effective_fps > 0 and now < self._next_presentation_at:
             return
-        if self.target_fps > 0:
-            interval = 1.0 / self.target_fps
+        if self.effective_fps > 0:
+            interval = 1.0 / self.effective_fps
             if paced and self._next_presentation_at > 0:
                 # Advance the intended clock, not the completion time of a step.
                 # Discard missed display slots without replaying them in a burst.
@@ -1643,11 +1671,11 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         else:
             self._next_presentation_at = 0.0
         if transition is not None:
-            game_frame = transition.after_frame if "game" in self.processing_features else None
+            game_frame = transition.after_frame if "game" in self.processing_features and getattr(self, "rgb_enabled", True) else None
             obs_frames = transition.before_frames
             sequence = transition.sequence
         else:
-            game_frame = self.session.current_frame if "game" in self.processing_features else None
+            game_frame = self.session.current_frame if "game" in self.processing_features and getattr(self, "rgb_enabled", True) else None
             obs_frames = tuple(self.session.frames or ())
             sequence = self.session.sequence
         obs_image = None
@@ -1815,6 +1843,19 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 self.continue_target = None
                 self.clear_input()
                 self._set_state("paused", message="paused at a completed transition")
+            elif command.name == "set_sampling_temperature":
+                temperature = float(command.payload.get("temperature"))
+                if not np.isfinite(temperature) or temperature <= 0:
+                    raise ValueError("sampling temperature must be finite and greater than zero")
+                if not self.supports_sampling_temperature:
+                    raise ValueError("this policy does not support sampling temperature")
+                if temperature != self.sampling_temperature:
+                    self.sampling_temperature = temperature
+                    self.temperature_changed = True
+                    self.capture.abort("sampling temperature changed during playback")
+                self._set_state(
+                    self.run_state, message=f"next sampling temperature · {temperature:g}"
+                )
             elif command.name == "set_action_selection_mode":
                 mode = str(command.payload.get("mode") or "")
                 if mode not in self.supported_action_selection_modes:
@@ -1875,6 +1916,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                         )
                     )
                 self.session.last_transition = None
+                self.temperature_changed = self.sampling_temperature != 1.0
                 self.sampling_mode = mode
                 self.driver = driver
                 self.clear_input()
@@ -1901,6 +1943,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                     enabled_termination_conditions = self._validate_enabled_termination_conditions(
                         enabled_termination_conditions
                     )
+                self.temperature_changed = self.sampling_temperature != 1.0
                 self.session.reset_episode(seed)
                 if enabled_termination_conditions is not None:
                     self.session.set_termination_conditions(enabled_termination_conditions)
@@ -1919,6 +1962,9 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 if fps < 0 or not np.isfinite(fps):
                     raise ValueError("fps must be a finite value >= 0")
                 self.target_fps = fps
+                self.rgb_enabled = bool(
+                    command.payload.get("rgb_enabled", getattr(self, "rgb_enabled", True))
+                )
                 self.revision += 1
                 self._publish(self.session.last_transition)
             elif command.name == "set_termination_conditions":
@@ -1979,7 +2025,14 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 self.session.step_human(self._human_labels())
                 if self.driver == "human"
                 else (
-                    self.session.step(action_selection_mode=self.sampling_mode)
+                    self.session.step(
+                        action_selection_mode=self.sampling_mode,
+                        **(
+                            {"sampling_temperature": self.sampling_temperature}
+                            if self.sampling_temperature != 1.0
+                            else {}
+                        ),
+                    )
                     if hasattr(self.session, "policy_runtime")
                     else self.session.step(deterministic=self.sampling_mode == "deterministic")
                 )
@@ -2049,7 +2102,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             if self.run_state not in {"playing", "stepping", "continuing"}:
                 time.sleep(0.005)
                 continue
-            fps = (self.target_fps or 60.0) if self.driver == "human" else 0.0
+            fps = (self.target_fps or 60.0) if self.driver == "human" and getattr(self, "rgb_enabled", True) else 0.0
             if fps > 0:
                 now = time.perf_counter()
                 if now < next_step_at:
@@ -2138,7 +2191,10 @@ class DatasetPlaybackRunner(_PlaybackRunnerProtocol):
                 "event_names": [],
                 "env_id": self.environment_id,
                 "sampling_mode": self.sampling_mode,
+                "sampling_temperature": getattr(self, "sampling_temperature", 1.0),
+                "temperature_changed": getattr(self, "temperature_changed", False),
                 "target_fps": self.target_fps,
+                "rgb_enabled": getattr(self, "rgb_enabled", True),
                 "episodes_limit": 1,
                 "awaiting_next_episode": self.transition_index >= len(self.rows) - 1,
                 "can_start_next_episode": False,
@@ -2160,7 +2216,7 @@ class DatasetPlaybackRunner(_PlaybackRunnerProtocol):
         }
 
     def _publish(self) -> None:
-        self.encoder.submit(FRAME_GAME, self.sequence, self.current_frame)
+        self.encoder.submit(FRAME_GAME, self.sequence, self.current_frame if getattr(self, "rgb_enabled", True) else None)
         payload = self._snapshot_payload()
         with self._snapshot_lock:
             self._latest_snapshot = payload
@@ -2233,6 +2289,9 @@ class DatasetPlaybackRunner(_PlaybackRunnerProtocol):
                 if fps < 0 or not np.isfinite(fps):
                     raise ValueError("fps must be a finite value >= 0")
                 self.target_fps = fps
+                self.rgb_enabled = bool(
+                    command.payload.get("rgb_enabled", getattr(self, "rgb_enabled", True))
+                )
                 self.revision += 1
                 self._publish()
             elif command.name == "stop":
@@ -2366,12 +2425,12 @@ class DatasetPlaybackRunner(_PlaybackRunnerProtocol):
             if self.run_state not in {"playing", "stepping", "continuing"}:
                 time.sleep(0.005)
                 continue
-            if self.target_fps > 0:
+            if self.effective_fps > 0:
                 now = time.perf_counter()
                 if now < next_step_at:
                     time.sleep(min(next_step_at - now, 0.005))
                     continue
-                next_step_at = max(next_step_at + 1.0 / self.target_fps, now)
+                next_step_at = max(next_step_at + 1.0 / self.effective_fps, now)
             try:
                 self._step_once()
             except (StopIteration, IndexError) as exc:
@@ -2478,6 +2537,9 @@ class HumanRecordingRunner(_PlaybackRunnerProtocol):
                 if not np.isfinite(fps) or fps <= 0:
                     raise ValueError("recording FPS must be a finite value > 0")
                 self.target_fps = fps
+                self.rgb_enabled = bool(
+                    command.payload.get("rgb_enabled", getattr(self, "rgb_enabled", True))
+                )
                 self._status_message = f"Recording at {fps:g} FPS"
             elif command.name == "set_driver":
                 if command.payload.get("driver") != "human":
@@ -2534,6 +2596,7 @@ class HumanRecordingRunner(_PlaybackRunnerProtocol):
                     "env_id": self.environment_id,
                     "sampling_mode": None,
                     "target_fps": self.target_fps,
+                    "rgb_enabled": getattr(self, "rgb_enabled", True),
                     "episodes_limit": int(getattr(self.args, "episodes", None) or 0),
                     "awaiting_next_episode": False,
                     "can_start_next_episode": False,
@@ -2557,7 +2620,7 @@ class HumanRecordingRunner(_PlaybackRunnerProtocol):
             self._snapshot_updates.append(payload)
 
     def action(self, frame: np.ndarray) -> tuple[Any | None, bool]:
-        self.encoder.submit(FRAME_GAME, self.sequence, frame)
+        self.encoder.submit(FRAME_GAME, self.sequence, frame if getattr(self, "rgb_enabled", True) else None)
         self._publish()
         while not self.stopped:
             with self._condition:
@@ -2569,7 +2632,10 @@ class HumanRecordingRunner(_PlaybackRunnerProtocol):
             now = time.perf_counter()
             if now < self._next_action_at:
                 time.sleep(self._next_action_at - now)
-            self._next_action_at = max(self._next_action_at + 1.0 / self.target_fps, now)
+            self._next_action_at = (
+                max(self._next_action_at + 1.0 / self.effective_fps, now)
+                if self.effective_fps > 0 else now
+            )
             try:
                 action = self.session.action_from_labels(labels)
             except ValueError as exc:
@@ -2654,7 +2720,7 @@ class HumanRecordingRunner(_PlaybackRunnerProtocol):
             },
         }
         self.history.append(history_point_payload(self._transition))
-        self.encoder.submit(FRAME_GAME, self.sequence, next_frame)
+        self.encoder.submit(FRAME_GAME, self.sequence, next_frame if getattr(self, "rgb_enabled", True) else None)
         self.revision += 1
         self._publish()
 
@@ -2739,6 +2805,13 @@ class WebClient:
             while not self.reliable.empty():
                 value = self.reliable.get_nowait()
                 if isinstance(value, bytes):
+                    if (
+                        len(value) > FRAME_HEADER.size
+                        and value[:4] == b"RLP3"
+                        and value[4] == FRAME_GAME
+                        and "game" not in self.subscriptions
+                    ):
+                        continue
                     await self.socket.send_bytes(value)
                 else:
                     await self.socket.send_str(value)
@@ -2747,6 +2820,8 @@ class WebClient:
                 await self.socket.send_str(snapshot)
                 self.sent_snapshot_key = key
             for kind, (sequence, packet) in tuple(self.latest_frames.items()):
+                if kind == FRAME_GAME and "game" not in self.subscriptions:
+                    continue
                 if (sequence, packet) != self.sent_frames.get(kind):
                     await self.socket.send_bytes(packet)
                     self.sent_frames[kind] = (sequence, packet)
@@ -2771,8 +2846,13 @@ def playback_updates(runner):
             except queue.Empty:
                 break
         responses.append(response)
-    return dict(snapshots=snapshots, frames=runner.encoder.latest(), responses=responses,
-                stopped=runner.stopped, session_change=int(getattr(runner, "session_change", 0)))
+    return dict(
+        snapshots=snapshots,
+        frames=runner.encoder.latest(),
+        responses=responses,
+        stopped=runner.stopped,
+        session_change=int(getattr(runner, "session_change", 0)),
+    )
 
 
 class PlaybackWebServer:
@@ -2789,6 +2869,7 @@ class PlaybackWebServer:
         publication_factory: Any | None = None,
     ) -> None:
         from gradlab.play_chart_transport import ChartResponses
+
         self._chart_responses = ChartResponses()
         self.runner = runner
         self.args = args
@@ -3192,7 +3273,10 @@ class PlaybackWebServer:
         return web.json_response(page.to_dict())
 
     async def _prepare_initial_catalog(self) -> None:
-        if self.catalog is None or (await asyncio.to_thread(self.runner.snapshot)).get("mode") == "trajectory":
+        if (
+            self.catalog is None
+            or (await asyncio.to_thread(self.runner.snapshot)).get("mode") == "trajectory"
+        ):
             return
         initial_environments = getattr(self.catalog, "initial_environments", None)
         if not callable(initial_environments):
@@ -3484,6 +3568,10 @@ class PlaybackWebServer:
             result = await asyncio.to_thread(inspect, *args)
             if epoch != await asyncio.to_thread(self._runner_epoch):
                 raise ValueError("the Playback Session has been replaced")
+            if request.query.get("rgb") == "off":
+                result["frames"] = [
+                    frame for frame in result.get("frames", []) if frame["kind"] != FRAME_GAME
+                ]
             result["snapshot"]["session_epoch"] = epoch
             return web.json_response(result, headers={"Cache-Control": "no-store"})
         except (KeyError, ValueError, OSError, RuntimeError) as exc:
@@ -3541,11 +3629,13 @@ class PlaybackWebServer:
         self._authorize_api(request)
         if self.catalog is None:
             raise web.HTTPNotFound()
-        response = web.StreamResponse(headers={
-            "Content-Type": "application/x-ndjson",
-            "Cache-Control": "no-store",
-            "X-Accel-Buffering": "no",
-        })
+        response = web.StreamResponse(
+            headers={
+                "Content-Type": "application/x-ndjson",
+                "Cache-Control": "no-store",
+                "X-Accel-Buffering": "no",
+            }
+        )
         await response.prepare(request)
         loop = asyncio.get_running_loop()
         events: asyncio.Queue[Mapping[str, Any]] = asyncio.Queue()
@@ -3557,10 +3647,14 @@ class PlaybackWebServer:
         async def produce() -> None:
             try:
                 result = await self._catalog_checkpoints(
-                    request, include_wandb=True, on_training_progress=progress,
+                    request,
+                    include_wandb=True,
+                    on_training_progress=progress,
                 )
                 payload = json.loads(result.body)
-                await events.put({"type": "complete" if result.status == 200 else "error", **payload})
+                await events.put(
+                    {"type": "complete" if result.status == 200 else "error", **payload}
+                )
             except Exception as exc:
                 await events.put({"type": "error", "error": str(exc)})
 
@@ -3899,15 +3993,21 @@ class PlaybackWebServer:
             client.offer_reliable((await asyncio.to_thread(self.runner.history_payload)))
             episode_start_payload = getattr(self.runner, "episode_start_payload", None)
             if callable(episode_start_payload):
-                episode_start_snapshot, episode_start_frames = await asyncio.to_thread(episode_start_payload)
+                episode_start_snapshot, episode_start_frames = await asyncio.to_thread(
+                    episode_start_payload
+                )
                 if episode_start_snapshot:
                     client.offer_reliable(self._snapshot_for(client, episode_start_snapshot))
                 for frame_kind, (_sequence, packet) in episode_start_frames.items():
                     subscription = FRAME_SUBSCRIPTIONS.get(frame_kind)
                     if subscription in client.subscriptions:
                         client.offer_reliable(packet)
-            client.offer_snapshot(self._snapshot_for(client, (await asyncio.to_thread(self.runner.snapshot))))
-            for frame_kind, (sequence, packet) in (await asyncio.to_thread(self.runner.encoder.latest)).items():
+            client.offer_snapshot(
+                self._snapshot_for(client, (await asyncio.to_thread(self.runner.snapshot)))
+            )
+            for frame_kind, (sequence, packet) in (
+                await asyncio.to_thread(self.runner.encoder.latest)
+            ).items():
                 subscription = FRAME_SUBSCRIPTIONS.get(frame_kind)
                 if subscription in client.subscriptions:
                     client.offer_frame(frame_kind, sequence, packet)
@@ -3936,11 +4036,20 @@ class PlaybackWebServer:
                         self._rotate_publication_authority(client.client_id)
                         await self._broadcast_control()
                 elif kind == "subscribe":
+                    previous_subscriptions = client.subscriptions
                     client.subscriptions = {
                         str(value)
                         for value in payload.get("subscriptions", ())
                         if str(value) in {"telemetry", *FRAME_SUBSCRIPTIONS.values()}
                     }
+                    for frame_kind, subscription in FRAME_SUBSCRIPTIONS.items():
+                        if (
+                            subscription not in client.subscriptions
+                            or subscription not in previous_subscriptions
+                        ):
+                            client.sent_frames.pop(frame_kind, None)
+                        if subscription not in client.subscriptions:
+                            client.latest_frames.pop(frame_kind, None)
                     if "processing" in payload:
                         client.processing = normalize_player_processing(
                             payload.get("processing") or ()

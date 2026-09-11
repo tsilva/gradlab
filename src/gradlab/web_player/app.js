@@ -71,6 +71,7 @@ function defaultLayout() {
 }
 
 const state = {
+  rgbEnabled: true,
   socket: null,
   connected: false,
   clientId: null,
@@ -178,7 +179,9 @@ function processingPanels() {
 }
 
 function subscriptions() {
-  return panelSubscriptions(state.layout, processingPanels());
+  return panelSubscriptions(state.layout, processingPanels()).filter(
+    (name) => name !== "game" || state.rgbEnabled !== false,
+  );
 }
 
 function processing() {
@@ -190,7 +193,10 @@ function processing() {
 function enabledPanelDefinitions() {
   return processingPanels()
     .map((id) => panelDefinition(state.layout, id))
-    .filter((definition) => definition?.enabled);
+    .filter((definition) => definition?.enabled)
+    .map((definition) => state.rgbEnabled === false
+      ? { ...definition, frameKinds: definition.frameKinds.filter((kind) => kind !== FRAME_GAME) }
+      : definition);
 }
 
 function setDetachedLayout() {
@@ -481,6 +487,17 @@ function handleMessage(message) {
     state.hasControl = Boolean(message.control?.has_control);
     state.controlEpoch = Number(message.control_epoch || 0);
     updatePublicationButton();
+    if (typeof message.session?.rgb_enabled === "boolean" && state.rgbEnabled !== message.session.rgb_enabled) {
+      state.rgbEnabled = message.session.rgb_enabled;
+      recordedStepReader.invalidate();
+      state.frameBlobs.get(FRAME_GAME).clear();
+      panelRuntime.resetFrames();
+      send({ type: "subscribe", subscriptions: subscriptions(), processing: processing() });
+      refreshPanels();
+      if (state.rgbEnabled && state.inspectionSequence !== null) {
+        void inspectStep(Number(state.snapshot?.transition?.step));
+      }
+    }
     if (message.app && message.app.phase !== "active") {
       state.liveSnapshot = message;
       state.snapshot = message;
@@ -719,6 +736,7 @@ async function handleFrame(buffer) {
   const magic = String.fromCharCode(...new Uint8Array(buffer, 0, 4));
   if (magic !== "RLP3") return;
   const kind = view.getUint8(4);
+  if (kind === FRAME_GAME && state.rgbEnabled === false) return;
   const epoch = Number(view.getBigUint64(8));
   const sequence = Number(view.getBigUint64(16));
   const generation = Number(view.getBigUint64(24));
@@ -999,6 +1017,7 @@ function command(name, payload = {}) {
     showToast("This window is an observer. Choose Control here first.", true);
     return null;
   }
+  if (name === "set_fps") payload = { rgb_enabled: state.rgbEnabled !== false, ...payload };
   const id = crypto.randomUUID();
   send({
     type: "command",
@@ -1421,6 +1440,7 @@ function inspectSequence(sequence) {
 
 const recordedStepPrefetch = new RecordedStepPrefetch(async ({ epoch, episode_id, step }, { signal } = {}) => {
   const query = new URLSearchParams({ epoch, episode_id, step });
+  if (state.rgbEnabled === false) query.set("rgb", "off");
   const response = await fetch(`/api/playback/recorded-step?${query}`, {
     signal,
     headers: { Authorization: `Bearer ${token}` },
@@ -1623,7 +1643,7 @@ function gridWidgetFor(name, placement = state.layout.panels[name]?.placement) {
 }
 
 function fitGridToViewport() {
-  if (!gridStack || state.windowId !== "main") return;
+  if (!gridStack) return;
   const dashboard = $("#dashboard");
   const timeline = $("#timeline");
   const nextCellHeight = viewportGridCellHeight({
@@ -1633,6 +1653,7 @@ function fitGridToViewport() {
       ? 0
       : timeline.getBoundingClientRect().height,
     rows: maxPanelRow(),
+    maxFillRows: state.windowId === STATS_WINDOW_ID ? 23 : undefined,
   });
   if (nextCellHeight !== gridCellHeight) {
     gridCellHeight = nextCellHeight;
@@ -2538,6 +2559,12 @@ panelRuntime = new PanelRuntime({
   container: $("#dashboard"),
   services: {
     getState: () => state,
+    setRgbEnabled(enabled) {
+      command("set_fps", {
+        fps: Number(state.liveSnapshot?.session?.target_fps || 0),
+        rgb_enabled: enabled,
+      });
+    },
     send,
     command,
     inspectSequence,

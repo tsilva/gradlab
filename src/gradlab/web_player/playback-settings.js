@@ -77,6 +77,11 @@ export function mountPlaybackSettings({ services, idPrefix = "playback" }) {
           <option value="deterministic">Deterministic</option>
         </select>
       </div>
+      <div class="playback-field" data-temperature-field>
+        <label for="${idPrefix}-temperature">Sampling temperature</label>
+        <input id="${idPrefix}-temperature" data-temperature type="number" min="0.01" step="any" value="1">
+        <p class="control-hint">1 uses the original distribution. Lower values favor likely actions; higher values add randomness. Changes apply to the next stochastic decision and make playback counterfactual.</p>
+      </div>
       <p id="${idPrefix}-sampling-hint" class="control-hint" data-sampling-hint hidden></p>
       <div class="playback-field playback-contract" data-playback-contract>
         <label for="${idPrefix}-contract-mode">Environment contract</label>
@@ -99,6 +104,8 @@ export function mountPlaybackSettings({ services, idPrefix = "playback" }) {
   const seed = element.querySelector("[data-seed]");
   const fps = element.querySelector("[data-fps]");
   const sampling = element.querySelector("[data-sampling]");
+  const temperature = element.querySelector("[data-temperature]");
+  const temperatureField = element.querySelector("[data-temperature-field]");
   const samplingHint = element.querySelector("[data-sampling-hint]");
   const contractMode = element.querySelector("[data-contract-mode]");
   const contractSettings = element.querySelector("[data-playback-contract]");
@@ -124,6 +131,10 @@ export function mountPlaybackSettings({ services, idPrefix = "playback" }) {
     enabled_termination_conditions: enabledTerminationConditions(),
   });
 
+  temperature.addEventListener("change", () => {
+    if (!temperature.validity.valid || !temperature.value.trim()) return;
+    services.command("set_sampling_temperature", { temperature: Number(temperature.value) });
+  });
   sampling.addEventListener("change", () => services.command("set_action_selection_mode", {
     mode: sampling.value,
   }));
@@ -151,6 +162,7 @@ export function mountPlaybackSettings({ services, idPrefix = "playback" }) {
     fps.disabled = readOnly;
     seed.disabled = readOnly || recording || dataset;
     sampling.disabled = readOnly || recording || dataset || sampling.options.length <= 1;
+    temperature.disabled = readOnly || recording || dataset || sampling.value !== "stochastic";
     contractMode.disabled = readOnly || recording || dataset;
     const canChangeTermination = (
       !recording
@@ -175,6 +187,9 @@ export function mountPlaybackSettings({ services, idPrefix = "playback" }) {
       const supportedModes = Array.isArray(actionSelection.supported_modes)
         ? actionSelection.supported_modes
         : ["stochastic", "deterministic"];
+      temperatureField.hidden = actionSelection.supports_temperature === false
+        || !supportedModes.includes("stochastic");
+      if (document.activeElement !== temperature) temperature.value = session.sampling_temperature ?? 1;
       const selectionKey = JSON.stringify(supportedModes);
       if (sampling.dataset.modes !== selectionKey) {
         sampling.dataset.modes = selectionKey;
@@ -225,7 +240,8 @@ export function mountPlaybackSettings({ services, idPrefix = "playback" }) {
         evaluation: "Published evaluation",
         counterfactual: "Counterfactual — not evidence",
       }[playbackContract.mode || "training"] || selectionLabel(playbackContract.mode);
-      glanceContract.textContent = contractLabel;
+      glanceContract.textContent = session.temperature_changed || Number(session.sampling_temperature ?? 1) !== 1
+        ? "Counterfactual — not evidence" : contractLabel;
       glanceDetail.textContent = `${selectionLabel(sampling.value || session.sampling_mode)} · seed ${
         text(snapshot.transition?.seed, text(session.seed, defaultSeed))
       }`;

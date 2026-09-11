@@ -82,9 +82,7 @@ def test_web_client_preserves_intermediate_snapshots_while_a_send_is_blocked() -
         await socket.first_send_started.wait()
 
         for sequence in range(1, 334):
-            client.offer_snapshot(
-                {"session_epoch": 0, "revision": sequence, "sequence": sequence}
-            )
+            client.offer_snapshot({"session_epoch": 0, "revision": sequence, "sequence": sequence})
         socket.release_first_send.set()
         while len(socket.sequences) < 334:
             await asyncio.sleep(0)
@@ -926,11 +924,21 @@ def test_player_application_requests_two_browser_windows_by_default(tmp_path) ->
     server = AsyncMock()
     server.run.return_value = 0
     with patch("gradlab.play_web.PlaybackWebServer", return_value=server) as server_type:
-        assert run_web_player_application(
-            host, args, catalog=catalog, repo_root=tmp_path,
-        ) == 0
+        assert (
+            run_web_player_application(
+                host,
+                args,
+                catalog=catalog,
+                repo_root=tmp_path,
+            )
+            == 0
+        )
     server_type.assert_called_once_with(
-        host, args, paired_windows=True, catalog=catalog, repo_root=tmp_path,
+        host,
+        args,
+        paired_windows=True,
+        catalog=catalog,
+        repo_root=tmp_path,
     )
 
 
@@ -945,13 +953,16 @@ def test_source_browser_paths_are_hierarchical_and_url_encoded() -> None:
         source_browser_path({"environment_id": "Mario Bros", "goal_id": "Level 1-1"})
         == "/environments/Mario%20Bros/goals/Level%201-1"
     )
-    assert source_browser_path(
-        {
-            "environment_id": "Mario Bros",
-            "goal_id": "Level 1-1",
-            "goal_variant_id": variant_id,
-        }
-    ) == "/environments/Mario%20Bros/goals/Level%201-1"
+    assert (
+        source_browser_path(
+            {
+                "environment_id": "Mario Bros",
+                "goal_id": "Level 1-1",
+                "goal_variant_id": variant_id,
+            }
+        )
+        == "/environments/Mario%20Bros/goals/Level%201-1"
+    )
     assert source_browser_path(
         {
             "environment_id": "Mario Bros",
@@ -1219,13 +1230,18 @@ def test_player_connection_and_checkpoint_load_wait_for_explicit_play(paired, de
                 while not server.origin:
                     await asyncio.sleep(0.01)
             async with ClientSession() as client:
+
                 async def connect(window):
                     socket = await client.ws_connect(f"{server.origin}/ws", origin=server.origin)
-                    await socket.send_json({
-                        "type": "hello", "token": server.token,
-                        "workspace_id": "workspace", "window_id": window,
-                        "subscriptions": ["telemetry"],
-                    })
+                    await socket.send_json(
+                        {
+                            "type": "hello",
+                            "token": server.token,
+                            "workspace_id": "workspace",
+                            "window_id": window,
+                            "subscriptions": ["telemetry"],
+                        }
+                    )
                     await receive_type(socket, "welcome")
                     await receive_type(socket, "snapshot")
                     return socket
@@ -1246,8 +1262,9 @@ def test_player_connection_and_checkpoint_load_wait_for_explicit_play(paired, de
                 assert runner.run_state == "paused"
                 runner.submit.assert_not_called()
 
-                await main.send_json({"type": "command", "id": "user-play",
-                    "name": "play", "payload": {}})
+                await main.send_json(
+                    {"type": "command", "id": "user-play", "name": "play", "payload": {}}
+                )
                 result = await receive_type(main, "command_result")
                 assert result["id"] == "user-play"
                 assert result["ok"] is True
@@ -1510,11 +1527,13 @@ def test_playback_transition_bootstraps_truncation_from_exact_final_policy_input
                 reset_observation,
                 np.asarray([2.0]),
                 np.asarray([True]),
-                [{
-                    "TimeLimit.truncated": True,
-                    "terminal_observation": final_observation,
-                    "reset_info": {},
-                }],
+                [
+                    {
+                        "TimeLimit.truncated": True,
+                        "terminal_observation": final_observation,
+                        "reset_info": {},
+                    }
+                ],
             )
 
         @staticmethod
@@ -2305,7 +2324,9 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
         training_continue = threading.Event()
 
         @classmethod
-        def checkpoints(cls, *, run_id, query, goal_variant_id, include_wandb, on_training_progress=None):
+        def checkpoints(
+            cls, *, run_id, query, goal_variant_id, include_wandb, on_training_progress=None
+        ):
             assert (
                 run_id,
                 query,
@@ -2313,10 +2334,17 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
             ) == ("gradlab-" + "a" * 32, "", "")
             cls.checkpoint_modes.append(include_wandb)
             if on_training_progress:
-                on_training_progress({"type": "metrics", "items": [{
-                    "checkpoint_id": "checkpoint-1-" + "b" * 16,
-                    "metrics": {"train/return/mean": 120.0},
-                }]})
+                on_training_progress(
+                    {
+                        "type": "metrics",
+                        "items": [
+                            {
+                                "checkpoint_id": "checkpoint-1-" + "b" * 16,
+                                "metrics": {"train/return/mean": 120.0},
+                            }
+                        ],
+                    }
+                )
                 assert cls.training_continue.wait(timeout=5)
             return CheckpointPage(
                 items=(
@@ -2614,9 +2642,14 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                     headers={"Authorization": f"Bearer {server.token}"},
                 )
                 assert streamed.status == 200
-                first_record = json.loads(await asyncio.wait_for(streamed.content.readline(), timeout=2))
+                first_record = json.loads(
+                    await asyncio.wait_for(streamed.content.readline(), timeout=2)
+                )
                 FakeCatalog.training_continue.set()
-                records = [first_record, *[json.loads(line) for line in (await streamed.text()).splitlines()]]
+                records = [
+                    first_record,
+                    *[json.loads(line) for line in (await streamed.text()).splitlines()],
+                ]
                 assert [record["type"] for record in records] == ["metrics", "complete"]
                 assert records[0]["items"][0]["metrics"]["train/return/mean"] == 120.0
                 run_inspection = await client.get(
@@ -2953,15 +2986,89 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
 def test_scheduled_critic_disables_stationary_calibration():
     config = {"game": "Game-v0", "task": {"termination": {}}}
     session = argparse.Namespace(
-        model=argparse.Namespace(gamma=0.945), config=config, termination_base_config=config,
+        model=argparse.Namespace(gamma=0.945),
+        config=config,
+        termination_base_config=config,
     )
     runner = WebPlaybackRunner(
-        session, human_args(), config_text="", contract_details={"comparison_reasons": []},
-        value_contract={"discount": None, "discount_schedule": {
-            "initial": 0.9, "final": 0.99, "timesteps": 100,
-        }},
+        session,
+        human_args(),
+        config_text="",
+        contract_details={"comparison_reasons": []},
+        value_contract={
+            "discount": None,
+            "discount_schedule": {
+                "initial": 0.9,
+                "final": 0.99,
+                "timesteps": 100,
+            },
+        },
     )
     assert runner.value_discount == 0.945
     assert runner._critic_comparison_reasons() == [
         "critic was trained with a changing discount; fixed-discount calibration is unavailable"
     ]
+
+
+def test_sampling_temperature_changes_without_reset():
+    session = argparse.Namespace(
+        config={"game": "Game-v0"},
+        step_index=12,
+        last_transition=None,
+        reset_episode=Mock(),
+    )
+    runner = WebPlaybackRunner(session, human_args(episodes=0), config_text="")
+    runner._publish = Mock()
+    runner.capture.abort = Mock()
+    runner.run_state = "playing"
+    runner._apply(
+        PlaybackCommand(
+            "temperature", "client", "set_sampling_temperature", {"temperature": 0.5}, None
+        )
+    )
+    assert runner.sampling_temperature == 0.5
+    assert runner.temperature_changed
+    assert runner.run_state == "playing"
+    session.reset_episode.assert_not_called()
+    runner.capture.abort.assert_called_once()
+
+def test_rgb_visibility_bypasses_fps_without_overwriting_configuration() -> None:
+    from gradlab.play_web import _PlaybackRunnerProtocol
+
+    runner = _PlaybackRunnerProtocol.__new__(_PlaybackRunnerProtocol)
+    runner.target_fps = 30.0
+    assert runner.effective_fps == 30.0
+    runner.rgb_enabled = False
+    assert runner.effective_fps == 0.0
+    runner.target_fps = 12.0
+    assert runner.effective_fps == 0.0
+    runner.rgb_enabled = True
+    assert runner.effective_fps == 12.0
+
+
+def test_web_client_drops_queued_rgb_after_unsubscribe() -> None:
+    from gradlab.play_web import _frame_packet
+
+    class Socket:
+        closed = False
+
+        def __init__(self) -> None:
+            self.frames = []
+
+        async def send_bytes(self, value) -> None:
+            self.frames.append(value)
+
+    async def scenario() -> None:
+        socket = Socket()
+        client = WebClient("client", socket, {"telemetry"}, "workspace", "main")
+        game = _frame_packet(FRAME_GAME, 1, np.zeros((2, 2, 3), dtype=np.uint8))
+        client.offer_reliable(game)
+        client.offer_frame(FRAME_GAME, 1, game)
+        writer = asyncio.create_task(client.write())
+        await asyncio.sleep(0)
+        client.closed = True
+        client.event.set()
+        await writer
+        assert socket.frames == []
+
+    asyncio.run(scenario())
