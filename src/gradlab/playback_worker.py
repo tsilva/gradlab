@@ -69,15 +69,16 @@ def _worker_main(
                         if len(read_jobs) >= 8:
                             raise ValueError("too many pending diagnostic reads")
                         kind = request["kind"]
-                        if kind not in {"chart_history", "reward_history", "event_history"}:
+                        if kind not in {"chart_history", "reward_history", "event_history",
+                                       "inspect_recorded_step"}:
                             raise ValueError("unsupported diagnostic read")
                         value = uuid.uuid4().hex
                         read_jobs[value] = reads.submit(
                             getattr(host, kind),
                             request["epoch"],
                             request["episode_id"],
-                            request.get("first"),
-                            request.get("last"),
+                            *([request["step"]] if kind == "inspect_recorded_step" else
+                              [request.get("first"), request.get("last")]),
                         )
                     else:
                         future = read_jobs[request["job_id"]]
@@ -162,16 +163,6 @@ def _worker_main(
                         request["episode_id"],
                         request.get("first"),
                         request.get("last"),
-                    )
-                except (ValueError, OSError) as exc:
-                    connection.send(
-                        {"ok": False, "error_type": type(exc).__name__, "error": str(exc)}
-                    )
-                    continue
-            elif operation == "inspect_recorded_step":
-                try:
-                    value = host.inspect_recorded_step(
-                        request["epoch"], request["episode_id"], request["step"]
                     )
                 except (ValueError, OSError) as exc:
                     connection.send(
@@ -432,13 +423,13 @@ class IsolatedPlaybackHost:
     def playback_updates(self):
         return self._rpc("playback_updates")
 
-    def _read(self, kind, **payload):
+    def _read(self, kind, *, poll_interval=0.01, **payload):
         job = self._rpc("begin_read", kind=kind, **payload)
         while True:
             result = self._rpc("poll_read", job_id=job)
             if result["done"]:
                 return result["result"]
-            time.sleep(0.01)
+            time.sleep(poll_interval)
 
     def chart_history(self, epoch, episode_id, first=None, last=None):
         return dict(
@@ -457,7 +448,8 @@ class IsolatedPlaybackHost:
 
     def inspect_recorded_step(self, epoch: int, episode_id: str, step: int) -> dict[str, Any]:
         return dict(
-            self._rpc("inspect_recorded_step", epoch=epoch, episode_id=episode_id, step=step)
+            self._read("inspect_recorded_step", epoch=epoch, episode_id=episode_id,
+                       step=step, poll_interval=0.001)
         )
 
     def episode_start_payload(

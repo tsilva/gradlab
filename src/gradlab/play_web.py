@@ -1010,7 +1010,10 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             resolved_capture_context.get("execution", {})
         )
         self._trajectory_lock = threading.RLock()
-        self._diagnostic_lock = self._trajectory_lock
+        # Recording identity/pins need a short lock independent of Policy work.
+        # Replacement acquires trajectory first, then diagnostic; reads use only
+        # diagnostic and never block behind an in-flight environment decision.
+        self._diagnostic_lock = threading.RLock()
         from gradlab.play_diagnostics import DiagnosticQueries
         self._diagnostics = DiagnosticQueries()
         self._inspection_history: tuple[str, int, int, list[dict[str, Any]]] | None = None
@@ -1030,7 +1033,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             self._begin_recording()
 
     def _begin_recording(self) -> None:
-        with self._trajectory_lock:
+        with self._trajectory_lock, self._diagnostic_lock:
             previous = self.recording
             self.recording = None
             if previous is not None:
@@ -1111,7 +1114,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
 
     def close_recording(self) -> None:
         self._diagnostics.close()
-        with self._trajectory_lock:
+        with self._trajectory_lock, self._diagnostic_lock:
             if self.recording is not None:
                 self.recording.close()
                 self.recording = None
@@ -1134,39 +1137,51 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         return read_diagnostics(self, episode_id, "event", first, last)
 
     def inspect_recorded_step(self, episode_id: str, step: int) -> dict[str, Any]:
-        """Read an inspection window without touching the live policy or cursor."""
-        with self._trajectory_lock:
+        """Read owned frames from a pinned prefix without holding up inference."""
+        from gradlab.play_diagnostics import RecordedPrefix
+
+        with self._diagnostic_lock:
             recording = self.recording
             if recording is None or recording.metadata["episode_id"] != episode_id:
                 raise ValueError("the recorded episode has been replaced")
-            row = recording.transition(step)
-            snapshot = row["inspection_snapshot"]
-            snapshot["trajectory"] = self.recording_status()
-            snapshot["history_point"] = history_point_payload(snapshot["transition"])
-            last_step = recording.status()["last_step"]
+            status = self.recording_status()
+            if type(step) is not int or not status["first_step"] <= step <= status["last_step"]:
+                raise ValueError("step is outside the recorded episode")
             cached = self._inspection_history
-            if not (
+            reuse = (
                 cached is not None
                 and cached[0] == episode_id
-                and cached[1] <= max(recording.metadata["first_step"], step - 63)
+                and cached[1] <= max(status["first_step"], step - 63)
                 and step <= cached[2]
-            ):
-                # Aligned pages retain the trailing 64 steps and room to advance
-                # without rereading a diagnostic page on every cursor movement.
-                first = max(recording.metadata["first_step"], ((step - 1) // 64) * 64 - 63)
-                last = min(last_step, first + 127)
-                points = [
-                    history_point_payload(
-                        recording.transition(index)["inspection_snapshot"]["transition"]
-                    )
-                    for index in range(first, last + 1)
-                ]
-                self._inspection_history = (episode_id, first, last, points)
-            else:
+            )
+            first = cached[1] if reuse else max(status["first_step"], ((step - 1) // 64) * 64 - 63)
+            last = cached[2] if reuse else min(status["last_step"], first + 127)
+            recent = {
+                point["sequence"]: dict(point) for point in list(self.history)
+                if first <= point["step"] <= last
+            }
+            descriptor = recording.reserve_read()
+        try:
+            prefix = RecordedPrefix(descriptor)
+            row = prefix.transition(step)
+            snapshot = row["inspection_snapshot"]
+            snapshot["trajectory"] = status
+            snapshot["history_point"] = history_point_payload(snapshot["transition"])
+            if reuse:
                 points = cached[3]
-            # Keep already-computed calibration annotations where available. A
-            # partial disk window must never invent a completed-episode return.
-            recent = {point["sequence"]: point for point in self.history}
+            else:
+                previous = {
+                    point["step"]: point for point in cached[3]
+                } if cached is not None and cached[0] == episode_id else {}
+                points = []
+                for index in range(first, last + 1):
+                    point = previous.get(index)
+                    if point is None:
+                        item = row if index == step else prefix.transition(index)
+                        point = history_point_payload(item["inspection_snapshot"]["transition"])
+                    points.append(point)
+            cache = cached if reuse else (episode_id, first, last, points)
+            # Preserve calibration amendments without inventing completed returns.
             points = [dict(recent.get(point["sequence"], point)) for point in points]
             images = {
                 FRAME_GAME: row["after_image"],
@@ -1193,7 +1208,13 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                         "png": base64.b64encode(stream.getvalue()).decode("ascii"),
                     }
                 )
+            with self._diagnostic_lock:
+                if self.recording is not recording:
+                    raise ValueError("the recorded episode has been replaced")
+                self._inspection_history = cache
             return {"snapshot": snapshot, "points": points, "frames": frames}
+        finally:
+            recording.release_read()
 
     def freeze_trajectory(self) -> str:
         with self._trajectory_lock:
@@ -1602,7 +1623,20 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         now = time.perf_counter()
         if paced and self.target_fps > 0 and now < self._next_presentation_at:
             return
-        self._next_presentation_at = now + (1.0 / self.target_fps if self.target_fps > 0 else 0.0)
+        if self.target_fps > 0:
+            interval = 1.0 / self.target_fps
+            if paced and self._next_presentation_at > 0:
+                # Advance the intended clock, not the completion time of a step.
+                # Discard missed display slots without replaying them in a burst.
+                missed = int((now - self._next_presentation_at) / interval)
+                self._next_presentation_at += (missed + 1) * interval
+                if self._next_presentation_at <= now:
+                    self._next_presentation_at = now + interval
+            else:
+                # Commands publish immediately and rebase resume/rate changes.
+                self._next_presentation_at = now + interval
+        else:
+            self._next_presentation_at = 0.0
         if transition is not None:
             game_frame = transition.after_frame if "game" in self.processing_features else None
             obs_frames = transition.before_frames

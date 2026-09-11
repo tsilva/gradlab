@@ -12,7 +12,7 @@ function harness({ driver = "policy", mode, imported = false, acknowledgeCommand
     inspectionSequence: null, inspectionPauseCommandId: null, replayingInspection: false,
     inspectionReplayTimer: null, seekingStep: null, timelineSequences: [] };
   const commands = [], timers = new Map(), requests = [];
-  let timerId = 0, invalidations = 0, transport;
+  let timerId = 0, invalidations = 0, transport, now = 0;
   const select = (sequence, { preserveReplay = false } = {}) => {
     if (!preserveReplay) transport.stopInspectionReplay({ render: false });
     if (shouldPauseForInspection(state)) command("pause");
@@ -30,6 +30,7 @@ function harness({ driver = "policy", mode, imported = false, acknowledgeCommand
     state.snapshot = state.liveSnapshot;
   };
   const services = { state, command, renderSnapshot() {}, setInspectionCursor: select, returnToLive,
+    now: () => now,
     inspectionEpisodeSequences: () => [], invalidateRead() { invalidations++; },
     async inspectStep(step, options) {
       requests.push(step);
@@ -44,6 +45,8 @@ function harness({ driver = "policy", mode, imported = false, acknowledgeCommand
   };
   transport = createPlaybackTransport(services);
   return { state, commands, timers, requests, select, transport, services,
+    get now() { return now; },
+    elapse(ms) { now += ms; },
     get invalidations() { return invalidations; },
     advanceInference(step) {
       if (state.liveSnapshot.run_state !== "playing") return;
@@ -52,9 +55,10 @@ function harness({ driver = "policy", mode, imported = false, acknowledgeCommand
       state.liveSnapshot.trajectory.transitions = step;
       if (state.inspectionSequence === null) state.snapshot = state.liveSnapshot;
     },
-    async tick() {
+    async tick(lateMs = 0) {
       const [id, timer] = timers.entries().next().value;
       timers.delete(id);
+      now += timer.delay + lateMs;
       await timer.callback();
     },
   };
@@ -87,6 +91,59 @@ test("pause stops both clocks and play behind the head resumes unfinished infere
   assert.equal(h.state.liveSnapshot.transition.step, 140);
   assert.equal(h.transport.playbackIsRunning(), false);
   assert.deepEqual(h.commands, ["pause", "play", "pause"]);
+});
+
+for (const readMs of [0, 5, 16.666667]) {
+  test(`replay sustains 30 FPS with ${readMs} ms reads and timer jitter`, async () => {
+    const h = harness();
+    h.advanceInference(10000);
+    h.select(0);
+    h.services.beforeRead = () => h.elapse(readMs);
+    h.transport.playFromCurrentPosition();
+    for (let frame = 0; frame < 300; frame++) await h.tick(frame % 3);
+    assert.ok(Math.abs(h.now - 10000 - readMs) < 3, `300 frames took ${h.now} ms`);
+    assert.deepEqual(h.requests, Array.from({ length: 300 }, (_, index) => index + 1));
+    assert.equal(h.timers.size, 1);
+  });
+}
+
+test("replay discards timing debt after a stalled timer and slow reads", async () => {
+  const h = harness();
+  h.select(0);
+  h.transport.playFromCurrentPosition();
+  await h.tick(5000);
+  const nextDelay = () => h.timers.values().next().value.delay;
+  assert.ok(nextDelay() >= 33 && nextDelay() <= 34);
+  h.services.beforeRead = () => h.elapse(100);
+  for (let frame = 0; frame < 5; frame++) await h.tick();
+  h.services.beforeRead = null;
+  await h.tick();
+  assert.ok(nextDelay() >= 33 && nextDelay() <= 34);
+  assert.deepEqual(h.requests, [1, 2, 3, 4, 5, 6, 7]);
+  assert.equal(h.timers.size, 1);
+});
+
+test("replay rebases its clock on restart and FPS changes including unlimited", async () => {
+  const h = harness();
+  h.select(0);
+  h.transport.playFromCurrentPosition();
+  await h.tick();
+  h.transport.pauseCurrentPlayback();
+  h.elapse(10000);
+  h.transport.playFromCurrentPosition();
+  const nextDelay = () => h.timers.values().next().value.delay;
+  assert.ok(Math.abs(nextDelay() - 1000 / 30) < 1e-8);
+  h.state.liveSnapshot.session.target_fps = 60;
+  await h.tick();
+  assert.ok(Math.abs(nextDelay() - 1000 / 60) < 1e-8);
+  h.state.liveSnapshot.session.target_fps = 0;
+  await h.tick();
+  assert.equal(nextDelay(), 0);
+  await h.tick();
+  assert.equal(nextDelay(), 0);
+  h.state.liveSnapshot.session.target_fps = 30;
+  await h.tick();
+  assert.ok(Math.abs(nextDelay() - 1000 / 30) < 1e-8);
 });
 
 test("playing an older step resumes a paused producer without seeking to the live head", () => {

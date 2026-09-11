@@ -80,13 +80,17 @@ export function timelineEventMarkers(points, range, slots = 120) {
 // At most one read is in flight. Scrubbing coalesces intermediate requests;
 // replacing the episode or returning to latest invalidates outstanding results.
 export class RecordedStepReader {
-  constructor(fetchStep) {
+  constructor(fetchStep, { onInvalidate = () => {} } = {}) {
     this.fetchStep = fetchStep;
+    this.onInvalidate = onInvalidate;
     this.version = 0;
     this.pending = null;
   }
 
-  invalidate() { this.version += 1; }
+  invalidate() {
+    this.version += 1;
+    this.onInvalidate();
+  }
 
   async read(request) {
     const version = ++this.version;

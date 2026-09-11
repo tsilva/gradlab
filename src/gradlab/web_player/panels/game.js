@@ -1,3 +1,5 @@
+import { mountRenderSpeed } from "./render-speed.js";
+
 const FRAME_GAME = 1;
 
 export function gameFramePhase(snapshot) {
@@ -78,6 +80,7 @@ export function mount({ definition, services }) {
       <div id="game-empty" class="game-empty empty-state">This environment has no RGB renderer.</div>
       <div class="game-frame-status">
         <div class="game-frame-phase" data-frame-phase>Initial observation</div>
+        <div class="game-render-speed" data-render-speed>Render — FPS</div>
         <div class="game-frame-boundary" data-frame-boundary hidden></div>
         <div class="game-frame-detail" data-frame-detail hidden></div>
       </div>
@@ -93,6 +96,7 @@ export function mount({ definition, services }) {
   const frame = element.querySelector(".game-frame");
   const canvas = element.querySelector("canvas");
   const empty = element.querySelector(".game-empty");
+  const renderSpeed = mountRenderSpeed(element.querySelector("[data-render-speed]"));
   const pressed = new Set();
   let focused = false;
   let aspect = 256 / 240;
@@ -102,6 +106,7 @@ export function mount({ definition, services }) {
   let preparedBitmap = null;
   let preparedSequence = null;
   let preparedHasFrame = false;
+  let preparedDecodeMs = 0;
   let bitmapRequest = 0;
   let mounted = true;
   const mapping = new Map([
@@ -183,10 +188,12 @@ export function mount({ definition, services }) {
     preparedBitmap = null;
     preparedSequence = null;
     preparedHasFrame = false;
+    preparedDecodeMs = 0;
   };
   const commitPrepared = (snapshot) => {
     if (preparedSequence !== targetSequence) return false;
     if (!preparedHasFrame) {
+      renderSpeed.reset();
       frameSequence = null;
       canvas.width = 1;
       canvas.height = 1;
@@ -197,6 +204,7 @@ export function mount({ definition, services }) {
       return true;
     }
     if (preparedBitmap) {
+      const drawStarted = performance.now();
       aspect = preparedBitmap.width / Math.max(1, preparedBitmap.height);
       fit();
       canvas.width = preparedBitmap.width;
@@ -204,6 +212,7 @@ export function mount({ definition, services }) {
       const context = canvas.getContext("2d", { alpha: false });
       context.imageSmoothingEnabled = false;
       context.drawImage(preparedBitmap, 0, 0);
+      renderSpeed.record(preparedDecodeMs, performance.now() - drawStarted);
       preparedBitmap.close();
       preparedBitmap = null;
     }
@@ -231,12 +240,14 @@ export function mount({ definition, services }) {
       preparedSequence = incomingSequence;
       return true;
     }
+    const decodeStarted = performance.now();
     const bitmap = await createImageBitmap(blob);
     if (!mounted || request !== bitmapRequest) {
       bitmap.close();
       return true;
     }
     clearPrepared();
+    preparedDecodeMs = performance.now() - decodeStarted;
     preparedBitmap = bitmap;
     preparedSequence = incomingSequence;
     preparedHasFrame = true;
@@ -267,6 +278,7 @@ export function mount({ definition, services }) {
     },
     resetFrames() {
       bitmapRequest += 1;
+      renderSpeed.reset();
       clearPrepared();
       targetSnapshot = null;
       targetSequence = null;
@@ -275,6 +287,7 @@ export function mount({ definition, services }) {
     resize: fit,
     destroy() {
       mounted = false;
+      renderSpeed.destroy();
       bitmapRequest += 1;
       clearPrepared();
       loseFocus();

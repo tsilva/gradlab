@@ -16,6 +16,7 @@ import {
 } from "./panels/catalog.js";
 import { episodeReport } from "./episode-report.js";
 import { episodeStepRange, RecordedStepReader, EventOverview, timelineEventMarkers } from "./episode-timeline.js";
+import { RecordedStepPrefetch } from "./recorded-step-prefetch.js";
 import { eventColorFill, eventLabels } from "./event-colors.js";
 import { mountPlaybackSettings } from "./playback-settings.js";
 import { snapshotActivatesCheckpointSelection, snapshotFailsCheckpointSelection } from "./playback-transition.js";
@@ -961,7 +962,12 @@ function applySnapshot(snapshot) {
     renderTimeline();
     if (snapshotCompletesCheckpointLoad(snapshot)) finishCheckpointLoad();
   }
-  if (historyChanged) renderHistory();
+  if (historyChanged) {
+    if (state.inspectionSequence === null || !state.replayingInspection) renderHistory();
+    // Replay already renders its recorded inspection page at each cursor step.
+    // The recorded chart refresh still redraws whenever its data arrives.
+    else void refreshChartHistory();
+  }
   syncAttributionToPanel();
   syncCnnCaptureToPanel();
 }
@@ -1476,14 +1482,18 @@ function inspectSequence(sequence) {
   setInspectionCursor(sequence);
 }
 
-const recordedStepReader = new RecordedStepReader(async ({ epoch, episode_id, step }) => {
+const recordedStepPrefetch = new RecordedStepPrefetch(async ({ epoch, episode_id, step }, { signal } = {}) => {
   const query = new URLSearchParams({ epoch, episode_id, step });
   const response = await fetch(`/api/playback/recorded-step?${query}`, {
+    signal,
     headers: { Authorization: `Bearer ${token}` },
   });
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error || "Unable to load the recorded step");
   return payload;
+});
+const recordedStepReader = new RecordedStepReader(request => recordedStepPrefetch.read(request), {
+  onInvalidate: () => recordedStepPrefetch.clear(),
 });
 
 function recordedFrames(result) {
@@ -1522,6 +1532,9 @@ async function inspectStep(step, { preserveReplay = false } = {}) {
     state.inspectionHistory = result.points;
     const frames = recordedFrames(result);
     setInspectionCursor(result.snapshot.sequence, { snapshot: result.snapshot, frames, preserveReplay });
+    if (preserveReplay && state.replayingInspection) {
+      void recordedStepPrefetch.ahead({ epoch, episode_id: episodeId, step: step + 1 }, trajectory.last_step);
+    }
   } catch (error) {
     state.seekingStep = null;
     stopInspectionReplay({ render: false });
