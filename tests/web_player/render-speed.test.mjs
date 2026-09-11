@@ -164,3 +164,49 @@ test("FPS chart bounds its history and clears it on reset", (t) => {
   assert.equal(element.querySelector("[data-fps-area]").attributes.d, "");
   meter.destroy();
 });
+
+test("RGB-off chart counts playback progress without decoding frames", async (t) => {
+  const clock = browserClock(t);
+  const state = { rgbEnabled: false, hasControl: true };
+  const panel = mount({ definition: { id: "game" }, services: { getState: () => state } });
+  const snapshot = (step, run_state = "playing", episode = 1) => ({
+    session_epoch: 1, sequence: step, run_state, session: { step, episode },
+  });
+  panel.render(snapshot(10));
+  clock.at(500);
+  panel.render(snapshot(210));
+  panel.render(snapshot(210)); // Repeated UI renders must not inflate the rate.
+  await panel.prepareFrame(1, {}, { sequence: 210 });
+  assert.equal(clock.frames.size, 0);
+  clock.at(1000);
+  clock.tick();
+  const element = clock.nodes.get("[data-render-speed]");
+  assert.equal(element.querySelector("[data-fps-value]").textContent, "200.0 FPS (200–200)");
+  assert.match(element.title, /Playback steps per second/);
+  assert.doesNotMatch(element.title, /Decode .*ms/);
+  assert.notEqual(element.querySelector("[data-fps-area]").attributes.d, "");
+  panel.render(snapshot(210, "paused"));
+  panel.render(snapshot(250, "paused")); // Paused scrubbing is not playback.
+  clock.at(2000);
+  clock.tick();
+  assert.equal(element.querySelector("[data-fps-value]").textContent, "0.0 FPS (0–200)");
+  panel.render(snapshot(0, "paused", 2));
+  assert.equal(element.querySelector("[data-fps-value]").textContent, "— FPS");
+  state.rgbEnabled = true;
+  panel.render(snapshot(0, "paused", 2));
+  assert.match(element.title, /Changed game frames/);
+  panel.destroy();
+});
+
+test("RGB-off FPS follows recorded replay even with paused stored snapshots", (t) => {
+  const clock = browserClock(t);
+  const state = { rgbEnabled: false, replayingInspection: true, inspectionSequence: 10 };
+  const panel = mount({ definition: { id: "game" }, services: { getState: () => state } });
+  panel.render({ sequence: 10, session: { step: 10 }, run_state: "paused" });
+  panel.render({ sequence: 90, session: { step: 90 }, run_state: "paused" });
+  clock.at(1000);
+  clock.tick();
+  const element = clock.nodes.get("[data-render-speed]");
+  assert.equal(element.querySelector("[data-fps-value]").textContent, "80.0 FPS (80–80)");
+  panel.destroy();
+});
