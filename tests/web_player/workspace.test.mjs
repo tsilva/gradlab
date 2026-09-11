@@ -254,7 +254,7 @@ test("v7 workspaces add value error only to the old built-in value configuration
   );
 });
 
-test("new and upgraded paired workspaces keep the CNN explorer hidden", () => {
+test("paired workspaces keep the disabled CNN explorer on the shelf", () => {
   const workspace = createDefaultWorkspace({ paired: true });
   assert.equal(workspace.panels.cnn.placement.visible, false);
   assert.equal(workspace.panels.cnn.enabled, false);
@@ -266,7 +266,7 @@ test("new and upgraded paired workspaces keep the CNN explorer hidden", () => {
   assert.equal(normalized.panels.cnn.builtin, true);
 });
 
-test("new and upgraded paired workspaces keep attribution hidden", () => {
+test("paired workspaces keep disabled attribution on the shelf", () => {
   const workspace = createDefaultWorkspace({ paired: true });
   assert.equal(workspace.panels.attribution.placement.visible, false);
   assert.equal(workspace.panels.attribution.enabled, false);
@@ -302,40 +302,22 @@ test("reward breakdown defaults missing scope to episode-to-cursor", () => {
   );
 });
 
-test("paired workspace gives every panel in a logical row the same height", () => {
+test("paired workspace keeps game, Input and Action decision in the main window", () => {
   const workspace = createDefaultWorkspace({ paired: true });
-  const rows = [
-    ["policy", "value"],
-    ["step-reward", "episode-return"],
-    ["observation", "signals", "events"],
-  ];
-  rows.forEach((ids) => {
-    const placements = ids.map((id) => workspace.panels[id].placement);
-    assert.equal(new Set(placements.map(({ y }) => y)).size, 1, `${ids} y`);
-    assert.equal(new Set(placements.map(({ h }) => h)).size, 1, `${ids} h`);
-    assert.equal(new Set(placements.map(({ window }) => window)).size, 1, `${ids} window`);
-  });
-  assert.deepEqual(
-    ["policy", "value"].map((id) => workspace.panels[id].placement.w),
-    [6, 6],
-  );
-  assert.deepEqual(
-    ["step-reward", "episode-return"].map((id) => workspace.panels[id].placement.w),
-    [6, 6],
-  );
   assert.deepEqual(workspace.panels.game.placement, {
-    x: 0,
-    y: 0,
-    w: 12,
-    h: 15,
-    visible: true,
-    window: "main",
+    x: 0, y: 0, w: 8, h: 15, visible: true, window: "main",
   });
-  assert.equal(workspace.panels.controls.placement.visible, false);
-  assert.equal(workspace.panels.raw.placement.visible, false);
-  assert.equal(workspace.panels["reward-analysis"].placement.y, 30);
-  assert.equal(workspace.panels.attribution.placement.y, 45);
-  assert.equal(workspace.panels.cnn.placement.y, 45);
+  assert.deepEqual(workspace.panels.observation.placement, {
+    x: 8, y: 0, w: 4, h: 4, visible: true, window: "main",
+  });
+  assert.deepEqual(workspace.panels.policy.placement, {
+    x: 8, y: 4, w: 4, h: 11, visible: true, window: "main",
+  });
+  for (const [id, panel] of Object.entries(workspace.panels)) {
+    if (["game", "observation", "policy"].includes(id)) continue;
+    assert.equal(panel.placement.window, "stats", id);
+    assert.equal(panel.placement.visible, !["controls", "raw", "attribution", "cnn"].includes(id), id);
+  }
 });
 
 test("non-current workspace data is replaced instead of interpreted", () => {

@@ -29,13 +29,13 @@ export function createChartStatus(retry) {
   return {
     element,
     render(chart) {
-      element.hidden = !chart || chart.status === "ready";
+      element.hidden = !chart || chart.status === "ready" || chart.status === "refreshing";
       button.hidden = chart?.status !== "error";
       message.textContent = chart?.status === "error"
         ? chart.error || "Unable to load episode charts"
         : chart?.status === "recovering" ? "Recovering chart history…"
-          : chart?.status === "refreshing" ? "Refreshing chart history…"
-            : chart?.status === "loading" ? "Loading chart history…"
+          : chart?.status === "loading" ? "Loading chart history…"
+            : chart?.status === "refreshing" || chart?.status === "ready" ? ""
               : "No recorded chart history";
     },
   };

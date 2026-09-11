@@ -1462,7 +1462,9 @@ body:not(.workspace-editing) .panel-processing-toggle { display: none; }
   border-radius: .42rem;
   background: var(--color-inverse-surface);
 }
-.game-stage { flex: 1 1 auto; border: 0; border-radius: calc(.66rem - 1px); }
+.game-stage { grid-template-rows: minmax(0, 1fr) auto; grid-template-columns: minmax(0, 1fr); flex: 1 1 auto; border: 0; border-radius: calc(.66rem - 1px); }
+.game-viewport { position: relative; display: grid; place-items: center; width: 100%; height: 100%; min-height: 0; overflow: hidden; }
+.game-viewport > .game-empty { position: absolute; inset: 0; display: grid; place-items: center; }
 .observation-stage { min-height: 10rem; }
 .game-frame { position: relative; flex: none; aspect-ratio: 256 / 240; max-width: 100%; max-height: 100%; background: var(--color-media-black); }
 canvas { display: block; max-width: 100%; }
@@ -1510,13 +1512,14 @@ canvas { display: block; max-width: 100%; }
 .game-frame-status { position: absolute; top: .58rem; left: .58rem; z-index: 5; display: grid; justify-items: start; gap: .3rem; max-width: min(28rem, calc(100% - 1.16rem)); pointer-events: none; }
 .game-frame-phase,
 .game-frame-boundary,
-.game-render-speed,
 .game-frame-detail { max-width: 100%; padding: .28rem .42rem; overflow-wrap: anywhere; border: 1px solid var(--color-border-translucent); border-radius: .36rem; background: var(--color-inverse-overlay); font-family: var(--font-family-mono); font-size: var(--font-size-xs); font-weight: var(--font-weight-bold); line-height: var(--line-height-tight); letter-spacing: var(--letter-spacing-label); text-transform: uppercase; }
 .game-frame-phase,
 .game-frame-boundary,
-.game-render-speed,
 .game-frame-detail { color: var(--color-inverse-text); }
-.game-render-speed { font-variant-numeric: tabular-nums; text-transform: none; letter-spacing: normal; pointer-events: auto; }
+.game-overlay-tools { position: absolute; top: .58rem; right: .58rem; z-index: 5; display: grid; justify-items: end; gap: .35rem; }
+.game-render-speed { width: 8.6rem; box-sizing: border-box; padding: .35rem .4rem; border: 1px solid var(--color-border-translucent); border-radius: .36rem; background: #11172ded; color: #70f3f5; font: 700 10px/1.4 var(--font-family-mono); font-variant-numeric: tabular-nums; }
+.game-render-speed svg { display: block; width: 100%; height: 2rem; margin-top: .2rem; background: #1d3448; }
+.game-render-speed path { fill: currentColor; }
 .game-frame-detail.outcome-success,
 .termination-outcome.outcome-success {
   color: var(--color-evaluation-surface);
@@ -1535,7 +1538,7 @@ canvas { display: block; max-width: 100%; }
   border-color: var(--color-training-surface);
   background: var(--color-series-amber);
 }
-.game-actions { position: absolute; top: .58rem; right: .58rem; z-index: 5; padding: .2rem; border: 1px solid var(--color-border-translucent); border-radius: .45rem; background: var(--color-inverse-overlay); opacity: .78; transition: opacity .15s ease; }
+.game-actions { padding: .2rem; border: 1px solid var(--color-border-translucent); border-radius: .45rem; background: var(--color-inverse-overlay); opacity: .78; transition: opacity .15s ease; }
 .game-actions .icon-button { color: var(--color-inverse-text); }
 .game-stage:hover .game-actions, .game-stage:focus-within .game-actions { opacity: 1; }
 
@@ -2097,29 +2100,14 @@ td:last-child { font-family: var(--font-family-mono); text-align: right; }
   border-top: 1px solid var(--color-border);
   border-bottom: 1px solid var(--color-border);
 }
-.game-stage > .timeline.game-timeline-overlay {
-  position: absolute;
-  inset: auto 0 0;
-  z-index: 7;
+.game-stage > .timeline.game-timeline-docked {
+  align-self: end;
+  width: 100%;
+  min-width: 0;
   margin: 0;
-  padding: 2.8rem .72rem .62rem;
+  padding: .58rem .72rem .62rem;
   border: 0;
-  border-radius: 0 0 calc(.66rem - 1px) calc(.66rem - 1px);
-  background: linear-gradient(
-    to top,
-    color-mix(in srgb, var(--color-inverse-overlay) 92%, transparent) 0 52%,
-    transparent 100%
-  );
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(.65rem);
-  transition: opacity .2s ease, transform .2s ease;
-}
-.game-stage > .timeline.game-timeline-overlay.visible,
-.game-stage > .timeline.game-timeline-overlay:focus-within {
-  opacity: 1;
-  pointer-events: auto;
-  transform: translateY(0);
+  background: var(--color-inverse-surface);
 }
 .game-stage > .timeline .timeline-labels {
   margin-bottom: -.25rem;

@@ -42,6 +42,7 @@ from gradlab.play_web import (
     history_point_payload,
     reward_accounting_contract,
     run_web_playback,
+    run_web_player_application,
     source_browser_path,
     transition_payload,
 )
@@ -905,7 +906,7 @@ def test_dataset_playback_uses_web_runner_and_preserves_recorded_telemetry() -> 
     assert snapshot["transition"]["reward"]["raw"] is None
 
 
-def test_run_web_playback_requests_one_browser_window_by_default() -> None:
+def test_run_web_playback_requests_two_browser_windows_by_default() -> None:
     args = human_args()
     runner = object()
     server = AsyncMock()
@@ -916,7 +917,21 @@ def test_run_web_playback_requests_one_browser_window_by_default() -> None:
     ):
         assert run_web_playback(object(), args, config_text="config") == 0
 
-    server_type.assert_called_once_with(runner, args, paired_windows=False)
+    server_type.assert_called_once_with(runner, args, paired_windows=True)
+
+
+def test_player_application_requests_two_browser_windows_by_default(tmp_path) -> None:
+    args = human_args()
+    host, catalog = object(), object()
+    server = AsyncMock()
+    server.run.return_value = 0
+    with patch("gradlab.play_web.PlaybackWebServer", return_value=server) as server_type:
+        assert run_web_player_application(
+            host, args, catalog=catalog, repo_root=tmp_path,
+        ) == 0
+    server_type.assert_called_once_with(
+        host, args, paired_windows=True, catalog=catalog, repo_root=tmp_path,
+    )
 
 
 def test_source_browser_paths_are_hierarchical_and_url_encoded() -> None:
@@ -2894,7 +2909,7 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert 'type: "inspection_frames"' in script
     assert "sequence < (state.receivedFrameSequence" not in script
 
-    assert '"gradlab.player.workspace.v7.paired"' in script
+    assert '"gradlab.player.workspace.v8.paired"' in script
     assert '"gradlab.player.workspace.v7.single"' in script
     assert "createTelemetryPanel" in script
     assert "updateTelemetryPanel" in script

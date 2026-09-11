@@ -263,7 +263,7 @@ def add_play_source_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--latest",
         action="store_true",
-        help="Open the highest-step published checkpoint of the newest catalog run, paused.",
+        help="Open the highest-step published checkpoint of the newest catalog run with published checkpoints, paused.",
     )
     parser.add_argument(
         "--model",

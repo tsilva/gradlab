@@ -4,7 +4,7 @@ This specification applies to the public checkpoint browser and interactive web 
 
 ## Discovery
 
-- `gradlab play --latest` must open the highest-step published Checkpoint from the newest Run by creation time directly in the player, paused; if that Run has no published Checkpoint, report it without substituting an older Run.
+- `gradlab play --latest` must open the highest-step published Checkpoint from the newest Run by creation time that has a published Checkpoint directly in the player, paused; skip Runs without published Checkpoints and report when none are available.
 - Discovery must provide a searchable Environment → Research Goal → Goal Revision or Goal Variant → Run → public Checkpoint flow.
 - Discovery must preserve browser history for each navigable screen; selecting a Run from a Goal Revision or Goal Variant must open its public Checkpoints directly without an intermediate Run-selection screen or route.
 - Discovery must use a rebuildable precomputed catalog and must not perform synchronous storage scans.
@@ -17,6 +17,8 @@ This specification applies to the public checkpoint browser and interactive web 
 - A selected Run's Checkpoint list must show its authoritative current Run state and make unavailable state explicit.
 
 ## Evidence and Inspection
+
+- Default Playback must open two separate synchronized windows: the main window shows the game on the left with Input above Action decision on the right; the second window shows Step reward and Reward table in its first row, Value estimate and Episode return in its second row, and Reward analysis, Events, and Live signals in its third row. Controls, Transition inspector, Attribution, and CNN feature explorer remain available to add manually but are hidden by default.
 
 - Launching gradplay or loading a Policy must leave Playback and inference paused until the user presses Play in the player.
 - Checkpoint lists must show the exact Goal Variant's Acceptance and ranking measures with applicable Training Success proxies.
@@ -37,7 +39,7 @@ This specification applies to the public checkpoint browser and interactive web 
 
 ## Chart History
 
-- History charts must match the active Playback Session, episode, and selected range. Changing any of these must immediately replace obsolete plots with loading; refreshing the same selection must retain valid data with visible status.
+- History charts must match the active Playback Session, episode, and selected range. Changing any of these must immediately replace obsolete plots with loading; refreshing the same selection must retain valid data without a refresh-status indicator.
 - Episode replacement must reset the chart window to the full episode. Seeking and chart navigation must preserve the independent reward reference and must not advance Playback or Policy inference.
 - Recorded history must preserve its annotations and sampling. Eligible live points may extend only its tail, without duplicates or backfilling sampled gaps; the inspection cursor must limit only the live tail.
 - Transient chart failures must retry three times after delays of 1, 2, and 4 seconds, including while paused. An unusable revision must receive one full-history recovery attempt without its unusable base; reconstruction failures must not create an unbounded loop.

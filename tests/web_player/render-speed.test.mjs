@@ -18,7 +18,8 @@ function browserClock(t) {
       if (!nodes.has(selector)) nodes.set(selector, node());
       return nodes.get(selector);
     },
-    addEventListener() {}, setAttribute() {},
+    attributes: {},
+    addEventListener() {}, setAttribute(key, value) { this.attributes[key] = value; },
     getContext: () => ({ drawImage() { now += 2; } }),
   });
   const doc = {
@@ -32,6 +33,7 @@ function browserClock(t) {
   };
   const globals = {
     document: doc,
+    ResizeObserver: class { observe() {} disconnect() {} },
     requestAnimationFrame: (fn) => { frames.set(++id, fn); return id; },
     cancelAnimationFrame: (key) => frames.delete(key),
     setInterval: (fn) => { timers.set(++id, fn); return id; },
@@ -68,9 +70,9 @@ function browserClock(t) {
 
 test("render speed counts refreshes, measures actual elapsed time, and expires idle readings", (t) => {
   const clock = browserClock(t);
-  const element = {};
+  const element = document.createElement("div");
   const meter = mountRenderSpeed(element);
-  assert.equal(element.textContent, "Render — FPS");
+  assert.equal(element.querySelector("[data-fps-value]").textContent, "— FPS");
   meter.record(4, 2);
   meter.record(8, 4);
   assert.equal(clock.frames.size, 1);
@@ -80,17 +82,17 @@ test("render speed counts refreshes, measures actual elapsed time, and expires i
   clock.refresh();
   clock.at(2000); // Delayed UI/timer: use two seconds, not the requested interval.
   clock.tick();
-  assert.equal(element.textContent, "Render 1.0 FPS · Decode 6.0 ms · Draw 3.0 ms");
+  assert.equal(element.querySelector("[data-fps-value]").textContent, "1.0 FPS (1–1)");
   clock.at(3000);
   clock.tick();
-  assert.equal(element.textContent, "Render 0.0 FPS");
+  assert.equal(element.querySelector("[data-fps-value]").textContent, "0.0 FPS (0–1)");
   meter.destroy();
   assert.equal(clock.timers.size, 0);
 });
 
 test("visibility and reset discard pending refreshes and old timings", (t) => {
   const clock = browserClock(t);
-  const element = {};
+  const element = document.createElement("div");
   const meter = mountRenderSpeed(element);
   meter.record(5, 1);
   clock.visibility(true);
@@ -103,9 +105,9 @@ test("visibility and reset discard pending refreshes and old timings", (t) => {
   clock.refresh();
   clock.at(6000);
   clock.tick();
-  assert.equal(element.textContent, "Render 1.0 FPS · Decode 2.0 ms · Draw 1.0 ms");
+  assert.equal(element.querySelector("[data-fps-value]").textContent, "1.0 FPS (1–1)");
   meter.reset();
-  assert.equal(element.textContent, "Render — FPS");
+  assert.equal(element.querySelector("[data-fps-value]").textContent, "— FPS");
   meter.record(2, 1);
   meter.destroy();
   assert.equal(clock.frames.size, 0);
@@ -113,6 +115,12 @@ test("visibility and reset discard pending refreshes and old timings", (t) => {
 
 test("game panel measures only committed bitmaps, not repeated snapshots or missing frames", async (t) => {
   const clock = browserClock(t);
+  const originalObserver = globalThis.ResizeObserver;
+  globalThis.ResizeObserver = class { observe() {} disconnect() {} };
+  t.after(() => {
+    if (originalObserver) globalThis.ResizeObserver = originalObserver;
+    else delete globalThis.ResizeObserver;
+  });
   const panel = mount({ definition: { id: "game" }, services: { getState: () => ({}) } });
   const element = clock.nodes.get("[data-render-speed]");
   await panel.prepareFrame(1, {}, { sequence: 1 });
@@ -123,15 +131,36 @@ test("game panel measures only committed bitmaps, not repeated snapshots or miss
   assert.equal(clock.frames.size, 0);
   clock.at(1006);
   clock.tick();
-  assert.equal(element.textContent, "Render 1.0 FPS · Decode 4.0 ms · Draw 2.0 ms");
+  assert.equal(element.querySelector("[data-fps-value]").textContent, "1.0 FPS (1–1)");
   await panel.prepareFrame(1, null, { sequence: 2 });
   panel.render({ sequence: 2 });
-  assert.equal(element.textContent, "Render — FPS");
+  assert.equal(element.querySelector("[data-fps-value]").textContent, "— FPS");
   await panel.prepareFrame(1, {}, { sequence: 3 });
   panel.render({ sequence: 3 });
   panel.resetFrames();
   assert.equal(clock.frames.size, 0);
-  assert.equal(element.textContent, "Render — FPS");
+  assert.equal(element.querySelector("[data-fps-value]").textContent, "— FPS");
   panel.destroy();
   assert.equal(clock.timers.size, 0);
+});
+
+test("FPS chart bounds its history and clears it on reset", (t) => {
+  const clock = browserClock(t);
+  const element = document.createElement("div");
+  const meter = mountRenderSpeed(element);
+  meter.record(4, 2);
+  clock.refresh();
+  clock.at(1000);
+  clock.tick();
+  assert.match(element.title, /Decode 4.0 ms · Draw 2.0 ms/);
+  assert.match(element.querySelector("[data-fps-area]").attributes.d, /^M118,32 L118,/);
+  for (let second = 2; second <= 61; second += 1) {
+    clock.at(second * 1000);
+    clock.tick();
+  }
+  assert.equal(element.querySelector("[data-fps-value]").textContent, "0.0 FPS (0–0)");
+  assert.equal((element.querySelector("[data-fps-area]").attributes.d.match(/L/g) || []).length, 121);
+  meter.reset();
+  assert.equal(element.querySelector("[data-fps-area]").attributes.d, "");
+  meter.destroy();
 });

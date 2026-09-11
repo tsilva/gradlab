@@ -16,7 +16,8 @@ authority for that decision.
   never emitted to W&B. Render FPS counts changed canvases at most once per animation
   refresh divided by the actual elapsed sampling time, updated about once per second.
   It includes playback pacing and frame delivery delays and falls to zero when frames
-  stop. Decode and Draw report mean image-decode and synchronous canvas-update time
+  stop. The chart and min–max range retain the latest 60 samples, with a vertical
+  scale from zero to at least 60 FPS. Decode and Draw appear in the tooltip and report mean image-decode and synchronous canvas-update time
   per drawn frame in that interval, including draws coalesced before a refresh.
   They exclude server work, transport, other panels, and GPU presentation. Unavailable
   frames, session resets, and tab visibility changes clear the measurements.
