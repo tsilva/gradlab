@@ -147,6 +147,17 @@ export function mount({ definition, services }) {
   };
   const visibility = () => { if (document.hidden) loseFocus(); };
 
+  element.addEventListener("mousedown", (event) => {
+    if (event.button !== 0) return;
+    if (event.target.closest("button, input, select, textarea, a, [role='slider'], [contenteditable='true']")) return;
+    const state = services.getState();
+    if (state.hasControl && state.snapshot?.driver === "human") return;
+    const scrubber = document.querySelector("#timeline-scrubber");
+    if (!scrubber || scrubber.disabled) return;
+    event.preventDefault();
+    scrubber.focus({ preventScroll: true });
+  });
+
   canvas.addEventListener("focus", () => { focused = true; publish(true); });
   canvas.addEventListener("blur", loseFocus);
   canvas.addEventListener("keydown", (event) => {
