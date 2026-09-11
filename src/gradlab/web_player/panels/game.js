@@ -268,7 +268,9 @@ export function mount({ definition, services }) {
   return {
     element,
     render(nextSnapshot) {
-      const rgbEnabled = services.getState().rgbEnabled !== false;
+      const state = services.getState();
+      const rgbEnabled = state.rgbEnabled !== false;
+      renderSpeed.setPlaybackMode(!rgbEnabled);
       rgbToggle.disabled = !services.getState().hasControl;
       rgbToggle.setAttribute("aria-pressed", String(rgbEnabled));
       const label = rgbEnabled ? "Hide RGB and play at maximum speed" : "Show RGB and restore configured speed";
@@ -279,7 +281,12 @@ export function mount({ definition, services }) {
       if (!rgbEnabled) {
         bitmapRequest += 1;
         clearPrepared();
-        renderSpeed.reset();
+        renderSpeed.recordProgress(
+          nextSnapshot,
+          Boolean(state.replayingInspection)
+            || (state.inspectionSequence == null
+              && ["playing", "stepping", "continuing"].includes(nextSnapshot?.run_state)),
+        );
         empty.textContent = "RGB hidden · Maximum playback speed";
         empty.hidden = false;
         commitSnapshot(nextSnapshot);

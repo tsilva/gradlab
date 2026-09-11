@@ -21,6 +21,12 @@ authority for that decision.
   per drawn frame in that interval, including draws coalesced before a refresh.
   They exclude server work, transport, other panels, and GPU presentation. Unavailable
   frames, session resets, and tab visibility changes clear the measurements.
+  With RGB hidden, the same FPS chart reports advancing playback steps per elapsed
+  second from snapshot step deltas, including steps skipped between delivered
+  snapshots, without receiving or drawing RGB. Repeated snapshots and paused
+  scrubbing do not count; the rate falls to zero when playback stops. The tooltip
+  identifies this mode and omits decode/draw timings. Switching RGB mode, changing
+  episodes, or moving backward resets the sample history.
 - W&B is the authoritative scientific metric surface. One supervisor process inside the training
   container is the only process allowed to open and write the logical W&B run.
 - The learner writes structured events only to its embedded SQLite WAL outbox. It performs no

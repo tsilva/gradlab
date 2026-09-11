@@ -5,7 +5,11 @@ export function mountRenderSpeed(element) {
   const value = element.querySelector("[data-fps-value]");
   const area = element.querySelector("[data-fps-area]");
   const history = [];
-  const description = "Changed game frames per browser refresh, sampled about once per second. Chart and range show the last 60 samples. Decode and draw timings exclude server work, transport, other panels, and GPU presentation.";
+  const renderDescription = "Changed game frames per browser refresh, sampled about once per second. Chart and range show the last 60 samples. Decode and draw timings exclude server work, transport, other panels, and GPU presentation.";
+  const playbackDescription = "Playback steps per second while RGB is hidden, measured from snapshot progress. Chart and range show the last 60 samples. No RGB frames are received or drawn.";
+  let mode = "render";
+  let previousProgress = null;
+  const description = () => mode === "playback" ? playbackDescription : renderDescription;
   let started = performance.now();
   let frames = 0;
   let draws = 0;
@@ -22,11 +26,12 @@ export function mountRenderSpeed(element) {
     if (pendingFrame !== null) cancelAnimationFrame(pendingFrame);
     pendingFrame = null;
     available = false;
+    previousProgress = null;
     clearWindow();
     history.length = 0;
     value.textContent = "— FPS";
     area.setAttribute("d", "");
-    element.title = description;
+    element.title = description();
   };
   reset();
 
@@ -53,13 +58,38 @@ export function mountRenderSpeed(element) {
       return `L${x},${y} L${x + 2},${y}`;
     }).join(" ");
     area.setAttribute("d", `M${left},32 ${points} L120,32 Z`);
-    element.title = description
+    element.title = description()
       + (draws ? ` Decode ${(decodeTotal / draws).toFixed(1)} ms · Draw ${(drawTotal / draws).toFixed(1)} ms.` : "");
     clearWindow();
   }, 1000);
   document.addEventListener("visibilitychange", reset);
 
   return {
+    setPlaybackMode(enabled) {
+      const nextMode = enabled ? "playback" : "render";
+      if (mode === nextMode) return;
+      mode = nextMode;
+      reset();
+    },
+    recordProgress(snapshot, advancing) {
+      if (document.hidden || mode !== "playback") return;
+      const step = snapshot?.transition?.step ?? snapshot?.session?.step;
+      if (!Number.isFinite(step)) return;
+      const identity = JSON.stringify([
+        snapshot.session_epoch,
+        snapshot.trajectory?.episode_id,
+        snapshot.transition?.episode ?? snapshot.session?.episode,
+      ]);
+      if (!available) clearWindow();
+      available = true;
+      if (previousProgress?.identity === identity && step >= previousProgress.step) {
+        if (advancing || previousProgress.advancing) frames += step - previousProgress.step;
+      } else if (previousProgress) {
+        reset();
+        available = true;
+      }
+      previousProgress = { identity, step, advancing };
+    },
     record(decodeMs, drawMs) {
       if (document.hidden) return;
       if (!available) clearWindow();
