@@ -295,6 +295,7 @@ resuming as its cause without a matched uninterrupted continuation.
   action-space-only minimum or maximum. The bounds remain a pure policy-space calculation used by
   diagnostics and are not duplicated as W&B metrics.
 - For custom PPO, `train/clip/fraction` averages minibatch fractions across attempted epochs and counts sampled action-probability ratios outside the clipping interval. It does not measure how far those ratios moved or the fraction of gradients disabled; similar fractions can accompany different policy changes. `train/kl/mean` averages minibatch estimates from the last attempted epoch, not a fresh full-rollout evaluation of the final policy. Interpret both alongside learning rate and progress at matched timesteps; neither has a universally desirable target.
+- Custom PPO checks each minibatch's approximate KL against `1.5 * target_kl` before its optimizer step. Exceeding the threshold stops remaining optimization on the collected rollout, retaining earlier optimizer steps; it neither interrupts rollout collection nor rolls back the policy. The reference is the policy that collected that rollout, and PPO ratio clipping remains enabled. The logged epoch mean is not the individual triggering estimate, and an average KL cannot establish behavior preservation in rare states.
 - Changing GAE lambda changes both the policy advantage estimator and the critic return targets. Value loss and explained variance across different lambda settings therefore describe different target distributions; larger loss alone does not prove critic divergence or greater advantage variance. Advantage normalization rescales the estimator but does not remove noise in its action ranking. Rollout advantage standard deviation measures dispersion across sampled transitions, not conditional estimator noise at fixed states; differences across runs can reflect changed state occupancy and true action-value variation.
 - Actor-critic explained variance is `1 - Var(value_target - value_prediction) /
   Var(value_target)`: one means the residual variance is zero (perfect up to a constant prediction
@@ -395,9 +396,32 @@ resuming as its cause without a matched uninterrupted continuation.
 - Go-Explore `train/go-explore/visits/count` includes initialization visits and subsequent
   nonterminal destination-cell visits. It is not a count of every collected pre-action state.
   Curriculum admission counts refer to cell-crossing candidates, while archive cell and entry
-  counts describe retained inventory. None of these metrics currently provides a per-cell
-  training-occupancy history. Occupancy would count each collected policy transition once by
-  its source cell, including terminal transitions, and exclude reset work and optimizer reuse.
+  counts describe retained inventory. The separate `train/occupancy/table` counts each collected transition once by its
+  pre-action cell, including terminal and truncated transitions. Resets, restores, and optimizer
+  reuse add no counts. Entries count the first collected transition after a reset, restore, or
+  cell crossing. They do not count distinct episodes or prove reachability.
+- Occupancy windows default to 100,000 transitions, rounded up to a full vector batch.
+  Combined denominators include normal, archive, and search origins. An empty origin has null
+  fractions. Declared cells with no exposure have zero counts. Gaps are uncovered intervals,
+  never zero-filled windows. Partial windows retain their actual denominators and completeness.
+  Cumulative counts belong to one collection segment. Model-only continuation starts a new
+  segment; a matching collector and learner recovery cursor is required for continuous totals.
+- Occupancy tables identify the Run, Attempt, segment, cell contract, sequence, and step bounds.
+  Bounded eight-window pages preserve exact historical inspection. The recent panel reads the
+  latest page; the historical panel uses an explicit table index because W&B's unindexed
+  history query samples versions. All versions remain addressable. The selected-window chart and exact
+  coarser grouping sum raw counts and retain the population denominator. They never average
+  cell fractions. Display labels do not change the cell contract hash.
+- `train/curriculum/distribution` lists retained representatives separately from exposure.
+  Its table records the publishing Run identity; charts separate Runs rather than adding their
+  inventories or probabilities together.
+  Its probabilities describe the regular sampler frozen at rollout admission. Cold-cell
+  dispatch is explicit and precedes that sampler. The cap is at least `1 / eligible_cells`
+  when fewer cells make the configured cap infeasible. Coverage feedback uses recent combined
+  counts, including assisted practice. Existing `value_error` feedback remains mean absolute
+  raw GAE for completed archive-origin trajectories.
+- Occupancy and curriculum tables have `train/step` as their scientific axis and require their
+  respective configuration. They confer no Training Success, Acceptance, or Promotion authority.
 - Derived throughput phase timing satisfies `loop wall time = provider step time +
   train/rollout_overhead/seconds + train/between_rollouts/seconds`. Compare
   those phases on matching workloads to identify a training-loop bottleneck. Rollout overhead includes
@@ -678,6 +702,8 @@ and target-progress fields are not registry metrics and cannot enter the publish
 | `train/curriculum/effective_cells/count` | Curriculum effective cell count | Inverse-Simpson effective cell count of the archive sampling distribution. | cells | rollout | history | last | train/step | training | - | - |
 | `train/curriculum/capture/seconds` | Curriculum capture time | Portable state capture wall time accumulated during the rollout. | seconds | rollout | history | last | train/step | training | - | - |
 | `train/curriculum/restore/seconds` | Curriculum restore time | Provider restore wall time for reset calls containing archive lanes. | seconds | rollout | history | last | train/step | training | - | - |
+| `train/occupancy/table` | Collected cell occupancy | Exact pre-action cell counts, entries and origin denominators in a bounded page of up to eight collection windows; each row retains its own bounds, sequence and denominator. Includes declared zero cells and unavailable fractions for empty origins. Use exact indexed history or latest-page queries, never sampled table history. | table | transition window | history | last | train/step | training | - | - |
+| `train/curriculum/distribution` | Curriculum start distribution | Compatible retained representatives, cold-cell status and intended per-cell start probabilities at rollout admission; recent combined counts are coverage feedback, distinct from value-error feedback. | table | rollout start | history | last | train/step | training | - | - |
 <!-- METRIC_REGISTRY_END -->
 
 ## Registry relationships and dashboard applicability

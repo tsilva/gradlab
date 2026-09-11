@@ -64,7 +64,7 @@ def _line_panel(wr, panel: WorkspacePanelSpec, *, x: int, y: int):
     )
 
 
-def _section_panels(wr, section):
+def _section_panels(wr, section, *, entity=None):
     panels = []
     slot_width = _WORKSPACE_GRID_WIDTH // section.columns
     row_y = 0
@@ -78,6 +78,27 @@ def _section_panels(wr, section):
                         panel,
                         x=column * slot_width,
                         y=row_y,
+                    )
+                )
+            elif panel.kind in {"occupancy", "occupancy_recent", "curriculum"}:
+                from gradlab.occupancy_charts import workspace_panel, curriculum_workspace_panel
+
+                factory = (
+                    curriculum_workspace_panel if panel.kind == "curriculum" else workspace_panel
+                )
+
+                panels.append(
+                    factory(
+                        wr,
+                        entity=entity,
+                        **(
+                            {"recent": panel.kind == "occupancy_recent"}
+                            if panel.kind != "curriculum"
+                            else {}
+                        ),
+                        layout=wr.Layout(
+                            x=column * slot_width, y=row_y, w=panel.width, h=panel.height
+                        ),
                     )
                 )
             else:
@@ -100,7 +121,7 @@ def build_wandb_workspace(spec: WandbWorkspaceSpec, *, entity: str):
 
     sections = []
     for section in spec.sections:
-        panels = _section_panels(wr, section)
+        panels = _section_panels(wr, section, entity=entity)
         sections.append(
             ws.Section(
                 name=section.title,
@@ -268,6 +289,25 @@ def sync_workspaces(
     saver = workspace_saver or _default_workspace_saver
     app_url = _app_url(api)
     prepared = _prepared_workspaces(specs, entity=entity)
+    if any(
+        panel.kind in {"occupancy", "occupancy_recent"}
+        for spec in specs
+        for section in spec.sections
+        for panel in section.panels
+    ):
+        from gradlab.occupancy_charts import ensure_chart
+
+        ensure_chart(api, entity=entity)
+
+    if any(
+        panel.kind == "curriculum"
+        for spec in specs
+        for section in spec.sections
+        for panel in section.panels
+    ):
+        from gradlab.occupancy_charts import ensure_curriculum_chart
+
+        ensure_curriculum_chart(api, entity=entity)
 
     remote: dict[str, tuple[str, Any | None, str]] = {}
     for spec in specs:

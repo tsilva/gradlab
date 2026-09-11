@@ -222,6 +222,74 @@ class MetricStore(SqliteStore):
             )
         return len(payload)
 
+    def occupancy_covered_end(self, *, run_id: str, cell_space_hash: str) -> int:
+        """Return the last durable observation, including recovered attempt journals."""
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT MAX(step) FROM metric_frames WHERE kind='occupancy' "
+                "AND json_extract(payload_json, '$.run_id')=? "
+                "AND json_extract(payload_json, '$.cell_space_hash')=?",
+                (run_id, cell_space_hash),
+            ).fetchone()
+        return int(row[0] or 0)
+
+    def occupancy_page(self, window: Mapping[str, Any]) -> list[dict[str, Any]]:
+        """Fetch one exact eight-window page, bounded independently of Run length."""
+        from gradlab.occupancy import HISTORY_PAGE_WINDOWS
+
+        sequence = int(window["sequence"])
+        first = sequence // HISTORY_PAGE_WINDOWS * HISTORY_PAGE_WINDOWS
+        with self.connection() as connection:
+            rows = connection.execute(
+                "SELECT payload_json FROM metric_frames WHERE kind='occupancy' "
+                "AND json_extract(payload_json, '$.run_id')=? "
+                "AND json_extract(payload_json, '$.segment')=? "
+                "AND json_extract(payload_json, '$.sequence') BETWEEN ? AND ? "
+                "ORDER BY json_extract(payload_json, '$.sequence') LIMIT ?",
+                (window["run_id"], window["segment"], first, sequence, HISTORY_PAGE_WINDOWS),
+            ).fetchall()
+        return [json.loads(row[0]) for row in rows]
+
+    def append_occupancy(self, window: Mapping[str, object], *, publish: bool = True) -> str:
+        from gradlab.occupancy import validate_occupancy_window
+
+        payload = validate_occupancy_window(window)
+        identity = f"occupancy:{payload['run_id']}:{payload['segment']}:{payload['sequence']}"
+        encoded = canonical_json_text(payload, ensure_ascii=True)
+        now = self.clock.time()
+        with self.connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                "SELECT payload_json FROM metric_frames WHERE event_id=?", (identity,)
+            ).fetchone()
+            if existing is not None:
+                if json.loads(existing[0]) != payload:
+                    raise ValueError("conflicting replay of an occupancy window")
+                return identity
+            overlap = connection.execute(
+                "SELECT 1 FROM metric_frames WHERE kind='occupancy' "
+                "AND json_extract(payload_json, '$.run_id')=? "
+                "AND json_extract(payload_json, '$.segment')=? "
+                "AND json_extract(payload_json, '$.start_step')<? "
+                "AND json_extract(payload_json, '$.end_step')>? LIMIT 1",
+                (payload["run_id"], payload["segment"], payload["end_step"], payload["start_step"]),
+            ).fetchone()
+            if overlap is not None:
+                raise ValueError("overlapping occupancy windows in one collection segment")
+            connection.execute(
+                "INSERT INTO metric_frames (event_id, step, source, kind, payload_json, status, created_at, updated_at) "
+                "VALUES (?, ?, 'train', 'occupancy', ?, ?, ?, ?)",
+                (
+                    identity,
+                    payload["end_step"],
+                    encoded,
+                    "pending" if publish else "local_only",
+                    now,
+                    now,
+                ),
+            )
+        return identity
+
     def enqueue_event(
         self,
         *,
@@ -231,6 +299,7 @@ class MetricStore(SqliteStore):
         source: str,
         event_id: str | None = None,
         created_at: float | None = None,
+        publish: bool = True,
     ) -> str:
         normalized = dict(payload)
         identity = event_id or self._event_id(
@@ -246,7 +315,7 @@ class MetricStore(SqliteStore):
                 INSERT INTO metric_frames
                   (event_id, step, source, kind, payload_json, status,
                    created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(event_id) DO NOTHING
                 """,
                 (
@@ -259,6 +328,7 @@ class MetricStore(SqliteStore):
                         default=str,
                         ensure_ascii=True,
                     ),
+                    "pending" if publish else "local_only",
                     now,
                     now,
                 ),
@@ -383,9 +453,7 @@ class MetricStore(SqliteStore):
 
     def outbox_health(self) -> dict[str, object]:
         with self.connection() as connection:
-            state = connection.execute(
-                "SELECT * FROM outbox_state WHERE singleton = 1"
-            ).fetchone()
+            state = connection.execute("SELECT * FROM outbox_state WHERE singleton = 1").fetchone()
             backlog = connection.execute(
                 """
                 SELECT COUNT(*) AS pending_frames,
@@ -470,14 +538,11 @@ class MetricStore(SqliteStore):
             key
             for key in manifest
             if any(
-                token in str(key).lower()
-                for token in ("token", "secret", "password", "api_key")
+                token in str(key).lower() for token in ("token", "secret", "password", "api_key")
             )
         }
         if forbidden:
-            raise ValueError(
-                f"recovery manifest contains secret-like fields: {sorted(forbidden)}"
-            )
+            raise ValueError(f"recovery manifest contains secret-like fields: {sorted(forbidden)}")
         payload = canonical_json_text(
             dict(manifest),
             default=str,
@@ -559,16 +624,12 @@ class MetricStore(SqliteStore):
                         f"checkpoint ledger replay conflicts for {values['path']}: {name}"
                     )
             if sha256 is not None and row["sha256"] not in (None, sha256):
-                raise ValueError(
-                    f"checkpoint ledger replay conflicts for {values['path']}: sha256"
-                )
+                raise ValueError(f"checkpoint ledger replay conflicts for {values['path']}: sha256")
             return int(row["id"])
 
     def checkpoints(self) -> list[dict[str, Any]]:
         with self.connection() as connection:
-            rows = connection.execute(
-                "SELECT * FROM checkpoints ORDER BY id"
-            ).fetchall()
+            rows = connection.execute("SELECT * FROM checkpoints ORDER BY id").fetchall()
         return [dict(row) for row in rows]
 
     def mark_checkpoint_uploaded(self, checkpoint_id: int, public_url: str) -> None:

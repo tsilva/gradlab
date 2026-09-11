@@ -144,7 +144,9 @@ def _partition_policy_environment_overrides(
     catalog = goal_document.get("reward_shapes")
     for item in overrides:
         path, raw_value, parsed_value = _override_parts(item, label=label)
-        if isinstance(catalog, Mapping) and path.startswith(("train.task.reward", "eval.task.reward")):
+        if isinstance(catalog, Mapping) and path.startswith(
+            ("train.task.reward", "eval.task.reward")
+        ):
             raise ValueError(
                 "catalog goals reject raw reward overrides; select or override a named "
                 f"reward_shape instead: {path}"
@@ -719,9 +721,7 @@ def compose_train_document(
             Path(".").resolve(),
         )
     source_policy_overrides = [
-        item
-        for item in effective_environment_overrides
-        if item.startswith("train.environment.")
+        item for item in effective_environment_overrides if item.startswith("train.environment.")
     ]
     source_document = apply_dotlist_overrides(
         recipe_composition.document,
@@ -851,9 +851,7 @@ def compose_train_document(
             source_environment.get("task") if isinstance(source_environment, Mapping) else None
         )
         if isinstance(source_task, Mapping) and "action" in source_task:
-            raise ValueError(
-                "action_profile cannot be combined with recipe-authored task.action"
-            )
+            raise ValueError("action_profile cannot be combined with recipe-authored task.action")
         source_env_config = (
             source_environment.get("env_config")
             if isinstance(source_environment, Mapping)
@@ -863,9 +861,7 @@ def compose_train_document(
             source_env_config.get("env_args") if isinstance(source_env_config, Mapping) else None
         )
         source_vizdoom_config = (
-            source_env_args.get("vizdoom_config")
-            if isinstance(source_env_args, Mapping)
-            else None
+            source_env_args.get("vizdoom_config") if isinstance(source_env_args, Mapping) else None
         )
         if isinstance(source_env_args, Mapping) and "use_restricted_actions" in source_env_args:
             raise ValueError(
@@ -916,9 +912,33 @@ def compose_train_document(
         path=goal_path,
         goal_composition=goal_composition,
     )
+    effective_goal = copy.deepcopy(goal_composition.document)
+    from gradlab.occupancy import resolve_cell_spaces
+    from gradlab.state_archive import normalize_state_archive_config
+
+    resolved_training = copy.deepcopy(document["train_config"])
+    resolve_cell_spaces(resolved_training)
+    archive = resolved_training.get("state_archive")
+    if isinstance(archive, Mapping):
+        archive = normalize_state_archive_config(
+            archive, label="train.state_archive", n_envs=resolved_training.get("n_envs")
+        )
+        curriculum = archive.get("curriculum") or {}
+        if curriculum.get("restore_entries"):
+            # Enabled restoration changes the effective start distribution.
+            # Passive observation and capture-only recipes retain the authored goal.
+            semantics = {key: value for key, value in archive.items() if key != "persistence"}
+            if curriculum.get("strategy") == "coverage":
+                semantics["occupancy"] = {
+                    key: value
+                    for key, value in resolved_training["occupancy"].items()
+                    if key != "labels"
+                }
+            effective_goal.setdefault("train", {})["state_archive"] = semantics
+    document["goal"] = effective_goal
     document["train_config"]["goal_contract_sha256"] = goal_contract_sha256(authored_goal_document)
     document["train_config"]["effective_goal_contract_sha256"] = goal_contract_sha256(
-        goal_composition.document
+        effective_goal
     )
     from gradlab.goal_variants import build_goal_variant_descriptor
 
@@ -936,7 +956,7 @@ def compose_train_document(
         goal_slug=goal_path.resolve().parent.relative_to(goals_root).as_posix(),
         source_sha="",
         authored_goal=authored_goal_document,
-        effective_goal=goal_composition.document,
+        effective_goal=effective_goal,
     )
     if selected_reward is not None:
         document["train_config"].update(
