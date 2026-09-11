@@ -28,6 +28,19 @@ class BrowserSession(ScriptedSession):
 
 
 class ChartPlayer(PlaybackWebServer):
+    async def page(self, request):
+        html = (self.asset_root / "index.html").read_text()
+        return web.Response(
+            text=html.replace("</body>", '<script src="/assets/chart-player-controls.js"></script></body>'),
+            content_type="text/html",
+            headers={"Cross-Origin-Opener-Policy": "same-origin-allow-popups"},
+        )
+
+    async def asset(self, request):
+        if request.match_info["path"] == "chart-player-controls.js":
+            return web.FileResponse(Path(__file__).with_name("chart-player-controls.js"))
+        return await super().asset(request)
+
     async def chart_history(self, request):
         print(f"Chart request: {request.query_string}", flush=True)
         await asyncio.sleep(self.args.chart_delay)
