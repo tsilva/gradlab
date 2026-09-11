@@ -12,6 +12,14 @@ authority for that decision.
 
 ## Surfaces and dimensions
 
+- The game panel's Render FPS, Decode ms, and Draw ms are browser-local diagnostics,
+  never emitted to W&B. Render FPS counts changed canvases at most once per animation
+  refresh divided by the actual elapsed sampling time, updated about once per second.
+  It includes playback pacing and frame delivery delays and falls to zero when frames
+  stop. Decode and Draw report mean image-decode and synchronous canvas-update time
+  per drawn frame in that interval, including draws coalesced before a refresh.
+  They exclude server work, transport, other panels, and GPU presentation. Unavailable
+  frames, session resets, and tab visibility changes clear the measurements.
 - W&B is the authoritative scientific metric surface. One supervisor process inside the training
   container is the only process allowed to open and write the logical W&B run.
 - The learner writes structured events only to its embedded SQLite WAL outbox. It performs no

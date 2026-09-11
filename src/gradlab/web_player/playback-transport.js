@@ -20,8 +20,11 @@ export function createPlaybackTransport({
   inspectionEpisodeSequences, invalidateRead,
   setTimeout: schedule = globalThis.setTimeout,
   clearTimeout: cancel = globalThis.clearTimeout,
+  now = () => performance.now(),
 }) {
   let replayGeneration = 0;
+  let nextReplayAt = null;
+  let replayFps = null;
 
   function canReplayInspection() {
     if (state.liveSnapshot?.trajectory?.imported) return false;
@@ -35,6 +38,8 @@ export function createPlaybackTransport({
 
   function stopInspectionReplay({ render = true } = {}) {
     replayGeneration += 1;
+    nextReplayAt = null;
+    replayFps = null;
     if (state.replayingInspection) {
       invalidateRead();
       state.seekingStep = null;
@@ -51,9 +56,19 @@ export function createPlaybackTransport({
   function scheduleInspectionReplay() {
     const generation = replayGeneration;
     const fps = Number(state.liveSnapshot?.session?.target_fps || 0);
+    const interval = fps > 0 ? 1000 / fps : 0;
+    const scheduledAt = now();
+    nextReplayAt = nextReplayAt === null || replayFps !== fps
+      ? scheduledAt + interval
+      : Math.max(nextReplayAt + interval, scheduledAt);
+    replayFps = fps;
     state.inspectionReplayTimer = schedule(async () => {
       state.inspectionReplayTimer = null;
       if (!state.replayingInspection || generation !== replayGeneration) return;
+      // A suspended tab must not accumulate replay debt. Short timer delays
+      // and read work still consume the current interval instead of adding one.
+      const startedAt = now();
+      if (startedAt - nextReplayAt >= interval) nextReplayAt = startedAt;
       if (state.liveSnapshot?.trajectory?.transitions > 0) {
         const nextStep = Number(state.snapshot.transition.step) + 1;
         if (nextStep > state.liveSnapshot.trajectory.last_step) {
@@ -74,7 +89,7 @@ export function createPlaybackTransport({
       if (nextSequence === state.timelineSequences.at(-1)) returnToLive();
       else setInspectionCursor(nextSequence, { preserveReplay: true });
       if (state.replayingInspection) scheduleInspectionReplay();
-    }, fps > 0 ? 1000 / fps : 0);
+    }, Math.max(0, nextReplayAt - scheduledAt));
   }
 
   function playFromCurrentPosition() {

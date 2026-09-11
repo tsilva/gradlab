@@ -1339,18 +1339,31 @@ export function mount({ definition, services }) {
       (block) => makeBlock(block, definition, services),
     );
   target.replaceChildren(...blocks.map((block) => block.element));
-  let context = { snapshot: null, history: [], view: {} };
-
-  const renderBlocks = () => blocks.forEach((block) => block.render(context));
   return {
     element,
+    ...createTelemetryRenderer(blocks),
+  };
+}
+
+export function createTelemetryRenderer(blocks) {
+  let context = { snapshot: null, history: [], view: {} };
+  const renderBlocks = () => blocks.forEach((block) => block.render(context));
+  const update = (snapshot, history, view) => {
+    view ||= {};
+    // Snapshot presentation already supplies the matching history. Its queued
+    // history callback must not rebuild the same tables and charts a second time.
+    if (snapshot === context.snapshot && history === context.history
+        && Object.keys(view).length === Object.keys(context.view).length
+        && Object.entries(view).every(([key, value]) => context.view[key] === value)) return;
+    context = { snapshot, history, view };
+    renderBlocks();
+  };
+  return {
     render(snapshot, view = context.view) {
-      context = { ...context, snapshot, view: view || {} };
-      renderBlocks();
+      update(snapshot, view?.history ?? context.history, view);
     },
     renderHistory(history, snapshot = context.snapshot, view = context.view) {
-      context = { history, snapshot, view: view || {} };
-      renderBlocks();
+      update(snapshot, history, view);
     },
     resize: renderBlocks,
   };

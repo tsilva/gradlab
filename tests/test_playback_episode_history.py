@@ -53,6 +53,31 @@ def test_recording_reuses_transition_projection_without_changing_inspection(
         runner.stop()
 
 
+def test_sequential_inspection_reuses_overlapping_history_rows(tmp_path, monkeypatch):
+    from gradlab.play_diagnostics import RecordedPrefix
+
+    runner = live_runner(tmp_path, length=200)
+    try:
+        for _ in range(192):
+            runner._step_once()
+        episode = runner.recording.metadata["episode_id"]
+        first_page = runner.inspect_recorded_step(episode, 100)["points"]
+        reads = []
+        read = RecordedPrefix.transition
+
+        def counted(prefix, step):
+            reads.append(step)
+            return read(prefix, step)
+
+        monkeypatch.setattr(RecordedPrefix, "transition", counted)
+        next_page = runner.inspect_recorded_step(episode, 129)["points"]
+        assert reads == list(range(129, 193))
+        assert next_page[:64] == first_page[64:]
+        assert len(runner._inspection_history[3]) == 128
+    finally:
+        runner.stop()
+
+
 def test_seek_before_memory_window_preserves_live_trajectory_and_exact_frames(
     tmp_path, monkeypatch
 ):
