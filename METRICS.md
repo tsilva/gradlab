@@ -172,6 +172,12 @@ resuming as its cause without a matched uninterrupted continuation.
   The full-episode recorded chart refresh is throttled to roughly once per second.
   Between refreshes, charts append bounded streamed transitions through the presented
   playback step, respecting the selected episode and chart window without extra requests.
+  Changing the session, episode, or chart window clears obsolete plots until the new
+  history loads. Refreshing the same selection preserves valid recorded samples.
+  Loading, recovery, and error status are shared by affected panels in each window;
+  they are display state, not scientific measures. Recovery retries transient failures
+  after 1, 2, and 4 seconds even while paused, then requires explicit Retry, a new
+  selection, or restored visibility. Hidden or suspended chart panels do not fetch.
   A line chart legend reports the hovered point while the pointer is over the chart;
   otherwise it follows the selected playback transition. In inspection, that transition
   can precede the end of the recorded curve, so its legend need not equal the last value.

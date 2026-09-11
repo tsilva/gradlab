@@ -114,7 +114,14 @@ export function mount({ definition, services }) {
 Only `element` is required. The shared `view` identifies the selected and live
 transition with `sessionEpoch`, `selectedSequence`, `liveSequence`, and
 `inspection`. `chartHistory` supplies the separate extrema-preserving episode
-overview or shared `chartRange` for line and signal plots. Exact history remains
+overview or shared `chartRange` for line and signal plots and the reward table.
+`chartStatus` supplies their shared loading, refreshing, recovering, ready, or error
+state. Null chart data means the current selection has not loaded; panels must
+not fall back to retained history. `retryChartHistory` restarts recovery for all
+affected panels in that window. The chart-history module owns requests, revisions,
+refresh cadence, recovery, and live-tail merging. The shell supplies its Playback
+context and eligible panel demand and disposes it when the window closes.
+Exact history remains
 separate for selected-step values and action frequencies; never compute statistics
 from display samples. `setChartRange` synchronizes zoom and `inspectStep` seeks an
 original recorded step. History is already filtered to the active episode. Panels render
