@@ -1,7 +1,8 @@
-import { ChartVersions, frameScheduler } from "./chart-transport.js";
+import { frameScheduler } from "./chart-transport.js";
 import { createPlaybackTransport, hasIndependentInference, shouldPauseForInspection } from "./playback-transport.js";
 import { rewardReferenceStore } from "./panels/reward-reference.js";
-import { chartWithLiveTail } from "./chart-live-tail.js";
+import { createChartHistory } from "./chart-history.js";
+import { usesChartHistory } from "./panels/chart-status.js";
 import { bindTimelineRange } from "./chart-range.js";
 import {
   FRAME_ATTRIBUTION,
@@ -95,16 +96,6 @@ const state = {
   seekingStep: null,
   history: [],
   historyLimit: 4096,
-  chartRange: null,
-  chartHistory: null,
-  chartEpisode: null,
-  chartRequest: 0,
-  chartPending: false,
-  chartAbort: null,
-  chartVersions: new ChartVersions(),
-  chartUpdated: 0,
-  chartTimer: null,
-  chartDirty: false,
   hasControl: false,
   publicationAuthority: false,
   publicationCapability: null,
@@ -259,13 +250,6 @@ function updateConnection(label, kind = "") {
 }
 
 function resetSession(epoch) {
-  state.chartAbort?.abort();
-  state.chartVersions.reset();
-  state.chartRequest += 1;
-  state.chartHistory = null;
-  state.chartEpisode = null;
-  clearTimeout(state.chartTimer);
-  state.chartTimer = null;
   cancelInspectionFrameRequest();
   state.sessionEpoch = Number(epoch) || 0;
   state.backgroundPlaybackSnapshot = null;
@@ -276,6 +260,7 @@ function resetSession(epoch) {
   state.attributionCommand = null;
   state.cnnCaptureCommand = null;
   state.liveSnapshot = null;
+  chartHistory.updateContext({ epoch: state.sessionEpoch });
   state.snapshot = null;
   state.history = [];
   clearRetainedEpisode();
@@ -837,18 +822,30 @@ function setRewardReference(step) {
   panelRuntime?.renderHistory(currentEpisodeHistory(), state.snapshot, panelView());
 }
 
+function updateChartContext() {
+  chartHistory.updateContext({
+    epoch: state.sessionEpoch,
+    episodeId: state.liveSnapshot?.trajectory?.episode_id,
+    episode: episodeForSnapshot(state.liveSnapshot),
+    lastStep: state.liveSnapshot?.trajectory?.last_step,
+    liveHistory: state.history,
+    throughStep: state.snapshot?.transition?.step ?? 0,
+  });
+}
+
+function updateChartDemand() {
+  chartHistory.setDemand(enabledPanelDefinitions().some(usesChartHistory));
+}
+
 function panelView() {
+  updateChartContext();
+  const chart = chartHistory.read();
   return {
     history: currentEpisodeHistory(),
-    chartHistory: state.liveSnapshot?.trajectory?.episode_id ? chartWithLiveTail(
-      state.chartEpisode === `${state.sessionEpoch}:${state.liveSnapshot.trajectory.episode_id}`
-        ? state.chartHistory : null,
-      state.history,
-      { episode: episodeForSnapshot(state.liveSnapshot), range: state.chartRange,
-        throughStep: state.snapshot?.transition?.step ?? 0 },
-    ) : null,
+    chartHistory: chart.data,
+    chartStatus: chart,
     rewardReference: rewardReferences.get(state.snapshot, state.sessionEpoch),
-    chartRange: state.chartRange,
+    chartRange: chart.range,
     inspection: state.inspectionSequence !== null,
     sessionEpoch: state.sessionEpoch,
     selectedSequence: state.inspectionSequence ?? state.snapshot?.sequence ?? null,
@@ -1188,69 +1185,12 @@ function configureMode(mode) {
 }
 
 function setChartRange(range, { broadcast = true } = {}) {
-  clearTimeout(state.chartTimer);
-  state.chartTimer = null;
-  state.chartRange = range;
-  state.chartAbort?.abort();
-  state.chartVersions.reset();
-  state.chartRequest += 1;
-  state.chartUpdated = 0;
+  chartHistory.selectRange(range);
   if (broadcast) workspaceChannel?.postMessage({ type: "chart-range", source: state.windowId, epoch: state.sessionEpoch, episode: state.liveSnapshot?.trajectory?.episode_id, range });
-  void refreshChartHistory();
   renderTimeline();
 }
 
-async function refreshChartHistory() {
-  if (!enabledPanelDefinitions().some((definition) => definition.type === "telemetry"
-    && definition.config?.blocks?.some((block) => ["line", "signals", "reward-table"].includes(block.kind)))) return;
-  const trajectory = state.liveSnapshot?.trajectory;
-  if (!trajectory?.episode_id || !trajectory.last_step) return;
-  const episode = `${state.sessionEpoch}:${trajectory.episode_id}`;
-  if (state.chartEpisode !== episode) {
-    state.chartEpisode = episode;
-    state.chartRange = null;
-    state.chartHistory = null;
-    state.chartAbort?.abort();
-    state.chartVersions.reset();
-    state.chartUpdated = 0;
-    state.chartRequest += 1;
-  }
-  if (state.chartPending) { state.chartDirty = true; return; }
-  const delay = 1000 - (Date.now() - state.chartUpdated);
-  if (delay > 0) {
-    if (state.chartTimer === null) state.chartTimer = setTimeout(() => {
-      state.chartTimer = null;
-      void refreshChartHistory();
-    }, delay);
-    return;
-  }
-  state.chartDirty = false;
-  const request = state.chartRequest;
-  const epoch = state.sessionEpoch;
-  const query = new URLSearchParams({ epoch, episode_id: trajectory.episode_id, format: "chart-columns-v1" });
-  if (state.chartVersions.revision) query.set("base", state.chartVersions.revision);
-  if (state.chartRange) {
-    query.set("first", state.chartRange.first);
-    query.set("last", state.chartRange.last);
-  }
-  state.chartPending = true;
-  const controller = new AbortController();
-  state.chartAbort = controller;
-  try {
-    const response = await fetch(`/api/playback/chart-history?${query}`, { signal: controller.signal, headers: { Authorization: `Bearer ${token}` } });
-    const result = await response.json();
-    if (request !== state.chartRequest || epoch !== state.sessionEpoch || trajectory.episode_id !== state.liveSnapshot?.trajectory?.episode_id) return;
-    if (!response.ok) throw new Error(result.error || "Unable to load episode charts");
-    state.chartHistory = state.chartVersions.accept(result);
-    scheduleHistoryRender();
-  } catch (error) {
-    if (error.name !== "AbortError" && request === state.chartRequest) showToast(error.message, true);
-  } finally {
-    state.chartPending = false;
-    if (request === state.chartRequest && !controller.signal.aborted) state.chartUpdated = Date.now();
-    if (request !== state.chartRequest || state.chartDirty) void refreshChartHistory();
-  }
-}
+const chartHistory = createChartHistory({ token, onChange: () => scheduleHistoryRender() });
 
 const scheduleHistoryRender = frameScheduler(() => {
   if (!state.snapshot || !panelRuntime) return;
@@ -1260,7 +1200,7 @@ const scheduleHistoryRender = frameScheduler(() => {
 });
 
 function renderHistory() {
-  void refreshChartHistory();
+  updateChartContext();
   scheduleHistoryRender();
 }
 
@@ -1596,21 +1536,22 @@ function renderTimeline() {
   $("#timeline").setAttribute("aria-busy", String(state.seekingStep !== null));
   renderWorkspaceStatus();
   const zoomLabel = $("#timeline-zoom");
-  zoomLabel.hidden = !state.chartRange;
-  zoomLabel.textContent = state.chartRange ? `Steps ${state.chartRange.first}–${state.chartRange.last} · Reset zoom` : "";
+  const chartRange = chartHistory.read().range;
+  zoomLabel.hidden = !chartRange;
+  zoomLabel.textContent = chartRange ? `Steps ${chartRange.first}–${chartRange.last} · Reset zoom` : "";
   const zoomBand = $("#timeline-zoom-band");
-  zoomBand.hidden = !state.chartRange || !range;
-  if (state.chartRange && range) {
+  zoomBand.hidden = !chartRange || !range;
+  if (chartRange && range) {
     const span = Math.max(1, range.last - range.first);
-    zoomBand.style.left = `${100 * (state.chartRange.first - range.first) / span}%`;
+    zoomBand.style.left = `${100 * (chartRange.first - range.first) / span}%`;
     for (const handle of zoomBand.querySelectorAll(".timeline-range-handle")) {
       const start = handle.dataset.edge === "first";
-      handle.setAttribute("aria-valuemin", String(start ? range.first : state.chartRange.first + 1));
-      handle.setAttribute("aria-valuemax", String(start ? state.chartRange.last - 1 : range.last));
-      handle.setAttribute("aria-valuenow", String(state.chartRange[handle.dataset.edge]));
-      handle.setAttribute("aria-valuetext", `Step ${state.chartRange[handle.dataset.edge]}`);
+      handle.setAttribute("aria-valuemin", String(start ? range.first : chartRange.first + 1));
+      handle.setAttribute("aria-valuemax", String(start ? chartRange.last - 1 : range.last));
+      handle.setAttribute("aria-valuenow", String(chartRange[handle.dataset.edge]));
+      handle.setAttribute("aria-valuetext", `Step ${chartRange[handle.dataset.edge]}`);
     }
-    zoomBand.style.width = `${100 * (state.chartRange.last - state.chartRange.first) / span}%`;
+    zoomBand.style.width = `${100 * (chartRange.last - chartRange.first) / span}%`;
   }
   const markers = $("#timeline-markers");
   if (!range) { markers.replaceChildren(); return; }
@@ -1799,6 +1740,7 @@ function updateWorkspaceEditing() {
 }
 
 async function applyLayout() {
+  updateChartDemand();
   restoreTimelineHome();
   const visibleHere = panelsInThisWindow();
   document.body.classList.toggle("empty-workspace", visibleHere.length === 0);
@@ -2424,6 +2366,7 @@ function bindWorkspaceSync() {
   heartbeat();
   setInterval(heartbeat, 1000);
   window.addEventListener("beforeunload", () => {
+    chartHistory.dispose();
     workspaceChannel?.postMessage({ type: "window-closing", window: state.windowId });
   });
 }
@@ -2432,7 +2375,7 @@ function bindTimeline() {
   bindTimelineRange($("#timeline-zoom-band"), () => {
     const scrubber = $("#timeline-scrubber");
     return { first: Number(scrubber.min), last: Number(scrubber.max) };
-  }, () => state.chartRange, setChartRange);
+  }, () => chartHistory.read().range, setChartRange);
   $("#timeline-zoom").addEventListener("click", () => setChartRange(null));
   const scrubber = $("#timeline-scrubber");
   let trackWidth = 0;
@@ -2659,6 +2602,7 @@ panelRuntime = new PanelRuntime({
     inspectStep,
     setRewardReference,
     setChartRange,
+    retryChartHistory: () => chartHistory.retry(),
     showToast,
     setAttributionPreference: (config) => {
       state.attributionPreference = {
@@ -2729,6 +2673,7 @@ connect();
 
 // Fullscreen is a local processing override, never a persisted layout edit.
 document.addEventListener("fullscreenchange", () => {
+  updateChartDemand();
   panelRuntime.resetFrames();
   send({ type: "subscribe", subscriptions: subscriptions(), processing: processing() });
   refreshPanels();
