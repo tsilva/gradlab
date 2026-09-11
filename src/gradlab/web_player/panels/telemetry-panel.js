@@ -1,3 +1,4 @@
+import { chartHistoryBlock, chartPoints, createChartStatus, usesChartHistory } from "./chart-status.js";
 import { rewardContribution } from "./reward-discount.js";
 import { createRewardInspector, createRewardLegend } from "./reward-inspector.js";
 import { bindChartRange } from "../chart-range.js";
@@ -370,7 +371,7 @@ function makeLineBlock(block, services, definition) {
   };
 
   const renderChart = ({ history, view }) => {
-    history = view?.chartHistory || history;
+    history = chartPoints(history, view);
     const series = descriptors.map((descriptor) => ({
       values: seriesForMetric(descriptor.key, history),
       color: themeColor(descriptor.color || "chartBar"),
@@ -424,13 +425,13 @@ function makeLineBlock(block, services, definition) {
     if (!(bounds.width > 0)) return;
     const x = (event.clientX - bounds.left) * (canvas.clientWidth / bounds.width);
     const sequence = lineCursorSequence(
-      currentContext.view?.chartHistory || currentContext.history,
+      chartPoints(currentContext.history, currentContext.view),
       chartGeometry?.plot,
       x,
       chartGeometry?.pointCount,
     );
     if (sequence !== null) {
-      const point = (currentContext.view?.chartHistory || currentContext.history).find((point) => point.sequence === sequence);
+      const point = (chartPoints(currentContext.history, currentContext.view)).find((point) => point.sequence === sequence);
       clearTimeout(clickTimer);
       clickTimer = setTimeout(() => {
         if (point && services.inspectStep) services.inspectStep(point.step);
@@ -1048,7 +1049,7 @@ function makeNamespaceBlock(block, definition, services) {
 
   const render = ({ snapshot, history, view }) => {
     currentContext = { snapshot, history, view };
-    const chartHistory = view?.chartHistory || history;
+    const chartHistory = chartPoints(history, view);
     const descriptors = namespaceDescriptors(block.namespace, snapshot, history);
     if (!descriptors.some((descriptor) => descriptor.key === selected)) {
       selected = descriptors[0]?.key || "";
@@ -1300,7 +1301,7 @@ function makeRewardTableBlock(services) {
       button.disabled = !Number.isInteger(cursor);
       const range = view?.chartRange;
       context.textContent = `Cursor ${cursor ?? "unavailable"} · Reference ${reference?.step ?? "unavailable"} · ${range ? `Steps ${range.first}–${range.last}` : "Full episode"}`;
-      const points = view?.chartHistory || history;
+      const points = chartPoints(history, view);
       const gamma = snapshot?.session?.value_discount ?? snapshot?.session?.critic_comparison?.discount;
       inspector.render(points, { step: cursor }, gamma, reference?.step, reference?.sample);
     },
@@ -1329,6 +1330,9 @@ export function mount({ definition, services }) {
   element.classList.toggle("step-reward-panel", definition.id === "step-reward");
   const target = document.createElement("div");
   target.className = "telemetry-blocks";
+  const chartStatus = usesChartHistory({ ...definition, type: "telemetry" })
+    ? createChartStatus(services.retryChartHistory) : null;
+  if (chartStatus) element.append(chartStatus.element);
   element.append(target);
   const blocks = policyDecision
     ? [makePolicyDecisionBlock(
@@ -1341,7 +1345,17 @@ export function mount({ definition, services }) {
   target.replaceChildren(...blocks.map((block) => block.element));
   let context = { snapshot: null, history: [], view: {} };
 
-  const renderBlocks = () => blocks.forEach((block) => block.render(context));
+  const renderBlocks = () => {
+    const chart = context.view.chartStatus;
+    chartStatus?.render(chart);
+    if (chartStatus && chart) element.dataset.chartStatus = chart.status;
+    blocks.forEach((block, index) => {
+      const waiting = chart && chart.data === null
+        && chartHistoryBlock(definition.config.blocks[index]);
+      block.element.hidden = Boolean(waiting);
+      block.render(context);
+    });
+  };
   return {
     element,
     render(snapshot, view = context.view) {
