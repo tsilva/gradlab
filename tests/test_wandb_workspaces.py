@@ -76,6 +76,7 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
                 "ppo_clip_fraction",
                 "loop_throughput",
                 "provider_step_throughput",
+                "occupancy_cumulative",
                 "occupancy_recent",
                 "occupancy_history",
                 "curriculum_distribution",
@@ -167,6 +168,7 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
         document["profiles"].pop("breakout_training")
         document["sections"].pop("breakout_secondary")
         document["sections"].pop("breakout_primary")
+        document["sections"].pop("occupancy_totals")
         document["profiles"]["compact"] = {
             "display_name": "GradLab Compact",
             "run_scope": "current_metrics_schema",

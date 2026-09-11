@@ -23,7 +23,9 @@ WORKSPACE_SCHEMA_VERSION = 4
 DEFAULT_WORKSPACE_MANIFEST = Path("experiments/goals/_workspaces.yaml")
 _SAFE_ID = re.compile(r"^[a-z][a-z0-9_-]*$")
 _RUN_SCOPES = frozenset({"all", "current_metrics_schema"})
-_PANEL_KINDS = frozenset({"line", "occupancy", "occupancy_recent", "curriculum"})
+_PANEL_KINDS = frozenset(
+    {"line", "occupancy", "occupancy_recent", "occupancy_cumulative", "curriculum"}
+)
 _WORKSPACE_GRID_WIDTH = 24
 
 
@@ -220,7 +222,7 @@ def _panel_spec(panel_id: str, value: Any, *, label: str) -> WorkspacePanelSpec:
         raise ValueError(f"{label} metric declarations must be unique")
     if kind == "curriculum" and (y != ("train/curriculum/distribution",) or metric_templates):
         raise ValueError("curriculum panels require exactly train/curriculum/distribution")
-    if kind in {"occupancy", "occupancy_recent"} and (
+    if kind in {"occupancy", "occupancy_recent", "occupancy_cumulative"} and (
         y != ("train/occupancy/table",) or metric_templates
     ):
         raise ValueError("occupancy panels require exactly train/occupancy/table")

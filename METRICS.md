@@ -359,6 +359,10 @@ resuming as its cause without a matched uninterrupted continuation.
   which corresponds to `0.5` on this provider-normalized metric. It does not
   rescale the metric to the recipe's episode boundary; use the run's recorded
   success rule when interpreting completion and progress-based occupancy buckets.
+  The default recipe enables four occupancy buckets for quarters of the first
+  wall, using provider-signal edges `0`, `0.125`, `0.25`, `0.375`, and `0.5`.
+  Bucket percentages describe collected pre-action policy transitions; the
+  terminal wall-clear state is not an additional collected transition.
   All three statistics
   include warm-up before the window is full and are online behavior-policy training proxies rather
   than frozen-checkpoint evaluation evidence. Breakout ranks runs first by the rolling mean
@@ -417,6 +421,11 @@ resuming as its cause without a matched uninterrupted continuation.
   history query samples versions. All versions remain addressable. The selected-window chart and exact
   coarser grouping sum raw counts and retain the population denominator. They never average
   cell fractions. Display labels do not change the cell contract hash.
+- The Breakout dashboard's cumulative occupancy bars use the latest window's
+  cumulative count divided by its cumulative denominator, separately for each
+  Run, segment, and cell contract. They cover the latest collection segment,
+  not experience before an unrecovered continuation. Empty origins remain
+  unavailable. Runs without occupancy enabled have no occupancy chart data.
 - `train/curriculum/distribution` lists retained representatives separately from exposure.
   Its table records the publishing Run identity; charts separate Runs rather than adding their
   inventories or probabilities together.

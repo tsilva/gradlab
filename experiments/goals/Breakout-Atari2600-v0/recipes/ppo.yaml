@@ -2,10 +2,21 @@ defaults:
 - ../../../recipes/_presets/breakout-ball-state-ablation-ppo@_global_
 - _self_
 recipe_id: ppo
-description: Default Breakout custom PPO with batch size 512, ball-state and paddle-velocity inputs, equal reward per destroyed brick, and terminal success after clearing one wall.
+description: Default Breakout custom PPO with batch size 512, ball-state and paddle-velocity inputs, equal reward per destroyed brick, terminal success after clearing one wall, and first-wall quarter occupancy tracking.
 # Extends the 1B-step baseline with native paddle velocity from Breakout Turbo 0.5.12.
 train:
   timesteps: 1000000000
+  occupancy:
+    cell:
+      dimensions:
+      - signal: bricks_destroyed_normalized
+        # The provider normalizes across two walls; one wall spans [0, 0.5].
+        bucket_size: 0.125
+        clamp: [0, 0.49999999999999994]
+    domains: [[0, 1, 2, 3]]
+    units: [two-wall completion fraction]
+    labels: [0-25% of first wall, 25-50% of first wall, 50-75% of first wall, 75-100% of first wall]
+    window_transitions: 65536
   backend:
     id: gradlab.ppo
     config:
