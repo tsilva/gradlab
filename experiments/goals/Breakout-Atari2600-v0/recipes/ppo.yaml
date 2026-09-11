@@ -2,7 +2,7 @@ defaults:
 - ../../../recipes/_presets/breakout-ball-state-ablation-ppo@_global_
 - _self_
 recipe_id: ppo
-description: Default Breakout custom PPO with batch size 512, ball-state and paddle-velocity inputs, and equal reward per destroyed brick.
+description: Default Breakout custom PPO with batch size 512, ball-state and paddle-velocity inputs, equal reward per destroyed brick, and terminal success after clearing one wall.
 # Extends the 1B-step baseline with native paddle velocity from Breakout Turbo 0.5.12.
 train:
   timesteps: 1000000000
@@ -59,12 +59,13 @@ train:
         brick_destroyed:
           signal: bricks_destroyed
           operation: increase
-        two_walls_cleared:
+        one_wall_cleared:
           signal: walls_cleared
           operation: equals
-          value: 2
+          value: 1
       termination:
-        success: [two_walls_cleared]
+        # Clearing the first wall ends the episode without value bootstrapping.
+        success: [one_wall_cleared]
       reward:
         # Exclude native score; retain inherited life-loss and serve-stall rewards.
         reward_mode: events

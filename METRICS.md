@@ -354,7 +354,12 @@ resuming as its cause without a matched uninterrupted continuation.
   metrics average the terminal cumulative values over the most recent 100 target-origin episodes,
   while `train/progress/{progress}/max` and `/min` report the maximum and minimum
   over that same window. Minimum bricks describes the worst episode in the current window,
-  including failures; it is not an all-time minimum or a fourth ranking criterion. The normalized value is the `0.0..1.0` two-wall completion fraction. All three statistics
+  including failures; it is not an all-time minimum or a fourth ranking criterion. The normalized value is the `0.0..1.0` two-wall completion fraction.
+  The default `ppo` recipe terminates successfully after the first cleared wall,
+  which corresponds to `0.5` on this provider-normalized metric. It does not
+  rescale the metric to the recipe's episode boundary; use the run's recorded
+  success rule when interpreting completion and progress-based occupancy buckets.
+  All three statistics
   include warm-up before the window is full and are online behavior-policy training proxies rather
   than frozen-checkpoint evaluation evidence. Breakout ranks runs first by the rolling mean
   terminal `bricks_destroyed` count, then by higher rolling maximum target-origin bricks,
