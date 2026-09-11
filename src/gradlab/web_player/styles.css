@@ -2841,3 +2841,14 @@ body.recording #timeline { opacity: .72; }
 .reward-table-block { min-width: 0; }
 .reward-table-block > button { align-self: flex-start; margin-bottom: .75rem; }
 .reward-table-block .reward-history-scroll { overflow: auto; }
+
+.chart-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .6rem;
+  padding: .5rem .8rem;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-muted);
+}
+[data-chart-status="error"] > .chart-status { color: var(--color-error-text); }
