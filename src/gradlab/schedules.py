@@ -22,8 +22,7 @@ def linear_decay_schedule(
     def schedule(progress_remaining: float) -> float:
         progress_remaining = min(max(progress_remaining, 0.0), 1.0)
         elapsed_timesteps = (1.0 - progress_remaining) * total_timesteps
-        progress = min(max(elapsed_timesteps / schedule_timesteps, 0.0), 1.0)
-        return initial_value + (final_value - initial_value) * progress
+        return scheduled_scalar(initial_value, final_value, elapsed_timesteps, schedule_timesteps)
 
     return schedule
 
@@ -57,8 +56,9 @@ class EntropyCoefficientScheduleHelper(CallbackHelper):
         self.schedule_timesteps = schedule_timesteps
 
     def _current_value(self) -> float:
-        progress = min(max(self.num_timesteps / self.schedule_timesteps, 0.0), 1.0)
-        return self.initial_value + (self.final_value - self.initial_value) * progress
+        return scheduled_scalar(
+            self.initial_value, self.final_value, self.num_timesteps, self.schedule_timesteps
+        )
 
     def _on_training_start(self) -> None:
         self.model.ent_coef = self._current_value()
@@ -101,3 +101,43 @@ def apply_a2c_resume_hyperparameters(
     model.vf_coef = backend_config["vf_coef"]
     model.max_grad_norm = backend_config["max_grad_norm"]
     model.normalize_advantage = backend_config["normalize_advantage"]
+
+
+def scheduled_scalar(
+    initial: float, final: float | None, step: int | float, duration: int
+) -> float:
+    """Interpolate by absolute training transitions and hold the endpoint."""
+    if final is None:
+        return float(initial)
+    if duration <= 0:
+        raise ValueError("schedule duration must be positive")
+    progress = min(max(step / duration, 0.0), 1.0)
+    return float(initial) + (float(final) - float(initial)) * progress
+
+
+def apply_rollout_gamma(model: Any, config: Mapping[str, Any], total: int) -> float:
+    """Freeze one discount for rollout collection, timeout bootstrap and GAE."""
+    gamma = scheduled_scalar(
+        config["gamma"],
+        config.get("gamma_final"),
+        int(model.num_timesteps),
+        int(config.get("gamma_schedule_timesteps", 0) or total),
+    )
+    model.gamma = gamma
+    buffer = getattr(model, "rollout_buffer", None)
+    if buffer is not None:
+        buffer.gamma = gamma
+    return gamma
+
+
+class GammaScheduleHelper(CallbackHelper):
+    def __init__(self, config: Mapping[str, Any], total: int):
+        super().__init__()
+        self.config = dict(config)
+        self.total = total
+
+    def _on_rollout_start(self) -> None:
+        apply_rollout_gamma(self.model, self.config, self.total)
+
+    def _on_rollout_end(self) -> None:
+        self.logger.record("train/gamma", float(self.model.gamma))

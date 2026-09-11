@@ -2948,3 +2948,20 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert 'window.addEventListener("popstate", this.onPopState);' in source_browser
     assert "goHome()" in source_browser
     assert "hydrateInitialEnvironments()" in source_browser
+
+
+def test_scheduled_critic_disables_stationary_calibration():
+    config = {"game": "Game-v0", "task": {"termination": {}}}
+    session = argparse.Namespace(
+        model=argparse.Namespace(gamma=0.945), config=config, termination_base_config=config,
+    )
+    runner = WebPlaybackRunner(
+        session, human_args(), config_text="", contract_details={"comparison_reasons": []},
+        value_contract={"discount": None, "discount_schedule": {
+            "initial": 0.9, "final": 0.99, "timesteps": 100,
+        }},
+    )
+    assert runner.value_discount == 0.945
+    assert runner._critic_comparison_reasons() == [
+        "critic was trained with a changing discount; fixed-discount calibration is unavailable"
+    ]

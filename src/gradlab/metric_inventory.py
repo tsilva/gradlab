@@ -21,6 +21,7 @@ ACTOR_CRITIC_METRICS = frozenset(
         "train/policy_loss/mean",
         "train/value_loss/mean",
         "train/learning_rate",
+        "train/gamma",
         "train/entropy/mean",
         "train/noise/std/mean",
         "train/action/fraction/max",

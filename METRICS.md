@@ -392,6 +392,12 @@ resuming as its cause without a matched uninterrupted continuation.
 - Snapshot-curriculum `train/curriculum/probability/max` and `train/curriculum/effective_cells/count` summarize the
   current cell-probability distribution. They do not report realized per-cell selection frequency
   or identify which resident cells were selected.
+- Go-Explore `train/go-explore/visits/count` includes initialization visits and subsequent
+  nonterminal destination-cell visits. It is not a count of every collected pre-action state.
+  Curriculum admission counts refer to cell-crossing candidates, while archive cell and entry
+  counts describe retained inventory. None of these metrics currently provides a per-cell
+  training-occupancy history. Occupancy would count each collected policy transition once by
+  its source cell, including terminal transitions, and exclude reset work and optimizer reuse.
 - Derived throughput phase timing satisfies `loop wall time = provider step time +
   train/rollout_overhead/seconds + train/between_rollouts/seconds`. Compare
   those phases on matching workloads to identify a training-loop bottleneck. Rollout overhead includes
@@ -614,6 +620,7 @@ and target-progress fields are not registry metrics and cannot enter the publish
 | `train/explained_variance` | Explained variance | Actor-critic value-function explained variance. | scalar | rollout | history | last | train/step | training | - | - |
 | `train/policy_loss/mean` | Policy-gradient loss | Actor-critic policy-gradient loss. | scalar | rollout | history | last | train/step | training | - | - |
 | `train/value_loss/mean` | Value loss | Actor-critic value loss. | scalar | rollout | history | last | train/step | training | - | - |
+| `train/gamma` | Discount factor | Discount frozen at rollout start, used for timeout bootstrapping and GAE; scheduled by absolute training transitions and restored on resume. | scalar | rollout | history | last | train/step | training | - | - |
 | `train/learning_rate` | Learning rate | Current actor-critic learning rate. | scalar | rollout | history | last | train/step | training | - | - |
 | `train/entropy/mean` | Policy entropy | Actor-critic policy entropy with the entropy-loss sign reversed, averaged over the update samples. Discrete entropy is nonnegative; continuous differential entropy can be negative. | nats | rollout | history | last | train/step | training | - | - |
 | `train/noise/std/mean` | Policy distribution std | Arithmetic mean of exp(policy.log_std) over its parameter entries; this summarizes continuous-policy scale parameters, not the empirical standard deviation of sampled or executed actions. | scalar | rollout | history | last | train/step | training | - | - |
