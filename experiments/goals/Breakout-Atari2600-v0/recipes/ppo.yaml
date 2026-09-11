@@ -2,7 +2,7 @@ defaults:
 - ../../../recipes/_presets/breakout-ball-state-ablation-ppo@_global_
 - _self_
 recipe_id: ppo
-description: Default Breakout custom PPO with batch size 512, ball-state and paddle-velocity inputs, equal reward per destroyed brick, terminal success after clearing one wall, and first-wall quarter occupancy tracking.
+description: Default Breakout custom PPO with batch size 512, ball-state, paddle-velocity, and remaining-lives inputs, equal reward per destroyed brick, terminal success after clearing one wall, and first-wall quarter occupancy tracking.
 # Extends the 1B-step baseline with native paddle velocity from Breakout Turbo 0.5.12.
 train:
   timesteps: 1000000000
@@ -30,6 +30,7 @@ train:
     task:
       signals:
         policy_paddle_vx: paddle_vx_normalized
+        policy_lives: lives_normalized
       model_inputs:
         schema_version: 1
         context:
@@ -64,6 +65,10 @@ train:
             encoding: {kind: continuous, scale: 8.0, offset: -7.0, low: null, high: null, clip: false}
           ball_paddle_offset:
             signal: policy_ball_paddle_offset
+            update: transition
+            encoding: {kind: continuous, scale: 1.0, offset: 0.0, low: null, high: null, clip: false}
+          lives_normalized:
+            signal: policy_lives
             update: transition
             encoding: {kind: continuous, scale: 1.0, offset: 0.0, low: null, high: null, clip: false}
       events:
