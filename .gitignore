@@ -70,3 +70,7 @@ events.out.tfevents.*
 *.swo
 
 artifacts/
+
+# Generated local settings and design QA output
+/_vizdoom.ini
+/design-qa.md
