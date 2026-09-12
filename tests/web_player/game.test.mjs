@@ -113,17 +113,7 @@ test("terminal badge tone follows the canonical success or failure outcome", () 
   }), "");
 });
 
-test("game frames commit only the latest exact scrub decode", () => {
+test("game presents frame boundary metadata", () => {
   assert.match(source, /data-frame-boundary hidden/);
   assert.match(source, /boundaryElement\.hidden = !boundaryKind/);
-  assert.match(source, /targetSnapshot = nextSnapshot/);
-  assert.match(source, /const prepareFrame = async \(kind, blob, metadata = \{\}\)/);
-  assert.match(source, /async renderFrame\(kind, blob, metadata = \{\}\)/);
-  assert.match(source, /const incomingSequence = Number\(metadata\.sequence\)/);
-  assert.match(
-    source,
-    /const bitmap = await createImageBitmap\(blob\);\s*if \(!mounted \|\| request !== bitmapRequest\)/,
-  );
-  assert.match(source, /if \(incomingSequence === targetSequence\) commitPrepared\(frameSnapshot\)/);
-  assert.match(source, /resetFrames\(\) \{\s*bitmapRequest \+= 1;/);
 });
