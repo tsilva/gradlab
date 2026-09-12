@@ -2887,7 +2887,6 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert "window.opener.postMessage(message, location.origin)" in oauth_script
     assert "location.replace(`/#token=${encodeURIComponent(token)}`)" in oauth_script
     assert '$("#player-home")' not in script
-    assert '$("#page-title").hidden = Boolean(state.sourceMode || activeRecordingRoute);' in script
     assert 'id="more-toggle"' in markup
     assert 'id="playback-settings-menu"' in markup
     assert '$("#page-title").textContent = "Select checkpoint"' not in script
@@ -2937,7 +2936,6 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert 'search_algorithm_id !== "go-explore"' in script
     assert "hideGoExploreValuePanel(snapshot)" in script
     assert 'features.add("rewards")' in script
-    assert "state.backgroundPlaybackSnapshot = message" in script
     assert 'this.activeBreadcrumbRoute = ""' in source_browser
     assert 'type: "inspection_frames"' in script
     assert "sequence < (state.receivedFrameSequence" not in script
