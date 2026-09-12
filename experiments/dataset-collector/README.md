@@ -160,6 +160,73 @@ pacing changes throughput and time-limited sample counts.
 HUD-only changes count as new images. Discovery attribution depends on collection
 order. A novelty plateau does not prove exhaustive state or action coverage.
 
+## Hugging Face export
+
+`export-hf` creates a standalone, upload-ready snapshot without changing the
+collection format. Stop the writer first; the export holds a shared dataset lock,
+validates the source, and writes into a temporary sibling directory. Only a
+completed export becomes the requested output directory. Existing destinations
+are refused. Failed exports clean up their own temporary files.
+
+```bash
+uv run --frozen python experiments/dataset-collector/collector.py export-hf \
+  /path/to/dataset /path/to/huggingface-export --max-gib 10
+```
+
+The export contains four Hugging Face configurations:
+
+| Configuration | Contents | Splits |
+| --- | --- | --- |
+| `frames` | One lossless PNG per unique frame, image feature and SHA-256 | `assets` |
+| `transitions` (default) | Ordered frame references, actions, rewards, temperatures, boundaries | `train`, `heldout` when present |
+| `episodes` | Initial frames, lengths, seeds, session IDs, completion status | Original episode splits |
+| `sessions` | Portable checkpoint provenance and collection settings | `metadata` |
+
+PNG bytes are embedded in Parquet using Hugging Face's image feature metadata.
+The Hub viewer can display the `frames` images; it does not automatically join
+transition frame IDs to images. Consumers join `source_frame_id` and
+`successor_frame_id` to `frames.frame_id`. IDs are not array offsets. The shared
+image pool is not a training split: select episodes first, then their referenced
+images, preserving held-out isolation. Incomplete episodes remain marked.
+
+The numerical columns and JSON action columns are directly readable without
+GradLab. `record_json` additionally preserves every original transition fact and
+exact array dtypes/shapes using the documented tree structure and base64 array
+bytes. The generated card describes decoding and loading. Manifest and session
+metadata use the existing portable metadata filter. No Policy weights, SQLite,
+private source paths, or custom Hugging Face loading script are required.
+
+Parquet row groups are bounded by 128 records and an 8 MiB target (one bounded
+record may exceed it). `--shard-rows` defaults to 4096. `--max-gib` limits the
+completed export, separately from collection storage; a failed private staging
+write can temporarily exceed it by a bounded row group and Parquet footer.
+`export.json` records source identity, counts and file checksums. Its hashes
+exclude `export.json` itself. This is a snapshot export, not incremental sync.
+
+Load locally, or substitute a Hub dataset ID after upload:
+
+```python
+from datasets import load_dataset
+steps = load_dataset("/path/to/huggingface-export", "transitions", split="train")
+frames = load_dataset("/path/to/huggingface-export", "frames", split="assets")
+episodes = load_dataset("/path/to/huggingface-export", "episodes", split="train")
+```
+
+The exporter uses existing dependencies. The `datasets` library is only needed by
+consumers; it is not added to GradLab. Upload is separate and requires a chosen
+repository and visibility. After setting the appropriate license and attribution
+in the generated dataset card, an example for a **new** dataset repository is:
+
+```bash
+uv run --frozen hf upload YOUR_NAMESPACE/YOUR_DATASET /path/to/huggingface-export . \
+  --type dataset --private
+```
+
+Do not overlay a shorter export on old shards: files absent locally are not
+removed by this command. Use a fresh repository or explicitly manage obsolete
+files when publishing a replacement snapshot. The collector never uploads data
+or creates a Hub repository automatically.
+
 ## Validation and pilot
 
 ```bash

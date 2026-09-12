@@ -1309,6 +1309,342 @@ def export_preview(root, destination, *, episode_id=1, max_steps=600, fps=30):
     return destination
 
 
+def export_huggingface(root, destination, *, shard_rows=4096, max_bytes=10 * 1024**3):
+    """Export a quiescent, validated dataset as standalone Hugging Face Parquet tables."""
+    import base64
+    import io
+    import tempfile
+    import shutil
+    import yaml
+    from PIL import Image
+    from gradlab.play_trajectory import encode_tree, portable_metadata
+
+    root, destination = Path(root).resolve(), Path(destination).absolute()
+    if destination.exists() or destination.is_symlink():
+        raise ValueError("export destination already exists")
+    if destination.resolve().is_relative_to(root):
+        raise ValueError("export destination cannot be inside the source dataset")
+    if type(shard_rows) is not int or not 1 <= shard_rows <= 1000000:
+        raise ValueError("shard_rows must be between 1 and 1000000")
+    if type(max_bytes) is not int or max_bytes < 1:
+        raise ValueError("export byte budget must be positive")
+
+    def readable(value):
+        if isinstance(value, np.ndarray | np.generic):
+            return value.tolist()
+        raise TypeError(f"unsupported JSON value: {type(value).__name__}")
+
+    def exact_record(value):
+        tree = encode_tree(value)
+        for leaf in tree["arrays"]:
+            leaf["data"] = base64.b64encode(leaf["data"]).decode("ascii")
+        return canonical(tree).decode()
+
+    def schema(fields):
+        return pa.schema([(name, getattr(pa, kind)()) for name, kind in fields])
+
+    transition_schema = schema(
+        [
+            *[
+                (name, "int64")
+                for name in (
+                    "episode_id",
+                    "step",
+                    "source_frame_id",
+                    "successor_frame_id",
+                    "policy_decision_id",
+                    "configured_frame_skip",
+                    "elapsed_native_frames",
+                )
+            ],
+            *[
+                (name, "bool_")
+                for name in (
+                    "successor_frame_new",
+                    "terminated",
+                    "truncated",
+                    "native_game_over",
+                    "native_truncated",
+                    "task_terminated",
+                    "task_truncated",
+                )
+            ],
+            *[
+                (name, "float64")
+                for name in ("policy_reward", "native_reward", "task_reward", "temperature")
+            ],
+            *[
+                (name, "string")
+                for name in (
+                    "session_id",
+                    "action_selection_mode",
+                    "action_override_rule_id",
+                    "selected_action_json",
+                    "effective_action_json",
+                    "native_action_json",
+                    "record_json",
+                )
+            ],
+        ]
+    )
+    episode_schema = schema(
+        [
+            *[(name, "int64") for name in ("episode_id", "seed", "initial_frame_id", "length")],
+            *[(name, "string") for name in ("session_id", "split", "status", "end_reason")],
+            ("initial_frame_new", "bool_"),
+        ]
+    )
+    session_schema = schema([("session_id", "string"), ("record_json", "string")])
+    image_features = {
+        "frame_id": {"dtype": "int64", "_type": "Value"},
+        "sha256": {"dtype": "string", "_type": "Value"},
+        "image": {"_type": "Image"},
+    }
+    frame_schema = pa.schema(
+        [
+            ("frame_id", pa.int64()),
+            ("sha256", pa.string()),
+            ("image", pa.struct([("bytes", pa.binary()), ("path", pa.string())])),
+        ],
+        metadata={b"huggingface": canonical({"info": {"features": image_features}})},
+    )
+
+    with (root / ".writer.lock").open("rb") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise ValueError("stop the dataset writer before exporting") from error
+        summary = validate_dataset(root)
+        if not summary["transitions"]:
+            raise ValueError("export requires at least one committed transition")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        staging = Path(tempfile.mkdtemp(prefix=f".{destination.name}-", dir=destination.parent))
+        try:
+
+            def budget():
+                if disk_bytes(staging) > max_bytes:
+                    raise ValueError("export exceeds byte budget")
+
+            def write_table(config, split, rows, arrow_schema):
+                folder = staging / config / split
+                folder.mkdir(parents=True)
+                writer, pending, pending_bytes = None, [], 0
+                count, in_shard, shard = 0, 0, 0
+
+                def flush():
+                    nonlocal writer, pending, pending_bytes, in_shard, shard
+                    if not pending:
+                        return
+                    if writer is None:
+                        writer = pq.ParquetWriter(
+                            folder / f"{shard:05d}.parquet",
+                            arrow_schema,
+                            compression="zstd",
+                            write_page_index=True,
+                        )
+                    writer.write_table(
+                        pa.Table.from_pylist(pending, schema=arrow_schema),
+                        row_group_size=len(pending),
+                    )
+                    in_shard += len(pending)
+                    pending, pending_bytes = [], 0
+                    if in_shard == shard_rows:
+                        writer.close()
+                        writer, in_shard, shard = None, 0, shard + 1
+                    budget()
+
+                try:
+                    for row in rows:
+                        size = pa.Table.from_pylist([row], schema=arrow_schema).nbytes
+                        if size > 4 * MAX_BATCH_BYTES:
+                            raise ValueError("export record exceeds bounded row size")
+                        if pending and pending_bytes + size > MAX_BATCH_BYTES:
+                            flush()
+                        pending.append(row)
+                        pending_bytes += size
+                        count += 1
+                        if len(pending) >= min(128, shard_rows - in_shard):
+                            flush()
+                    flush()
+                finally:
+                    if writer is not None:
+                        writer.close()
+                budget()
+                return count
+
+            with DatasetReader(root) as reader:
+                reader.db.execute("BEGIN")
+
+                def frames():
+                    for frame in reader.db.execute(
+                        "SELECT frame_id, sha256 FROM frames ORDER BY frame_id"
+                    ):
+                        buffer = io.BytesIO()
+                        Image.fromarray(reader.frame(frame["frame_id"])).save(buffer, format="PNG")
+                        yield {
+                            "frame_id": frame["frame_id"],
+                            "sha256": frame["sha256"],
+                            "image": {"bytes": buffer.getvalue(), "path": None},
+                        }
+
+                def transitions(split):
+                    for episode in reader.episodes():
+                        if episode["split"] != split:
+                            continue
+                        for row in reader.transitions(episode["episode_id"]):
+                            result = {key: row.get(key) for key in transition_schema.names}
+                            result["session_id"] = episode["session_id"]
+                            for key in ("selected_action", "effective_action", "native_action"):
+                                result[f"{key}_json"] = json.dumps(
+                                    row.get(key),
+                                    default=readable,
+                                    allow_nan=False,
+                                    separators=(",", ":"),
+                                )
+                            result["record_json"] = exact_record(row)
+                            yield result
+
+                configs = []
+                write_table("frames", "assets", frames(), frame_schema)
+                configs.append(
+                    {
+                        "config_name": "frames",
+                        "data_files": [{"split": "assets", "path": "frames/assets/*.parquet"}],
+                    }
+                )
+                for name, arrow_schema in [
+                    ("transitions", transition_schema),
+                    ("episodes", episode_schema),
+                ]:
+                    files = []
+                    for split in ("train", "heldout"):
+                        rows = (
+                            transitions(split)
+                            if name == "transitions"
+                            else (e for e in reader.episodes() if e["split"] == split)
+                        )
+                        if write_table(name, split, rows, arrow_schema):
+                            files.append({"split": split, "path": f"{name}/{split}/*.parquet"})
+                    configs.append(
+                        {
+                            "config_name": name,
+                            "data_files": files,
+                            **({"default": True} if name == "transitions" else {}),
+                        }
+                    )
+                sessions = (
+                    {
+                        "session_id": row[0],
+                        "record_json": exact_record(portable_metadata(reader.session(row[0]))),
+                    }
+                    for row in reader.db.execute(
+                        "SELECT session_id FROM sessions ORDER BY session_id"
+                    )
+                )
+                write_table("sessions", "metadata", sessions, session_schema)
+                configs.append(
+                    {
+                        "config_name": "sessions",
+                        "data_files": [
+                            {"split": "metadata", "path": "sessions/metadata/*.parquet"}
+                        ],
+                    }
+                )
+                (staging / "manifest.json").write_bytes(
+                    canonical(portable_metadata(reader.manifest))
+                )
+                report = {
+                    "export_version": 1,
+                    "source_format_version": VERSION,
+                    "source_manifest_sha256": hashlib.sha256(
+                        canonical(reader.manifest)
+                    ).hexdigest(),
+                    "transitions": summary["transitions"],
+                    "unique_frames": summary["unique_frames"],
+                    "complete_episodes": summary["complete_episodes"],
+                    "incomplete_episodes": summary["incomplete_episodes"],
+                }
+                card = {
+                    "pretty_name": "GradLab RGB trajectories",
+                    "tags": ["reinforcement-learning", "image"],
+                    "configs": configs,
+                }
+                (staging / "README.md").write_text(
+                    "---\n"
+                    + yaml.safe_dump(card, sort_keys=False)
+                    + """---
+# GradLab RGB trajectories
+
+A snapshot of recorded Policy execution for trajectory and neural-emulator research.
+Full RGB, including HUD pixels, is preserved as lossless PNG. Each image is stored
+once in `frames`; ordered `transitions` reference source/successor frame IDs.
+`episodes` includes initial frames, seeds, completion status and session IDs.
+`sessions` contains collection settings and portable checkpoint/runtime provenance.
+`manifest.json` records the collection contract. No checkpoint is needed to read it.
+
+## Loading
+
+```python
+from datasets import load_dataset
+repo = "YOUR_NAMESPACE/YOUR_DATASET"  # Or this local export directory.
+steps = load_dataset(repo, "transitions", split="train")
+frames = load_dataset(repo, "frames", split="assets")
+episodes = load_dataset(repo, "episodes", split="train")
+# Join source_frame_id / successor_frame_id to frames.frame_id.
+# Frame IDs are identifiers, not zero-based row offsets.
+```
+
+Each configuration is a separate table in the Hugging Face Dataset Viewer.
+The `frames` table previews images; the transition table shows IDs and numerical
+facts. The Hub does not automatically render frame-ID joins as image columns.
+Use `(episode_id, step)` for ordering and `session_id` for provenance.
+Action JSON columns preserve scalar/vector shape. Nullable fields mean unavailable.
+`record_json` retains every original fact and exact NumPy dtype/shape: parse its
+JSON, parse `structure` for the tagged tree, and base64-decode each `arrays[].data`
+using the declared NumPy dtype/shape. Array references index that array list.
+The tree tags are scalar, array, dict (key/value pairs), list, and tuple.
+
+## Splits and limitations
+
+Episode assignments are preserved as `train` and `heldout`; absent splits are
+omitted. `frames/assets` is a shared image pool, NOT an independent training split.
+Only join images referenced by your chosen episode split; sharing image bytes does
+not permit fitting on held-out trajectories, labels, or histories. Incomplete
+prefixes remain marked in `episodes` and must not be treated as game-over events.
+Boundaries and temperature changes are recorded in session settings; Counterfactual
+Playback remains ineligible as Acceptance or Promotion evidence. Capture cadence
+comes from the manifest, and omitted native intermediate frames are unavailable.
+Image uniqueness does not measure hidden simulator-state coverage.
+
+This exporter does not assign a dataset license. Set the applicable license and
+source attribution in this card before publication. `export.json` identifies the
+snapshot and hashes its files; this is collection evidence, not model performance.
+"""
+                )
+            report["files"] = []
+            for path in sorted(staging.rglob("*")):
+                if path.is_file():
+                    with path.open("rb") as stream:
+                        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+                    report["files"].append(
+                        {
+                            "path": path.relative_to(staging).as_posix(),
+                            "sha256": digest,
+                            "bytes": path.stat().st_size,
+                        }
+                    )
+            (staging / "export.json").write_bytes(canonical(report))
+            budget()
+            # Destination must still be absent; preserve any concurrently created directory.
+            if destination.exists() or destination.is_symlink():
+                raise ValueError("export destination already exists")
+            os.rename(staging, destination)
+            return report
+        finally:
+            if staging.exists():
+                shutil.rmtree(staging)
+
+
 def main(argv=None):
     import argparse
 
@@ -1335,9 +1671,13 @@ def main(argv=None):
     collect.add_argument("--schedule-seed", type=int, default=0)
     collect.add_argument("--device", default="cpu")
     collect.add_argument("--debug", action="store_true", help="start the local debugger paused")
-    for name in ("validate", "inspect", "progress", "preview"):
+    for name in ("validate", "inspect", "progress", "preview", "export-hf"):
         mode = modes.add_parser(name)
         mode.add_argument("dataset", type=Path)
+        if name == "export-hf":
+            mode.add_argument("output", type=Path)
+            mode.add_argument("--shard-rows", type=int, default=4096)
+            mode.add_argument("--max-gib", type=float, default=10)
         if name in {"inspect", "preview"}:
             mode.add_argument("--episode", type=int, default=1)
         if name == "preview":
@@ -1345,7 +1685,21 @@ def main(argv=None):
             mode.add_argument("--max-steps", type=int, default=600)
             mode.add_argument("--fps", type=float, default=30)
     args = parser.parse_args(argv)
-    if args.mode == "validate":
+    if args.mode == "export-hf":
+        if not math.isfinite(args.max_gib) or args.max_gib <= 0:
+            parser.error("--max-gib must be positive and finite")
+        print(
+            json.dumps(
+                export_huggingface(
+                    args.dataset,
+                    args.output,
+                    shard_rows=args.shard_rows,
+                    max_bytes=int(args.max_gib * 1024**3),
+                ),
+                sort_keys=True,
+            )
+        )
+    elif args.mode == "validate":
         print(json.dumps(validate_dataset(args.dataset), sort_keys=True))
     elif args.mode == "progress":
         with DatasetReader(args.dataset) as reader:
