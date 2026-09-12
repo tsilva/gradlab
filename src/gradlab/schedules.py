@@ -31,6 +31,24 @@ def learning_rate_schedule(
     common_config: Mapping[str, Any],
     backend_config: Mapping[str, Any],
 ) -> float | Callable[[float], float]:
+    milestones = backend_config.get("learning_rate_milestones")
+    if milestones is not None:
+        # Config validation owns point ordering and finite, non-negative rates.
+        points = ((0, float(backend_config["learning_rate"])),) + tuple(
+            (point["step"], point["value"]) for point in milestones
+        )
+        total = int(common_config["timesteps"])
+        if total <= 0:
+            raise ValueError("timesteps must be positive")
+
+        def schedule(progress_remaining: float) -> float:
+            step = (1.0 - min(max(progress_remaining, 0.0), 1.0)) * total
+            for (start, initial), (end, final) in zip(points, points[1:]):
+                if step <= end:
+                    return scheduled_scalar(initial, final, step - start, end - start)
+            return float(points[-1][1])
+
+        return schedule
     if backend_config["learning_rate_final"] is None:
         return float(backend_config["learning_rate"])
     return linear_decay_schedule(

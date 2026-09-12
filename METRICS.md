@@ -306,6 +306,7 @@ resuming as its cause without a matched uninterrupted continuation.
   action-space-only minimum or maximum. The bounds remain a pure policy-space calculation used by
   diagnostics and are not duplicated as W&B metrics.
 - For custom PPO, `train/clip/fraction` averages minibatch fractions across attempted epochs and counts sampled action-probability ratios outside the clipping interval. It does not measure how far those ratios moved or the fraction of gradients disabled; similar fractions can accompany different policy changes. `train/kl/mean` averages minibatch estimates from the last attempted epoch, not a fresh full-rollout evaluation of the final policy. Interpret both alongside learning rate and progress at matched timesteps; neither has a universally desirable target.
+- `train/learning_rate` reports the optimizer rate applied to the update. Optional `learning_rate_milestones` interpolate from `learning_rate` at step zero through declared absolute-transition `step`/`value` points, then hold the last value. Equal consecutive values define a constant phase. Milestones replace the linear endpoint/duration settings; extending or resuming a run does not restart their absolute timeline.
 - Custom PPO checks each minibatch's approximate KL against `1.5 * target_kl` before its optimizer step. Exceeding the threshold stops remaining optimization on the collected rollout, retaining earlier optimizer steps; it neither interrupts rollout collection nor rolls back the policy. The reference is the policy that collected that rollout, and PPO ratio clipping remains enabled. The logged epoch mean is not the individual triggering estimate, and an average KL cannot establish behavior preservation in rare states.
 - Changing GAE lambda changes both the policy advantage estimator and the critic return targets. Value loss and explained variance across different lambda settings therefore describe different target distributions; larger loss alone does not prove critic divergence or greater advantage variance. Advantage normalization rescales the estimator but does not remove noise in its action ranking. Rollout advantage standard deviation measures dispersion across sampled transitions, not conditional estimator noise at fixed states; differences across runs can reflect changed state occupancy and true action-value variation.
 - Actor-critic explained variance is `1 - Var(value_target - value_prediction) /
@@ -393,7 +394,7 @@ resuming as its cause without a matched uninterrupted continuation.
   `leaders runs` applies the complete configured training ranking to individual runs and excludes
   runs missing any criterion. Recipe cohorts retain their separate cross-seed aggregation order;
   the individual-run tie-breaks do not redefine cohort statistics.
-  The default `ppo` recipe terminates successfully when the second wall clears. For that
+  The default `ppo` recipe terminates successfully when the first wall clears. For that
   contract, episode length measures completion time on successful episodes; its rolling mean
   also includes failures, so decreasing length indicates faster completion only when full
   completion remains consistent. Recipes that continue after wall completion would need a
