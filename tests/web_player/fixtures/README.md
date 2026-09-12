@@ -45,3 +45,45 @@ with the same delayed chart reads and recovery controls. The Checkpoint attachme
 is the fixture's opaque test data; the imported runner only reads recorded
 transitions. Use the exact-transition field to inspect earlier steps, and Replay
 to replay the captured prefix. An unfinished archive cannot generate new steps.
+
+## Checkpoint selection
+
+Run `uv run --frozen python -m tests.web_player.fixtures.selection_player` and open
+its printed loopback URL in the Codex in-app browser. This sibling fixture starts
+with a Run's two synthetic Checkpoints. It uses the production PlaybackHost,
+PlaybackWebServer, source navigation, message handler, and frame presentation.
+The loader generates three recorded transitions per Checkpoint and leaves the
+runner paused. Manifest URLs are identifiers only; the loader never fetches them.
+
+Use **Run selection checks** for catalog Retry, observer refusal, command rejection,
+keyboard selection, initial failure and preparation Retry, adjacent navigation,
+loading-mask accessibility, delayed frames, local browsing, and failed replacement.
+Use **Run history and window checks** for Back/Forward, repeated selection,
+inspection, RGB settings, cancellation characterization, and imported recordings.
+Each assertion reports PASS or a failing condition in the fixture controls.
+Run these suites on a fresh fixture. Imported Playback is the final case.
+
+The fixture's buttons can release or fail preparation, withhold/release frames,
+refuse a command, change control ownership, fail/recover catalog reads, delay the
+source-browser module, and disconnect the socket. Fixture controls sit above the
+production loading mask. The cancellation check activates the real DOM button
+programmatically because the production mask covers it for pointer users; it
+characterizes the existing command without changing its accessibility policy.
+Preparation and frame release are explicit gates. Polling observes mounted DOM or
+server status; elapsed time alone never proves a race assertion. Activation cleanup
+must finish before an independent replacement case begins, as the production host
+can reject new work while its previous worker is still draining.
+
+For manual multi-window verification, open `/panel/game#token=<printed token>` on
+the same origin. Select an adjacent Checkpoint there, release preparation from
+either window, and verify that both display the authoritative session while only
+the initiating window tracks its load. For a direct-link check, start a fresh
+fixture and append `/checkpoints/checkpoint-200-bbbbbbbbbbbbbbbb` to its Run path.
+Hold the browser module before opening that link, then release it and verify that
+one preparation opens the full Environment/Goal/Variant/Run/Checkpoint route.
+
+To replay an immutable frontend baseline, extract its web-player assets with
+`git archive <revision> src/gradlab/web_player`, then pass the extracted directory
+to `--assets-root`. The fixture and production Python host stay the same, allowing
+comparison of the complete frontend behavior. Generated baseline trees belong in
+ignored `logs/`, never source control.
