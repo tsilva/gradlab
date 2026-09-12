@@ -1207,7 +1207,7 @@ export class SourceBrowser {
       getState,
       showToast,
       checkpointNavigationRoot = null,
-      beginCheckpointLoad = null,
+      selection,
       openInspection,
       openSourceRoute,
       catalogRequestTimeoutMs = 30_000,
@@ -1229,7 +1229,7 @@ export class SourceBrowser {
     this.checkpointPosition = checkpointNavigationRoot?.querySelector(
       "[data-checkpoint-position]",
     ) || null;
-    this.beginCheckpointLoad = beginCheckpointLoad;
+    this.selection = selection;
     this.openInspection = openInspection;
     this.openSourceRoute = openSourceRoute;
     this.route = {
@@ -1275,13 +1275,11 @@ export class SourceBrowser {
     this.goalVariantRunPages = new Map();
     this.activityRevision = "";
     this.autoSelectedRoute = "";
-    this.playbackRoute = null;
     this.activeBreadcrumbRoute = "";
     this.activeCheckpointCache = new Map();
     this.activeCheckpointController = null;
     this.activeCheckpointRequestSerial = 0;
     this.activeCheckpointError = "";
-    this.activeCheckpointPendingId = "";
     this.adjacentPrefetchKey = "";
     this.initialEnvironmentCatalog = null;
     this.initialCatalogConsumed = false;
@@ -1332,7 +1330,7 @@ export class SourceBrowser {
       this.pendingLocationRoute = null;
       this.lastAppRoute = routeSignature(appRoute);
       this.applyRoute(pending);
-      this.command("browse_sources", { route: { ...pending } });
+      this.selection.browse(pending, snapshot, { historyMode: null });
     } else {
       this.pendingLocationRoute = null;
     }
@@ -1437,8 +1435,6 @@ export class SourceBrowser {
       run_id: route.run_id || "",
       checkpoint_id: route.checkpoint_id || "",
     };
-    this.playbackRoute = { ...this.route };
-    this.activeCheckpointPendingId = "";
     this.activeCheckpointError = "";
     this.activeBreadcrumbRoute = signature;
     this.renderBreadcrumbs(this.breadcrumbsRoot);
@@ -1469,7 +1465,7 @@ export class SourceBrowser {
     root.hidden = false;
     const items = this.activeCheckpointItems(route);
     const presentation = checkpointNavigationPresentation(items, route.checkpoint_id);
-    const pending = Boolean(this.activeCheckpointPendingId);
+    const pending = this.selection.view.navigationPending;
     const loading = items === null && !this.activeCheckpointError;
     const unavailable = !loading && presentation.position === null;
     root.classList.toggle("warning", Boolean(this.activeCheckpointError || unavailable));
@@ -1547,7 +1543,7 @@ export class SourceBrowser {
       this.route.checkpoint_id,
     );
     const item = direction === "previous" ? presentation.previous : presentation.next;
-    if (!item || this.activeCheckpointPendingId) return false;
+    if (!item || this.selection.view.navigationPending) return false;
     const commandId = this.selectCheckpoint(item);
     if (!commandId) return false;
     return true;
@@ -2152,10 +2148,9 @@ export class SourceBrowser {
 
   navigate(route, { historyMode = "push", seedItems = null } = {}) {
     const nextRoute = canonicalSourceRoute({ ...this.route, ...route });
-    if (!this.app?.has_active_runner) {
-      const commandId = this.command("browse_sources", { route: nextRoute });
-      if (commandId === null) return false;
-    }
+    const current = this.getState()?.applicationSnapshot || { app: this.app };
+    const decision = this.selection.browse(nextRoute, current, { historyMode });
+    if (!decision) return false;
     this.applyRoute(nextRoute, { seedItems });
     if (historyMode) this.syncUrl(historyMode);
     this.openSourceRoute?.({ ...this.route });
@@ -2194,26 +2189,18 @@ export class SourceBrowser {
       level: "runs",
       checkpoint_id: item.checkpoint_id,
     };
-    const commandId = this.command("select_source", {
-      source: {
+    const decision = this.selection.select({
         kind: "public_run",
         value: item.manifest_url,
         run_id: item.run_id,
         checkpoint_id: item.checkpoint_id,
         seed: checkpointPlaybackSeed(item),
-      },
-      route: { ...route },
-    });
-    if (commandId === null) return false;
-    this.route = route;
-    this.syncUrl(historyMode);
-    this.activeCheckpointPendingId = String(item.checkpoint_id || "");
-    this.beginCheckpointLoad?.({
-      commandId,
-      checkpointId: this.activeCheckpointPendingId,
-    });
+    }, route, { historyMode });
+    if (!decision) return false;
+    this.route = { ...decision.route };
+    if (decision.historyMode) this.syncUrl(decision.historyMode);
     this.renderActiveCheckpointNavigation(this.route);
-    return commandId;
+    return decision.commandId;
   }
 
   back() {
