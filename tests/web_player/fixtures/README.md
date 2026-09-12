@@ -38,3 +38,10 @@ Exercise these sequences:
 
 The scripted session intentionally omits some Policy diagnostics. Unavailable or
 incomparable diagnostics are fixture data, not evidence of a solved Research Goal.
+
+Use `--imported` with the complete-player command to export the synthetic episode
+and inspect it through `TrajectoryPlaybackRunner`. It opens paused at step 140
+with the same delayed chart reads and recovery controls. The Checkpoint attachment
+is the fixture's opaque test data; the imported runner only reads recorded
+transitions. Use the exact-transition field to inspect earlier steps, and Replay
+to replay the captured prefix. An unfinished archive cannot generate new steps.

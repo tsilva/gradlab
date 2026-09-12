@@ -1,3 +1,4 @@
+from gradlab.play_diagnostics import DiagnosticRead
 import pytest
 from tests.test_play_trajectory import live_runner
 
@@ -8,19 +9,19 @@ def test_exact_discounted_future_and_live_cursor(tmp_path):
         for _ in range(140):
             runner._step_once()
         episode = runner.recording_status()["episode_id"]
-        result = runner.reward_history(episode, 2)
+        result = runner.diagnostics.read(DiagnosticRead("reward", episode, 2))
         assert result["complete"]
         assert result["reward_sum"] == 139 * 0.5
         assert result["return_total"] == pytest.approx(sum(0.5 * 0.9**k for k in range(139)))
         assert result["points"][0]["weight"] == 1
         assert len(result["points"]) == 100
-        page = runner.reward_history(episode, 2, result["next_last"])
+        page = runner.diagnostics.read(DiagnosticRead("reward", episode, 2, result["next_last"]))
         assert len(page["points"]) == 39
         assert page["points"][0]["offset"] == 100
         assert page["return_total"] == result["return_total"]
         assert runner.snapshot()["transition"]["step"] == 140
         with pytest.raises(ValueError, match="replaced"):
-            runner.reward_history("old", 1)
+            runner.diagnostics.read(DiagnosticRead("reward", "old", 1))
     finally:
         runner.stop()
 
@@ -29,7 +30,7 @@ def test_incomplete_future_is_not_full_return(tmp_path):
     runner = live_runner(tmp_path, length=3)
     try:
         runner._step_once()
-        result = runner.reward_history(runner.recording_status()["episode_id"], 1)
+        result = runner.diagnostics.read(DiagnosticRead("reward", runner.recording_status()["episode_id"], 1))
         assert not result["complete"]
         assert result["return_total"] is None
         assert result["discounted_reward_sum"] == 0.5
@@ -87,9 +88,9 @@ def test_reward_history_worker_epoch_and_import(tmp_path, monkeypatch):
         snapshot = host.snapshot()
         epoch = snapshot["session_epoch"]
         episode = snapshot["trajectory"]["episode_id"]
-        result = host.reward_history(epoch, episode, 1)
+        result = host.read_diagnostics(epoch, DiagnosticRead("reward", episode, 1))
         assert result["discounted_reward_sum"] > 0
         with pytest.raises(RuntimeError, match="replaced"):
-            host.reward_history(epoch + 1, episode, 1)
+            host.read_diagnostics(epoch + 1, DiagnosticRead("reward", episode, 1))
     finally:
         host.stop()

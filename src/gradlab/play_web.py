@@ -1026,9 +1026,11 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         # Replacement acquires trajectory first, then diagnostic; reads use only
         # diagnostic and never block behind an in-flight environment decision.
         self._diagnostic_lock = threading.RLock()
-        from gradlab.play_diagnostics import DiagnosticQueries
+        from gradlab.play_diagnostics import DiagnosticReads, LiveRecordingSource
 
-        self._diagnostics = DiagnosticQueries()
+        self.diagnostics = DiagnosticReads(LiveRecordingSource(
+            self._diagnostic_lock, lambda: self.recording, lambda: self.history
+        ))
         self._inspection_history: tuple[str, int, int, list[dict[str, Any]]] | None = None
         self.recording: EpisodeRecording | None = None
         self.recording_enabled = False
@@ -1127,28 +1129,13 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         return payload
 
     def close_recording(self) -> None:
-        self._diagnostics.close()
+        self.diagnostics.close()
         with self._trajectory_lock, self._diagnostic_lock:
             if self.recording is not None:
                 self.recording.close()
                 self.recording = None
             if self._checkpoint_root is not None:
                 shutil.rmtree(self._checkpoint_root, ignore_errors=True)
-
-    def chart_history(self, episode_id, first=None, last=None):
-        from gradlab.play_diagnostics import read_diagnostics
-
-        return read_diagnostics(self, episode_id, "chart", first, last)
-
-    def reward_history(self, episode_id, first=None, last=None):
-        from gradlab.play_diagnostics import read_diagnostics
-
-        return read_diagnostics(self, episode_id, "reward", first, last)
-
-    def event_history(self, episode_id, first=None, last=None):
-        from gradlab.play_diagnostics import read_diagnostics
-
-        return read_diagnostics(self, episode_id, "event", first, last)
 
     def inspect_recorded_step(self, episode_id: str, step: int) -> dict[str, Any]:
         """Read owned frames from a pinned prefix without holding up inference."""
@@ -2872,6 +2859,14 @@ class PlaybackWebServer:
 
         self._chart_responses = ChartResponses()
         self.runner = runner
+        from gradlab.play_diagnostics import DirectDiagnosticReader, DiagnosticReader
+
+        self._diagnostic_reader: DiagnosticReader = (
+            DirectDiagnosticReader(getattr(runner, "diagnostics", None), self._runner_epoch)
+            if isinstance(runner, (WebPlaybackRunner, DatasetPlaybackRunner))
+            or not hasattr(runner, "read_diagnostics")
+            else runner
+        )
         self.args = args
         self.paired_windows = paired_windows
         self.catalog = catalog
@@ -3461,26 +3456,21 @@ class PlaybackWebServer:
             return web.json_response({"error": str(exc)}, status=502)
         return web.json_response(document)
 
+    async def _read_diagnostics(self, request: web.Request, kind: str):
+        from gradlab.play_diagnostics import DiagnosticKind, DiagnosticRead
+
+        epoch = int(request.query["epoch"])
+        query = DiagnosticRead(
+            DiagnosticKind(kind), request.query["episode_id"],
+            int(request.query["first"]) if "first" in request.query else None,
+            int(request.query["last"]) if "last" in request.query else None,
+        )
+        return await asyncio.to_thread(self._diagnostic_reader.read_diagnostics, epoch, query)
+
     async def chart_history(self, request: web.Request) -> web.Response:
         self._authorize_api(request)
         try:
-            epoch = int(request.query["epoch"])
-            episode_id = request.query["episode_id"]
-            first = int(request.query["first"]) if "first" in request.query else None
-            last = int(request.query["last"]) if "last" in request.query else None
-            if epoch != await asyncio.to_thread(self._runner_epoch):
-                raise ValueError("the Playback Session has been replaced")
-            read = getattr(self.runner, "chart_history", None)
-            if read is None:
-                raise ValueError("episode chart history is unavailable")
-            args = (
-                (episode_id, first, last)
-                if isinstance(self.runner, (WebPlaybackRunner, DatasetPlaybackRunner))
-                else (epoch, episode_id, first, last)
-            )
-            result = await asyncio.to_thread(read, *args)
-            if epoch != await asyncio.to_thread(self._runner_epoch):
-                raise ValueError("the Playback Session has been replaced")
+            result = await self._read_diagnostics(request, "chart")
             if request.query.get("format") == "chart-columns-v1":
                 result = await asyncio.to_thread(
                     self._chart_responses.encode, result, request.query.get("base")
@@ -3502,23 +3492,7 @@ class PlaybackWebServer:
     async def reward_history(self, request: web.Request) -> web.Response:
         self._authorize_api(request)
         try:
-            epoch = int(request.query["epoch"])
-            episode_id = request.query["episode_id"]
-            first = int(request.query["first"]) if "first" in request.query else None
-            last = int(request.query["last"]) if "last" in request.query else None
-            if epoch != await asyncio.to_thread(self._runner_epoch):
-                raise ValueError("the Playback Session has been replaced")
-            read = getattr(self.runner, "reward_history", None)
-            if read is None:
-                raise ValueError("episode reward history is unavailable")
-            args = (
-                (episode_id, first, last)
-                if isinstance(self.runner, (WebPlaybackRunner, DatasetPlaybackRunner))
-                else (epoch, episode_id, first, last)
-            )
-            result = await asyncio.to_thread(read, *args)
-            if epoch != await asyncio.to_thread(self._runner_epoch):
-                raise ValueError("the Playback Session has been replaced")
+            result = await self._read_diagnostics(request, "reward")
             return web.json_response(result, headers={"Cache-Control": "no-store"})
         except (KeyError, ValueError, OSError, RuntimeError) as exc:
             return web.json_response({"error": str(exc)}, status=400)
@@ -3526,23 +3500,7 @@ class PlaybackWebServer:
     async def event_history(self, request: web.Request) -> web.Response:
         self._authorize_api(request)
         try:
-            epoch = int(request.query["epoch"])
-            episode_id = request.query["episode_id"]
-            first = int(request.query["first"]) if "first" in request.query else None
-            last = int(request.query["last"]) if "last" in request.query else None
-            if epoch != await asyncio.to_thread(self._runner_epoch):
-                raise ValueError("the Playback Session has been replaced")
-            read = getattr(self.runner, "event_history", None)
-            if read is None:
-                raise ValueError("episode event history is unavailable")
-            args = (
-                (episode_id, first, last)
-                if isinstance(self.runner, (WebPlaybackRunner, DatasetPlaybackRunner))
-                else (epoch, episode_id, first, last)
-            )
-            result = await asyncio.to_thread(read, *args)
-            if epoch != await asyncio.to_thread(self._runner_epoch):
-                raise ValueError("the Playback Session has been replaced")
+            result = await self._read_diagnostics(request, "event")
             return web.json_response(result, headers={"Cache-Control": "no-store"})
         except (KeyError, ValueError, OSError, RuntimeError) as exc:
             return web.json_response({"error": str(exc)}, status=400)
