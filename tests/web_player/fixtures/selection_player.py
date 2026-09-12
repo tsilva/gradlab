@@ -40,10 +40,14 @@ CHECKPOINTS = tuple(
 
 
 class SelectionCatalog:
+    fail_next = False
+
     def environments(self, **_kwargs):
         return CatalogPage((dict(name="Game-v0", goal_count=1, run_count=1),), None)
 
     def checkpoints(self, **_kwargs):
+        if self.fail_next:
+            raise RuntimeError("Fixture catalog unavailable")
         return CheckpointPage(CHECKPOINTS, (), "f" * 64, run=dict(run_id=RUN, state="finished"))
 
 
@@ -139,6 +143,10 @@ class SelectionPlayer(PlaybackWebServer):
         self.browser_ready = asyncio.Event()
         self.browser_ready.set()
 
+    @property
+    def asset_root(self):
+        return self.args.assets_root or super().asset_root
+
     async def page(self, request):
         html = (self.asset_root / "index.html").read_text()
         return web.Response(
@@ -160,6 +168,11 @@ class SelectionPlayer(PlaybackWebServer):
             self._authorize_api(request)
             action = request.query.get("action")
             loader = self.runner.loader
+            if action in {"catalog-fail", "catalog-recover"}:
+                self.catalog.fail_next = action == "catalog-fail"
+            if action == "disconnect":
+                for client in tuple(self.clients.values()):
+                    await client.socket.close()
             if action == "shutdown":
                 loader.ready.set()
                 self.stop_event.set()
@@ -217,7 +230,10 @@ class SelectionPlayer(PlaybackWebServer):
 
 
 def main():
-    args = argparse.Namespace(port=0, no_open=True, episodes=0, fps=20)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--assets-root", type=Path, help="Serve an immutable baseline asset tree")
+    args = parser.parse_args()
+    args.port, args.no_open, args.episodes, args.fps = 0, True, 0, 20
     with TemporaryDirectory(prefix="gradlab-selection-") as temporary:
         root = Path(temporary)
         write_bundle(root)

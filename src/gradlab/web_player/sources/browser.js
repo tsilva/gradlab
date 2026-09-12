@@ -1320,7 +1320,7 @@ export class SourceBrowser {
     ) {
       this.initialEnvironmentCatalog = this.app.catalog;
     }
-    const appRoute = canonicalSourceRoute(this.app.route || {});
+    const appRoute = canonicalSourceRoute(this.selection.view.route || {});
     if (
       this.pendingLocationRoute
       && location.pathname !== "/"
@@ -1406,7 +1406,7 @@ export class SourceBrowser {
 
   renderActiveBreadcrumbs(snapshot) {
     const app = snapshot?.app || {};
-    const route = app.route || {};
+    const route = this.selection.view.route || {};
     const recording = snapshot?.mode === "trajectory" && Boolean(route.environment_id);
     const signature = routeSignature(route);
     if (
@@ -2151,14 +2151,14 @@ export class SourceBrowser {
     const current = this.getState()?.applicationSnapshot || { app: this.app };
     const decision = this.selection.browse(nextRoute, current, { historyMode });
     if (!decision) return false;
-    this.applyRoute(nextRoute, { seedItems });
-    if (historyMode) this.syncUrl(historyMode);
+    this.applyRoute(decision.route, { seedItems });
+    if (decision.historyMode) this.syncUrl(decision.historyMode);
     this.openSourceRoute?.({ ...this.route });
     return true;
   }
 
   browseCurrentSource() {
-    const route = this.app.route || this.route;
+    const route = this.selection.view.route || this.route;
     const next = route.run_id
       ? { ...route, level: "runs", checkpoint_id: "" }
       : {
@@ -2190,11 +2190,11 @@ export class SourceBrowser {
       checkpoint_id: item.checkpoint_id,
     };
     const decision = this.selection.select({
-        kind: "public_run",
-        value: item.manifest_url,
-        run_id: item.run_id,
-        checkpoint_id: item.checkpoint_id,
-        seed: checkpointPlaybackSeed(item),
+      kind: "public_run",
+      value: item.manifest_url,
+      run_id: item.run_id,
+      checkpoint_id: item.checkpoint_id,
+      seed: checkpointPlaybackSeed(item),
     }, route, { historyMode });
     if (!decision) return false;
     this.route = { ...decision.route };

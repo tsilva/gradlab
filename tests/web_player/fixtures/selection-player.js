@@ -1,7 +1,7 @@
 const controls = document.createElement('aside');
 controls.id = 'fixture-controls';
 const token = new URLSearchParams(location.hash.slice(1)).get('token');
-for (const action of ['succeed', 'fail', 'status', 'hold-frames', 'release-frames', 'reject', 'observer', 'control', 'reset', 'import', 'hold-browser', 'release-browser']) {
+for (const action of ['succeed', 'fail', 'status', 'hold-frames', 'release-frames', 'reject', 'observer', 'control', 'reset', 'import', 'hold-browser', 'release-browser', 'catalog-fail', 'catalog-recover', 'disconnect']) {
   const button = document.createElement('button');
   button.textContent = `Fixture ${action}`;
   button.onclick = async () => {

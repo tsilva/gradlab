@@ -36,7 +36,7 @@ export class CheckpointSelection {
     const commandId = this.#command('select_source', { source, route: { ...route } });
     if (commandId === null) return false;
     this.#route = Object.freeze({ ...route });
-    this.#pending = { commandId, checkpointId: String(route.checkpoint_id || ''), generation: ++this.#generation, afterEpoch: this.#epoch };
+    this.#pending = { commandId, checkpointId: String(route.checkpoint_id || ''), generation: ++this.#generation };
     this.#navigationPending = true;
     this.#publish();
     return { commandId, route: this.#route, historyMode };
@@ -81,7 +81,6 @@ export class CheckpointSelection {
       this.#pending = null;
     }
     const activates = Boolean(this.#pending && app?.phase === 'active'
-      && this.#epoch > this.#pending.afterEpoch
       && String(app.route?.checkpoint_id || '') === this.#pending.checkpointId);
     if (this.#sourceMode && this.#background && app?.phase === 'active' && !activates) {
       this.#background = message;
@@ -90,8 +89,8 @@ export class CheckpointSelection {
     }
     if (activates) this.#background = null;
     this.#sourceMode = Boolean(app && app.phase !== 'active');
+    if (app?.route) this.#route = Object.freeze({ ...app.route });
     if (app?.phase === 'active') {
-      this.#route = Object.freeze({ ...app.route });
       this.#navigationPending = false;
     }
     if (activates) this.#presentations.set(message, Object.freeze({

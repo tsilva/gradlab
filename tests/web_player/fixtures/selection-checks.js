@@ -43,6 +43,14 @@ export async function runChecks() {
     await control('reset');
     await list();
     const path = location.pathname;
+    await control('catalog-fail');
+    click('#source-browser button[aria-label="Refresh"]');
+    await wait(() => $('#toast').textContent.includes('Fixture catalog unavailable'), 'catalog refresh failure not visible');
+    await control('catalog-recover');
+    click('#source-browser button[aria-label="Refresh"]');
+    await list();
+    assert((await control('status')).prepared.length === 0, 'catalog Retry prepared a checkpoint');
+    pass('catalog refresh recovery retains rows without preparing a checkpoint');
     await control('observer');
     await new Promise(requestAnimationFrame);
     rows()[0].click();
@@ -88,7 +96,8 @@ export async function runChecks() {
     await control('succeed');
     await wait(() => $('#source-browser').hidden && $('[data-checkpoint-position]').textContent === '2 / 2', 'activation did not reconcile navigation');
     assert(mask(), 'activation cleared mask before applicable frame');
-    assert(!$('[data-checkpoint-previous]').disabled, 'navigation readiness tied to mask');
+    await wait(() => !$('[data-checkpoint-previous]').disabled, 'navigation readiness tied to mask');
+    assert(mask(), 'navigation readiness dismissed the mask');
     await control('release-frames');
     await ready();
     assert(document.body.getAttribute('aria-busy') === null, 'busy indication not released');
@@ -172,6 +181,19 @@ export async function runAdditionalChecks() {
     await control('succeed');
     await ready();
     pass('selection begun with RGB hidden completes under server activation settings');
+    const beforeCancel = await control('status');
+    await wait(() => !$('[data-checkpoint-next]').disabled, 'cancel test navigation unavailable');
+    click('[data-checkpoint-next]');
+    await waitStatus(status => status.phase === 'loading', 'cancel test preparation not admitted');
+    const cancel = [...document.querySelectorAll('#source-browser button')].find(button => button.textContent === 'Back to current run');
+    assert(cancel && mask(), 'expected covered cancellation control');
+    // Programmatic DOM activation characterizes the existing command. The mask covers it for pointer users.
+    cancel.click();
+    await wait(() => !mask(), 'cancel did not release applicable presentation');
+    await control('succeed');
+    await waitStatus(status => !status.preparing, 'cancelled worker did not drain');
+    assert((await control('status')).epoch === beforeCancel.epoch, 'cancel discarded previous runner');
+    pass('covered Cancel control retains the previous runner and presentation behavior');
     const beforeImport = await control('status');
     await control('import');
     await wait(() => $('[data-checkpoint-position]').closest('nav').hidden && document.body.textContent.includes('inspection only'), 'imported playback not mounted');
