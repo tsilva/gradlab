@@ -87,3 +87,23 @@ To replay an immutable frontend baseline, extract its web-player assets with
 to `--assets-root`. The fixture and production Python host stay the same, allowing
 comparison of the complete frontend behavior. Generated baseline trees belong in
 ignored `logs/`, never source control.
+
+## Playback inspection
+
+Run `uv run --frozen python -m tests.web_player.fixtures.inspection_player` and
+open the printed URL in the native Codex in-app browser. **Run inspection checks**
+uses the complete player and real controls to test rapid recorded seeks, retained
+frames, delayed game/Input decoding, the independent reward reference, and
+Checkpoint loading readiness. The result lists each assertion and a final status.
+
+The fixture wraps only external browser APIs. **hold read** retains a completed
+recorded response, **hold decode** retains decoded bitmaps, and **hold peer** holds
+incoming inspection messages. Matching **release** buttons drain them. The gate
+status exposes arrivals and pending counts so assertions can fence work explicitly.
+
+Open `/panel/observation#token=<printed token>` on the same origin for a second
+window. Hold peer messages there, seek twice in the main playbar, verify the second
+window stays at its old step, and release. Input metadata and the second playbar
+must settle on the latest selection. Selecting the last step in either window
+returns both to live without starting inference. Inspect server command history
+with **Fixture status** to check that peer reception adds no inferred Pause.

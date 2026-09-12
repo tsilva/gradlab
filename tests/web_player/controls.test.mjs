@@ -178,18 +178,6 @@ test("the scrubber delegates arrow keys to native one-step range behavior", () =
   assert.match(bindTimeline, /event\.code !== "Space"/);
 });
 
-test("the scrubber retains snapshots before waiting for their frames", () => {
-  const snapshotMessage = app.slice(
-    app.indexOf('if (message.type === "snapshot")'),
-    app.indexOf('if (message.type === "command_result")'),
-  );
-  const retainPosition = snapshotMessage.indexOf("state.snapshots.set");
-  const frameWaitPosition = snapshotMessage.indexOf("livePresentation.offer");
-  assert.ok(retainPosition >= 0 && retainPosition < frameWaitPosition);
-  assert.match(app, /isReady: requiredFramesAvailable/);
-  assert.match(app, /prepare: prepareSnapshotFrames/);
-  assert.match(app, /present: applySnapshot/);
-});
 
 test("the player has no view selector", () => {
   assert.doesNotMatch(page, /workspace-preset|Workspace view|<option[^>]*>(?:Watch|Explain|Debug|Customize)<\/option>/);

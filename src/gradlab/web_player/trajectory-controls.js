@@ -11,7 +11,7 @@ export function recordingDescription(trajectory = {}) {
   return `${trajectory.enabled ? "Recording" : "Recorded"} ${trajectory.transitions} transitions${prefix}`;
 }
 
-export function mountTrajectoryControls({ command, getState, request, toast }) {
+export function mountTrajectoryControls({ command, inspectStep, getState, request, toast }) {
   const retry = document.querySelector("#trajectory-retry");
   const download = document.querySelector("#trajectory-download");
   const importButton = document.querySelector("#trajectory-import");
@@ -28,11 +28,11 @@ export function mountTrajectoryControls({ command, getState, request, toast }) {
   let importing = false;
 
   retry.addEventListener("click", () => command("set_recording", { enabled: true }));
-  seek.addEventListener("change", () => command("seek", { step: Number(seek.value) }));
+  seek.addEventListener("change", () => inspectStep(Number(seek.value)));
   seek.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
       event.preventDefault();
-      command("seek", { step: Number(seek.value) });
+      inspectStep(Number(seek.value));
     }
   });
   previous.addEventListener("click", () => command("step_backward"));

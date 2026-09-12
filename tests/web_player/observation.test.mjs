@@ -188,7 +188,6 @@ test("observation receives CNN frames without demanding CNN processing", () => {
   }
   assert.match(appSource, /magic !== "RLP3"/);
   assert.match(appSource, /getBigUint64\(24\)/);
-  assert.match(appSource, /function frameGeneration/);
   assert.match(catalogSource, /cnn-inspection/);
 });
 
@@ -204,53 +203,6 @@ test("observation commits an exact decoded frame and its metadata without blanki
   assert.doesNotMatch(source, /baseCanvas\.width = 1/);
 });
 
-test("scrubbing retains displayed frames while exact target blobs are requested", () => {
-  const start = appSource.indexOf("async function showFramesForSequence");
-  const end = appSource.indexOf("\nfunction inspectionFrames", start);
-  const showFrames = appSource.slice(start, end);
-  assert.match(
-    showFrames,
-    /if \(blob\) \{\s*await panelRuntime\.renderFrame\(kind, blob, \{ sequence, generation \}\);/,
-  );
-  assert.match(
-    showFrames,
-    /else if \(!expected \|\| !retainMissing\) \{\s*await panelRuntime\.renderFrame\(kind, null, \{ sequence, generation \}\);/,
-  );
-});
-
-test("rapid scrubbing coalesces missing-frame requests to the latest position", () => {
-  assert.match(appSource, /const INSPECTION_FRAME_REQUEST_DELAY_MS = 50;/);
-  assert.match(appSource, /function scheduleInspectionFrameRequest\(sequence, kinds\)/);
-  assert.match(appSource, /clearTimeout\(state\.inspectionFrameRequestTimer\)/);
-  assert.match(
-    appSource,
-    /Number\(state\.inspectionSequence\) !== numericSequence\) return;/,
-  );
-  assert.match(appSource, /scheduleInspectionFrameRequest\(numericSequence, missing\)/);
-});
-
-test("late observation decodes cannot repaint an older scrub position", () => {
-  assert.match(
-    source,
-    /if \(!sameFrameIdentity\(preparedBaseIdentity, targetBaseIdentity\(\)\)\) return false;/,
-  );
-  assert.match(
-    source,
-    /const bitmap = await createImageBitmap\(blob\);\s*if \(!mounted \|\| request !== baseBitmapRequest\)/,
-  );
-  for (const [targetIdentity, request] of [
-    ["targetAttributionIdentity", "attributionBitmapRequest"],
-    ["targetCnnIdentity", "cnnBitmapRequest"],
-  ]) {
-    assert.match(
-      source,
-      new RegExp(
-        `const bitmap = await createImageBitmap\\(blob\\);\\s*if \\(\\s*!mounted\\s*\\|\\| request !== ${request}\\s*\\|\\| !sameFrameIdentity\\(incoming, ${targetIdentity}\\(\\)\\)`,
-      ),
-      `${targetIdentity} must be rechecked after decoding`,
-    );
-  }
-});
 
 test("observation omits the frame stage when no exact frame exists", () => {
   assert.match(source, /<div class="observation-stage" hidden>/);

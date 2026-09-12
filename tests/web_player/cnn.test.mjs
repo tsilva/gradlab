@@ -85,8 +85,6 @@ test("CNN panel is modular, opt-in, and generation-tagged", () => {
   assert.deepEqual(PANEL_TYPES.cnn.processing, ["cnn-inspection"]);
   assert.deepEqual(PANEL_TYPES.cnn.frameKinds, [4]);
   assert.match(catalogSource, /subscriptions: \["cnn-inspection"\]/);
-  assert.match(appSource, /cnnInspectionGeneration/);
-  assert.match(appSource, /FRAME_CNN_INSPECTION/);
   assert.match(appSource, /function syncCnnCaptureToPanel/);
   assert.match(appSource, /command\("set_cnn_inspection", \{ enabled: desired \}\)/);
 });

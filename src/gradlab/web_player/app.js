@@ -1,14 +1,11 @@
 import { frameScheduler } from "./chart-transport.js";
-import { createPlaybackTransport, hasIndependentInference, shouldPauseForInspection } from "./playback-transport.js";
+import { createPlaybackInspection, hasIndependentInference } from "./playback-inspection.js";
 import { rewardReferenceStore } from "./panels/reward-reference.js";
 import { createChartHistory } from "./chart-history.js";
 import { usesChartHistory } from "./panels/chart-status.js";
 import { bindTimelineRange } from "./chart-range.js";
 import {
-  FRAME_ATTRIBUTION,
-  FRAME_CNN_INSPECTION,
   FRAME_GAME,
-  FRAME_OBSERVATION,
   PANEL_TYPES,
   panelDefinition,
   panelLabels,
@@ -16,12 +13,10 @@ import {
   panelSubscriptions,
 } from "./panels/catalog.js";
 import { episodeReport } from "./episode-report.js";
-import { episodeStepRange, RecordedStepReader, EventOverview, timelineEventMarkers } from "./episode-timeline.js";
-import { RecordedStepPrefetch } from "./recorded-step-prefetch.js";
+import { timelineEventMarkers } from "./episode-timeline.js";
 import { eventColorFill, eventLabels } from "./event-colors.js";
 import { mountPlaybackSettings } from "./playback-settings.js";
 import { CheckpointSelection } from "./checkpoint-selection.js";
-import { SynchronizedPresentation } from "./synchronized-presentation.js";
 import {
   playbackSourceTitle,
   statusMessageShouldToast,
@@ -71,33 +66,12 @@ function defaultLayout() {
 }
 
 const state = {
-  rgbEnabled: true,
   socket: null,
   connected: false,
   clientId: null,
-  snapshot: null,
-  liveSnapshot: null,
-  snapshots: new Map(),
-  frameBlobs: new Map([
-    [FRAME_GAME, new Map()],
-    [FRAME_OBSERVATION, new Map()],
-    [FRAME_ATTRIBUTION, new Map()],
-    [FRAME_CNN_INSPECTION, new Map()],
-  ]),
-  inspectionSequence: null,
-  replayingInspection: false,
-  inspectionReplayTimer: null,
-  inspectionFrameRequestTimer: null,
-  inspectionPauseCommandId: null,
   attributionCommand: null,
   attributionPreference: { mode: "gradcam", interval: 1 },
   cnnCaptureCommand: null,
-  timelineSequences: [],
-  inspectionHistory: null,
-  eventOverview: new EventOverview(),
-  seekingStep: null,
-  history: [],
-  historyLimit: 4096,
   hasControl: false,
   publicationAuthority: false,
   publicationCapability: null,
@@ -105,10 +79,6 @@ const state = {
   publicationCurrent: null,
   publicationJob: null,
   publicationPoll: null,
-  frameSequence: new Map(),
-  receivedFrameSequence: new Map(),
-  retainedEpisode: null,
-  recordedEpisodeId: null,
   mode: null,
   lastStatus: null,
   actionNamesKey: "",
@@ -117,7 +87,6 @@ const state = {
   layout: null,
   selectedPanel: null,
   activeWindows: new Map(),
-  sessionEpoch: 0,
   applicationSnapshot: null,
   workspaceReady: false,
 };
@@ -131,7 +100,6 @@ let gridCellHeight = DEFAULT_GRID_CELL_HEIGHT;
 let syncingGrid = false;
 let panelManager = null;
 let playbackSettings = null;
-const INSPECTION_FRAME_REQUEST_DELAY_MS = 50;
 let youtubeOAuthPopup = null;
 
 const workspaceChannel = "BroadcastChannel" in window
@@ -177,7 +145,7 @@ function processingPanels() {
 
 function subscriptions() {
   return panelSubscriptions(state.layout, processingPanels()).filter(
-    (name) => name !== "game" || state.rgbEnabled !== false,
+    (name) => name !== "game" || inspection.view.rgbEnabled !== false,
   );
 }
 
@@ -191,7 +159,7 @@ function enabledPanelDefinitions() {
   return processingPanels()
     .map((id) => panelDefinition(state.layout, id))
     .filter((definition) => definition?.enabled)
-    .map((definition) => state.rgbEnabled === false
+    .map((definition) => inspection.view.rgbEnabled === false
       ? { ...definition, frameKinds: definition.frameKinds.filter((kind) => kind !== FRAME_GAME) }
       : definition);
 }
@@ -232,20 +200,10 @@ function updateConnection(label, kind = "") {
 }
 
 function resetSession(epoch) {
-  cancelInspectionFrameRequest();
-  state.sessionEpoch = Number(epoch) || 0;
-  state.retainedEpisode = null;
-  state.recordedEpisodeId = null;
-  state.inspectionSequence = null;
-  state.inspectionPauseCommandId = null;
   state.attributionCommand = null;
   state.cnnCaptureCommand = null;
-  state.liveSnapshot = null;
-  chartHistory.updateContext({ epoch: state.sessionEpoch });
-  state.snapshot = null;
-  state.history = [];
-  clearRetainedEpisode();
-  stopInspectionReplay({ render: false });
+  inspection.reset(epoch);
+  chartHistory.updateContext({ epoch: inspection.view.sessionEpoch });
 }
 
 async function ensureSourceBrowser() {
@@ -255,7 +213,7 @@ async function ensureSourceBrowser() {
       sourceBrowser = new SourceBrowser($("#source-browser"), $("#source-breadcrumbs"), {
         token,
         command,
-        getState: () => state,
+        getState: playerState,
         showToast,
         checkpointNavigationRoot: $("#checkpoint-navigation"),
         selection: checkpointSelection,
@@ -285,7 +243,7 @@ async function openContractInspection(endpoint, options = {}) {
 }
 
 function openSourceRoute(route) {
-  const current = state.applicationSnapshot || state.liveSnapshot || {};
+  const current = state.applicationSnapshot || inspection.view.liveSnapshot || {};
   const snapshot = {
     ...current,
     app: {
@@ -300,8 +258,6 @@ function openSourceRoute(route) {
     },
   };
   state.applicationSnapshot = snapshot;
-  state.liveSnapshot = snapshot;
-  state.snapshot = snapshot;
   renderSourceMode(snapshot);
 }
 
@@ -323,11 +279,11 @@ function renderSourceMode(snapshot = null) {
   $("#source-back").hidden = Boolean(
     sourceMode
     || activeRecordingRoute
-    || !(snapshot?.app?.has_active_runner || state.liveSnapshot?.app?.has_active_runner)
+    || !(snapshot?.app?.has_active_runner || inspection.view.liveSnapshot?.app?.has_active_runner)
   );
   $("#more-toggle").hidden = sourceMode;
   $("#inspect-active").hidden = !(
-    snapshot?.app?.has_active_runner || state.liveSnapshot?.app?.has_active_runner
+    snapshot?.app?.has_active_runner || inspection.view.liveSnapshot?.app?.has_active_runner
   );
   if (!sourceMode) {
     const expected = snapshot;
@@ -389,6 +345,7 @@ function connect() {
   socket.addEventListener("close", () => {
     state.connected = false;
     state.hasControl = false;
+    inspection.updateConnection({ connected: false, hasControl: false });
     state.publicationAuthority = false;
     state.publicationCapability = null;
     checkpointSelection.terminate();
@@ -405,23 +362,12 @@ function handleMessage(message) {
   if (message.type === "welcome") {
     state.connected = true;
     state.clientId = message.client_id;
-    state.historyLimit = Math.max(1, Number(message.history_limit) || 4096);
+    inspection.updateConnection({ connected: true, hasControl: state.hasControl, historyLimit: message.history_limit });
     updateConnection("Synced", "");
     return;
   }
   if (message.type === "history") {
-    if (
-      message.session_epoch !== undefined
-      && Number(message.session_epoch) !== state.sessionEpoch
-    ) return;
-    state.history = normalizedHistory(message.points);
-    if (message.timeline && (!state.recordedEpisodeId || message.timeline.episode_id === state.recordedEpisodeId)) {
-      state.eventOverview.load(message.timeline);
-    } else {
-      state.history.filter((point) => Number(point.episode) === state.retainedEpisode)
-        .forEach((point) => state.eventOverview.append(point));
-    }
-    renderHistory();
+    inspection.receiveHistory(message);
     return;
   }
   if (message.type === "publication_authority") {
@@ -438,49 +384,37 @@ function handleMessage(message) {
   }
   if (message.type === "snapshot") {
     const epoch = Number(message.session_epoch || 0);
-    if (epoch !== state.sessionEpoch) resetSession(epoch);
+    if (epoch !== inspection.view.sessionEpoch) resetSession(epoch);
     const selectionResult = checkpointSelection.receive(message);
     if (selectionResult.error) showToast(selectionResult.error, true);
     if (selectionResult.background) {
       state.hasControl = Boolean(message.control?.has_control);
+      inspection.updateConnection({ hasControl: state.hasControl });
       state.controlEpoch = Number(message.control_epoch || 0);
       trajectoryControls.render();
       return;
     }
     state.applicationSnapshot = message;
     state.hasControl = Boolean(message.control?.has_control);
+    inspection.updateConnection({ hasControl: state.hasControl });
     state.controlEpoch = Number(message.control_epoch || 0);
     updatePublicationButton();
-    if (typeof message.session?.rgb_enabled === "boolean" && state.rgbEnabled !== message.session.rgb_enabled) {
-      state.rgbEnabled = message.session.rgb_enabled;
-      recordedStepReader.invalidate();
-      state.frameBlobs.get(FRAME_GAME).clear();
-      panelRuntime.resetFrames();
+    if (typeof message.session?.rgb_enabled === "boolean" && inspection.view.rgbEnabled !== message.session.rgb_enabled) {
+      void inspection.setFrameDemand({ rgbEnabled: message.session.rgb_enabled });
       send({ type: "subscribe", subscriptions: subscriptions(), processing: processing() });
       refreshPanels();
-      if (state.rgbEnabled && state.inspectionSequence !== null) {
-        void inspectStep(Number(state.snapshot?.transition?.step));
-      }
     }
     if (message.app && message.app.phase !== "active") {
-      state.liveSnapshot = message;
-      state.snapshot = message;
       renderSourceMode(message);
       updateControlState();
       return;
     }
     renderSourceMode(message);
-    prepareRetainedEpisode(message);
-    state.snapshots.set(Number(message.sequence), message);
-    pruneRetainedTrace();
-    if (message.history_point) ingestHistoryPoint(message.history_point);
-    void livePresentation.offer(message).catch(reportPresentationError);
+    void inspection.admitSnapshot(message, checkpointSelection.presentationFor(message));
     return;
   }
   if (message.type === "command_result") {
-    if (message.id === state.inspectionPauseCommandId && !message.ok) {
-      state.inspectionPauseCommandId = null;
-    }
+    inspection.commandResult(message);
     if (message.id === state.attributionCommand?.id) state.attributionCommand = null;
     if (message.id === state.cnnCaptureCommand?.id) state.cnnCaptureCommand = null;
     checkpointSelection.receive(message);
@@ -493,7 +427,7 @@ function handleMessage(message) {
 function updatePublicationButton() {
   const button = $("#publish-episode");
   if (!button) return;
-  const snapshot = state.applicationSnapshot || state.liveSnapshot;
+  const snapshot = state.applicationSnapshot || inspection.view.liveSnapshot;
   const configured = Boolean(snapshot?.publication?.configured);
   const complete = snapshot?.publication_capture?.ready === true;
   button.hidden = !(configured && complete && state.publicationAuthority);
@@ -666,147 +600,39 @@ async function openPublicationDialog() {
   }
 }
 
-function frameKey(sequence, generation = 0) {
-  return `${Number(sequence)}:${Number(generation)}`;
-}
-
-function frameKeySequence(key) {
-  return Number(String(key).split(":", 1)[0]);
-}
-
-function rememberFrame(kind, sequence, generation, blob, preserveSequence = null) {
-  const frames = state.frameBlobs.get(kind);
-  if (!frames) return;
-  frames.set(frameKey(sequence, generation), blob);
-  while (frames.size > state.historyLimit) {
-    const candidates = [...frames.keys()].filter(
-      (candidate) => preserveSequence === null
-        || frameKeySequence(candidate) !== Number(preserveSequence),
-    );
-    if (!candidates.length) break;
-    const oldest = candidates.sort((left, right) => (
-      frameKeySequence(left) - frameKeySequence(right)
-    ))[0];
-    frames.delete(oldest);
-  }
-}
-
 async function handleFrame(buffer) {
-  const view = new DataView(buffer);
   if (buffer.byteLength <= FRAME_HEADER_BYTES) return;
+  const view = new DataView(buffer);
   const magic = String.fromCharCode(...new Uint8Array(buffer, 0, 4));
   if (magic !== "RLP3") return;
-  const kind = view.getUint8(4);
-  if (kind === FRAME_GAME && state.rgbEnabled === false) return;
-  const epoch = Number(view.getBigUint64(8));
-  const sequence = Number(view.getBigUint64(16));
-  const generation = Number(view.getBigUint64(24));
-  if (epoch !== state.sessionEpoch) return;
-  state.receivedFrameSequence.set(
-    kind,
-    Math.max(sequence, state.receivedFrameSequence.get(kind) ?? -1),
-  );
-  const blob = new Blob([buffer.slice(FRAME_HEADER_BYTES)], { type: "image/png" });
-  rememberFrame(kind, sequence, generation, blob, state.inspectionSequence);
-  const selectedSnapshot = state.inspectionSequence === null
-    ? state.liveSnapshot
-    : state.snapshot;
-  const expectedGeneration = frameGeneration(kind, selectedSnapshot);
-  const exactGeneration = !isGeneratedFrame(kind)
-    || (expectedGeneration > 0 && expectedGeneration === generation);
-  if (
-    exactGeneration
-    && (
-      state.inspectionSequence === sequence
-      || (
-        state.inspectionSequence === null
-        && Number(state.liveSnapshot?.sequence) === sequence
-      )
-    )
-  ) {
-    await panelRuntime.renderFrame(kind, blob, { sequence, generation });
-  }
-  state.frameSequence.set(kind, sequence);
-  await livePresentation.notifyReady().catch(reportPresentationError);
-}
-
-function requiredFrameKinds(snapshot) {
-  const visible = new Set(
-    enabledPanelDefinitions().flatMap((definition) => definition.frameKinds),
-  );
-  const required = [];
-  if (visible.has(FRAME_GAME) && snapshot.transition?.after?.game_frame) {
-    required.push(FRAME_GAME);
-  }
-  if (
-    visible.has(FRAME_OBSERVATION)
-    && Number(snapshot.transition?.before?.observation_frames || 0) > 0
-  ) required.push(FRAME_OBSERVATION);
-  return required.filter((kind) => !isGeneratedFrame(kind));
-}
-
-function requiredFramesAvailable(snapshot) {
-  const sequence = Number(snapshot?.sequence);
-  return requiredFrameKinds(snapshot).every(
-    (kind) => exactFrameBlob(kind, sequence) !== null,
-  );
+  await inspection.receiveFrame({
+    epoch: Number(view.getBigUint64(8)), sequence: Number(view.getBigUint64(16)),
+    generation: Number(view.getBigUint64(24)), kind: view.getUint8(4),
+    blob: new Blob([buffer.slice(FRAME_HEADER_BYTES)], { type: "image/png" }),
+  });
 }
 
 function episodeForSnapshot(snapshot) {
   const episode = snapshot?.transition?.episode ?? snapshot?.session?.episode;
-  return episode === undefined || episode === null ? null : Number(episode);
+  return episode == null ? null : Number(episode);
 }
 
-function historyKey(point) {
-  return `${Number(point?.episode)}:${Number(point?.sequence)}`;
-}
-
-function normalizedHistory(points) {
-  const byTransition = new Map();
-  (Array.isArray(points) ? points : []).forEach((point) => {
-    if (!point || !Number.isFinite(Number(point.sequence))) return;
-    byTransition.set(historyKey(point), point);
-  });
-  return [...byTransition.values()]
-    .sort((a, b) => Number(a.sequence) - Number(b.sequence))
-    .slice(-state.historyLimit);
-}
-
-function ingestHistoryPoint(point) {
-  if (!point || !Number.isFinite(Number(point.sequence))) return false;
-  if (Number(point.episode) === state.retainedEpisode) state.eventOverview.append(point);
-  const key = historyKey(point);
-  const index = state.history.findIndex((candidate) => historyKey(candidate) === key);
-  if (index >= 0) {
-    state.history[index] = { ...state.history[index], ...point };
-    return true;
-  }
-  state.history.push(point);
-  state.history = normalizedHistory(state.history);
-  return true;
-}
-
-function currentEpisodeHistory() {
-  if (state.inspectionSequence !== null && state.inspectionHistory) return state.inspectionHistory;
-  const episode = episodeForSnapshot(state.liveSnapshot) ?? state.retainedEpisode;
-  if (episode === null) return state.history;
-  return state.history.filter((point) => Number(point.episode) === episode);
-}
+function currentEpisodeHistory() { return inspection.view.currentHistory; }
 
 function setRewardReference(step) {
-  if (!Number.isInteger(step) || step !== state.snapshot?.transition?.step) return;
-  rewardReferences.set(state.snapshot, state.sessionEpoch);
-  panelRuntime?.renderHistory(currentEpisodeHistory(), state.snapshot, panelView());
+  if (!Number.isInteger(step) || step !== inspection.view.snapshot?.transition?.step) return;
+  rewardReferences.set(inspection.view.snapshot, inspection.view.sessionEpoch);
+  panelRuntime?.renderHistory(currentEpisodeHistory(), inspection.view.snapshot, panelView());
 }
 
 function updateChartContext() {
   chartHistory.updateContext({
-    epoch: state.sessionEpoch,
-    episodeId: state.liveSnapshot?.trajectory?.episode_id,
-    episode: episodeForSnapshot(state.liveSnapshot),
-    lastStep: state.liveSnapshot?.trajectory?.last_step,
-    liveHistory: state.history,
-    throughStep: state.snapshot?.transition?.step ?? 0,
+    epoch: inspection.view.sessionEpoch,
+    episodeId: inspection.view.liveSnapshot?.trajectory?.episode_id,
+    episode: episodeForSnapshot(inspection.view.liveSnapshot),
+    lastStep: inspection.view.liveSnapshot?.trajectory?.last_step,
+    liveHistory: inspection.view.history,
+    throughStep: inspection.view.snapshot?.transition?.step ?? 0,
   });
 }
 
@@ -821,71 +647,13 @@ function panelView() {
     history: currentEpisodeHistory(),
     chartHistory: chart.data,
     chartStatus: chart,
-    rewardReference: rewardReferences.get(state.snapshot, state.sessionEpoch),
+    rewardReference: rewardReferences.get(inspection.view.snapshot, inspection.view.sessionEpoch),
     chartRange: chart.range,
-    inspection: state.inspectionSequence !== null,
-    sessionEpoch: state.sessionEpoch,
-    selectedSequence: state.inspectionSequence ?? state.snapshot?.sequence ?? null,
-    liveSequence: state.liveSnapshot?.sequence ?? null,
+    inspection: inspection.view.inspectionSequence !== null,
+    sessionEpoch: inspection.view.sessionEpoch,
+    selectedSequence: inspection.view.inspectionSequence ?? inspection.view.snapshot?.sequence ?? null,
+    liveSequence: inspection.view.liveSnapshot?.sequence ?? null,
   };
-}
-
-function pruneRetainedTrace(preserveSequence = state.inspectionSequence) {
-  const sequences = [...state.snapshots.keys()].sort((a, b) => a - b);
-  const remove = sequences
-    .filter(
-      (sequence) => preserveSequence === null
-        || Number(sequence) !== Number(preserveSequence),
-    )
-    .slice(0, Math.max(0, sequences.length - state.historyLimit));
-  remove.forEach((sequence) => {
-    state.snapshots.delete(sequence);
-    state.frameBlobs.forEach((frames) => {
-      [...frames.keys()]
-        .filter((key) => frameKeySequence(key) === Number(sequence))
-        .forEach((key) => frames.delete(key));
-    });
-  });
-  if (
-    state.inspectionSequence !== null
-    && !state.snapshots.has(Number(state.inspectionSequence))
-  ) {
-    stopInspectionReplay({ render: false });
-    state.inspectionSequence = null;
-    state.snapshot = state.liveSnapshot;
-    showToast("The selected transition expired from the bounded history.", true);
-    broadcastInspection(null);
-  }
-}
-
-function clearRetainedEpisode() {
-  state.eventOverview.reset(null);
-  recordedStepReader.invalidate();
-  state.inspectionHistory = null;
-  state.seekingStep = null;
-  livePresentation.reset();
-  panelRuntime?.resetFrames();
-  state.snapshots.clear();
-  state.frameBlobs.forEach((frames) => frames.clear());
-  state.frameSequence.clear();
-  state.receivedFrameSequence.clear();
-  state.timelineSequences = [];
-}
-
-function prepareRetainedEpisode(snapshot) {
-  const episode = episodeForSnapshot(snapshot);
-  if (episode === null) return;
-  const episodeId = snapshot.trajectory?.episode_id ?? null;
-  if ((state.retainedEpisode !== null && state.retainedEpisode !== episode)
-      || (state.recordedEpisodeId !== null && state.recordedEpisodeId !== episodeId)) {
-    clearRetainedEpisode();
-    stopInspectionReplay({ render: false });
-    state.inspectionSequence = null;
-  }
-  state.retainedEpisode = episode;
-  state.recordedEpisodeId = episodeId;
-  const overviewId = episodeId ?? `episode-${episode}`;
-  if (state.eventOverview.episodeId !== overviewId) state.eventOverview.reset(overviewId);
 }
 
 function hideGoExploreValuePanel(snapshot) {
@@ -897,78 +665,41 @@ function hideGoExploreValuePanel(snapshot) {
   return true;
 }
 
-function applySnapshot(snapshot) {
-  const selectionPresentation = checkpointSelection.presentationFor(snapshot);
-  if (snapshot.mode === "trajectory") state.inspectionSequence = null;
-  const previousEnvironmentId = state.liveSnapshot?.session?.env_id;
-  const previousEpisode = episodeForSnapshot(state.liveSnapshot);
-  const nextEpisode = episodeForSnapshot(snapshot);
-  const episodeChanged = (
-    previousEpisode !== null
-    && nextEpisode !== null
-    && previousEpisode !== nextEpisode
-  );
-  state.liveSnapshot = snapshot;
-  if (hideGoExploreValuePanel(snapshot)) void applyLayout();
-  if (snapshot.run_state === "paused") state.inspectionPauseCommandId = null;
-  if (snapshot.session?.env_id !== previousEnvironmentId) updateLayoutTitle();
-  if (state.inspectionSequence !== null && episodeChanged) {
-    stopInspectionReplay({ render: false });
-    state.inspectionSequence = null;
-    state.snapshot = snapshot;
-  }
-  state.snapshots.set(Number(snapshot.sequence), snapshot);
-  pruneRetainedTrace();
-  state.hasControl = Boolean(snapshot.control?.has_control);
-  const historyChanged = snapshot.history_point
-    ? ingestHistoryPoint(snapshot.history_point)
-    : false;
-  if (state.inspectionSequence === null) {
-    state.snapshot = snapshot;
-    renderSnapshot();
-    void showFramesForSequence(Number(snapshot.sequence)).then(() => {
-      checkpointSelection.presented(selectionPresentation, snapshot);
+const inspection = createPlaybackInspection({
+  windowId, command, send,
+  peer: message => workspaceChannel?.postMessage(message),
+  async fetchStep({ epoch, episode_id, step, rgbEnabled }, { signal } = {}) {
+    const query = new URLSearchParams({ epoch, episode_id, step });
+    if (rgbEnabled === false) query.set("rgb", "off");
+    const response = await fetch(`/api/playback/recorded-step?${query}`, {
+      signal, headers: { Authorization: `Bearer ${token}` },
     });
-  } else {
-    panelRuntime.invoke("controls", "render", snapshot);
-    updateControlState();
-    renderWorkspaceStatus();
-    renderTimeline();
-    checkpointSelection.presented(selectionPresentation, snapshot);
-  }
-  if (historyChanged) {
-    if (state.inspectionSequence === null || !state.replayingInspection) renderHistory();
-    // Replay already renders its recorded inspection page at each cursor step.
-    // The recorded chart refresh still redraws whenever its data arrives.
-    else updateChartContext();
-  }
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Unable to load the recorded step");
+    return payload;
+  },
+  prepareFrame: (...args) => panelRuntime.prepareFrame(...args),
+  renderFrame: (...args) => panelRuntime.renderFrame(...args),
+  resetFrames: () => panelRuntime?.resetFrames(),
+  presented: (ticket, snapshot) => checkpointSelection.presented(ticket, snapshot),
+  onError: error => showToast(error.message, true),
+});
+inspection.subscribe(view => {
+  updateChartContext();
+  // Source admission belongs to CheckpointSelection. Inspection can never
+  // bring a background runner over a locally selected discovery route.
+  if (!view.snapshot || !panelRuntime || checkpointSelection.view.sourceMode) return;
+  if (hideGoExploreValuePanel(view.liveSnapshot)) void applyLayout();
+  renderSnapshot();
+  if (view.inspectionSequence !== null) panelRuntime.invoke("controls", "render", view.liveSnapshot);
+  renderHistory();
+  updateControlState();
   syncAttributionToPanel();
   syncCnnCaptureToPanel();
-}
-
-async function prepareSnapshotFrames(snapshot) {
-  // Background inference must not replace a replay frame's pending decode.
-  if (state.inspectionSequence !== null) return;
-  const sequence = Number(snapshot.sequence);
-  await Promise.all(requiredFrameKinds(snapshot).map((kind) => (
-    panelRuntime.prepareFrame(
-      kind,
-      exactFrameBlob(kind, sequence),
-      { sequence, generation: 0 },
-    )
-  )));
-}
-
-function reportPresentationError(error) {
-  console.error("Synchronized playback presentation failed", error);
-  showToast("A synchronized playback frame could not be displayed.", true);
-}
-
-const livePresentation = new SynchronizedPresentation({
-  isReady: requiredFramesAvailable,
-  prepare: prepareSnapshotFrames,
-  present: applySnapshot,
 });
+
+// Existing panel/settings services consume a read-only projection of inspection.
+function playerState() { return { ...state, ...inspection.view }; }
 
 function send(value) {
   if (state.socket?.readyState === WebSocket.OPEN) state.socket.send(JSON.stringify(value));
@@ -979,28 +710,28 @@ function command(name, payload = {}) {
     showToast("This window is an observer. Choose Control here first.", true);
     return null;
   }
-  if (name === "set_fps") payload = { rgb_enabled: state.rgbEnabled !== false, ...payload };
+  if (name === "set_fps") payload = { rgb_enabled: inspection.view.rgbEnabled !== false, ...payload };
   const id = crypto.randomUUID();
   send({
     type: "command",
     id,
     name,
     payload,
-    expected_revision: state.liveSnapshot?.revision ?? null,
+    expected_revision: inspection.view.liveSnapshot?.revision ?? null,
   });
   return id;
 }
 
 function syncAttributionToPanel() {
-  if (state.liveSnapshot?.mode === "trajectory") return;
+  if (inspection.view.liveSnapshot?.mode === "trajectory") return;
   const panel = state.layout?.panels?.attribution;
-  const attribution = state.liveSnapshot?.session?.attribution;
+  const attribution = inspection.view.liveSnapshot?.session?.attribution;
   if (
     !panel
     || panel.placement?.window !== state.windowId
     || !attribution
   ) return;
-  const supported = state.liveSnapshot?.policy?.attribution?.supported_modes;
+  const supported = inspection.view.liveSnapshot?.policy?.attribution?.supported_modes;
   if (!Array.isArray(supported)) return;
   if (supported.includes(attribution.mode) && attribution.mode !== "none") {
     state.attributionPreference = {
@@ -1030,16 +761,16 @@ function syncAttributionToPanel() {
 }
 
 function syncCnnCaptureToPanel() {
-  if (state.liveSnapshot?.mode === "trajectory") return;
+  if (inspection.view.liveSnapshot?.mode === "trajectory") return;
   const panel = state.layout?.panels?.cnn;
-  const cnn = state.liveSnapshot?.session?.cnn;
+  const cnn = inspection.view.liveSnapshot?.session?.cnn;
   if (
     !panel
     || panel.placement?.window !== state.windowId
     || !cnn
   ) return;
   const desired = Boolean(panel.enabled && panel.placement.visible);
-  const layers = state.liveSnapshot?.policy?.cnn?.layers;
+  const layers = inspection.view.liveSnapshot?.policy?.cnn?.layers;
   if (desired && (!Array.isArray(layers) || !layers.length)) return;
   if (Boolean(cnn.enabled) === desired) {
     if (state.cnnCaptureCommand?.desired === desired) state.cnnCaptureCommand = null;
@@ -1050,38 +781,19 @@ function syncCnnCaptureToPanel() {
   if (id) state.cnnCaptureCommand = { id, desired };
 }
 
-function inspectionEpisodeSequences() {
-  if (state.inspectionSequence === null) return [];
-  const selected = state.snapshots.get(Number(state.inspectionSequence));
-  const episode = episodeForSnapshot(selected);
-  if (episode === null) return [];
-  return state.timelineSequences.filter(
-    (sequence) => episodeForSnapshot(state.snapshots.get(Number(sequence))) === episode,
-  );
-}
-
-const {
-  canReplayInspection, stopInspectionReplay, playFromCurrentPosition,
-  pauseCurrentPlayback, playbackIsRunning,
-} = createPlaybackTransport({
-  state, command, renderSnapshot, inspectStep, setInspectionCursor, returnToLive,
-  inspectionEpisodeSequences,
-  invalidateRead: () => recordedStepReader.invalidate(),
-});
-
 function updateTimelinePlaybackControl() {
   const playbackToggle = $("#timeline-playback-toggle");
   const playbackIcon = $("#timeline-playback-icon");
   if (!playbackToggle || !playbackIcon) return;
-  const session = state.liveSnapshot?.session || state.snapshot?.session || {};
+  const session = inspection.view.liveSnapshot?.session || inspection.view.snapshot?.session || {};
   const presentation = transportPresentation({
-    running: playbackIsRunning(),
-    replaying: state.replayingInspection,
-    independentInference: hasIndependentInference(state.liveSnapshot),
+    running: inspection.view.running,
+    replaying: inspection.view.replayingInspection,
+    independentInference: hasIndependentInference(inspection.view.liveSnapshot),
     hasControl: state.hasControl,
-    canReplay: canReplayInspection() || Boolean(state.liveSnapshot?.trajectory?.imported && session.awaiting_next_episode),
+    canReplay: inspection.view.canReplay || Boolean(inspection.view.liveSnapshot?.trajectory?.imported && session.awaiting_next_episode),
     session,
-    recording: (state.liveSnapshot?.mode || state.snapshot?.mode) === "recording",
+    recording: (inspection.view.liveSnapshot?.mode || inspection.view.snapshot?.mode) === "recording",
   });
   playbackToggle.dataset.action = presentation.action;
   playbackToggle.disabled = presentation.disabled;
@@ -1091,7 +803,7 @@ function updateTimelinePlaybackControl() {
   setSvgUseHref(playbackIcon, `/assets/tabler-icons.svg#ti-${presentation.icon}`);
   const reset = $("#timeline-reset");
   if (reset) {
-    const mode = state.liveSnapshot?.mode || state.snapshot?.mode;
+    const mode = inspection.view.liveSnapshot?.mode || inspection.view.snapshot?.mode;
     const canReset = (
       state.hasControl
       && !["recording", "dataset", "trajectory"].includes(mode)
@@ -1115,7 +827,7 @@ function updateControlState() {
 
 function renderWorkspaceStatus() {
   $("#timeline-label").textContent = timelineLabel(
-    state.snapshot || state.liveSnapshot,
+    inspection.view.snapshot || inspection.view.liveSnapshot,
   );
 }
 
@@ -1135,7 +847,7 @@ function renderPlaybackEvidenceStatus(snapshot) {
 }
 
 function renderSnapshot() {
-  const snapshot = state.snapshot;
+  const snapshot = inspection.view.snapshot;
   const session = snapshot.session || {};
   configureMode(snapshot.mode || "playback");
   updateControlState();
@@ -1149,7 +861,7 @@ function renderSnapshot() {
     state.actionNamesKey = actionNamesKey;
     renderHistory();
   }
-  if (state.inspectionSequence === null && snapshot.status_message && snapshot.status_message !== state.lastStatus) {
+  if (inspection.view.inspectionSequence === null && snapshot.status_message && snapshot.status_message !== state.lastStatus) {
     state.lastStatus = snapshot.status_message;
     if (statusMessageShouldToast(snapshot)) {
       showToast(snapshot.status_message, snapshot.run_state === "paused" && /error|expired|unsupported|no configured/i.test(snapshot.status_message));
@@ -1170,15 +882,15 @@ function configureMode(mode) {
 
 function setChartRange(range, { broadcast = true } = {}) {
   chartHistory.selectRange(range);
-  if (broadcast) workspaceChannel?.postMessage({ type: "chart-range", source: state.windowId, epoch: state.sessionEpoch, episode: state.liveSnapshot?.trajectory?.episode_id, range });
+  if (broadcast) workspaceChannel?.postMessage({ type: "chart-range", source: state.windowId, epoch: inspection.view.sessionEpoch, episode: inspection.view.liveSnapshot?.trajectory?.episode_id, range });
   renderTimeline();
 }
 
 const chartHistory = createChartHistory({ token, onChange: () => scheduleHistoryRender() });
 
 const scheduleHistoryRender = frameScheduler(() => {
-  if (!state.snapshot || !panelRuntime) return;
-  panelRuntime.renderHistory(currentEpisodeHistory(), state.snapshot, panelView());
+  if (!inspection.view.snapshot || !panelRuntime) return;
+  panelRuntime.renderHistory(currentEpisodeHistory(), inspection.view.snapshot, panelView());
   fitGridToViewport();
   renderTimeline();
 });
@@ -1188,333 +900,13 @@ function renderHistory() {
   scheduleHistoryRender();
 }
 
-function attributionGeneration(snapshot) {
-  const attribution = snapshot?.transition?.attribution;
-  return attribution?.status === "available" ? Number(attribution.generation || 0) : 0;
-}
-
-function cnnInspectionGeneration(snapshot) {
-  const cnn = snapshot?.transition?.cnn;
-  return cnn?.status === "available" ? Number(cnn.generation || 0) : 0;
-}
-
-function isGeneratedFrame(kind) {
-  return [FRAME_ATTRIBUTION, FRAME_CNN_INSPECTION].includes(Number(kind));
-}
-
-function frameGeneration(kind, snapshot) {
-  if (Number(kind) === FRAME_ATTRIBUTION) return attributionGeneration(snapshot);
-  if (Number(kind) === FRAME_CNN_INSPECTION) return cnnInspectionGeneration(snapshot);
-  return 0;
-}
-
-function frameExpected(kind, snapshot) {
-  if (isGeneratedFrame(kind)) return frameGeneration(kind, snapshot) > 0;
-  if (!snapshot?.transition) return true;
-  if (Number(kind) === FRAME_GAME) {
-    return Boolean(snapshot.transition.after?.game_frame);
-  }
-  if (Number(kind) === FRAME_OBSERVATION) {
-    return Number(snapshot.transition.before?.observation_frames || 0) > 0;
-  }
-  return false;
-}
-
-function exactFrameBlob(kind, sequence, generation = 0) {
-  return state.frameBlobs.get(kind)?.get(frameKey(sequence, generation)) || null;
-}
-
-async function showFramesForSequence(sequence) {
-  const snapshot = state.snapshots.get(Number(sequence)) || state.snapshot;
-  const retainMissing = (
-    state.inspectionSequence !== null
-    && Number(state.inspectionSequence) === Number(sequence)
-  );
-  const kinds = [...new Set(
-    enabledPanelDefinitions().flatMap((definition) => definition.frameKinds),
-  )];
-  const missing = [];
-  await Promise.all(kinds.map(async (kind) => {
-    const generation = frameGeneration(kind, snapshot);
-    const expected = frameExpected(kind, snapshot);
-    const blob = expected ? exactFrameBlob(kind, sequence, generation) : null;
-    if (expected && !blob) missing.push(kind);
-    if (blob) {
-      await panelRuntime.renderFrame(kind, blob, { sequence, generation });
-    } else if (!expected || !retainMissing) {
-      await panelRuntime.renderFrame(kind, null, { sequence, generation });
-    }
-  }));
-  return missing;
-}
-
-function inspectionFrames(sequence) {
-  const snapshot = state.snapshots.get(Number(sequence)) || state.snapshot;
-  return [FRAME_GAME, FRAME_OBSERVATION, FRAME_ATTRIBUTION, FRAME_CNN_INSPECTION]
-    .map((kind) => {
-      const generation = frameGeneration(kind, snapshot);
-      return {
-        kind,
-        generation,
-        blob: generation || !isGeneratedFrame(kind)
-          ? exactFrameBlob(kind, sequence, generation)
-          : null,
-      };
-    })
-    .filter((item) => item.blob);
-}
-
-function broadcastInspection(sequence) {
-  if (!workspaceChannel) return;
-  if (sequence === null) {
-    workspaceChannel.postMessage({
-      type: "inspection-cursor",
-      session_epoch: state.sessionEpoch,
-      episode: episodeForSnapshot(state.liveSnapshot),
-      sequence: null,
-      source: state.windowId,
-    });
-    return;
-  }
-  const snapshot = state.snapshots.get(Number(sequence)) || state.snapshot;
-  workspaceChannel.postMessage({
-    type: "inspection-cursor",
-    session_epoch: state.sessionEpoch,
-    episode: episodeForSnapshot(snapshot),
-    sequence: Number(sequence),
-    snapshot,
-    frames: inspectionFrames(sequence),
-    points: state.inspectionHistory,
-    source: state.windowId,
-  });
-}
-
-function requestInspectionFrames(sequence, kinds) {
-  if (!kinds.length) return;
-  const request = {
-    session_epoch: state.sessionEpoch,
-    sequence: Number(sequence),
-    kinds,
-    source: state.windowId,
-  };
-  workspaceChannel?.postMessage({
-    type: "inspection-frame-request",
-    ...request,
-  });
-  send({
-    type: "inspection_frames",
-    ...request,
-  });
-}
-
-function cancelInspectionFrameRequest() {
-  clearTimeout(state.inspectionFrameRequestTimer);
-  state.inspectionFrameRequestTimer = null;
-}
-
-function scheduleInspectionFrameRequest(sequence, kinds) {
-  cancelInspectionFrameRequest();
-  if (!kinds.length) return;
-  state.inspectionFrameRequestTimer = window.setTimeout(() => {
-    state.inspectionFrameRequestTimer = null;
-    if (Number(state.inspectionSequence) !== Number(sequence)) return;
-    requestInspectionFrames(sequence, kinds);
-  }, INSPECTION_FRAME_REQUEST_DELAY_MS);
-}
-
-function maybePauseForInspection() {
-  if (!shouldPauseForInspection(state)) return;
-  state.inspectionPauseCommandId = command("pause");
-}
-
-function setInspectionCursor(
-  sequence,
-  {
-    announce = true,
-    snapshot: suppliedSnapshot = null,
-    frames = [],
-    preserveReplay = false,
-  } = {},
-) {
-  if (sequence === null) {
-    returnToLive({ announce });
-    return;
-  }
-  const numericSequence = Number(sequence);
-  const snapshot = suppliedSnapshot || state.snapshots.get(numericSequence);
-  if (!snapshot) {
-    showToast("That transition is not retained in this window.", true);
-    return;
-  }
-  if (
-    Number(snapshot.session_epoch || 0) !== state.sessionEpoch
-    || (snapshot.trajectory?.episode_id && state.liveSnapshot?.trajectory?.episode_id
-      && snapshot.trajectory.episode_id !== state.liveSnapshot.trajectory.episode_id)
-    || (
-      state.retainedEpisode !== null
-      && episodeForSnapshot(snapshot) !== state.retainedEpisode
-    )
-  ) return;
-  frames.forEach(({ kind, generation = 0, blob }) => {
-    if ([FRAME_GAME, FRAME_OBSERVATION, FRAME_ATTRIBUTION, FRAME_CNN_INSPECTION].includes(Number(kind)) && blob instanceof Blob) {
-      rememberFrame(
-        Number(kind),
-        numericSequence,
-        Number(generation),
-        blob,
-        numericSequence,
-      );
-    }
-  });
-  if (!preserveReplay) stopInspectionReplay({ render: false });
-  cancelInspectionFrameRequest();
-  if (announce) maybePauseForInspection();
-  state.snapshots.set(numericSequence, snapshot);
-  state.inspectionSequence = numericSequence;
-  pruneRetainedTrace(numericSequence);
-  state.snapshot = snapshot;
-  renderSnapshot();
-  renderHistory();
-  void showFramesForSequence(numericSequence).then((missing) => {
-    if (Number(state.inspectionSequence) !== numericSequence) return;
-    scheduleInspectionFrameRequest(numericSequence, missing);
-  });
-  if (announce) broadcastInspection(numericSequence);
-}
-
-function inspectSequence(sequence) {
-  if (state.liveSnapshot?.mode === "trajectory") {
-    const snapshot = state.snapshots.get(Number(sequence));
-    if (snapshot?.transition) command("seek", { step: snapshot.transition.step });
-    return;
-  }
-  if (state.liveSnapshot?.trajectory?.transitions > 0) {
-    const point = currentEpisodeHistory().find((item) => Number(item.sequence) === Number(sequence));
-    const snapshot = state.snapshots.get(Number(sequence));
-    const step = point?.step ?? snapshot?.transition?.step;
-    if (Number.isInteger(step)) void inspectStep(step);
-    return;
-  }
-  recordedStepReader.invalidate();
-  state.inspectionHistory = null;
-  setInspectionCursor(sequence);
-}
-
-const recordedStepPrefetch = new RecordedStepPrefetch(async ({ epoch, episode_id, step }, { signal } = {}) => {
-  const query = new URLSearchParams({ epoch, episode_id, step });
-  if (state.rgbEnabled === false) query.set("rgb", "off");
-  const response = await fetch(`/api/playback/recorded-step?${query}`, {
-    signal,
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  const payload = await response.json();
-  if (!response.ok) throw new Error(payload.error || "Unable to load the recorded step");
-  return payload;
-});
-const recordedStepReader = new RecordedStepReader(request => recordedStepPrefetch.read(request), {
-  onInvalidate: () => recordedStepPrefetch.clear(),
-});
-
-function recordedFrames(result) {
-  return result.frames.map(({ kind, generation, png }) => ({
-    kind, generation,
-    blob: new Blob([Uint8Array.from(atob(png), (character) => character.charCodeAt(0))], { type: "image/png" }),
-  }));
-}
-
-async function inspectStep(step, { preserveReplay = false } = {}) {
-  const trajectory = state.liveSnapshot?.trajectory;
-  if (!Number.isInteger(step)) return;
-  if (trajectory?.imported) { command("seek", { step }); return; }
-  if (!preserveReplay) stopInspectionReplay({ render: false });
-  if (!trajectory?.episode_id || !trajectory?.transitions) {
-    const entry = [...state.snapshots.entries()].find(([, snapshot]) =>
-      Number(snapshot.transition?.step ?? snapshot.session?.step) === step);
-    if (entry?.[0] === Number(state.liveSnapshot?.sequence)) returnToLive();
-    else if (entry) inspectSequence(entry[0]);
-    return;
-  }
-  if (step < trajectory.first_step || step > trajectory.last_step) return;
-  if (step === trajectory.last_step && step === Number(state.liveSnapshot?.transition?.step)) {
-    returnToLive();
-    return;
-  }
-  maybePauseForInspection();
-  const epoch = state.sessionEpoch;
-  const episodeId = trajectory.episode_id;
-  state.seekingStep = step;
-  renderTimeline();
-  try {
-    const result = await recordedStepReader.read({ epoch, episode_id: episodeId, step });
-    if (!result || epoch !== state.sessionEpoch || episodeId !== state.liveSnapshot?.trajectory?.episode_id) return;
-    state.seekingStep = null;
-    state.inspectionHistory = result.points;
-    const frames = recordedFrames(result);
-    setInspectionCursor(result.snapshot.sequence, { snapshot: result.snapshot, frames, preserveReplay });
-    if (preserveReplay && state.replayingInspection) {
-      void recordedStepPrefetch.ahead({ epoch, episode_id: episodeId, step: step + 1 }, trajectory.last_step);
-    }
-  } catch (error) {
-    state.seekingStep = null;
-    stopInspectionReplay({ render: false });
-    showToast(error.message, true);
-    renderTimeline();
-  }
-}
-
-function returnToLive({ announce = true } = {}) {
-  recordedStepReader.invalidate();
-  state.seekingStep = null;
-  state.inspectionHistory = null;
-  stopInspectionReplay({ render: false });
-  cancelInspectionFrameRequest();
-  state.inspectionSequence = null;
-  state.snapshot = state.liveSnapshot;
-  if (state.snapshot) {
-    renderSnapshot();
-    renderHistory();
-    void showFramesForSequence(Number(state.snapshot.sequence));
-  }
-  if (announce) broadcastInspection(null);
-  void restoreLatestRecordedPresentation();
-}
-
-async function restoreLatestRecordedPresentation() {
-  const live = state.liveSnapshot;
-  const trajectory = live?.trajectory;
-  if (!trajectory?.transitions || trajectory.imported || live.run_state !== "paused"
-      || live.transition?.step !== trajectory.last_step) return;
-  const epoch = state.sessionEpoch;
-  try {
-    const result = await recordedStepReader.read({ epoch, episode_id: trajectory.episode_id, step: trajectory.last_step });
-    if (!result || state.inspectionSequence !== null || epoch !== state.sessionEpoch
-        || state.liveSnapshot?.sequence !== live.sequence
-        || state.liveSnapshot?.trajectory?.episode_id !== trajectory.episode_id) return;
-    // Reconnection or cache eviction can lose the latest frame too. Restore only
-    // its captured presentation; live transport and configuration stay current.
-    const snapshot = { ...state.liveSnapshot, transition: result.snapshot.transition };
-    recordedFrames(result).forEach(({ kind, generation, blob }) =>
-      rememberFrame(kind, snapshot.sequence, generation, blob, snapshot.sequence));
-    state.snapshots.set(Number(snapshot.sequence), snapshot);
-    state.snapshot = snapshot;
-    renderSnapshot();
-    void showFramesForSequence(Number(snapshot.sequence));
-  } catch (error) {
-    showToast(error.message, true);
-  }
-}
-
 function renderTimeline() {
   const scrubber = $("#timeline-scrubber");
   if (!scrubber) return;
-  const trajectory = state.liveSnapshot?.trajectory;
-  const currentEpisode = episodeForSnapshot(state.liveSnapshot);
-  const snapshots = [...state.snapshots.values()].filter((snapshot) =>
-    currentEpisode === null || episodeForSnapshot(snapshot) === currentEpisode);
-  state.timelineSequences = snapshots.map((snapshot) => Number(snapshot.sequence)).sort((a, b) => a - b);
-  const range = episodeStepRange(trajectory, snapshots);
-  const selected = state.seekingStep ?? Number(trajectory?.imported ? trajectory.current_step
-    : state.snapshot?.transition?.step ?? state.snapshot?.session?.step ?? range?.first ?? 0);
+  const trajectory = inspection.view.liveSnapshot?.trajectory;
+  const range = inspection.view.range;
+  const selected = inspection.view.seekingStep ?? Number(trajectory?.imported ? trajectory.current_step
+    : inspection.view.snapshot?.transition?.step ?? inspection.view.snapshot?.session?.step ?? range?.first ?? 0);
   scrubber.min = String(range?.first ?? 0);
   scrubber.max = String(range?.last ?? 0);
   scrubber.step = "1";
@@ -1525,7 +917,7 @@ function renderTimeline() {
   scrubber.style.setProperty("--timeline-progress", `${timelineProgress(
     selected - (range?.first ?? 0), (range?.last ?? 0) - (range?.first ?? 0) + 1,
   )}%`);
-  $("#timeline").setAttribute("aria-busy", String(state.seekingStep !== null));
+  $("#timeline").setAttribute("aria-busy", String(inspection.view.seekingStep !== null));
   renderWorkspaceStatus();
   const zoomLabel = $("#timeline-zoom");
   const chartRange = chartHistory.read().range;
@@ -1548,7 +940,7 @@ function renderTimeline() {
   const markers = $("#timeline-markers");
   if (!range) { markers.replaceChildren(); return; }
   const markerSlots = Math.max(1, Math.min(120, Math.floor(scrubber.clientWidth / 9)));
-  const interesting = timelineEventMarkers([...state.eventOverview.buckets.values()], range, markerSlots);
+  const interesting = timelineEventMarkers(inspection.view.eventPoints, range, markerSlots);
   markers.replaceChildren(...interesting.map((point) => {
     const marker = document.createElement("span");
     marker.className = "timeline-marker";
@@ -1647,9 +1039,9 @@ function persistLayout({ announce = true } = {}) {
 }
 
 function updateLayoutTitle() {
-  const route = (state.applicationSnapshot || state.liveSnapshot)?.app?.route || {};
+  const route = (state.applicationSnapshot || inspection.view.liveSnapshot)?.app?.route || {};
   const environmentId = String(
-    route.environment_id || state.liveSnapshot?.session?.env_id || "",
+    route.environment_id || inspection.view.liveSnapshot?.session?.env_id || "",
   ).trim();
   const environmentTitle = playbackSourceTitle({
     ...route,
@@ -1717,43 +1109,10 @@ async function applyLayout() {
 }
 
 function refreshPanels() {
-  if (state.snapshot) {
-    panelRuntime.renderSnapshot(state.snapshot, panelView());
-    panelRuntime.renderHistory(currentEpisodeHistory(), state.snapshot, panelView());
-    const sequence = Number(state.snapshot.sequence);
-    const visibleKinds = new Set(
-      enabledPanelDefinitions().flatMap((definition) => definition.frameKinds),
-    );
-    if (visibleKinds.has(FRAME_GAME)) {
-      panelRuntime.renderFrame(
-        FRAME_GAME,
-        exactFrameBlob(FRAME_GAME, sequence),
-        { sequence, generation: 0 },
-      );
-    }
-    if (visibleKinds.has(FRAME_OBSERVATION)) {
-      panelRuntime.renderFrame(
-        FRAME_OBSERVATION,
-        exactFrameBlob(FRAME_OBSERVATION, sequence),
-        { sequence, generation: 0 },
-      );
-    }
-    if (visibleKinds.has(FRAME_ATTRIBUTION)) {
-      const generation = attributionGeneration(state.snapshot);
-      panelRuntime.renderFrame(
-        FRAME_ATTRIBUTION,
-        generation ? exactFrameBlob(FRAME_ATTRIBUTION, sequence, generation) : null,
-        { sequence, generation },
-      );
-    }
-    if (visibleKinds.has(FRAME_CNN_INSPECTION)) {
-      const generation = cnnInspectionGeneration(state.snapshot);
-      panelRuntime.renderFrame(
-        FRAME_CNN_INSPECTION,
-        generation ? exactFrameBlob(FRAME_CNN_INSPECTION, sequence, generation) : null,
-        { sequence, generation },
-      );
-    }
+  void inspection.setFrameDemand({ kinds: enabledPanelDefinitions().flatMap(definition => definition.frameKinds) });
+  if (inspection.view.snapshot) {
+    panelRuntime.renderSnapshot(inspection.view.snapshot, panelView());
+    panelRuntime.renderHistory(currentEpisodeHistory(), inspection.view.snapshot, panelView());
     fitGridToViewport();
   }
   requestAnimationFrame(() => panelRuntime.resize());
@@ -2198,14 +1557,14 @@ function reclaimWindow(closedWindow) {
 function bindWorkspaceSync() {
   window.addEventListener("storage", (event) => {
     if (event.key === `gradlab-reward-reference-${workspaceId}`) {
-      panelRuntime?.renderHistory(currentEpisodeHistory(), state.snapshot, panelView());
+      panelRuntime?.renderHistory(currentEpisodeHistory(), inspection.view.snapshot, panelView());
     }
   });
   if (workspaceChannel) {
     workspaceChannel.addEventListener("message", (event) => {
       const message = event.data || {};
       if (message.type === "chart-range" && message.source !== state.windowId) {
-        if (message.epoch === state.sessionEpoch && message.episode === state.liveSnapshot?.trajectory?.episode_id) setChartRange(message.range, { broadcast: false });
+        if (message.epoch === inspection.view.sessionEpoch && message.episode === inspection.view.liveSnapshot?.trajectory?.episode_id) setChartRange(message.range, { broadcast: false });
       } else if (message.type === "layout" && message.source !== state.windowId) {
         const next = normalizeWorkspace(message.layout, {
           paired: pairedWorkspace,
@@ -2217,76 +1576,8 @@ function bindWorkspaceSync() {
         }
       } else if (message.type === "heartbeat") {
         state.activeWindows.set(message.window, Date.now());
-      } else if (
-        message.type === "inspection-cursor"
-        && message.source !== state.windowId
-        && Number(message.session_epoch || 0) === state.sessionEpoch
-      ) {
-        if (message.sequence === null) {
-          returnToLive({ announce: false });
-        } else if (
-          message.snapshot
-          && Number(message.episode) === episodeForSnapshot(message.snapshot)
-          && message.snapshot.trajectory?.episode_id === state.liveSnapshot?.trajectory?.episode_id
-        ) {
-          recordedStepReader.invalidate();
-          state.seekingStep = null;
-          state.inspectionHistory = Array.isArray(message.points) ? message.points : null;
-          setInspectionCursor(Number(message.sequence), {
-            announce: false,
-            snapshot: message.snapshot,
-            frames: Array.isArray(message.frames) ? message.frames : [],
-          });
-        }
-      } else if (
-        message.type === "inspection-frame-request"
-        && message.source !== state.windowId
-        && Number(message.session_epoch || 0) === state.sessionEpoch
-      ) {
-        (Array.isArray(message.kinds) ? message.kinds : []).forEach((kind) => {
-          const numericKind = Number(kind);
-          const snapshot = state.snapshots.get(Number(message.sequence));
-          const generation = frameGeneration(numericKind, snapshot);
-          const blob = exactFrameBlob(
-            numericKind,
-            Number(message.sequence),
-            generation,
-          );
-          if (!blob) return;
-          workspaceChannel.postMessage({
-            type: "inspection-frame",
-            session_epoch: state.sessionEpoch,
-            sequence: Number(message.sequence),
-            kind: numericKind,
-            generation,
-            blob,
-            source: state.windowId,
-            target: message.source,
-          });
-        });
-      } else if (
-        message.type === "inspection-frame"
-        && message.target === state.windowId
-        && Number(message.session_epoch || 0) === state.sessionEpoch
-        && Number(message.sequence) === Number(state.inspectionSequence)
-        && [FRAME_GAME, FRAME_OBSERVATION, FRAME_ATTRIBUTION, FRAME_CNN_INSPECTION].includes(Number(message.kind))
-        && message.blob instanceof Blob
-      ) {
-        rememberFrame(
-          Number(message.kind),
-          Number(message.sequence),
-          Number(message.generation || 0),
-          message.blob,
-          Number(message.sequence),
-        );
-        void panelRuntime.renderFrame(
-          Number(message.kind),
-          message.blob,
-          {
-            sequence: Number(message.sequence),
-            generation: Number(message.generation || 0),
-          },
-        );
+      } else if (["inspection-cursor", "inspection-frame-request", "inspection-frame"].includes(message.type)) {
+        inspection.receivePeer(message);
       } else if (message.type === "window-closing" && state.windowId === "main") {
         setTimeout(() => {
           const lastSeen = state.activeWindows.get(message.window) || 0;
@@ -2312,6 +1603,7 @@ function bindWorkspaceSync() {
   heartbeat();
   setInterval(heartbeat, 1000);
   window.addEventListener("beforeunload", () => {
+    inspection.dispose();
     chartHistory.dispose();
     workspaceChannel?.postMessage({ type: "window-closing", window: state.windowId });
   });
@@ -2328,13 +1620,13 @@ function bindTimeline() {
   const markerResizeObserver = new ResizeObserver(([entry]) => {
     if (entry.contentRect.width === trackWidth) return;
     trackWidth = entry.contentRect.width;
-    if (state.liveSnapshot) renderTimeline();
+    if (inspection.view.liveSnapshot) renderTimeline();
   });
   markerResizeObserver.observe(scrubber);
   $("#timeline-playback-toggle").addEventListener("click", (event) => {
     const action = event.currentTarget.dataset.action;
     if (action === "pause") {
-      pauseCurrentPlayback();
+      inspection.pause();
     } else if (action === "next_episode") {
       const options = playbackSettings?.episodeOptions() || {};
       command("next_episode", {
@@ -2343,7 +1635,7 @@ function bindTimeline() {
         enabled_termination_conditions: options.enabled_termination_conditions,
       });
     } else {
-      playFromCurrentPosition();
+      inspection.play();
     }
   });
   $("#timeline-reset").addEventListener("click", () => {
@@ -2366,7 +1658,7 @@ function bindTimeline() {
     $("#playback-settings-menu").hidden = true;
     $("#playback-settings-toggle").setAttribute("aria-expanded", "false");
   });
-  const selectStep = (step) => { void inspectStep(step); };
+  const selectStep = (step) => { void inspection.selectStep(step); };
   scrubber.addEventListener("input", (event) => selectStep(Number(event.target.value)));
   scrubber.addEventListener("keydown", (event) => {
     if (event.code !== "Space" || event.repeat) return;
@@ -2385,7 +1677,7 @@ function initWorkspace() {
   panelManager = new PanelManager({
     getWorkspace: () => state.layout,
     getContext: () => ({
-      snapshot: state.snapshot,
+      snapshot: inspection.view.snapshot,
       history: currentEpisodeHistory(),
     }),
     getWindowId: () => state.windowId,
@@ -2398,7 +1690,7 @@ function initWorkspace() {
   });
   playbackSettings = mountPlaybackSettings({
     services: {
-      getState: () => state,
+      getState: playerState,
       command,
     },
     idPrefix: "player-playback",
@@ -2520,18 +1812,18 @@ panelRuntime = new PanelRuntime({
   isSuspended: panelSuspended,
   container: $("#dashboard"),
   services: {
-    getState: () => state,
+    getState: playerState,
     setRgbEnabled(enabled) {
       command("set_fps", {
-        fps: Number(state.liveSnapshot?.session?.target_fps || 0),
+        fps: Number(inspection.view.liveSnapshot?.session?.target_fps || 0),
         rgb_enabled: enabled,
       });
     },
     send,
     command,
-    inspectSequence,
+    inspectSequence: inspection.selectSequence,
     async loadRewardHistory(episodeId, first, last) {
-      const query = new URLSearchParams({ epoch: state.sessionEpoch, episode_id: episodeId });
+      const query = new URLSearchParams({ epoch: inspection.view.sessionEpoch, episode_id: episodeId });
       query.set("first", first);
       if (last !== null) query.set("last", last);
       const response = await fetch(`/api/playback/reward-history?${query}`, { headers: { Authorization: `Bearer ${token}` } });
@@ -2540,14 +1832,14 @@ panelRuntime = new PanelRuntime({
       return result;
     },
     async loadEvents(episodeId, last) {
-      const query = new URLSearchParams({ epoch: state.sessionEpoch, episode_id: episodeId });
+      const query = new URLSearchParams({ epoch: inspection.view.sessionEpoch, episode_id: episodeId });
       if (last !== null) query.set("last", last);
       const response = await fetch(`/api/playback/event-history?${query}`, { headers: { Authorization: `Bearer ${token}` } });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || "Unable to load events");
       return result;
     },
-    inspectStep,
+    inspectStep: inspection.selectStep,
     setRewardReference,
     setChartRange,
     retryChartHistory: () => chartHistory.retry(),
@@ -2597,7 +1889,8 @@ window.addEventListener("resize", () => {
 });
 const trajectoryControls = mountTrajectoryControls({
   command,
-  getState: () => state,
+  inspectStep: inspection.selectStep,
+  getState: playerState,
   toast: showToast,
   request: async (path, body) => {
     const response = await fetch(path, {
