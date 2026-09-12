@@ -1788,6 +1788,9 @@ def state_archive_artifact_summary(source: Any) -> Mapping[str, Any] | None:
             value = summary()
             if value is None or value.get("persistence") != "durable":
                 return None
-            return dict(value)
+            artifact_summary = dict(value)
+            # Local storage accounting is not part of the portable model provenance contract.
+            artifact_summary.pop("physical_bytes", None)
+            return artifact_summary
         current = getattr(current, "venv", None) or getattr(current, "env", None)
     return None
