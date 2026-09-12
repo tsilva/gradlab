@@ -732,3 +732,87 @@ def test_concurrent_progress_reports_one_committed_prefix(tmp_path):
                 samples += 1
             assert samples > 0
         future.result()
+
+
+def test_huggingface_export_preserves_frames_splits_and_records(tmp_path):
+    import io
+    import json
+    import pyarrow.parquet as pq
+    import yaml
+    from PIL import Image
+    from collector import export_huggingface
+
+    root, output = tmp_path / "data", tmp_path / "hub"
+    with Collection(root, ScriptedExecution(), limits=Limits(max_steps=9), heldout_every=2) as run:
+        run.run()
+    report = export_huggingface(root, output, shard_rows=2)
+    assert report["transitions"] == 9
+    card = yaml.safe_load((output / "README.md").read_text().split("---")[1])
+    assert {c["config_name"] for c in card["configs"]} == {
+        "frames",
+        "transitions",
+        "episodes",
+        "sessions",
+    }
+    frames = pq.read_table(output / "frames").to_pylist()
+    assert len(frames) == 2
+    with DatasetReader(root) as reader:
+        for row in frames:
+            rgb = np.asarray(Image.open(io.BytesIO(row["image"]["bytes"])))
+            np.testing.assert_array_equal(rgb, reader.frame(row["frame_id"]))
+        exported = []
+        for split in ("train", "heldout"):
+            episodes = pq.read_table(output / "episodes" / split).to_pylist()
+            rows = pq.read_table(output / "transitions" / split).to_pylist()
+            assert all(reader.episode(e["episode_id"])["split"] == split for e in episodes)
+            assert all(reader.episode(r["episode_id"])["split"] == split for r in rows)
+            exported.extend(rows)
+        assert len(exported) == 9
+        for row in exported:
+            original = reader.transition(row["episode_id"], row["step"])
+            assert row["source_frame_id"] == original["source_frame_id"]
+            assert row["successor_frame_id"] == original["successor_frame_id"]
+            assert row["policy_reward"] == original["policy_reward"]
+            assert json.loads(row["selected_action_json"]) == original["selected_action"].tolist()
+            import base64
+            from gradlab.play_trajectory import decode_tree
+
+            tree = json.loads(row["record_json"])
+            for leaf in tree["arrays"]:
+                leaf["data"] = base64.b64decode(leaf["data"])
+            restored = decode_tree(tree)
+            assert restored["selected_action"].dtype == original["selected_action"].dtype
+            assert restored["labels"]["ball"].dtype == original["labels"]["ball"].dtype
+            np.testing.assert_array_equal(restored["labels"]["ball"], original["labels"]["ball"])
+
+        episodes = pq.read_table(output / "episodes" / "train").to_pylist()
+        assert episodes[-1]["status"] == "incomplete"
+    assert len(list((output / "transitions").rglob("*.parquet"))) >= 5
+    assert json.loads((output / "export.json").read_text())["source_manifest_sha256"]
+    with pytest.raises(ValueError, match="exists"):
+        export_huggingface(root, output)
+
+
+def test_huggingface_export_refuses_active_writer_and_cleans_failed_output(tmp_path):
+    from collector import export_huggingface
+
+    root, output = tmp_path / "data", tmp_path / "hub"
+    with Collection(root, ScriptedExecution(), limits=Limits(max_steps=2)) as run:
+        run.run()
+        with pytest.raises(ValueError, match="writer"):
+            export_huggingface(root, output)
+    assert not output.exists()
+    with pytest.raises(ValueError, match="budget"):
+        export_huggingface(root, output, max_bytes=1)
+    assert not output.exists()
+    assert not list(tmp_path.glob(".hub-*"))
+    with pytest.raises(ValueError, match="inside"):
+        export_huggingface(root, root / "export")
+    with DatasetReader(root) as reader:
+        shard = reader.db.execute("SELECT shard FROM frames LIMIT 1").fetchone()[0]
+    (root / shard).write_bytes(b"corrupt")
+    import zlib
+
+    with pytest.raises((ValueError, zlib.error)):
+        export_huggingface(root, output)
+    assert not output.exists()
