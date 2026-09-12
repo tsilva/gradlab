@@ -6,20 +6,16 @@ It adds no package CLI command and changes no shared GradLab runtime or Player c
 
 ## Delivery status
 
-Storage, collection controls, offline inspection, and deterministic native Breakout
-fidelity tests are implemented. **PPO/A2C checkpoint loading and the 10 GiB pilot
-remain blocked.** The issue requires an existing Data-Only Policy loader, but
-`gradlab.sb3_models.load_sb3_model` calls the SB3 loader, whose JSON metadata path
-can execute `cloudpickle.loads`. Integrity hashes do not remove that behavior.
-The experimental loader rejects these checkpoints before deserialization.
-Resolving this prerequisite requires a scope decision about shared loading code.
-There is no unsafe-loader switch in this experiment.
+Storage, collection controls, offline inspection, and native Breakout fidelity
+tests are implemented. The collector reuses GradLab's existing shared checkpoint
+loader unchanged, including for PPO/A2C, with staged bundle verification and the
+shared Policy runtime. This is the agreed loading scope for this experiment;
+it adds no new model format or shared loader changes.
 
-Existing data-only action-program and cell-graph artifacts use the shared staged
-bundle verification and Policy runtime. Their action-selection modes do not support
-temperature exploration. The optional schedule is tested with in-memory stochastic
-Policies through the same collection boundary. That test does not establish that
-an external PPO checkpoint can be loaded safely.
+PPO checkpoint loading and collection are integration-tested with exploration
+both disabled and enabled. Action-program and cell-graph artifacts retain their
+existing action-selection modes and do not support temperature exploration.
+The 10 GiB pilot has not been authorized or run.
 
 ## Commands
 
@@ -82,8 +78,7 @@ separate facts. The collector requires terminal RGB from the pre-autoreset
 single-lane diagnostics. Missing evidence fails recording and preserves an
 incomplete prefix.
 
-Once the shared stochastic Checkpoint loader prerequisite is resolved, the proposed
-pilot settings are:
+The proposed pilot settings are:
 
 ```text
 --full-game --episode-steps <explicit cap>
@@ -179,10 +174,12 @@ terminal evidence, stochastic baseline fidelity, temperature blocks, paused disk
 readback, crash prefixes, fresh seed allocation, splits, writer locking, append
 compatibility, disk limits, corrupt records, and bounded memory. A native Breakout
 integration compares an in-memory stochastic Policy's ordinary execution with both
-headless and debug recording over equal transition prefixes, including a task timeout.
+headless and debug recording over equal transition prefixes, including a task timeout. A separate integration saves and reloads a PPO Checkpoint
+through the shared loader, collects native RGB with exploration off and on, and
+validates terminal images, provenance, and the resulting dataset.
 
-The 10 GiB pilot has **not run**. Before launch, resolve the Data-Only PPO loader,
-obtain explicit pilot authorization, and record the selected Checkpoint, episode
+The 10 GiB pilot has **not run**. Before launch, obtain explicit pilot authorization
+and record the selected Checkpoint, episode
 cap, compute target, seed allocation, exact source, and resource limits under the
 operator's run directory. Follow `COMPUTE.md` and the private operator inventory.
 Use the explicit full-game override and exploratory schedule after fidelity checks

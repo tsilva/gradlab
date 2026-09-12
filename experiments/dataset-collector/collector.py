@@ -1208,12 +1208,6 @@ def load_execution(
                 "an immutable Checkpoint bundle with model/recipe sidecars is required"
             )
         algorithm = resolve_policy_algorithm(bundle.model["policy"])
-        if algorithm in {"ppo", "a2c"}:
-            raise ValueError(
-                "PPO/A2C collection is blocked: the existing shared loader still deserializes "
-                "executable SB3 metadata. Issue #47 requires a shared Data-Only Policy loader; "
-                "this isolated experiment cannot introduce or bypass that prerequisite."
-            )
         original = playback_contract(bundle.recipe, mode="training")["environment"]
         effective = collection_environment(
             original, full_game=full_game, episode_steps=episode_steps
@@ -1267,7 +1261,7 @@ def load_execution(
             contract = {
                 "environment": asdict(config),
                 "provider_version": provider_version,
-                "action_contract": env.runtime.action_contract,
+                "action_contract": portable_metadata(env.runtime.action_contract),
                 "frame_skip": config.frame_skip,
             }
             # Normalize tuples once so JSON reload comparison remains exact.
