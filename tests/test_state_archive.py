@@ -312,6 +312,11 @@ class StateArchiveTests(unittest.TestCase):
                 self.assertNotIn(
                     receipt["entry_id"], runtime.archive_curriculum.retained_entry_ids()
                 )
+                summary = runtime.state_archive_summary()
+                artifact_summary = state_archive_artifact_summary(runtime)
+                self.assertIn("physical_bytes", summary)
+                self.assertNotIn("physical_bytes", artifact_summary)
+                self.assertEqual(artifact_summary["curriculum"], summary["curriculum"])
             finally:
                 runtime.close()
 

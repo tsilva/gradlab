@@ -4,6 +4,7 @@ import json
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -39,6 +40,7 @@ from gradlab.recipe_documents import (
 )
 from gradlab.train_config import validate_and_normalize_train_config
 from gradlab.training_backend import training_backend_config, training_backend_config_hash
+from gradlab.state_archive import StateArchive, state_archive_artifact_summary
 
 
 GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml")
@@ -814,6 +816,14 @@ def test_model_v3_records_durable_state_archive_summary(tmp_path: Path) -> None:
     checkpoint.write_bytes(b"checkpoint bytes")
     recipe_document = level1_1_recipe_document()
     recipe_path = write_canonical_json(tmp_path / "recipe.json", recipe_document)
+    archive = StateArchive(
+        tmp_path / "archive",
+        provider_id="env-supermariobrosnes-turbo-emu",
+        codec_id="supermariobrosnes-turbo.portable-v2",
+        compatibility_id="sha256:" + "d" * 64,
+        persistence="durable",
+    )
+    runtime = SimpleNamespace(state_archive_summary=archive.summary)
     metadata = {
         "kind": "checkpoint",
         "checkpoint_step": 500_000,
@@ -824,18 +834,7 @@ def test_model_v3_records_durable_state_archive_summary(tmp_path: Path) -> None:
             recipe_document["recipe"]["train_config"]
         ),
         "state_archive_preflight_sha256": "c" * 64,
-        "state_archive_summary": {
-            "semantic_id": "state-archive-v1",
-            "schema_version": 1,
-            "persistence": "durable",
-            "provider_id": "env-supermariobrosnes-turbo-emu",
-            "codec_id": "supermariobrosnes-turbo.portable-v2",
-            "compatibility_id": "sha256:" + "d" * 64,
-            "entry_count": 61,
-            "blob_count": 17,
-            "blob_bytes": 123456,
-            "view_ids": ["go-explore"],
-        },
+        "state_archive_summary": state_archive_artifact_summary(runtime),
     }
     model = build_model_document(checkpoint, recipe_path, metadata)
     write_canonical_json(tmp_path / "model.json", model)
@@ -844,6 +843,9 @@ def test_model_v3_records_durable_state_archive_summary(tmp_path: Path) -> None:
 
     assert bundle.model["format_version"] == 3
     assert bundle.model["provenance"]["state_archive_summary"] == metadata["state_archive_summary"]
+    assert "physical_bytes" in archive.summary()
+    assert "physical_bytes" not in bundle.model["provenance"]["state_archive_summary"]
+    archive.close()
 
 
 def test_noncurrent_model_schema_is_rejected(tmp_path: Path) -> None:
