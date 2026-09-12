@@ -3465,7 +3465,13 @@ class PlaybackWebServer:
             int(request.query["first"]) if "first" in request.query else None,
             int(request.query["last"]) if "last" in request.query else None,
         )
-        return await asyncio.to_thread(self._diagnostic_reader.read_diagnostics, epoch, query)
+        if epoch != await asyncio.to_thread(self._runner_epoch):
+            raise ValueError("the Playback Session has been replaced")
+        result = await asyncio.to_thread(self._diagnostic_reader.read_diagnostics, epoch, query)
+        # A completed worker job may wait unpolled across session replacement.
+        if epoch != await asyncio.to_thread(self._runner_epoch):
+            raise ValueError("the Playback Session has been replaced")
+        return result
 
     async def chart_history(self, request: web.Request) -> web.Response:
         self._authorize_api(request)
