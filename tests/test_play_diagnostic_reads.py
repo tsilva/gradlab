@@ -68,7 +68,7 @@ def test_preparation_failure_releases_recording_and_allows_later_reads(tmp_path,
 
 
 @pytest.fixture(params=["live", "imported"])
-def playback(request, tmp_path):
+def playback(request, tmp_path, monkeypatch):
     from gradlab.model_sources import ResolvedModelSource
     from gradlab.play_application import PlaybackHost
     from gradlab.play_runtime import ActivePlayback, PlaybackLoader, PlaySourceSpec
@@ -83,6 +83,11 @@ def playback(request, tmp_path):
     archive = export_trajectory(live.freeze_trajectory(), tmp_path / "episode.trj")
     runner = live
     if request.param == "imported":
+        def forbidden(*args, **kwargs):
+            raise AssertionError("Imported Checkpoint attachments must never execute")
+
+        monkeypatch.setattr("gradlab.policy_models.load_policy_model", forbidden)
+        monkeypatch.setattr("gradlab.policy_runtime.PolicyRuntime", forbidden)
         live.stop()
         runner = TrajectoryPlaybackRunner(archive, live.args)
         runner.start()
@@ -361,7 +366,7 @@ def _completed_reads_worker(*args):
 
     def completed(host, epoch, request):
         result = read(host, epoch, request)
-        (Path(args[1].fixture_root) / f"completed-{request.first}").touch()
+        (Path(args[1].fixture_root) / f"completed-{request.last}").touch()
         return result
 
     with patch.object(PlaybackHost, "read_diagnostics", completed):
@@ -382,7 +387,7 @@ def test_worker_counts_completed_unpolled_reads_and_inspection_together(tmp_path
         snapshot = host.snapshot()
         epoch, episode = snapshot["session_epoch"], snapshot["trajectory"]["episode_id"]
         jobs = [host._rpc("begin_read", kind="diagnostics", epoch=epoch,
-                          query=dict(kind="chart", episode_id=episode, first=i)) for i in range(8)]
+                          query=dict(kind="chart", episode_id=episode, first=1, last=i+2)) for i in range(8)]
         deadline = time.monotonic() + 10
         # Marker files are cross-process completion signals, not a sleep-based race.
         while len(list(tmp_path.glob("completed-*"))) != 8 and time.monotonic() < deadline:
@@ -396,5 +401,185 @@ def test_worker_counts_completed_unpolled_reads_and_inspection_together(tmp_path
         assert host.inspect_recorded_step(epoch, episode, 1)["frames"]
         for job in jobs:
             assert host._rpc("poll_read", job_id=job)["done"]
+    finally:
+        host.stop()
+
+
+@pytest.mark.parametrize("kind", ["chart", "reward", "event"])
+def test_http_rejects_worker_result_completed_before_session_replacement(tmp_path, monkeypatch, kind):
+    from argparse import Namespace
+    import threading
+    import time
+    import gradlab.playback_worker as worker
+    from gradlab.play_trajectory import export_trajectory
+
+    monkeypatch.setattr(worker, "_worker_main", _completed_reads_worker)
+    host = worker.IsolatedPlaybackHost(
+        Namespace(fps=30, fixture_root=str(tmp_path)), argv=[], explicit_seed=False
+    )
+    entered, release = threading.Event(), threading.Event()
+    rpc = host._rpc
+
+    def hold_poll(operation, **kwargs):
+        if operation == "poll_read":
+            entered.set()
+            assert release.wait(15)
+        return rpc(operation, **kwargs)
+
+    async def scenario():
+        host.start()
+        snapshot = host.snapshot()
+        archive = export_trajectory(host.freeze_trajectory(), tmp_path / "replacement.trj")
+        server = PlaybackWebServer(host, Namespace())
+        app = web.Application()
+        app.router.add_get("/history", getattr(server, f"{kind}_history"))
+        monkeypatch.setattr(host, "_rpc", hold_poll)
+        async with TestClient(TestServer(app)) as client:
+            request = asyncio.create_task(client.get(
+                "/history", params=dict(epoch=0, episode_id=snapshot["trajectory"]["episode_id"]),
+                headers={"Authorization": f"Bearer {server.token}"},
+            ))
+            try:
+                assert await asyncio.to_thread(entered.wait, 3)
+                deadline = time.monotonic() + 8
+                while not (tmp_path / "completed-None").exists() and time.monotonic() < deadline:
+                    await asyncio.sleep(0.01)
+                assert (tmp_path / "completed-None").exists()
+                await asyncio.to_thread(host.import_trajectory, str(archive))
+                assert host.session_epoch == 1
+            finally:
+                release.set()
+            response = await request
+            assert response.status == 400
+            assert "Session has been replaced" in (await response.json())["error"]
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        release.set()
+        host.stop()
+
+
+def _held_calculation(descriptor, history, kind, first, last):
+    """Picklable process boundary controlled by file-backed test signals."""
+    from pathlib import Path
+    import time
+    from gradlab.play_diagnostics import query_prefix
+
+    root = Path(descriptor["root"])
+    (root / "calculation-entered").touch()
+    deadline = time.monotonic() + 15
+    while not (root / "calculation-release").exists():
+        if time.monotonic() > deadline:
+            raise TimeoutError("test did not release calculation")
+        time.sleep(0.005)
+    return query_prefix(descriptor, history, kind, first, last)
+
+
+def test_spawned_calculation_shutdown_drains_and_exits(tmp_path, monkeypatch):
+    from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+    import threading
+    import time
+    import gradlab.play_diagnostics as diagnostics
+    from tests.test_play_trajectory import live_runner
+
+    four_submitted, closing = threading.Event(), threading.Event()
+    pools, children = [], []
+
+    class ObservedPool(ProcessPoolExecutor):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            pools.append(self)
+            self.submissions = 0
+
+        def submit(self, fn, *args):
+            future = super().submit(_held_calculation, *args)
+            self.submissions += 1
+            if self.submissions == 4:
+                four_submitted.set()
+            return future
+
+        def shutdown(self, **kwargs):
+            children.extend((self._processes or {}).values())
+            closing.set()
+            return super().shutdown(**kwargs)
+
+    monkeypatch.setattr(diagnostics, "ProcessPoolExecutor", ObservedPool)
+    runner = live_runner(tmp_path, length=10)
+    runner._step_once()
+    recording = runner.recording
+    query = DiagnosticRead("chart", recording.metadata["episode_id"])
+    try:
+        with ThreadPoolExecutor(5) as calls:
+            first = calls.submit(runner.diagnostics.read, query)
+            try:
+                deadline = time.monotonic() + 10
+                while not (recording.root / "calculation-entered").exists() and time.monotonic() < deadline:
+                    time.sleep(0.01)
+                assert (recording.root / "calculation-entered").exists()
+                others = [calls.submit(runner.diagnostics.read, query) for _ in range(3)]
+                assert four_submitted.wait(3)
+                shutdown = calls.submit(runner.diagnostics.close)
+                assert closing.wait(3)
+                assert not shutdown.done()
+                # Playback controls and inference remain independent of the child.
+                assert calls.submit(runner.snapshot).result(timeout=1)["sequence"] == 1
+                runner._step_once()
+                assert runner.session.sequence == 2
+            finally:
+                (recording.root / "calculation-release").touch()
+            assert first.result(timeout=5)["last"] == 1
+            results = []
+            for future in others:
+                try:
+                    results.append(future.result(timeout=5))
+                except CancelledError:
+                    results.append("cancelled")
+            assert "cancelled" in results
+            shutdown.result(timeout=5)
+        assert len(pools) == 1
+        assert len(children) == 1
+        assert not children[0].is_alive()
+    finally:
+        runner.stop()
+    assert not recording.root.exists()
+
+
+def _cancelled_reads_worker(*args):
+    from unittest.mock import patch
+    from gradlab.play_application import PlaybackHost
+    from tests.test_playback_episode_history import _episode_inspection_worker
+
+    with patch.object(PlaybackHost, "read_diagnostics", side_effect=CancelledError):
+        _episode_inspection_worker(*args)
+
+
+def test_worker_cancellation_remains_http_400_for_every_kind(tmp_path, monkeypatch):
+    from argparse import Namespace
+    import gradlab.playback_worker as worker
+
+    monkeypatch.setattr(worker, "_worker_main", _cancelled_reads_worker)
+    host = worker.IsolatedPlaybackHost(
+        Namespace(fps=30, fixture_root=str(tmp_path)), argv=[], explicit_seed=False
+    )
+
+    async def scenario():
+        host.start()
+        snapshot = host.snapshot()
+        server = PlaybackWebServer(host, Namespace())
+        app = web.Application()
+        for kind in ("chart", "reward", "event"):
+            app.router.add_get(f"/{kind}", getattr(server, f"{kind}_history"))
+        async with TestClient(TestServer(app)) as client:
+            for kind in ("chart", "reward", "event"):
+                response = await client.get(
+                    f"/{kind}", params=dict(epoch=0, episode_id=snapshot["trajectory"]["episode_id"]),
+                    headers={"Authorization": f"Bearer {server.token}"},
+                )
+                assert response.status == 400
+                assert await response.json() == {"error": "playback worker CancelledError: "}
+
+    try:
+        asyncio.run(scenario())
     finally:
         host.stop()

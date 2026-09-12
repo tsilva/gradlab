@@ -5,7 +5,7 @@ from __future__ import annotations
 from concurrent.futures import ProcessPoolExecutor
 from collections import OrderedDict
 from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from contextlib import AbstractContextManager, contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
 from enum import StrEnum
@@ -153,7 +153,7 @@ def calibration_annotations(history):
 
 
 class RecordingSource(Protocol):
-    def reserve(self, episode_id: str): ...
+    def reserve(self, episode_id: str) -> AbstractContextManager[RecordingRead]: ...
 
 
 class LiveRecordingSource:
