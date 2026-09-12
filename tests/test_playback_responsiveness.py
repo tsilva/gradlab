@@ -1,5 +1,7 @@
 """History work must not monopolize control RPCs or rescan old chart rows."""
 
+from gradlab.play_diagnostics import DiagnosticRead
+
 from argparse import Namespace
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -15,7 +17,7 @@ def _slow_history_worker(*args):
     from gradlab.play_web import WebPlaybackRunner
     from tests.test_playback_episode_history import _episode_inspection_worker
 
-    method = getattr(args[1], "blocked_read", "chart_history")
+    method = getattr(args[1], "blocked_read", "read_diagnostics")
     owner = WebPlaybackRunner if method == "inspect_recorded_step" else PlaybackHost
     original = getattr(owner, method)
 
@@ -30,7 +32,7 @@ def _slow_history_worker(*args):
         _episode_inspection_worker(*args)
 
 
-@pytest.mark.parametrize("method", ["chart_history", "inspect_recorded_step"])
+@pytest.mark.parametrize("method", ["read_diagnostics", "inspect_recorded_step"])
 def test_slow_history_does_not_hold_control_rpc(tmp_path, monkeypatch, method):
     import gradlab.playback_worker as worker
 
@@ -45,8 +47,8 @@ def test_slow_history_does_not_hold_control_rpc(tmp_path, monkeypatch, method):
         host.start()
         snapshot = host.snapshot()
         query = pool.submit(getattr(host, method), snapshot["session_epoch"],
-                            snapshot["trajectory"]["episode_id"],
-                            *([1] if method == "inspect_recorded_step" else []))
+                            *([snapshot["trajectory"]["episode_id"], 1] if method == "inspect_recorded_step"
+                              else [DiagnosticRead("chart", snapshot["trajectory"]["episode_id"])]))
         deadline = time.monotonic() + 5
         while not (tmp_path / "reading").exists() and time.monotonic() < deadline:
             time.sleep(0.01)
@@ -188,8 +190,8 @@ def test_slow_diagnostic_process_does_not_lock_inference(tmp_path):
     try:
         runner._step_once()
         episode = runner.recording.metadata["episode_id"]
-        with patch.object(runner._diagnostics, "query", blocked):
-            query = pool.submit(runner.chart_history, episode)
+        with patch.object(runner.diagnostics._queries, "query", blocked):
+            query = pool.submit(runner.diagnostics.read, DiagnosticRead("chart", episode))
             assert entered.wait(2)
             pool.submit(runner._step_once).result(timeout=0.5)
             assert runner.session.sequence == 2
