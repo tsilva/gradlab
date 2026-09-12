@@ -196,7 +196,7 @@ export function mount({ definition, services }) {
         return true;
       }
       const bitmap = await createImageBitmap(blob);
-      if (request !== bitmapRequest || !sameFrameIdentity(incoming, expectedIdentity())) {
+      if (metadata.isCurrent?.() === false || request !== bitmapRequest || !sameFrameIdentity(incoming, expectedIdentity())) {
         bitmap.close();
         return true;
       }
