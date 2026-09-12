@@ -306,29 +306,30 @@ function openSourceRoute(route) {
 }
 
 function renderSourceMode(snapshot = null) {
+  const { route, sourceMode } = checkpointSelection.view;
   const activeCheckpointRoute = (
-    !checkpointSelection.view.sourceMode
-    && snapshot?.app?.route?.checkpoint_id
+    !sourceMode
+    && route?.checkpoint_id
   );
   const activeRecordingRoute = (
-    !checkpointSelection.view.sourceMode
+    !sourceMode
     && snapshot?.mode === "trajectory"
-    && snapshot?.app?.route?.environment_id
+    && route?.environment_id
   );
-  document.body.classList.toggle("source-selection", checkpointSelection.view.sourceMode);
-  $("#source-browser").hidden = !checkpointSelection.view.sourceMode;
-  $("#checkpoint-navigation").hidden = Boolean(checkpointSelection.view.sourceMode || !activeCheckpointRoute);
-  $("#page-title").hidden = Boolean(checkpointSelection.view.sourceMode || activeRecordingRoute);
+  document.body.classList.toggle("source-selection", sourceMode);
+  $("#source-browser").hidden = !sourceMode;
+  $("#checkpoint-navigation").hidden = Boolean(sourceMode || !activeCheckpointRoute);
+  $("#page-title").hidden = Boolean(sourceMode || activeRecordingRoute);
   $("#source-back").hidden = Boolean(
-    checkpointSelection.view.sourceMode
+    sourceMode
     || activeRecordingRoute
     || !(snapshot?.app?.has_active_runner || state.liveSnapshot?.app?.has_active_runner)
   );
-  $("#more-toggle").hidden = checkpointSelection.view.sourceMode;
+  $("#more-toggle").hidden = sourceMode;
   $("#inspect-active").hidden = !(
     snapshot?.app?.has_active_runner || state.liveSnapshot?.app?.has_active_runner
   );
-  if (!checkpointSelection.view.sourceMode) {
+  if (!sourceMode) {
     const expected = snapshot;
     if (activeCheckpointRoute || activeRecordingRoute) {
       if (sourceBrowser) {

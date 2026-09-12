@@ -115,19 +115,6 @@ test('another window and imported playback can activate without a local command'
   assert.equal(Object.isFrozen(selection.view.route), true);
 });
 
-test('repeated selection does not treat an old active session snapshot as the new activation', () => {
-  const selection = new CheckpointSelection(() => 'command');
-  selection.receive(active());
-  selection.select({}, route);
-  const duplicate = active();
-  selection.receive(duplicate);
-  selection.presented(selection.presentationFor(duplicate), duplicate);
-  assert.equal(selection.view.loading, true);
-  const replacement = active('a', 2);
-  selection.receive(replacement);
-  selection.presented(selection.presentationFor(replacement), replacement);
-  assert.equal(selection.view.loading, false);
-});
 
 import { SynchronizedPresentation } from '../../src/gradlab/web_player/synchronized-presentation.js';
 for (const framesFirst of [false, true]) {
@@ -170,4 +157,51 @@ test('session replacement invalidates completion before its first snapshot arriv
   selection.receive({ type: 'session_changed', session_epoch: 2 });
   selection.presented(ticket, snapshot);
   assert.equal(selection.view.loading, true);
+});
+
+test('the selection view owns initial discovery and authoritative preparation routes', () => {
+  const selection = new CheckpointSelection(() => 'command');
+  selection.receive({ type: 'snapshot', app: { phase: 'selecting', route } });
+  assert.deepEqual(selection.view.route, route);
+  selection.select({}, route);
+  const preparingRoute = { ...route, goal_variant_id: 'resolved-variant' };
+  selection.receive({ type: 'snapshot', app: { phase: 'loading', route: preparingRoute } });
+  assert.deepEqual(selection.view.route, preparingRoute);
+  selection.receive({ type: 'snapshot', app: { phase: 'error', route: preparingRoute } });
+  assert.deepEqual(selection.view.route, preparingRoute);
+});
+
+
+test('authoritative cancellation can present the previous session at the same epoch', () => {
+  const selection = new CheckpointSelection(() => 'command');
+  selection.receive(active());
+  selection.select({}, { ...route, checkpoint_id: 'b' });
+  selection.receive({ type: 'snapshot', session_epoch: 1, app: { phase: 'loading', route: { ...route, checkpoint_id: 'b' } } });
+  // Existing cancellation keeps the runner and the requested source route.
+  const cancelled = active('b', 1);
+  selection.receive(cancelled);
+  selection.presented(selection.presentationFor(cancelled), cancelled);
+  assert.equal(selection.view.loading, false);
+});
+
+test('history decisions are returned once and reading the view never dispatches work', () => {
+  const commands = [];
+  const selection = new CheckpointSelection((...command) => { commands.push(command); return 'command'; });
+  assert.equal(selection.select({}, route, { historyMode: 'replace' }).historyMode, 'replace');
+  assert.equal(selection.browse(route, active(), { historyMode: null }).historyMode, null);
+  const view = selection.view;
+  for (let read = 0; read < 5; read += 1) assert.deepEqual(selection.view, view);
+  assert.equal(commands.length, 1);
+});
+
+test('replacement errors remain authoritative without inferred command correlation', () => {
+  const selection = new CheckpointSelection(() => 'command');
+  selection.receive(active());
+  selection.browse({ ...route, checkpoint_id: '' }, active());
+  selection.select({}, { ...route, checkpoint_id: 'b' });
+  const failure = { ...active(), app: { ...active().app, error: 'replacement failed' } };
+  assert.deepEqual(selection.receive(failure), { background: true, error: 'replacement failed' });
+  assert.equal(selection.view.loading, false);
+  assert.equal(selection.view.sourceMode, true);
+  assert.equal(selection.receive(failure).error, undefined);
 });
