@@ -387,11 +387,12 @@ class EpisodeRecording:
         with self._condition:
             if self._retired:
                 raise ValueError("the recorded episode has been replaced")
-            self._pins += 1
             metadata = deepcopy(self.metadata)
             metadata["transition_count"] = self._accepted
-            return dict(root=str(self.root), metadata=metadata, written=self._written,
-                        pending=tuple(self._pending))
+            descriptor = dict(root=str(self.root), metadata=metadata, written=self._written,
+                              pending=tuple(self._pending))
+            self._pins += 1
+            return descriptor
 
     def release_read(self):
         with self._condition:
@@ -785,9 +786,10 @@ class ImportedTrajectory:
         with self._read_lock:
             if self._retired:
                 raise ValueError("the recorded episode has been replaced")
+            descriptor = dict(root=str(self.root), metadata=deepcopy(self.metadata),
+                              written=self.metadata["transition_count"], pending=())
             self._read_pins += 1
-            return dict(root=str(self.root), metadata=deepcopy(self.metadata),
-                        written=self.metadata["transition_count"], pending=())
+            return descriptor
 
     def release_read(self):
         with self._read_lock:

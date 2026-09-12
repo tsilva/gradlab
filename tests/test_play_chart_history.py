@@ -1,3 +1,4 @@
+from gradlab.play_diagnostics import DiagnosticRead
 from tests.test_play_trajectory import live_runner
 
 
@@ -8,14 +9,14 @@ def test_chart_history_spans_episode_and_zoom_does_not_seek(tmp_path):
             runner._step_once()
         episode = runner.recording_status()["episode_id"]
         before = runner.snapshot()["transition"]["step"]
-        full = runner.chart_history(episode)
+        full = runner.diagnostics.read(DiagnosticRead("chart", episode))
         assert (full["first"], full["last"]) == (1, 140)
         assert full["points"][0]["step"] == 1
         assert full["points"][-1]["step"] == 140
-        zoom = runner.chart_history(episode, 10, 20)
+        zoom = runner.diagnostics.read(DiagnosticRead("chart", episode, 10, 20))
         assert [p["step"] for p in zoom["points"]] == list(range(10, 21))
         runner.inspect_recorded_step(episode, 2)
-        assert runner.chart_history(episode)["last"] == 140
+        assert runner.diagnostics.read(DiagnosticRead("chart", episode))["last"] == 140
         assert runner.snapshot()["transition"]["step"] == before
     finally:
         runner.stop()
@@ -69,7 +70,7 @@ def test_imported_episode_supports_full_chart_range(tmp_path):
             runner._step_once()
         archive = export_trajectory(runner.freeze_trajectory(), tmp_path / "charts.trj")
         imported = TrajectoryPlaybackRunner(archive, runner.args)
-        result = imported.chart_history(imported.metadata["episode_id"])
+        result = imported.diagnostics.read(DiagnosticRead("chart", imported.metadata["episode_id"]))
         assert [p["step"] for p in result["points"]] == [1, 2, 3]
     finally:
         if imported:
@@ -92,10 +93,10 @@ def test_worker_chart_history_is_bound_to_session_epoch(tmp_path, monkeypatch):
         snapshot = host.snapshot()
         epoch = snapshot["session_epoch"]
         episode = snapshot["trajectory"]["episode_id"]
-        assert host.chart_history(epoch, episode)["first"] == 1
+        assert host.read_diagnostics(epoch, DiagnosticRead("chart", episode))["first"] == 1
         with pytest.raises(RuntimeError, match="replaced"):
-            host.chart_history(epoch + 1, episode)
-        assert host.chart_history(epoch, episode, 2, 2)["last"] == 2
+            host.read_diagnostics(epoch + 1, DiagnosticRead("chart", episode))
+        assert host.read_diagnostics(epoch, DiagnosticRead("chart", episode, 2, 2))["last"] == 2
     finally:
         host.stop()
 

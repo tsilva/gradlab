@@ -54,6 +54,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--chart-delay", type=float, default=0.3)
     parser.add_argument("--chart-failures", type=int, default=1)
+    parser.add_argument("--imported", action="store_true", help="Inspect an exported data-only recording")
     args = parser.parse_args()
     args.port, args.no_open, args.episodes, args.fps = 0, True, 0, 20
     with TemporaryDirectory(prefix="gradlab-chart-player-") as temporary:
@@ -63,12 +64,25 @@ def main():
             BrowserSession(length=1000), args, config_text="game: Game-v0",
             trajectory_bundle=load_policy_bundle(root),
         )
+        if args.imported:
+            from gradlab.play_trajectory import export_trajectory
+            from gradlab.play_trajectory_runner import TrajectoryPlaybackRunner
+
+            runner.start()
+            for _ in range(140):
+                runner._step_once()
+            archive = export_trajectory(runner.freeze_trajectory(), root / "browser.trj")
+            runner.stop()
+            runner = TrajectoryPlaybackRunner(archive, args)
+            runner._load_step(140)
+
         async def serve():
             server = asyncio.create_task(ChartPlayer(runner, args).run())
             while not runner._thread.is_alive():
                 await asyncio.sleep(0.01)
-            for _ in range(140):
-                await asyncio.to_thread(runner._step_once)
+            if not args.imported:
+                for _ in range(140):
+                    await asyncio.to_thread(runner._step_once)
             print("Fixture ready at step 140, paused", flush=True)
             return await server
 

@@ -4,6 +4,12 @@ from __future__ import annotations
 
 from concurrent.futures import ProcessPoolExecutor
 from collections import OrderedDict
+from collections.abc import Callable, Iterator
+from contextlib import AbstractContextManager, contextmanager
+from copy import deepcopy
+from dataclasses import dataclass
+from enum import StrEnum
+from typing import Any, Protocol
 import multiprocessing
 from pathlib import Path
 import threading
@@ -88,29 +94,160 @@ class DiagnosticQueries:
             pool.shutdown(wait=True, cancel_futures=True)
 
 
-def read_diagnostics(runner, episode_id, kind, first=None, last=None):
-    with runner._diagnostic_lock:
-        recording = runner.recording
-        if recording is None or recording.metadata["episode_id"] != episode_id:
-            raise ValueError("the recorded episode has been replaced")
-        descriptor = recording.reserve_read()
-        # Only calibration amendments are needed in addition to recorded facts.
-        from gradlab.play_chart_history import ANNOTATIONS
 
-        history = [
-            {
-                "step": p["step"],
-                "episode": p["episode"],
-                **{key: p[key] for key in ANNOTATIONS if key in p},
-            }
-            for p in list(runner.history)
-            if any(key in p for key in ANNOTATIONS)
-        ]
-    try:
-        result = runner._diagnostics.query(descriptor, history, kind, first, last)
-        with runner._diagnostic_lock:
-            if runner.recording is not recording:
-                raise ValueError("the recorded episode has been replaced")
+class DiagnosticKind(StrEnum):
+    CHART = "chart"
+    REWARD = "reward"
+    EVENT = "event"
+
+
+@dataclass(frozen=True)
+class DiagnosticRead:
+    """Keep each calculation's query semantics, rather than normalizing a range."""
+
+    kind: DiagnosticKind
+    episode_id: str
+    first: int | None = None
+    last: int | None = None
+
+    def __post_init__(self):
+        object.__setattr__(self, "kind", DiagnosticKind(self.kind))
+
+
+class RecordingRead:
+    """An owned pin. Callbacks and locks never cross the calculation process seam."""
+
+    def __init__(self, descriptor, release: Callable[[], None], validate: Callable[[], None]):
+        self.descriptor = descriptor
+        self.history = []
+        self._release = release
+        self._validate = validate
+
+    def validate(self):
+        self._validate()
+
+    def close(self):
+        release, self._release = self._release, None
+        if release is not None:
+            release()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
+
+
+def calibration_annotations(history):
+    from gradlab.play_chart_history import ANNOTATIONS
+
+    return [
+        deepcopy({
+            "step": point["step"],
+            "episode": point["episode"],
+            **{key: point[key] for key in ANNOTATIONS if key in point},
+        })
+        for point in list(history)
+        if any(key in point for key in ANNOTATIONS)
+    ]
+
+
+class RecordingSource(Protocol):
+    def reserve(self, episode_id: str) -> AbstractContextManager[RecordingRead]: ...
+
+
+class LiveRecordingSource:
+    """Capture the live recording and amendments under its short identity lock."""
+
+    def __init__(self, lock, recording: Callable, history: Callable):
+        self._lock = lock
+        self._recording = recording
+        self._history = history
+
+    @contextmanager
+    def reserve(self, episode_id: str) -> Iterator[RecordingRead]:
+        owned = None
+        try:
+            with self._lock:
+                recording = self._recording()
+                if recording is None or recording.metadata["episode_id"] != episode_id:
+                    raise ValueError("the recorded episode has been replaced")
+
+                def validate():
+                    with self._lock:
+                        if self._recording() is not recording:
+                            raise ValueError("the recorded episode has been replaced")
+
+                owned = RecordingRead(recording.reserve_read(), recording.release_read, validate)
+                owned.history = calibration_annotations(self._history())
+            yield owned
+        finally:
+            if owned is not None:
+                owned.close()
+
+
+class ImportedRecordingSource:
+    """An imported recording is fixed for the runner's lifetime and stays data-only."""
+
+    def __init__(self, lock, recording, history: Callable):
+        self._lock = lock
+        self._recording = recording
+        self._history = history
+
+    @contextmanager
+    def reserve(self, episode_id: str) -> Iterator[RecordingRead]:
+        owned = None
+        try:
+            with self._lock:
+                recording = self._recording
+                if recording.metadata["episode_id"] != episode_id:
+                    raise ValueError("the recorded episode has been replaced")
+                # reserve_read checks retirement; an admitted read may finish while
+                # shutdown drains. Session validity remains the host's authority.
+                owned = RecordingRead(recording.reserve_read(), recording.release_read, lambda: None)
+                owned.history = calibration_annotations(self._history())
+            yield owned
+        finally:
+            if owned is not None:
+                owned.close()
+
+
+class DiagnosticReads:
+    """Own reservation, admission, isolated calculation, and final validity together."""
+
+    def __init__(self, source: RecordingSource):
+        self._source = source
+        self._queries = DiagnosticQueries()
+
+    def read(self, request: DiagnosticRead) -> dict[str, Any]:
+        with self._source.reserve(request.episode_id) as owned:
+            result = self._queries.query(
+                owned.descriptor, owned.history, request.kind, request.first, request.last
+            )
+            owned.validate()
+            return result
+
+    def close(self):
+        self._queries.close()
+
+
+class DiagnosticReader(Protocol):
+    def read_diagnostics(self, epoch: int, request: DiagnosticRead) -> dict[str, Any]: ...
+
+
+class DirectDiagnosticReader:
+    """Bind an embedded runner to the same epoch-aware interface as a host."""
+
+    def __init__(self, diagnostics: DiagnosticReads | None, epoch: Callable[[], int]):
+        self._diagnostics = diagnostics
+        self._epoch = epoch
+
+    def read_diagnostics(self, epoch: int, request: DiagnosticRead) -> dict[str, Any]:
+        if epoch != self._epoch():
+            raise ValueError("the Playback Session has been replaced")
+        if self._diagnostics is None:
+            raise ValueError(f"episode {request.kind} history is unavailable")
+        result = self._diagnostics.read(request)
+        if epoch != self._epoch():
+            raise ValueError("the Playback Session has been replaced")
         return result
-    finally:
-        recording.release_read()

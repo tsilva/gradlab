@@ -55,7 +55,7 @@ def test_chart_endpoint_compresses_full_responses_and_serves_revision_deltas():
 
     async def scenario():
         result = dict(episode_id="one", points=[dict(step=i, value=i % 13) for i in range(3000)])
-        runner = SimpleNamespace(session_epoch=1, chart_history=lambda *args: result)
+        runner = SimpleNamespace(session_epoch=1, read_diagnostics=lambda *args: result)
         server = PlaybackWebServer(runner, SimpleNamespace())
         app = web.Application()
         app.router.add_get("/charts", server.chart_history)
