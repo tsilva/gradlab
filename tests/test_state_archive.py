@@ -249,6 +249,72 @@ class StateArchiveTests(unittest.TestCase):
 
         self.assertEqual(keys, (b"[1,7,1]", b"[2,0,0]"))
 
+    def test_masked_cell_indices_preserve_canonical_keys(self) -> None:
+        for dimensions, expected in (
+            ([{"signal": "score", "bucket_size": 50}], (b"score:0", b"score:2")),
+            (
+                [{"signal": "score", "bucket_size": 50, "clamp": [0, 75]}],
+                (b"[0]", b"[1]"),
+            ),
+            (
+                [
+                    {"signal": "score", "bucket_size": 50},
+                    {"signal": "stage", "bucket_size": 1},
+                ],
+                (b"[0,5]", b"[2,1]"),
+            ),
+        ):
+            with self.subTest(dimensions=dimensions):
+                detector = ArchiveCellDetector(
+                    ArchiveCellConfig.from_mapping({"dimensions": dimensions}, label="cell")
+                )
+                values = {
+                    ("signal", "score"): np.asarray([0, 50, 100]),
+                    ("signal", "stage"): np.asarray([5, 3, 1]),
+                }
+                indices = detector.indices(values, n_envs=3, mask=np.asarray([True, False, True]))
+                self.assertEqual(detector.keys_from_indices(indices), expected)
+                self.assertEqual(detector.keys(values, n_envs=3)[::2], expected)
+                self.assertEqual(detector.keys_from_indices(indices[:0]), ())
+
+    def test_multidimensional_curriculum_preflight_round_trip(self) -> None:
+        provider = PortableBreakoutProvider()
+        descriptor = ProviderDescriptor(
+            provider_id="env-breakoutatari2600-turbo-native",
+            native_observation_space=provider.single_observation_space,
+            native_action_space=provider.single_action_space,
+            signal_schema={"score": SignalSpec("score", np.int64)},
+            start_catalog=("Start",),
+            supports_live_snapshots=True,
+            live_snapshots_deterministic=True,
+            snapshot_codec_id="breakout-turbo-env.state-v1",
+            snapshot_compatibility_id="test-environment-v1",
+        )
+        kernel = IdentityTaskDefinition(signals={"score": "score", "stage": "score"}).bind(
+            descriptor, provider.num_envs
+        )
+        config = archive_config()
+        config["recorder"]["cell"]["dimensions"].append({"signal": "stage", "bucket_size": 100})
+        with tempfile.TemporaryDirectory() as root:
+            runtime = BatchRuntime(
+                provider,
+                descriptor,
+                kernel,
+                run_seed=17,
+                state_archive=config,
+                state_archive_root=root,
+            )
+            try:
+                receipt = runtime.preflight_state_archive_round_trip(seed=17)
+                self.assertTrue(receipt["observation_exact"])
+                self.assertTrue(receipt["one_step_continuation_exact"])
+                self.assertGreater(runtime.archive_curriculum.entry_count, 0)
+                self.assertNotIn(
+                    receipt["entry_id"], runtime.archive_curriculum.retained_entry_ids()
+                )
+            finally:
+                runtime.close()
+
     def test_ephemeral_archive_rejects_curriculum(self) -> None:
         with self.assertRaisesRegex(ValueError, "requires persistence='durable'"):
             archive_config(persistence="ephemeral")

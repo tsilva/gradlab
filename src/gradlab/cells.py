@@ -279,6 +279,8 @@ class ArchiveCellDetector:
         return self.keys_from_indices(rows)
 
     def keys_from_indices(self, rows) -> tuple[bytes, ...]:
+        if isinstance(rows, np.ndarray):
+            rows = rows.tolist()
         if len(self.config.dimensions) == 1:
             dimension = self.config.dimensions[0]
             if (
