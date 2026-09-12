@@ -2087,10 +2087,22 @@ class RunSupervisor:
     def _publish_state_archive(self, *, require_closed: bool = False) -> int:
         if not self._durable_state_archive_enabled():
             return 0
+        if self.lease is None:
+            raise RuntimeError("state archive publication requires the Run writer lease")
+
+        def heartbeat() -> None:
+            self._lease_heartbeat()
+            # The active loop tolerates transient renewal failures to stop the
+            # learner gracefully. Publication must not continue on that grace.
+            if self.lease_misses:
+                raise LeaseUnavailable("state archive writer lease could not be renewed")
+
+        heartbeat()
         archive_root = self.run_dir / "state-archive"
         from gradlab.state_archive import archive_lock
 
         with archive_lock(archive_root, exclusive=False):
+            heartbeat()
             closure_path = archive_root / "closure.json"
             if not closure_path.is_file():
                 if require_closed:
@@ -2108,9 +2120,8 @@ class RunSupervisor:
                 run_id=self.manifest.run_id,
                 attempt_id=self.manifest.attempt_id,
                 archive_root=archive_root,
+                heartbeat=heartbeat,
             )
-            if self.lease is None:
-                raise RuntimeError("state archive publication requires the Run writer lease")
             self.lease = self.authority.prune_state_archive(self.lease)
             if require_closed and publication.get("status") != "closed":
                 raise RuntimeError("state archive final closure is not closed")
