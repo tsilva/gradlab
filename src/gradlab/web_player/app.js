@@ -20,7 +20,7 @@ import { episodeStepRange, RecordedStepReader, EventOverview, timelineEventMarke
 import { RecordedStepPrefetch } from "./recorded-step-prefetch.js";
 import { eventColorFill, eventLabels } from "./event-colors.js";
 import { mountPlaybackSettings } from "./playback-settings.js";
-import { snapshotActivatesCheckpointSelection, snapshotFailsCheckpointSelection } from "./playback-transition.js";
+import { CheckpointSelection } from "./checkpoint-selection.js";
 import { SynchronizedPresentation } from "./synchronized-presentation.js";
 import {
   playbackSourceTitle,
@@ -118,11 +118,8 @@ const state = {
   selectedPanel: null,
   activeWindows: new Map(),
   sessionEpoch: 0,
-  sourceMode: false,
-  backgroundPlaybackSnapshot: null,
   applicationSnapshot: null,
   workspaceReady: false,
-  checkpointLoad: null,
 };
 let panelRuntime = null;
 let sourceBrowser = null;
@@ -217,34 +214,15 @@ function showToast(message, error = false) {
   showToast.timer = setTimeout(() => toast.classList.remove("visible"), 3200);
 }
 
-function beginCheckpointLoad({ commandId, checkpointId }) {
-  state.checkpointLoad = {
-    commandId: String(commandId || ""),
-    checkpointId: String(checkpointId || ""),
-  };
+const checkpointSelection = new CheckpointSelection(command);
+checkpointSelection.subscribe(({ loading }) => {
   const mask = $("#checkpoint-loading-mask");
-  mask.hidden = false;
-  document.activeElement?.blur?.();
-  document.body.classList.add("checkpoint-loading");
-  document.body.setAttribute("aria-busy", "true");
-}
-
-function finishCheckpointLoad() {
-  if (!state.checkpointLoad) return;
-  state.checkpointLoad = null;
-  $("#checkpoint-loading-mask").hidden = true;
-  document.body.classList.remove("checkpoint-loading");
-  document.body.removeAttribute("aria-busy");
-}
-
-function snapshotCompletesCheckpointLoad(snapshot) {
-  return Boolean(
-    state.checkpointLoad
-    && snapshot?.app?.phase === "active"
-    && String(snapshot?.app?.route?.checkpoint_id || "")
-      === state.checkpointLoad.checkpointId
-  );
-}
+  if (loading && mask.hidden) document.activeElement?.blur?.();
+  mask.hidden = !loading;
+  document.body.classList.toggle("checkpoint-loading", loading);
+  if (loading) document.body.setAttribute("aria-busy", "true");
+  else document.body.removeAttribute("aria-busy");
+});
 
 function updateConnection(label, kind = "") {
   const badge = $("#connection-status");
@@ -256,7 +234,6 @@ function updateConnection(label, kind = "") {
 function resetSession(epoch) {
   cancelInspectionFrameRequest();
   state.sessionEpoch = Number(epoch) || 0;
-  state.backgroundPlaybackSnapshot = null;
   state.retainedEpisode = null;
   state.recordedEpisodeId = null;
   state.inspectionSequence = null;
@@ -281,7 +258,7 @@ async function ensureSourceBrowser() {
         getState: () => state,
         showToast,
         checkpointNavigationRoot: $("#checkpoint-navigation"),
-        beginCheckpointLoad,
+        selection: checkpointSelection,
         openInspection: (endpoint, options) => openContractInspection(endpoint, options),
         openSourceRoute: (route) => openSourceRoute(route),
       });
@@ -309,9 +286,6 @@ async function openContractInspection(endpoint, options = {}) {
 
 function openSourceRoute(route) {
   const current = state.applicationSnapshot || state.liveSnapshot || {};
-  if (!state.sourceMode && current?.app?.has_active_runner) {
-    state.backgroundPlaybackSnapshot = current;
-  }
   const snapshot = {
     ...current,
     app: {
@@ -321,41 +295,41 @@ function openSourceRoute(route) {
       error: "",
       route: { ...route },
       has_active_runner: Boolean(
-        current?.app?.has_active_runner || state.backgroundPlaybackSnapshot,
+        current?.app?.has_active_runner || checkpointSelection.view.backgroundSnapshot,
       ),
     },
   };
   state.applicationSnapshot = snapshot;
   state.liveSnapshot = snapshot;
   state.snapshot = snapshot;
-  setSourceMode(true, snapshot);
+  renderSourceMode(snapshot);
 }
 
-function setSourceMode(active, snapshot = null) {
-  state.sourceMode = Boolean(active);
+function renderSourceMode(snapshot = null) {
+  const { route, sourceMode } = checkpointSelection.view;
   const activeCheckpointRoute = (
-    !state.sourceMode
-    && snapshot?.app?.route?.checkpoint_id
+    !sourceMode
+    && route?.checkpoint_id
   );
   const activeRecordingRoute = (
-    !state.sourceMode
+    !sourceMode
     && snapshot?.mode === "trajectory"
-    && snapshot?.app?.route?.environment_id
+    && route?.environment_id
   );
-  document.body.classList.toggle("source-selection", state.sourceMode);
-  $("#source-browser").hidden = !state.sourceMode;
-  $("#checkpoint-navigation").hidden = Boolean(state.sourceMode || !activeCheckpointRoute);
-  $("#page-title").hidden = Boolean(state.sourceMode || activeRecordingRoute);
+  document.body.classList.toggle("source-selection", sourceMode);
+  $("#source-browser").hidden = !sourceMode;
+  $("#checkpoint-navigation").hidden = Boolean(sourceMode || !activeCheckpointRoute);
+  $("#page-title").hidden = Boolean(sourceMode || activeRecordingRoute);
   $("#source-back").hidden = Boolean(
-    state.sourceMode
+    sourceMode
     || activeRecordingRoute
     || !(snapshot?.app?.has_active_runner || state.liveSnapshot?.app?.has_active_runner)
   );
-  $("#more-toggle").hidden = state.sourceMode;
+  $("#more-toggle").hidden = sourceMode;
   $("#inspect-active").hidden = !(
     snapshot?.app?.has_active_runner || state.liveSnapshot?.app?.has_active_runner
   );
-  if (!state.sourceMode) {
+  if (!sourceMode) {
     const expected = snapshot;
     if (activeCheckpointRoute || activeRecordingRoute) {
       if (sourceBrowser) {
@@ -363,7 +337,7 @@ function setSourceMode(active, snapshot = null) {
         $("#source-breadcrumbs").hidden = Boolean(activeCheckpointRoute);
       } else {
         void ensureSourceBrowser().then((browser) => {
-          if (!state.sourceMode && state.applicationSnapshot === expected) {
+          if (!checkpointSelection.view.sourceMode && state.applicationSnapshot === expected) {
             browser.renderActiveBreadcrumbs(expected);
             $("#source-breadcrumbs").hidden = Boolean(activeCheckpointRoute);
           }
@@ -382,7 +356,7 @@ function setSourceMode(active, snapshot = null) {
   document.title = "Select playback source · gradlab";
   const expected = snapshot;
   void ensureSourceBrowser().then((browser) => {
-    if (state.sourceMode && state.applicationSnapshot === expected) browser.render(expected);
+    if (checkpointSelection.view.sourceMode && state.applicationSnapshot === expected) browser.render(expected);
   }).catch((error) => showToast(`Source browser failed: ${error.message || error}`, true));
 }
 
@@ -417,12 +391,12 @@ function connect() {
     state.hasControl = false;
     state.publicationAuthority = false;
     state.publicationCapability = null;
-    finishCheckpointLoad();
+    checkpointSelection.terminate();
     updateConnection("Disconnected", "error");
     updateControlState();
   });
   socket.addEventListener("error", () => {
-    finishCheckpointLoad();
+    checkpointSelection.terminate();
     updateConnection("Connection error", "error");
   });
 }
@@ -458,30 +432,20 @@ function handleMessage(message) {
     return;
   }
   if (message.type === "session_changed") {
+    checkpointSelection.receive(message);
     resetSession(message.session_epoch);
     return;
   }
   if (message.type === "snapshot") {
     const epoch = Number(message.session_epoch || 0);
     if (epoch !== state.sessionEpoch) resetSession(epoch);
-    if (snapshotFailsCheckpointSelection(state.checkpointLoad, message)) {
-      finishCheckpointLoad();
-      showToast(message.app.error || "Could not open checkpoint", true);
-    }
-    if (
-      state.sourceMode
-      && state.backgroundPlaybackSnapshot
-      && message.app?.phase === "active"
-      && !snapshotActivatesCheckpointSelection(state.checkpointLoad, message)
-    ) {
-      state.backgroundPlaybackSnapshot = message;
+    const selectionResult = checkpointSelection.receive(message);
+    if (selectionResult.error) showToast(selectionResult.error, true);
+    if (selectionResult.background) {
       state.hasControl = Boolean(message.control?.has_control);
       state.controlEpoch = Number(message.control_epoch || 0);
       trajectoryControls.render();
       return;
-    }
-    if (snapshotActivatesCheckpointSelection(state.checkpointLoad, message)) {
-      state.backgroundPlaybackSnapshot = null;
     }
     state.applicationSnapshot = message;
     state.hasControl = Boolean(message.control?.has_control);
@@ -501,12 +465,11 @@ function handleMessage(message) {
     if (message.app && message.app.phase !== "active") {
       state.liveSnapshot = message;
       state.snapshot = message;
-      setSourceMode(true, message);
+      renderSourceMode(message);
       updateControlState();
       return;
     }
-    if (message.mode === "trajectory") finishCheckpointLoad();
-    setSourceMode(false, message);
+    renderSourceMode(message);
     prepareRetainedEpisode(message);
     state.snapshots.set(Number(message.sequence), message);
     pruneRetainedTrace();
@@ -520,9 +483,7 @@ function handleMessage(message) {
     }
     if (message.id === state.attributionCommand?.id) state.attributionCommand = null;
     if (message.id === state.cnnCaptureCommand?.id) state.cnnCaptureCommand = null;
-    if (message.id === state.checkpointLoad?.commandId && !message.ok) {
-      finishCheckpointLoad();
-    }
+    checkpointSelection.receive(message);
     if (!message.ok) showToast(message.error || "Command failed", true);
     return;
   }
@@ -937,6 +898,7 @@ function hideGoExploreValuePanel(snapshot) {
 }
 
 function applySnapshot(snapshot) {
+  const selectionPresentation = checkpointSelection.presentationFor(snapshot);
   if (snapshot.mode === "trajectory") state.inspectionSequence = null;
   const previousEnvironmentId = state.liveSnapshot?.session?.env_id;
   const previousEpisode = episodeForSnapshot(state.liveSnapshot);
@@ -965,14 +927,14 @@ function applySnapshot(snapshot) {
     state.snapshot = snapshot;
     renderSnapshot();
     void showFramesForSequence(Number(snapshot.sequence)).then(() => {
-      if (snapshotCompletesCheckpointLoad(snapshot)) finishCheckpointLoad();
+      checkpointSelection.presented(selectionPresentation, snapshot);
     });
   } else {
     panelRuntime.invoke("controls", "render", snapshot);
     updateControlState();
     renderWorkspaceStatus();
     renderTimeline();
-    if (snapshotCompletesCheckpointLoad(snapshot)) finishCheckpointLoad();
+    checkpointSelection.presented(selectionPresentation, snapshot);
   }
   if (historyChanged) {
     if (state.inspectionSequence === null || !state.replayingInspection) renderHistory();
@@ -1159,7 +1121,7 @@ function renderWorkspaceStatus() {
 
 function renderPlaybackEvidenceStatus(snapshot) {
   const status = $("#playback-evidence-status");
-  if (!status || !snapshot || state.sourceMode || state.windowId !== "main") {
+  if (!status || !snapshot || checkpointSelection.view.sourceMode || state.windowId !== "main") {
     if (status) status.hidden = true;
     return;
   }

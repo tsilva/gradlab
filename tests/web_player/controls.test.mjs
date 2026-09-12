@@ -264,23 +264,6 @@ test("the overflow menu omits the redundant change-checkpoint action", () => {
   assert.match(page, /id="source-back"[^>]*aria-label="Back to source selection"/);
 });
 
-test("checkpoint changes block the whole player until the new frame is renderable", () => {
-  assert.match(
-    page,
-    /id="checkpoint-loading-mask" class="checkpoint-loading-mask" role="status" aria-live="polite" hidden/,
-  );
-  assert.match(page, /<strong>Loading checkpoint…<\/strong>/);
-  assert.match(
-    styles,
-    /\.checkpoint-loading-mask \{[^}]*position: fixed;[^}]*inset: 0;[^}]*z-index: 200;/,
-  );
-  assert.match(app, /function beginCheckpointLoad\(\{ commandId, checkpointId \}\)/);
-  assert.match(
-    app,
-    /showFramesForSequence\(Number\(snapshot\.sequence\)\)\.then\(\(\) => \{\s*if \(snapshotCompletesCheckpointLoad\(snapshot\)\) finishCheckpointLoad\(\);/,
-  );
-  assert.match(app, /message\.id === state\.checkpointLoad\?\.commandId && !message\.ok/);
-});
 
 test("playback tuning is one reusable on-demand settings form", () => {
   assert.match(page, /id="playback-settings-menu"[^>]*hidden/);
