@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import deque
 from contextlib import AbstractContextManager
 from copy import deepcopy
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 import base64
 import io
 import fcntl
@@ -398,6 +398,14 @@ class DatasetReader(AbstractContextManager):
         }
 
 
+@dataclass
+class WriterLane:
+    episode: dict | None = None
+    frame: int | None = None
+    rows: list = field(default_factory=list)
+    dirty: bool = False
+
+
 class DatasetWriter(AbstractContextManager):
     """Bounded synchronous batches. File durability precedes SQLite visibility."""
 
@@ -426,7 +434,9 @@ class DatasetWriter(AbstractContextManager):
             raise ValueError("dataset already has an active writer") from None
         self.db = None
         self.reader = None
-        self.frames, self.rows = {}, []
+        self.frames = {}
+        self.lanes = {}
+        self.select_lane(0)
         self.pending_bytes = 0
         self.delta_captures = 0
         self.episode_record = None
@@ -505,6 +515,34 @@ class DatasetWriter(AbstractContextManager):
             raise ValueError(
                 "dataset disk limit reached, including pending bytes and index reserve"
             )
+
+    def select_lane(self, lane):
+        self.lane = self.lanes.setdefault(lane, WriterLane())
+
+    @property
+    def episode_record(self):
+        return self.lane.episode
+
+    @episode_record.setter
+    def episode_record(self, value):
+        self.lane.episode = value
+        self.lane.dirty = True
+
+    @property
+    def current_frame(self):
+        return self.lane.frame
+
+    @current_frame.setter
+    def current_frame(self, value):
+        self.lane.frame = value
+
+    @property
+    def rows(self):
+        return self.lane.rows
+
+    @property
+    def pending_transitions(self):
+        return sum(len(lane.rows) for lane in self.lanes.values())
 
     def session(self, provenance, settings):
         self.session_id = uuid.uuid4().hex
@@ -612,6 +650,7 @@ class DatasetWriter(AbstractContextManager):
     def initial(self, image):
         frame_id, new = self._frame(image)
         self.episode_record.update(initial_frame_id=frame_id, initial_frame_new=new)
+        self.lane.dirty = True
         self.current_frame = frame_id
         self.delta_captures += 1
         self.flush()
@@ -641,6 +680,7 @@ class DatasetWriter(AbstractContextManager):
         self.current_frame = frame_id
         self.delta_captures += 1
         self.episode_record["length"] += 1
+        self.lane.dirty = True
         if len(self.rows) >= self.limits.batch_steps or self.pending_bytes >= MAX_BATCH_BYTES:
             self.flush()
         return row
@@ -649,17 +689,30 @@ class DatasetWriter(AbstractContextManager):
         self.episode_record.update(
             status="complete" if complete else "incomplete", end_reason=reason
         )
+        self.lane.dirty = True
         self.flush()
         self.episode_record = None
 
     def flush(self):
-        if self.episode_record is None:
+        active = [lane for lane in self.lanes.values() if lane.episode is not None and lane.dirty]
+        if not active:
             return
         token = uuid.uuid4().hex
-        shard_name, rows_name, episode_name = (
-            f"{kind}-{token}.parquet" for kind in ("frames", "steps", "episode")
-        )
-        outputs = {episode_name: parquet_bytes("episodes", [self.episode_record])}
+        shard_name = f"frames-{token}.parquet"
+        outputs = {}
+        batches, episodes = [], []
+        for lane in active:
+            episode, rows = lane.episode, lane.rows
+            episode_id = episode["episode_id"]
+            episode_name = f"episode-{episode_id}-{token}.parquet"
+            outputs[episode_name] = parquet_bytes("episodes", [episode])
+            episodes.append(
+                (episode_id, episode["seed"], episode["split"], episode["status"], episode_name)
+            )
+            if rows:
+                rows_name = f"steps-{episode_id}-{token}.parquet"
+                outputs[rows_name] = parquet_bytes("transitions", rows)
+                batches.append((rows_name, episode_id, rows[0]["step"], rows[-1]["step"]))
         frame_records, images = [], []
         for index, (digest, (frame_id, png)) in enumerate(self.frames.items()):
             frame_records.append(
@@ -678,35 +731,14 @@ class DatasetWriter(AbstractContextManager):
             )
         if images:
             outputs[shard_name] = parquet_bytes("frames", images)
-        if self.rows:
-            outputs[rows_name] = parquet_bytes("transitions", self.rows)
-        episode = self.episode_record
 
         def update():
             self.db.executemany("INSERT INTO frames VALUES(?,?,?,?,?,?,?)", frame_records)
-            if self.rows:
-                self.db.execute(
-                    "INSERT INTO batches VALUES(?,?,?,?)",
-                    (
-                        rows_name,
-                        episode["episode_id"],
-                        episode["length"] - len(self.rows),
-                        episode["length"] - 1,
-                    ),
-                )
-            self.db.execute(
-                "INSERT OR REPLACE INTO episodes VALUES(?,?,?,?,?)",
-                (
-                    episode["episode_id"],
-                    episode["seed"],
-                    episode["split"],
-                    episode["status"],
-                    episode_name,
-                ),
-            )
+            self.db.executemany("INSERT INTO batches VALUES(?,?,?,?)", batches)
+            self.db.executemany("INSERT OR REPLACE INTO episodes VALUES(?,?,?,?,?)", episodes)
             for name, count in (
                 ("captured_occurrences", self.delta_captures),
-                ("transitions", len(self.rows)),
+                ("transitions", self.pending_transitions),
             ):
                 self.db.execute(
                     "INSERT INTO counters VALUES(?,?) ON CONFLICT(name) DO UPDATE SET value=value+excluded.value",
@@ -715,7 +747,9 @@ class DatasetWriter(AbstractContextManager):
 
         self._commit_files(outputs, update)
         self.frames.clear()
-        self.rows.clear()
+        for lane in active:
+            lane.rows.clear()
+            lane.dirty = False
         self.delta_captures = self.pending_bytes = 0
 
     def close(self):
@@ -745,6 +779,7 @@ class Collection(AbstractContextManager):
                 execution.provenance,
                 {
                     "limits": asdict(limits),
+                    "n_envs": getattr(execution, "n_envs", 1),
                     "schedule": asdict(schedule),
                     "classification": "Counterfactual Playback"
                     if schedule.enabled or execution.provenance.get("overrides")
@@ -760,7 +795,9 @@ class Collection(AbstractContextManager):
         self.session = self.writer.reader.session(self.writer.session_id)
         self.steps = 0
         self.started = time.monotonic()
-        self.active = False
+        self.n_envs = getattr(execution, "n_envs", 1)
+        self.active = set()
+        self.schedule_rngs, self.temperatures = {}, {}
         self.finished = False
         self.latest_source = None
         self.latest_row = None
@@ -795,9 +832,10 @@ class Collection(AbstractContextManager):
             projected_bytes_per_million_transitions=None
             if not self.steps
             else growth / self.steps * 1_000_000,
-            pending_transitions=len(self.writer.rows),
+            pending_transitions=self.writer.pending_transitions,
             pending_captured_occurrences=self.writer.delta_captures,
             pending_buffer_bytes=self.writer.pending_bytes,
+            n_envs=self.n_envs,
             peak_rss_bytes=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
             * (1 if sys.platform == "darwin" else 1024),
             measured_at_unix=time.time(),
@@ -825,34 +863,56 @@ class Collection(AbstractContextManager):
         ):
             self.stop("collection_limit")
             return None
-        if not self.active:
-            episode = self.writer.reserve_episode()
-            self.active = True
-            self.schedule_rng = np.random.default_rng(
-                np.random.SeedSequence([self.schedule.seed, episode["episode_id"]])
-            )
-            self.writer.initial(self.execution.reset(episode["seed"]))
-        decision_id = self.writer.episode_record["length"]
-        if decision_id % self.schedule.block_decisions == 0:
-            self.temperature = (
-                float(self.schedule_rng.choice(self.schedule.values, p=self.schedule.probabilities))
-                if self.schedule.enabled
-                else 1.0
-            )
-        image, facts = self.execution.step(self.temperature)
-        self.latest_source = owned_rgb(image)
-        facts = {
-            **facts,
-            "policy_decision_id": self.writer.episode_record["length"],
-            "temperature": self.temperature,
-            "action_selection_mode": self.execution.action_selection_mode,
-            "configured_frame_skip": self.execution.contract["frame_skip"],
-        }
-        self.latest_row = self.writer.append(image, facts)
-        self.steps += 1
-        if facts["terminated"] or facts["truncated"]:
-            self.writer.end_episode("environment_boundary", complete=True)
-            self.active = False
+        # A partial final batch never executes unrecorded extra transitions.
+        lanes = range(min(self.n_envs, self.limits.max_steps - self.steps))
+        temperatures = {}
+        for lane in lanes:
+            self.writer.select_lane(lane)
+            if lane not in self.active:
+                episode = self.writer.reserve_episode()
+                self.active.add(lane)
+                self.schedule_rngs[lane] = np.random.default_rng(
+                    np.random.SeedSequence([self.schedule.seed, episode["episode_id"]])
+                )
+                image = (
+                    self.execution.reset(episode["seed"])
+                    if self.n_envs == 1
+                    else self.execution.reset_lane(lane, episode["seed"])
+                )
+                self.writer.initial(image)
+            decision_id = self.writer.episode_record["length"]
+            if decision_id % self.schedule.block_decisions == 0:
+                self.temperatures[lane] = (
+                    float(
+                        self.schedule_rngs[lane].choice(
+                            self.schedule.values, p=self.schedule.probabilities
+                        )
+                    )
+                    if self.schedule.enabled
+                    else 1.0
+                )
+            temperatures[lane] = self.temperatures[lane]
+        results = (
+            {0: self.execution.step(temperatures[0])}
+            if self.n_envs == 1
+            else self.execution.step_batch(temperatures)
+        )
+        for lane, (image, facts) in results.items():
+            self.writer.select_lane(lane)
+            self.latest_source = owned_rgb(image)
+            facts = {
+                **facts,
+                "policy_decision_id": self.writer.episode_record["length"],
+                "temperature": temperatures[lane],
+                "action_selection_mode": self.execution.action_selection_mode,
+                "configured_frame_skip": self.execution.contract["frame_skip"],
+                "lane_id": lane,
+            }
+            self.latest_row = self.writer.append(image, facts)
+            self.steps += 1
+            if facts["terminated"] or facts["truncated"]:
+                self.writer.end_episode("environment_boundary", complete=True)
+                self.active.remove(lane)
         return self.latest_row
 
     def run(self, progress_callback=None):
@@ -867,9 +927,10 @@ class Collection(AbstractContextManager):
     def stop(self, reason="collection_cutoff"):
         if self.finished or self.writer.failed:
             return
-        if self.active:
+        for lane in sorted(self.active):
+            self.writer.select_lane(lane)
             self.writer.end_episode(reason, complete=False)
-            self.active = False
+        self.active.clear()
         self.finished = True
         self.publish_progress()
 
@@ -889,7 +950,9 @@ class Collection(AbstractContextManager):
 def validate_dataset(root):
     with DatasetReader(root) as reader:
         reader.db.execute("PRAGMA temp_store=FILE")
-        reader.db.execute("CREATE TEMP TABLE seen(frame_id INTEGER PRIMARY KEY)")
+        reader.db.execute(
+            "CREATE TEMP TABLE seen(frame_id INTEGER PRIMARY KEY, discoveries INTEGER NOT NULL DEFAULT 0)"
+        )
         reader.db.execute("BEGIN")  # One committed dataset prefix, even with a concurrent writer.
         transitions, occurrences, unique = 0, 0, 0
         shape = None
@@ -897,7 +960,10 @@ def validate_dataset(root):
         def capture(frame_id, claimed_new):
             nonlocal occurrences, unique, shape
             first = (
-                reader.db.execute("INSERT OR IGNORE INTO seen VALUES(?)", (frame_id,)).rowcount == 1
+                reader.db.execute(
+                    "INSERT OR IGNORE INTO seen(frame_id) VALUES(?)", (frame_id,)
+                ).rowcount
+                == 1
             )
             if first:
                 image = reader.frame(frame_id)
@@ -905,8 +971,12 @@ def validate_dataset(root):
                     raise ValueError("dataset image dimensions disagree")
                 shape = image.shape
                 unique += 1
-            if type(claimed_new) is not bool or first != claimed_new:
+            if type(claimed_new) is not bool:
                 raise ValueError("image discovery attribution mismatch")
+            reader.db.execute(
+                "UPDATE seen SET discoveries=discoveries+? WHERE frame_id=?",
+                (int(claimed_new), frame_id),
+            )
             occurrences += 1
 
         for episode in reader.episodes():
@@ -945,6 +1015,10 @@ def validate_dataset(root):
             ):
                 raise ValueError("episode length or boundary mismatch")
             transitions += length
+        # Episode traversal differs from capture order when lanes interleave.
+        # Each global image must still have exactly one discovering occurrence.
+        if reader.db.execute("SELECT 1 FROM seen WHERE discoveries != 1 LIMIT 1").fetchone():
+            raise ValueError("image discovery attribution mismatch")
         progress = reader.progress()
         if (
             transitions != progress["transitions"]
@@ -985,16 +1059,18 @@ class PolicyExecution:
             )
         return image
 
-    def reset(self, seed):
+    def reset(self, seed, *, reset_policy=True):
         import torch
 
-        torch.manual_seed(seed)
-        np.random.seed(seed)
-        if bool(getattr(self.runtime.model, "use_sde", False)):
-            self.runtime.model.policy.reset_noise()
+        if reset_policy:
+            torch.manual_seed(seed)
+            np.random.seed(seed)
+            if bool(getattr(self.runtime.model, "use_sde", False)):
+                self.runtime.model.policy.reset_noise()
         self.env.seed(seed)
         obs = self.env.reset()
-        self.runtime.reset()
+        if reset_policy:
+            self.runtime.reset()
         self.info = dict(self.env.reset_infos[0])
         self.obs = self._observation(obs)
         return owned_rgb(self.env.get_images()[0])
@@ -1014,7 +1090,10 @@ class PolicyExecution:
         )
         if len(decision.decisions) != 1:
             raise ValueError("collection requires one Policy decision per environment step")
-        obs, rewards, dones, infos = self.env.step(decision.actions)
+        return self.apply(decision.actions, decision.decisions[0].raw_action)
+
+    def apply(self, actions, raw_action):
+        obs, rewards, dones, infos = self.env.step(actions)
         diagnostics = self.env.take_step_diagnostics()
         self.env.drain_records()  # Do not retain training telemetry across a long collection.
         if diagnostics is None:
@@ -1028,7 +1107,7 @@ class PolicyExecution:
         self.info = dict(infos[0].get("reset_info", {}) if boundary else diagnostics.provider_info)
         self.obs = self._observation(obs)
         return rgb, {
-            "selected_action": deepcopy(decision.decisions[0].raw_action),
+            "selected_action": deepcopy(raw_action),
             "policy_action": deepcopy(diagnostics.policy_action),
             "effective_action": deepcopy(diagnostics.effective_policy_action),
             "native_action": deepcopy(diagnostics.native_action),
@@ -1055,6 +1134,80 @@ class PolicyExecution:
 
     def close(self):
         self.env.close()
+
+
+def validate_vector_runtime(runtime):
+    if runtime.capabilities.algorithm_id not in {"ppo", "a2c"} or bool(
+        getattr(runtime.model, "use_sde", False)
+    ):
+        raise ValueError(
+            "vector collection requires stateless PPO/A2C without state-dependent exploration"
+        )
+
+
+class VectorPolicyExecution:
+    """Batch one stateless actor across independently seeded environment instances.
+
+    Native environment steps run in lane order in this process. The expensive
+    actor forward pass runs once per distinct temperature, without model copies.
+    """
+
+    def __init__(self, lanes):
+        self.lanes = lanes
+        self.n_envs = len(lanes)
+        first = lanes[0]
+        self.runtime = first.runtime
+        validate_vector_runtime(self.runtime)
+        self.contract = first.contract
+        self.provenance = {
+            **first.provenance,
+            "vectorization": {
+                "n_envs": self.n_envs,
+                "environment_execution": "sequential_independent_instances",
+                "inference": "batched_by_temperature",
+                "policy_rng": "session_stream_seeded_by_first_episode_seed",
+            },
+        }
+        self.action_selection_mode = first.action_selection_mode
+        self.supports_temperature = first.supports_temperature
+        self.seeded = False
+
+    def reset_lane(self, lane, seed):
+        image = self.lanes[lane].reset(seed, reset_policy=not self.seeded)
+        self.seeded = True
+        return image
+
+    def step_batch(self, temperatures):
+        def concatenate(observations):
+            if isinstance(observations[0], dict):
+                return {
+                    key: concatenate([obs[key] for obs in observations]) for key in observations[0]
+                }
+            return np.concatenate(observations, axis=0)
+
+        groups = {}
+        for lane, temperature in temperatures.items():
+            groups.setdefault(temperature, []).append(lane)
+        decisions = {}
+        for temperature, lanes in groups.items():
+            batch = self.runtime.decide(
+                concatenate([self.lanes[lane].obs for lane in lanes]),
+                action_selection_mode=self.action_selection_mode,
+                sampling_temperature=temperature,
+                include_diagnostics=False,
+            )
+            if len(batch.decisions) != len(lanes):
+                raise ValueError("Policy decision batch does not match active collection lanes")
+            for index, lane in enumerate(lanes):
+                decisions[lane] = (
+                    batch.actions[index : index + 1],
+                    batch.decisions[index].raw_action,
+                )
+        return {lane: self.lanes[lane].apply(*decisions[lane]) for lane in temperatures}
+
+    def close(self):
+        for lane in self.lanes:
+            lane.close()
 
 
 class DebugController:
@@ -1229,7 +1382,7 @@ class Renderer(AbstractContextManager):
             row = snapshot["row"] or snapshot.get("episode", {})
             for index, keys in enumerate(
                 (
-                    ("episode_id", "step", "policy_decision_id"),
+                    ("lane_id", "episode_id", "step", "policy_decision_id"),
                     ("source_frame_id", "successor_frame_id", "successor_frame_new"),
                     ("selected_action", "effective_action", "native_action"),
                     ("action_override_rule_id", "temperature", "action_selection_mode"),
@@ -1312,7 +1465,13 @@ def collection_environment(original, *, full_game, episode_steps):
 
 
 def load_execution(
-    checkpoint, *, full_game=False, episode_steps=None, device="cpu", schedule=TemperatureSchedule()
+    checkpoint,
+    *,
+    full_game=False,
+    episode_steps=None,
+    device="cpu",
+    schedule=TemperatureSchedule(),
+    n_envs=1,
 ):
     from importlib.metadata import version
     import subprocess
@@ -1327,6 +1486,8 @@ def load_execution(
     from gradlab.play_trajectory import portable_metadata
     from gradlab.trusted_inputs import stage_model_input, verify_staged_model
 
+    if type(n_envs) is not int or not 1 <= n_envs <= 64:
+        raise ValueError("n_envs must be an integer from 1 to 64")
     checkpoint = Path(checkpoint).expanduser()
     if checkpoint.is_dir():
         checkpoint = checkpoint / "model.zip"
@@ -1358,7 +1519,10 @@ def load_execution(
             algorithm_id=algorithm,
         )
         schedule.validate_execution(SimpleExecutionCapabilities(runtime))
+        if n_envs > 1:
+            validate_vector_runtime(runtime)
         env = make_eval_vec_env(config=config, n_envs=1, seed=0, capture_step_diagnostics=True)
+        environments = [env]
         try:
             training = bundle.model["provenance"].get("training_metadata") or {}
             assert_action_contract_compatible(
@@ -1396,9 +1560,20 @@ def load_execution(
             }
             # Normalize tuples once so JSON reload comparison remains exact.
             contract = json.loads(canonical(contract))
-            return PolicyExecution(runtime, env, config, contract=contract, provenance=provenance)
+            for _ in range(n_envs - 1):
+                environments.append(
+                    make_eval_vec_env(
+                        config=config, n_envs=1, seed=0, capture_step_diagnostics=True
+                    )
+                )
+            lanes = [
+                PolicyExecution(runtime, item, config, contract=contract, provenance=provenance)
+                for item in environments
+            ]
+            return lanes[0] if n_envs == 1 else VectorPolicyExecution(lanes)
         except BaseException:
-            env.close()
+            for item in environments:
+                item.close()
             raise
 
 
@@ -1576,6 +1751,12 @@ def main(argv=None):
     collect.add_argument("--temperature-block", type=int, default=256)
     collect.add_argument("--schedule-seed", type=int, default=0)
     collect.add_argument("--device", default="cpu")
+    collect.add_argument(
+        "--n-envs",
+        type=int,
+        default=1,
+        help="independent environments sharing batched PPO/A2C inference (1–64)",
+    )
     collect.add_argument("--debug", action="store_true", help="start the local debugger paused")
     for name in ("validate", "inspect", "progress", "preview", "prepare-hf"):
         mode = modes.add_parser(name)
@@ -1626,6 +1807,7 @@ def main(argv=None):
             episode_steps=args.episode_steps,
             device=args.device,
             schedule=schedule,
+            n_envs=args.n_envs,
         )
         with Collection(
             args.dataset,

@@ -36,11 +36,51 @@ action, provider-version, RGB, and cadence contracts must remain compatible.
 The script refuses to initialize a nonempty directory without its manifest.
 
 Add `--debug` to start a local Pygame window paused. Space toggles play/pause and
-Right advances exactly one contracted environment step. Esc or closing the window
+Right advances one step per active environment. Esc or closing the window
 stops collection. Paused redraws never call the Policy or environment. Debug mode
 flushes each step and compares a copied live successor RGB against that exact
 transition's frame decoded from the committed store. The UI reports mismatches or
 read failures; it does not display a second copy of the live buffer as evidence.
+
+### Vector collection
+
+Add `--n-envs 16` to batch PPO/A2C inference across sixteen independently seeded
+environments. The default is one; supported counts are 1–64. One model serves
+all lanes. Environments step sequentially in lane order within the same process;
+batching accelerates policy inference.
+Lanes with the same current exploration temperature share one forward pass.
+Stateful action-program/cell-graph execution and state-dependent exploration
+remain single-environment only.
+
+```bash
+OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 uv run --frozen python \
+  experiments/dataset-collector/collector.py collect \
+  ~/.config/gradlab/runs/dataset-vector /path/to/checkpoint-bundle \
+  --n-envs 16 --max-gib 1 --max-steps 100000 --max-seconds 120
+```
+
+Benchmark lane counts and CPU thread settings on the target machine. Larger
+batches trade inference overhead against image encoding, environment stepping,
+storage latency and memory; more environments need not improve total throughput.
+
+`--max-steps` counts transitions across all lanes. The last batch shrinks to the
+remaining count, so it never steps extra lanes past the cap. The time limit is
+checked between batches; final writes can extend wall time slightly. Each lane
+keeps its own episode, seed, temperature-block position, and terminal frame.
+All lanes share frame deduplication and the bounded writer. Stopping or restarting
+marks every unfinished episode incomplete. `lane_id` is in each transition's
+exact `record_json`; environment count and batching/RNG rules are in session provenance.
+
+Vector policy sampling uses a single session RNG stream seeded by the first
+reserved episode seed. Resetting one environment never reseeds that stream or
+resets another lane. Repeatability requires the same checkpoint, runtime, initial
+allocation, lane count and step budget. Changing lane count changes stochastic
+trajectories; it does not change the recorded action-selection rule. Single-lane
+collection retains its original per-episode policy seeding.
+
+In vector debug mode, each Right press advances a batch and shows the last lane
+stepped, including its lane and episode IDs. All lanes are recorded and available
+in the offline inspector. Pausing still consumes no policy RNG or environment steps.
 
 ```bash
 uv run --frozen python experiments/dataset-collector/collector.py validate /path/to/dataset
@@ -120,7 +160,8 @@ Frame identity says nothing about hidden simulator-state identity.
 
 One process holds an exclusive advisory writer lock. Collection writes synchronous
 bounded batches, so storage latency applies backpressure. The batch target defaults
-to 128 transitions. Encoded records and compressed images trigger an 8 MiB flush
+to 128 transitions per environment; reaching it flushes all pending lanes together.
+Encoded records and compressed images across all lanes trigger an 8 MiB flush
 threshold; at most one additional bounded image and record can cross it. Each RGB
 image is limited to 4 MiB and each metadata record to 8 MiB. SQLite's page cache is
 bounded. There is no dataset-sized in-memory frame index or asynchronous write queue.
@@ -237,7 +278,11 @@ compatibility, disk limits, corrupt records, and bounded memory. A native Breako
 integration compares an in-memory stochastic Policy's ordinary execution with both
 headless and debug recording over equal transition prefixes, including a task timeout. A separate integration saves and reloads a PPO Checkpoint
 through the shared loader, collects native RGB with exploration off and on, and
-validates terminal images, provenance, and the resulting dataset.
+validates terminal images, provenance, and the resulting dataset. Vector tests
+cover partial final batches, interleaved frame discovery, temperature-group action
+alignment, recovery across all lanes, a 64-lane storage budget, native headless/debug
+equivalence across lane resets, early rejection of unsupported execution, and
+Hugging Face split/frame/record integrity.
 
 The 10 GiB pilot has **not run**. Before launch, obtain explicit pilot authorization
 and record the selected Checkpoint, episode

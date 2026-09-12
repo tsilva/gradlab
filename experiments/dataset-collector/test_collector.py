@@ -47,6 +47,127 @@ class ScriptedExecution:
         pass
 
 
+class ScriptedVectorExecution(ScriptedExecution):
+    n_envs = 3
+
+    def __init__(self):
+        self.lanes = [ScriptedExecution() for _ in range(self.n_envs)]
+        self.seeds = []
+        self.batch_sizes = []
+
+    def reset_lane(self, lane, seed):
+        self.seeds.append(seed)
+        return self.lanes[lane].reset(seed)
+
+    def step_batch(self, temperatures):
+        self.batch_sizes.append(len(temperatures))
+        return {lane: self.lanes[lane].step(temp) for lane, temp in temperatures.items()}
+
+
+def test_vector_collection_preserves_lanes_dedup_seeds_and_exact_cutoff(tmp_path):
+    execution = ScriptedVectorExecution()
+    with Collection(tmp_path, execution, limits=Limits(max_steps=11, batch_steps=4)) as run:
+        run.run()
+    assert execution.batch_sizes == [3, 3, 3, 2]
+    assert execution.seeds == [0, 1, 2, 3, 10000, 4]
+    result = validate_dataset(tmp_path)
+    assert result["transitions"] == 11
+    assert result["unique_frames"] == 2
+    assert result["captured_occurrences"] == 17
+    assert result["complete_episodes"] == 5
+    assert result["incomplete_episodes"] == 1
+    with DatasetReader(tmp_path) as reader:
+        assert [e["length"] for e in reader.episodes()] == [2, 2, 2, 2, 2, 1]
+        for episode in reader.episodes():
+            assert [
+                r["selected_action"].item() for r in reader.transitions(episode["episode_id"])
+            ] == list(range(1, episode["length"] + 1))
+
+
+def test_vector_restart_closes_every_lane_and_reserves_fresh_seeds(tmp_path):
+    with Collection(tmp_path, ScriptedVectorExecution(), limits=Limits(max_steps=3)) as run:
+        run.step()
+        run.writer.flush()
+        run.finished = True  # Simulate exit without graceful episode closure.
+    execution = ScriptedVectorExecution()
+    with Collection(tmp_path, execution, limits=Limits(max_steps=1)) as run:
+        run.run()
+    assert execution.seeds == [3]
+    with DatasetReader(tmp_path) as reader:
+        assert [e["end_reason"] for e in reader.episodes()] == ["interrupted"] * 3 + [
+            "collection_limit"
+        ]
+    assert validate_dataset(tmp_path)["transitions"] == 4
+
+
+def test_vector_temperature_groups_keep_actions_attached_to_the_correct_lane():
+    from collector import VectorPolicyExecution
+
+    calls, resets = [], []
+
+    class Runtime:
+        capabilities = SimpleNamespace(algorithm_id="ppo")
+        model = SimpleNamespace(use_sde=False)
+
+        def decide(self, obs, **kwargs):
+            temperature = kwargs["sampling_temperature"]
+            calls.append((obs["image"].shape[0], temperature))
+            actions = obs["task"][:, 0] + temperature
+            return SimpleNamespace(
+                actions=actions, decisions=[SimpleNamespace(raw_action=a) for a in actions]
+            )
+
+    runtime = Runtime()
+
+    class Lane(ScriptedExecution):
+        def __init__(self, lane):
+            self.runtime = runtime
+            self.obs = {"image": np.zeros((1, 4, 84, 84), np.uint8), "task": np.array([[lane]])}
+
+        def reset(self, seed, *, reset_policy):
+            resets.append((seed, reset_policy))
+
+        def apply(self, actions, raw):
+            assert actions.shape == (1,)
+            assert actions[0] == raw
+            return raw
+
+    execution = VectorPolicyExecution([Lane(i) for i in range(3)])
+    execution.reset_lane(0, 0)
+    execution.reset_lane(1, 1)
+    execution.reset_lane(0, 3)
+    assert resets == [(0, True), (1, False), (3, False)]
+    assert execution.step_batch({0: 0.75, 1: 1.25, 2: 0.75}) == {0: 0.75, 1: 2.25, 2: 2.75}
+    assert calls == [(2, 0.75), (1, 1.25)]
+
+
+def test_vector_discovery_order_can_differ_from_episode_order(tmp_path):
+    class DifferentLanes(ScriptedVectorExecution):
+        def step_batch(self, temperatures):
+            results = super().step_batch(temperatures)
+            # Lane 1 discovers this image on tick 1; lane 0 reaches it on tick 2.
+            if self.lanes[1].steps == 1:
+                self.lanes[1].image[100, 50] = [4, 5, 6]
+            return results
+
+    with Collection(tmp_path, DifferentLanes(), limits=Limits(max_steps=6)) as run:
+        run.run()
+    assert validate_dataset(tmp_path)["unique_frames"] == 2
+
+
+def test_many_lanes_fit_a_small_dataset_budget(tmp_path):
+    class ManyLanes(ScriptedVectorExecution):
+        n_envs = 64
+
+    with Collection(
+        tmp_path, ManyLanes(), limits=Limits(max_steps=64, max_bytes=8 * 1024**2)
+    ) as run:
+        run.run()
+    result = validate_dataset(tmp_path)
+    assert result["transitions"] == 64
+    assert result["incomplete_episodes"] == 64
+
+
 def test_collection_reuses_exact_rgb_without_losing_transition_occurrences(tmp_path):
     with Collection(tmp_path / "data", ScriptedExecution(), limits=Limits(max_steps=4)) as run:
         run.run()
@@ -539,7 +660,10 @@ def test_write_failure_preserves_error_and_last_committed_prefix(tmp_path, monke
 
 
 @pytest.mark.parametrize("explore", [False, True])
-def test_ppo_checkpoint_uses_existing_loader_and_collects_native_rgb(tmp_path, explore):
+@pytest.mark.parametrize("n_envs", [1, 3])
+def test_ppo_checkpoint_uses_existing_loader_and_collects_native_rgb(
+    tmp_path, explore, n_envs, monkeypatch
+):
     from collector import load_execution
     from pathlib import Path
     from gradlab.recipe_documents import compose_resolved_train_documents
@@ -617,11 +741,13 @@ def test_ppo_checkpoint_uses_existing_loader_and_collects_native_rgb(tmp_path, e
     schedule = TemperatureSchedule(
         enabled=explore, values=(0.75,), probabilities=(1.0,), block_decisions=2
     )
-    execution = load_execution(tmp_path, full_game=True, episode_steps=3, schedule=schedule)
+    execution = load_execution(
+        tmp_path, full_game=True, episode_steps=3, schedule=schedule, n_envs=n_envs
+    )
     assert execution.action_selection_mode == "stochastic"
-    assert execution.config.frame_skip == config.frame_skip
+    assert execution.contract["frame_skip"] == config.frame_skip
     with Collection(
-        tmp_path / "dataset", execution, limits=Limits(max_steps=3), schedule=schedule
+        tmp_path / "dataset", execution, limits=Limits(max_steps=5 * n_envs), schedule=schedule
     ) as run:
         run.run()
     with DatasetReader(tmp_path / "dataset") as reader:
@@ -637,6 +763,53 @@ def test_ppo_checkpoint_uses_existing_loader_and_collects_native_rgb(tmp_path, e
         assert session["provenance"]["recipe_sha256"]
     assert checkpoint.read_bytes() == original_bytes
     assert validate_dataset(tmp_path / "dataset")["valid"]
+    if n_envs > 1:
+        from collector import DebugController, image_hash, record_json
+
+        execution = load_execution(
+            tmp_path, full_game=True, episode_steps=3, schedule=schedule, n_envs=n_envs
+        )
+        with Collection(
+            tmp_path / "debug", execution, limits=Limits(max_steps=5 * n_envs), schedule=schedule
+        ) as run:
+            debugger = DebugController(run)
+            while not run.finished:
+                debugger.command("step")
+                snapshot = debugger.tick()
+                assert snapshot["pixel_equal"]
+                debugger.command("pause")
+                debugger.tick()
+
+        def trajectory(root):
+            with DatasetReader(root) as reader:
+                return [
+                    (
+                        episode["seed"],
+                        record_json({**row, "session_id": None}),
+                        image_hash(reader.frame(row["successor_frame_id"])),
+                    )
+                    for episode in reader.episodes()
+                    for row in reader.transitions(episode["episode_id"])
+                ]
+
+        assert trajectory(tmp_path / "dataset") == trajectory(tmp_path / "debug")
+        assert validate_dataset(tmp_path / "debug")["transitions"] == 5 * n_envs
+        if not explore:
+            from gradlab.policy_runtime import PolicyRuntime
+
+            def sde_runtime(*args, **kwargs):
+                runtime = PolicyRuntime(*args, **kwargs)
+                runtime.model.use_sde = True
+                return runtime
+
+            def unexpected_environment(*args, **kwargs):
+                pytest.fail("unsupported vector execution allocated an environment")
+
+            with monkeypatch.context() as patch:
+                patch.setattr("gradlab.policy_runtime.PolicyRuntime", sde_runtime)
+                patch.setattr("gradlab.env.make_eval_vec_env", unexpected_environment)
+                with pytest.raises(ValueError, match="state-dependent exploration"):
+                    load_execution(tmp_path, n_envs=64)
 
 
 @pytest.mark.parametrize(
@@ -734,7 +907,8 @@ def test_concurrent_progress_reports_one_committed_prefix(tmp_path):
         future.result()
 
 
-def test_native_huggingface_tables_preserve_frames_splits_and_records(tmp_path):
+@pytest.mark.parametrize("execution_type", [ScriptedExecution, ScriptedVectorExecution])
+def test_native_huggingface_tables_preserve_frames_splits_and_records(tmp_path, execution_type):
     import io
     import json
     import base64
@@ -746,7 +920,7 @@ def test_native_huggingface_tables_preserve_frames_splits_and_records(tmp_path):
 
     root = tmp_path / "data"
     with Collection(
-        root, ScriptedExecution(), limits=Limits(max_steps=9, batch_steps=2), heldout_every=2
+        root, execution_type(), limits=Limits(max_steps=9, batch_steps=2), heldout_every=2
     ) as run:
         run.run()
     before = {p.name: p.read_bytes() for p in root.glob("*.parquet")}
@@ -796,8 +970,9 @@ def test_native_huggingface_tables_preserve_frames_splits_and_records(tmp_path):
         assert rows("episodes", "train")[-1]["status"] == "incomplete"
     paths = {f["path"] for f in report["files"]}
     assert "index.sqlite" not in paths
-    assert len([p for p in paths if p.startswith("episode-")]) == 5
-    assert len(list(root.glob("episode-*.parquet"))) > 5
+    episode_count = 5 if execution_type is ScriptedExecution else 6
+    assert len([p for p in paths if p.startswith("episode-")]) == episode_count
+    assert len(list(root.glob("episode-*.parquet"))) > episode_count
     assert json.loads((root / "upload.json").read_text())["source_manifest_sha256"]
 
 
