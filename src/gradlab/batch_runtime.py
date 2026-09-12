@@ -1423,12 +1423,16 @@ class BatchRuntime:
         entry_ids = self.capture_archive_entries(mask)
         entry_id = entry_ids[lane]
         assert entry_id is not None
+        probe_entry = self.state_archive.entry(entry_id).to_dict()
+        probe_payload = self.state_archive.payload(entry_id)
         policy_actions = _deterministic_action_batch(self.action_space, self.num_envs)
         first_step = self.step(policy_actions)
         first_observation = _copy_tree_lane(first_step.observations, lane)
         first_reward = float(first_step.rewards[lane])
         first_terminated = bool(first_step.terminated[lane])
         first_truncated = bool(first_step.truncated[lane])
+        # Curriculum maintenance can prune this probe outside its retained representatives.
+        self.state_archive.import_entry(probe_entry, probe_payload)
         restored = self.restore_archive_entries(mask, entry_ids)
         if not _tree_equal(before, _copy_tree_lane(restored, lane)):
             raise ValueError("state archive round trip changed the policy observation")
