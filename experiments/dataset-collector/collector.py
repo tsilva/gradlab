@@ -65,6 +65,13 @@ def image_hash(image):
     return hashlib.sha256(image_header(image.shape) + image.tobytes()).hexdigest()
 
 
+def existing_size(path):
+    try:
+        return path.stat().st_size
+    except FileNotFoundError:
+        return 0
+
+
 def disk_bytes(root):
     total = 0
     for parent, _, files in os.walk(root):
@@ -195,6 +202,14 @@ class DatasetReader(AbstractContextManager):
             raise ValueError("unknown episode")
         return self._records(row[0])[0]
 
+    def session(self, session_id):
+        row = self.db.execute(
+            "SELECT record_file FROM sessions WHERE session_id=?", (session_id,)
+        ).fetchone()
+        if row is None:
+            raise ValueError("unknown session")
+        return self._records(row[0])[0]
+
     def transitions(self, episode_id):
         for row in self.db.execute(
             "SELECT name FROM batches WHERE episode_id=? ORDER BY first_step", (episode_id,)
@@ -231,19 +246,17 @@ class DatasetReader(AbstractContextManager):
         return image
 
     def progress(self):
-        counts = dict(self.db.execute("SELECT name, value FROM counters"))
-        unique, raw, compressed = self.db.execute(
-            "SELECT count(*), coalesce(sum(raw_size),0), coalesce(sum(size),0) FROM frames"
+        captures, transitions, complete, episodes, unique, raw, compressed = self.db.execute(
+            "SELECT coalesce((SELECT value FROM counters WHERE name='captured_occurrences'),0), "
+            "coalesce((SELECT value FROM counters WHERE name='transitions'),0), "
+            "(SELECT count(*) FROM episodes WHERE status='complete'), "
+            "(SELECT count(*) FROM episodes), count(*), coalesce(sum(raw_size),0), "
+            "coalesce(sum(size),0) FROM frames"
         ).fetchone()
-        occurrences = counts.get("captured_occurrences", 0)
-        complete = self.db.execute(
-            "SELECT count(*) FROM episodes WHERE status='complete'"
-        ).fetchone()[0]
-        episodes = self.db.execute("SELECT count(*) FROM episodes").fetchone()[0]
+        occurrences = captures
         actual = disk_bytes(self.root)
         return {
-            **counts,
-            "transitions": counts.get("transitions", 0),
+            "transitions": transitions,
             "unique_frames": unique,
             "complete_episodes": complete,
             "incomplete_episodes": episodes - complete,
@@ -254,7 +267,7 @@ class DatasetReader(AbstractContextManager):
             "compression_fraction_saved": None if not raw else 1 - compressed / raw,
             "actual_bytes": actual,
             "non_rgb_bytes": actual - compressed,
-            "index_bytes": sum(p.stat().st_size for p in self.root.glob("index.sqlite*")),
+            "index_bytes": sum(existing_size(p) for p in self.root.glob("index.sqlite*")),
             "pending_transitions": 0,
         }
 
@@ -479,18 +492,20 @@ class DatasetWriter(AbstractContextManager):
         # Flush before admitting another bounded item. No asynchronous queue can drop it.
         if self.pending_bytes >= MAX_BATCH_BYTES:
             self.flush()
-        frame_id, new = self._frame(image)
         row = {
             **deepcopy(facts),
             "episode_id": self.episode_record["episode_id"],
             "step": self.episode_record["length"],
             "source_frame_id": self.current_frame,
-            "successor_frame_id": frame_id,
-            "successor_frame_new": new,
+            # Upper-bound ID width and boolean size before staging this capture.
+            "successor_frame_id": self.next_frame,
+            "successor_frame_new": False,
         }
-        encoded = pack_record(row)
-        if len(encoded) > MAX_BATCH_BYTES:
+        if len(pack_record(row)) > MAX_BATCH_BYTES:
             raise ValueError("transition metadata exceeds bounded batch size")
+        frame_id, new = self._frame(image)
+        row.update(successor_frame_id=frame_id, successor_frame_new=new)
+        encoded = pack_record(row)
         self.rows.append(encoded)
         self.pending_bytes += len(encoded)
         self.current_frame = frame_id
@@ -612,6 +627,7 @@ class Collection(AbstractContextManager):
                 self.writer.close()
             execution.close()
             raise
+        self.session = self.writer.reader.session(self.writer.session_id)
         self.steps = 0
         self.started = time.monotonic()
         self.active = False
@@ -942,6 +958,15 @@ class DebugController:
         if not equal:
             self.playing = False
         return {
+            "classification": run.session["settings"]["classification"],
+            "overrides": {
+                **run.session["provenance"].get("overrides", {}),
+                **(
+                    {"temperature_schedule": run.session["settings"]["schedule"]}
+                    if run.schedule.enabled
+                    else {}
+                ),
+            },
             "source": run.latest_source,
             "decoded": decoded,
             "row": row,
@@ -963,6 +988,7 @@ class Inspector(AbstractContextManager):
 
     def select(self, episode_id):
         self.episode = self.reader.episode(episode_id)
+        self.session = self.reader.session(self.episode["session_id"])
         self.position = -1
 
     def move_episode(self, forward):
@@ -988,7 +1014,16 @@ class Inspector(AbstractContextManager):
         )
         frame_id = self.episode["initial_frame_id"] if row is None else row["successor_frame_id"]
         return {
-            "source": None,
+            "classification": self.session["settings"]["classification"],
+            "overrides": {
+                **self.session["provenance"].get("overrides", {}),
+                **(
+                    {"temperature_schedule": self.session["settings"]["schedule"]}
+                    if self.session["settings"]["schedule"]["enabled"]
+                    else {}
+                ),
+            },
+            "source": None if row is None else self.reader.frame(row["source_frame_id"]),
             "decoded": None if frame_id is None else self.reader.frame(frame_id),
             "row": row,
             "episode": self.episode,
@@ -1027,15 +1062,27 @@ class Renderer(AbstractContextManager):
             f"{'Live collection' if live else 'Stored dataset'} | {'playing' if playing else 'paused'} | no scientific evidence",
         ]
         if snapshot:
+            lines[1] = (
+                f"{snapshot['classification']} | {'playing' if playing else 'paused'} | no scientific evidence"
+            )
+            overrides = snapshot["overrides"]
+            details = []
+            if overrides.get("full_game"):
+                details.append(f"full game, cap {overrides['episode_steps']} steps")
+            if "temperature_schedule" in overrides:
+                details.append("temperature schedule enabled")
             lines.append(
-                f"Pixel equality: {snapshot['pixel_equal'] if live else 'unavailable offline'} | committed readback lag: {snapshot['persistence_lag']}"
+                f"RGB equality: {snapshot['pixel_equal'] if live else 'unavailable offline'} | lag: {snapshot['persistence_lag']} | "
+                + "; ".join(details)
             )
             for column, key in enumerate(("source", "decoded")):
                 image = snapshot[key]
                 x = 20 + column * 490
                 self.screen.blit(
                     self.font.render(
-                        "Copied live RGB" if key == "source" else "Decoded committed RGB",
+                        ("Copied live RGB" if live else "Stored source RGB")
+                        if key == "source"
+                        else "Decoded committed RGB",
                         True,
                         (220, 225, 232),
                     ),

@@ -605,3 +605,79 @@ def test_invalid_temperature_configuration_fails_before_collection(settings):
 
     with pytest.raises(ValueError):
         TemperatureSchedule(**settings)
+
+
+def test_rejected_transition_does_not_commit_orphan_rgb(tmp_path):
+    class BadMetadata(ScriptedExecution):
+        def step(self, temperature):
+            image, facts = super().step(temperature)
+            image[10, 10] = 23
+            facts["labels"] = object()
+            return image, facts
+
+    root = tmp_path / "data"
+    with pytest.raises(ValueError, match="unsupported trajectory"):
+        with Collection(root, BadMetadata()) as run:
+            run.run()
+    result = validate_dataset(root)
+    assert result["unique_frames"] == result["captured_occurrences"] == 1
+    assert result["transitions"] == 0
+
+
+def test_counterfactual_classification_and_overrides_remain_visible_offline(tmp_path):
+    from collector import DebugController, Inspector
+
+    execution = ScriptedExecution()
+    execution.provenance = {"overrides": {"full_game": True, "episode_steps": 100}}
+    root = tmp_path / "data"
+    with Collection(root, execution, limits=Limits(max_steps=1)) as run:
+        debug = DebugController(run)
+        debug.command("step")
+        snapshot = debug.tick()
+        assert snapshot["classification"] == "Counterfactual Playback"
+        assert snapshot["overrides"]["full_game"] is True
+    with Inspector(root) as inspector:
+        assert inspector.snapshot()["classification"] == "Counterfactual Playback"
+        assert inspector.snapshot()["overrides"]["episode_steps"] == 100
+
+
+def test_concurrent_progress_reports_one_committed_prefix(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+
+    ready, read_ready, done = threading.Event(), threading.Event(), threading.Event()
+    root = tmp_path / "data"
+
+    class UniqueFrames(ScriptedExecution):
+        def step(self, temperature):
+            self.steps += 1
+            self.image[0, 0] = [self.steps, 0, 0]
+            return self.image, {"terminated": False, "truncated": False}
+
+    def write():
+        try:
+            with Collection(
+                root, UniqueFrames(), limits=Limits(max_steps=120, batch_steps=1)
+            ) as run:
+                run.step()
+                ready.set()
+                assert read_ready.wait(10)
+                run.run()
+        finally:
+            ready.set()
+            done.set()
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(write)
+        assert ready.wait(10)
+        with DatasetReader(root) as reader:
+            read_ready.set()
+            samples = 0
+            while not done.is_set():
+                progress = reader.progress()
+                assert progress["captured_occurrences"] == progress["unique_frames"]
+                assert progress["transitions"] + 1 == progress["captured_occurrences"]
+                assert progress["reuse_fraction"] == 0
+                samples += 1
+            assert samples > 0
+        future.result()
