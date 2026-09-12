@@ -1,0 +1,170 @@
+defaults:
+- ../../../recipes/_presets/breakout-ball-state-ablation-ppo@_global_
+- _self_
+recipe_id: ppo-stability-schedule
+description: From-scratch Breakout PPO candidate with a +20 first-wall bonus, gamma
+  0.999, and automatic learning-rate phases for acquisition and fine-tuning; no checkpoint
+  resume is required. Research candidate, not yet verified at 100/100 clears.
+train:
+  timesteps: 200000000
+  occupancy:
+    cell:
+      dimensions:
+      - signal: bricks_destroyed_normalized
+        bucket_size: 0.125
+        clamp:
+        - 0
+        - 0.49999999999999994
+    domains:
+    - - 0
+      - 1
+      - 2
+      - 3
+    units:
+    - two-wall completion fraction
+    labels:
+    - 0-25% of first wall
+    - 25-50% of first wall
+    - 50-75% of first wall
+    - 75-100% of first wall
+    window_transitions: 65536
+  backend:
+    id: gradlab.ppo
+    config:
+      batch_size: 512
+      gamma: 0.999
+      gae_lambda: 0.95
+      n_steps: 128
+      learning_rate: 0.00025
+      learning_rate_final: null
+      learning_rate_schedule_timesteps: 0
+      learning_rate_milestones:
+      - step: 40001536
+        value: 5.0e-05
+      - step: 100000000
+        value: 5.0e-05
+      - step: 110000000
+        value: 1.0e-05
+      - step: 115000000
+        value: 1.0e-05
+      - step: 120000000
+        value: 5.0e-06
+      - step: 180000000
+        value: 1.0e-06
+  environment:
+    env_config:
+      n_envs: 64
+    task:
+      signals:
+        policy_paddle_vx: paddle_vx_normalized
+        policy_lives: lives_normalized
+      model_inputs:
+        schema_version: 1
+        context:
+          ball_x:
+            signal: policy_ball_x
+            update: transition
+            encoding:
+              kind: continuous
+              scale: 2.0
+              offset: -1.0
+              low: null
+              high: null
+              clip: false
+          ball_y:
+            signal: policy_ball_y
+            update: transition
+            encoding:
+              kind: continuous
+              scale: 2.0
+              offset: -1.0
+              low: null
+              high: null
+              clip: false
+          ball_vx:
+            signal: policy_ball_vx
+            update: transition
+            encoding:
+              kind: continuous
+              scale: 1.0
+              offset: 0.0
+              low: null
+              high: null
+              clip: false
+          ball_vy:
+            signal: policy_ball_vy
+            update: transition
+            encoding:
+              kind: continuous
+              scale: 1.0
+              offset: 0.0
+              low: null
+              high: null
+              clip: false
+          paddle_x:
+            signal: policy_paddle_x
+            update: transition
+            encoding:
+              kind: continuous
+              scale: 2.0
+              offset: -1.0
+              low: null
+              high: null
+              clip: false
+          paddle_vx:
+            signal: policy_paddle_vx
+            update: transition
+            encoding:
+              kind: continuous
+              scale: 1.0
+              offset: 0.0
+              low: null
+              high: null
+              clip: false
+          paddle_width:
+            signal: policy_paddle_width
+            update: transition
+            encoding:
+              kind: continuous
+              scale: 8.0
+              offset: -7.0
+              low: null
+              high: null
+              clip: false
+          ball_paddle_offset:
+            signal: policy_ball_paddle_offset
+            update: transition
+            encoding:
+              kind: continuous
+              scale: 1.0
+              offset: 0.0
+              low: null
+              high: null
+              clip: false
+          lives_normalized:
+            signal: policy_lives
+            update: transition
+            encoding:
+              kind: continuous
+              scale: 1.0
+              offset: 0.0
+              low: null
+              high: null
+              clip: false
+      events:
+        brick_destroyed:
+          signal: bricks_destroyed
+          operation: increase
+        one_wall_cleared:
+          signal: walls_cleared
+          operation: equals
+          value: 1
+      termination:
+        success:
+        - one_wall_cleared
+      reward:
+        reward_mode: events
+        event_delta_rewards:
+          brick_destroyed: 1.0
+        event_rewards:
+          one_wall_cleared: 20.0

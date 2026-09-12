@@ -141,6 +141,42 @@ def normalize_on_policy_config(
             raise ValueError(f"{label}.{key} must be finite and between zero and one")
     if normalized["gamma_final"] is None and normalized["gamma_schedule_timesteps"]:
         raise ValueError(f"{label}.gamma_schedule_timesteps requires gamma_final")
+    milestones = normalized.get("learning_rate_milestones")
+    if milestones is not None:
+        if (
+            normalized["learning_rate_final"] is not None
+            or normalized["learning_rate_schedule_timesteps"]
+        ):
+            raise ValueError(
+                f"{label}.learning_rate_milestones cannot combine with a linear schedule"
+            )
+        if not isinstance(milestones, list) or not milestones:
+            raise ValueError(f"{label}.learning_rate_milestones must be a nonempty list")
+        initial = normalized["learning_rate"]
+        if initial is None or not math.isfinite(initial) or initial < 0:
+            raise ValueError(f"{label}.learning_rate must be finite and non-negative")
+        previous_step = 0
+        points = []
+        for point in milestones:
+            if not isinstance(point, Mapping) or set(point) != {"step", "value"}:
+                raise ValueError(f"{label}.learning_rate_milestones entries require step and value")
+            step, value = point["step"], point["value"]
+            if not isinstance(step, int) or isinstance(step, bool) or step <= previous_step:
+                raise ValueError(
+                    f"{label}.learning_rate_milestones steps must strictly increase from zero"
+                )
+            if (
+                not isinstance(value, int | float)
+                or isinstance(value, bool)
+                or not math.isfinite(value)
+                or value < 0
+            ):
+                raise ValueError(
+                    f"{label}.learning_rate_milestones values must be finite and non-negative"
+                )
+            points.append({"step": step, "value": float(value)})
+            previous_step = step
+        normalized["learning_rate_milestones"] = points
     if normalized["device"] not in {"auto", "cpu", "cuda", "mps"}:
         raise ValueError(f"{label}.device must be one of auto, cpu, cuda, mps")
     if not isinstance(normalized["normalize_advantage"], bool):
