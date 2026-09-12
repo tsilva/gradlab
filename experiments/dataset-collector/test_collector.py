@@ -538,7 +538,8 @@ def test_write_failure_preserves_error_and_last_committed_prefix(tmp_path, monke
     assert validate_dataset(root)["transitions"] == 2
 
 
-def test_external_ppo_loader_fails_before_pickle_execution(tmp_path, monkeypatch):
+@pytest.mark.parametrize("explore", [False, True])
+def test_ppo_checkpoint_uses_existing_loader_and_collects_native_rgb(tmp_path, explore):
     from collector import load_execution
     from pathlib import Path
     from gradlab.recipe_documents import compose_resolved_train_documents
@@ -548,7 +549,12 @@ def test_external_ppo_loader_fails_before_pickle_execution(tmp_path, monkeypatch
         write_canonical_json,
     )
     from gradlab.training_backend import training_backend_config_hash
-    import gradlab.policy_models
+    from stable_baselines3 import PPO
+    from gradlab.actor_critic_policy import SharedActorCriticPolicy
+    from gradlab.env import make_eval_vec_env, resolve_env_config
+    from gradlab.env_config import env_config_from_mapping
+    from gradlab.policy_execution import compile_policy_execution_contract
+    from collector import TemperatureSchedule
 
     goal = Path("experiments/goals/Breakout-Atari2600-v0")
     resolved = compose_resolved_train_documents(
@@ -558,7 +564,7 @@ def test_external_ppo_loader_fails_before_pickle_execution(tmp_path, monkeypatch
         resolved.effective,
         repo_root=Path.cwd(),
         source_commit="a" * 40,
-        run_description="Collector rejection regression",
+        run_description="Collector PPO loading regression",
         seed=0,
         runtime_packages=("gradlab==0.2.2",),
         base_materialized_recipe=resolved.base,
@@ -566,26 +572,71 @@ def test_external_ppo_loader_fails_before_pickle_execution(tmp_path, monkeypatch
     )
     recipe_path = write_canonical_json(tmp_path / "recipe.json", recipe)
     checkpoint = tmp_path / "model.zip"
-    checkpoint.write_bytes(b"never deserialize this test Checkpoint")
     train = recipe["recipe"]["train_config"]
+    config = resolve_env_config(env_config_from_mapping(train))
+    env = make_eval_vec_env(config, 1, 0, capture_step_diagnostics=True)
+    try:
+        model = PPO(
+            SharedActorCriticPolicy,
+            env,
+            n_steps=2,
+            batch_size=2,
+            seed=0,
+            device="cpu",
+            policy_kwargs={
+                "policy_model": {
+                    "schema_version": 2,
+                    "encoder": {"kind": "flatten"},
+                    "fusion": {"hidden_sizes": [8], "activation": "relu"},
+                    "normalize_images": False,
+                    "orthogonal_init": True,
+                }
+            },
+        )
+        execution_contract = compile_policy_execution_contract(model, env)
+        action_contract = dict(env.runtime.action_contract)
+        model.save(checkpoint)
+    finally:
+        env.close()
     metadata = {
         "kind": "checkpoint",
         "checkpoint_step": 1,
         "algorithm_id": "ppo",
-        "model_class": "gradlab.ppo.GradLabPPO",
+        "model_class": "stable_baselines3.ppo.ppo.PPO",
+        "training_metadata": {
+            "policy_execution_contract": execution_contract,
+            "action_contract": action_contract,
+        },
         "training_backend_id": train["training_backend"]["id"],
         "training_backend_config_hash": training_backend_config_hash(train),
     }
     write_canonical_json(
         tmp_path / "model.json", build_model_document(checkpoint, recipe_path, metadata)
     )
-    monkeypatch.setattr(
-        gradlab.policy_models,
-        "load_policy_model",
-        lambda *a, **kw: pytest.fail("unsafe loader called"),
+    original_bytes = checkpoint.read_bytes()
+    schedule = TemperatureSchedule(
+        enabled=explore, values=(0.75,), probabilities=(1.0,), block_decisions=2
     )
-    with pytest.raises(ValueError, match="Data-Only Policy loader"):
-        load_execution(tmp_path)
+    execution = load_execution(tmp_path, full_game=True, episode_steps=3, schedule=schedule)
+    assert execution.action_selection_mode == "stochastic"
+    assert execution.config.frame_skip == config.frame_skip
+    with Collection(
+        tmp_path / "dataset", execution, limits=Limits(max_steps=3), schedule=schedule
+    ) as run:
+        run.run()
+    with DatasetReader(tmp_path / "dataset") as reader:
+        rows = list(reader.transitions(1))
+        assert len(rows) == 3
+        assert {r["temperature"] for r in rows} == ({0.75} if explore else {1.0})
+        assert rows[-1]["task_truncated"] is True
+        assert rows[-1]["native_game_over"] is False
+        assert reader.frame(rows[-1]["successor_frame_id"]).shape == (210, 160, 3)
+        session = reader.session(reader.episode(1)["session_id"])
+        assert session["provenance"]["checkpoint"]["sha256"]
+        assert session["provenance"]["model_sha256"]
+        assert session["provenance"]["recipe_sha256"]
+    assert checkpoint.read_bytes() == original_bytes
+    assert validate_dataset(tmp_path / "dataset")["valid"]
 
 
 @pytest.mark.parametrize(
