@@ -97,6 +97,7 @@ DEFAULT_SCENARIOS = (
     "wandb-retry-deduplication",
     "wandb-visibility-gating",
     "checkpoint-upload-retry",
+    "state-archive-lease-fencing",
     "eval-result-reconciliation",
     "modal-ambiguous-submit",
     "cancellation-terminalization",
@@ -1280,6 +1281,109 @@ def _scenario_checkpoint_upload_retry(root: Path) -> dict[str, Any]:
     }
 
 
+def _scenario_state_archive_lease_fencing(root: Path) -> dict[str, Any]:
+    recorder = ScenarioRecorder("state-archive-lease-fencing", [])
+    modes = ("expired", "stalled-upload", "slow-upload", "slow-list")
+    for mode in modes:
+        fixture = CertificationFixture(root / mode)
+        prepared = fixture.prepare(run_number=38)
+        supervisor = prepared.supervisor
+        supervisor.train_config["state_archive"] = {"persistence": "durable"}
+        archive_root = supervisor.run_dir / "state-archive"
+        archive_root.mkdir(parents=True)
+        files = []
+        for index in range(12):
+            payload = f"provider-state-{index}".encode()
+            path = f"state-{index:02d}"
+            (archive_root / path).write_bytes(payload)
+            files.append(
+                {
+                    "path": path,
+                    "sha256": hashlib.sha256(payload).hexdigest(),
+                    "size_bytes": len(payload),
+                }
+            )
+        write_canonical_json(
+            archive_root / "closure.json",
+            {
+                "semantic_id": "state-archive-v1",
+                "schema_version": 1,
+                "status": "closed",
+                "step": 64,
+                "files": files,
+                "inventory_sha256": canonical_json_sha256(files),
+                "archive": {"semantic_id": "state-archive-v1", "entry_count": 12, "blob_count": 12},
+            },
+        )
+        authority = supervisor.authority
+        prefix = f"runs/{supervisor.manifest.run_id}/state-archive/"
+        original_put = authority.control.put_bytes
+        original_iter = authority.control.iter_keys
+
+        def slow_put(key: str, *args: Any, **kwargs: Any) -> Any:
+            result = original_put(key, *args, **kwargs)
+            if mode == "slow-upload" and key.startswith(prefix + "objects/"):
+                fixture.clock.advance(8)
+            elif mode == "stalled-upload" and key.startswith(prefix + "objects/"):
+                fixture.clock.advance(LEASE_TTL_SECONDS + 1)
+            return result
+
+        def slow_iter(*args: Any, **kwargs: Any) -> Iterator[str]:
+            for key in original_iter(*args, **kwargs):
+                if mode == "slow-list" and key.startswith(prefix):
+                    fixture.clock.advance(8)
+                yield key
+
+        if mode == "expired":
+            fixture.clock.advance(LEASE_TTL_SECONDS + 1)
+        failure = None
+        with (
+            patch.object(authority.control, "put_bytes", side_effect=slow_put),
+            patch.object(authority.control, "iter_keys", side_effect=slow_iter),
+        ):
+            try:
+                supervisor._publish_state_archive(require_closed=True)
+                assert supervisor.lease is not None
+                supervisor.lease = authority.renew_lease(supervisor.lease)
+            except LeaseUnavailable as exc:
+                failure = str(exc)
+        if mode == "expired":
+            recorder.require(
+                "expired-writer-publishes-no-archive-bytes",
+                failure is not None and not list(authority.control.iter_keys(prefix)),
+                evidence={"failure": failure},
+            )
+        elif mode == "stalled-upload":
+            recorder.require(
+                "expired-during-upload-does-not-publish-generation-or-pointer",
+                failure is not None
+                and authority.state_archive_closure(run_id=supervisor.manifest.run_id) is None
+                and not list(authority.control.iter_keys(prefix + "generations/")),
+                evidence={"failure": failure},
+            )
+        else:
+            recorder.require(
+                f"{mode}-retains-writer-lease-beyond-original-ttl",
+                failure is None and fixture.clock.monotonic() > LEASE_TTL_SECONDS,
+                evidence={"failure": failure, "elapsed": fixture.clock.monotonic()},
+            )
+            restored_root = fixture.root / "restored"
+            publication = authority.restore_state_archive(
+                run_id=supervisor.manifest.run_id, destination=restored_root
+            )
+            recorder.require(
+                f"{mode}-complete-archive-restores",
+                publication is not None
+                and all(
+                    (restored_root / item["path"]).read_bytes()
+                    == (archive_root / item["path"]).read_bytes()
+                    for item in files
+                ),
+                evidence={"file_count": (publication or {}).get("file_count")},
+            )
+    return {"invariants": recorder.invariants, "evidence": {"modes": len(modes)}}
+
+
 def _scenario_eval_result_reconciliation(root: Path) -> dict[str, Any]:
     recorder = ScenarioRecorder("eval-result-reconciliation", [])
     fixture = CertificationFixture(root)
@@ -2265,6 +2369,7 @@ SCENARIOS: dict[str, Callable[[Path], dict[str, Any]]] = {
     "wandb-retry-deduplication": _scenario_wandb_retry_deduplication,
     "wandb-visibility-gating": _scenario_wandb_visibility_gating,
     "checkpoint-upload-retry": _scenario_checkpoint_upload_retry,
+    "state-archive-lease-fencing": _scenario_state_archive_lease_fencing,
     "eval-result-reconciliation": _scenario_eval_result_reconciliation,
     "modal-ambiguous-submit": _scenario_modal_ambiguous_submit,
     "cancellation-terminalization": _scenario_cancellation_terminalization,

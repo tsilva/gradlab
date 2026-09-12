@@ -944,10 +944,17 @@ class RunAuthority:
         run_id: str,
         attempt_id: str,
         archive_root: Path,
+        heartbeat: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         from gradlab.state_archive import archive_lock
 
+        def beat() -> None:
+            if heartbeat is not None:
+                heartbeat()
+
+        beat()
         with archive_lock(archive_root, exclusive=False):
+            beat()
             closure_path = archive_root / "closure.json"
             if not closure_path.is_file():
                 raise FileNotFoundError(f"state archive has no closure: {closure_path}")
@@ -962,8 +969,10 @@ class RunAuthority:
             if isinstance(raw_files, str | bytes) or not isinstance(raw_files, Sequence):
                 raise ValueError("state archive closure files must be a sequence")
             prior_objects: dict[str, str] = {}
+            beat()
             prior = self.state_archive_closure(run_id=run_id)
             if prior is not None:
+                beat()
                 prior_generation = self.control.get_json(str(prior["generation_key"]))
                 for raw_object in prior_generation.get("objects") or []:
                     if isinstance(raw_object, Mapping):
@@ -971,6 +980,7 @@ class RunAuthority:
             objects: list[dict[str, Any]] = []
             seen_paths: set[str] = set()
             for raw_file in raw_files:
+                beat()
                 if not isinstance(raw_file, Mapping):
                     raise ValueError("state archive closure file entry must be an object")
                 relative = Path(str(raw_file["path"]))
@@ -990,6 +1000,7 @@ class RunAuthority:
                     f"{self.run_prefix(run_id)}/state-archive/objects/{digest[:2]}/{digest[2:]}"
                 )
                 if digest not in prior_objects:
+                    beat()
                     self.control.put_bytes(
                         object_key,
                         payload,
@@ -1022,6 +1033,7 @@ class RunAuthority:
                 f"{self.run_prefix(run_id)}/state-archive/generations/"
                 f"{int(closure['step']):020d}-{generation_sha256}.json"
             )
+            beat()
             self.control.put_json(generation_key, generation, create_only=True)
             latest = {
                 "semantic_id": "state-archive-publication-v1",
@@ -1037,11 +1049,13 @@ class RunAuthority:
                 "size_bytes": sum(int(row["size_bytes"]) for row in objects),
                 "archive": dict(closure["archive"]),
             }
+            beat()
             self.control.put_json(
                 f"{self.run_prefix(run_id)}/state-archive/latest.json",
                 latest,
                 create_only=False,
             )
+            beat()
             return latest
 
     def prune_state_archive(self, lease: Lease) -> Lease:
@@ -1052,22 +1066,36 @@ class RunAuthority:
         use other prefixes and are never candidates for this reclamation.
         """
         lease = self.renew_lease(lease)
+        last_renewal = self.clock.monotonic()
+
+        def beat() -> None:
+            nonlocal lease, last_renewal
+            now = self.clock.monotonic()
+            if now - last_renewal >= LEASE_RENEW_SECONDS:
+                lease = self.renew_lease(lease)
+                last_renewal = now
+
         publication = self.state_archive_closure(run_id=lease.run_id)
+        beat()
         if publication is None:
             return lease
         generation_key = str(publication["generation_key"])
         generation = self.control.get_json(generation_key)
+        beat()
         retained = {generation_key, *(str(row["object_key"]) for row in generation["objects"])}
         prefix = f"{self.run_prefix(lease.run_id)}/state-archive"
-        obsolete = [
-            key
-            for directory in ("objects", "generations")
-            for key in self.control.iter_keys(f"{prefix}/{directory}")
-            if key not in retained
-        ]
+        obsolete = []
+        for directory in ("objects", "generations"):
+            beat()
+            for key in self.control.iter_keys(f"{prefix}/{directory}"):
+                beat()
+                if key not in retained:
+                    obsolete.append(key)
+        beat()
         for key in obsolete:
-            lease = self.renew_lease(lease)
+            beat()
             self.control.delete(key)
+            beat()
         return lease
 
     def restore_state_archive(
