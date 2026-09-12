@@ -214,7 +214,7 @@ def test_debug_pause_and_readback_use_committed_disk_images(tmp_path):
         for _ in range(20):
             assert debug.tick()["row"]["step"] == 0
         assert execution.steps == 1
-        shard = next((tmp_path / "data").glob("rgb-*.bin"))
+        shard = next((tmp_path / "data").glob("frames-*.parquet"))
         shard.write_bytes(b"corrupt")
         with pytest.raises((ValueError, __import__("zlib").error)):
             debug.tick()
@@ -734,39 +734,51 @@ def test_concurrent_progress_reports_one_committed_prefix(tmp_path):
         future.result()
 
 
-def test_huggingface_export_preserves_frames_splits_and_records(tmp_path):
+def test_native_huggingface_tables_preserve_frames_splits_and_records(tmp_path):
     import io
     import json
+    import base64
     import pyarrow.parquet as pq
     import yaml
     from PIL import Image
-    from collector import export_huggingface
+    from gradlab.play_trajectory import decode_tree
+    from collector import prepare_huggingface
 
-    root, output = tmp_path / "data", tmp_path / "hub"
-    with Collection(root, ScriptedExecution(), limits=Limits(max_steps=9), heldout_every=2) as run:
+    root = tmp_path / "data"
+    with Collection(
+        root, ScriptedExecution(), limits=Limits(max_steps=9, batch_steps=2), heldout_every=2
+    ) as run:
         run.run()
-    report = export_huggingface(root, output, shard_rows=2)
+    before = {p.name: p.read_bytes() for p in root.glob("*.parquet")}
+    assert not list(root.glob("*.bin"))
+    report = prepare_huggingface(root)
     assert report["transitions"] == 9
-    card = yaml.safe_load((output / "README.md").read_text().split("---")[1])
-    assert {c["config_name"] for c in card["configs"]} == {
-        "frames",
-        "transitions",
-        "episodes",
-        "sessions",
-    }
-    frames = pq.read_table(output / "frames").to_pylist()
+    assert before == {p.name: p.read_bytes() for p in root.glob("*.parquet")}
+    card = yaml.safe_load((root / "README.md").read_text().split("---")[1])
+    configs = {c["config_name"]: c for c in card["configs"]}
+    assert set(configs) == {"frames", "transitions", "episodes", "sessions"}
+
+    def rows(config, split):
+        paths = next(d["path"] for d in configs[config]["data_files"] if d["split"] == split)
+        return pq.read_table([root / name for name in paths]).to_pylist()
+
+    frames = rows("frames", "assets")
     assert len(frames) == 2
     with DatasetReader(root) as reader:
+        frame_files = configs["frames"]["data_files"][0]["path"]
+        assert reader.progress()["compressed_rgb_bytes"] == sum(
+            (root / name).stat().st_size for name in frame_files
+        )
         for row in frames:
             rgb = np.asarray(Image.open(io.BytesIO(row["image"]["bytes"])))
             np.testing.assert_array_equal(rgb, reader.frame(row["frame_id"]))
         exported = []
         for split in ("train", "heldout"):
-            episodes = pq.read_table(output / "episodes" / split).to_pylist()
-            rows = pq.read_table(output / "transitions" / split).to_pylist()
+            episodes = rows("episodes", split)
+            transitions = rows("transitions", split)
             assert all(reader.episode(e["episode_id"])["split"] == split for e in episodes)
-            assert all(reader.episode(r["episode_id"])["split"] == split for r in rows)
-            exported.extend(rows)
+            assert all(reader.episode(r["episode_id"])["split"] == split for r in transitions)
+            exported.extend(transitions)
         assert len(exported) == 9
         for row in exported:
             original = reader.transition(row["episode_id"], row["step"])
@@ -774,45 +786,88 @@ def test_huggingface_export_preserves_frames_splits_and_records(tmp_path):
             assert row["successor_frame_id"] == original["successor_frame_id"]
             assert row["policy_reward"] == original["policy_reward"]
             assert json.loads(row["selected_action_json"]) == original["selected_action"].tolist()
-            import base64
-            from gradlab.play_trajectory import decode_tree
-
             tree = json.loads(row["record_json"])
             for leaf in tree["arrays"]:
                 leaf["data"] = base64.b64decode(leaf["data"])
             restored = decode_tree(tree)
-            assert restored["selected_action"].dtype == original["selected_action"].dtype
-            assert restored["labels"]["ball"].dtype == original["labels"]["ball"].dtype
-            np.testing.assert_array_equal(restored["labels"]["ball"], original["labels"]["ball"])
+            assert restored["selected_action"].dtype == np.int16
+            assert restored["labels"]["ball"].dtype == np.float32
+            np.testing.assert_array_equal(restored["labels"]["ball"], [12, 13])
+        assert rows("episodes", "train")[-1]["status"] == "incomplete"
+    paths = {f["path"] for f in report["files"]}
+    assert "index.sqlite" not in paths
+    assert len([p for p in paths if p.startswith("episode-")]) == 5
+    assert len(list(root.glob("episode-*.parquet"))) > 5
+    assert json.loads((root / "upload.json").read_text())["source_manifest_sha256"]
 
-        episodes = pq.read_table(output / "episodes" / "train").to_pylist()
-        assert episodes[-1]["status"] == "incomplete"
-    assert len(list((output / "transitions").rglob("*.parquet"))) >= 5
-    assert json.loads((output / "export.json").read_text())["source_manifest_sha256"]
-    with pytest.raises(ValueError, match="exists"):
-        export_huggingface(root, output)
 
+def test_huggingface_preparation_refuses_writer_and_excludes_orphan_files(tmp_path):
+    from collector import prepare_huggingface
 
-def test_huggingface_export_refuses_active_writer_and_cleans_failed_output(tmp_path):
-    from collector import export_huggingface
-
-    root, output = tmp_path / "data", tmp_path / "hub"
+    root = tmp_path / "data"
     with Collection(root, ScriptedExecution(), limits=Limits(max_steps=2)) as run:
         run.run()
         with pytest.raises(ValueError, match="writer"):
-            export_huggingface(root, output)
-    assert not output.exists()
-    with pytest.raises(ValueError, match="budget"):
-        export_huggingface(root, output, max_bytes=1)
-    assert not output.exists()
-    assert not list(tmp_path.glob(".hub-*"))
-    with pytest.raises(ValueError, match="inside"):
-        export_huggingface(root, root / "export")
+            prepare_huggingface(root)
+    assert not (root / "README.md").exists()
+    (root / "frames-orphan.parquet").write_bytes(b"unfinished")
+    report = prepare_huggingface(root)
+    assert "frames-orphan.parquet" not in {f["path"] for f in report["files"]}
     with DatasetReader(root) as reader:
         shard = reader.db.execute("SELECT shard FROM frames LIMIT 1").fetchone()[0]
     (root / shard).write_bytes(b"corrupt")
-    import zlib
+    with pytest.raises(ValueError):
+        prepare_huggingface(root)
 
-    with pytest.raises((ValueError, zlib.error)):
-        export_huggingface(root, output)
-    assert not output.exists()
+
+def test_older_dataset_format_is_preserved_and_rejected(tmp_path):
+    root = tmp_path / "old"
+    root.mkdir()
+    original = b'{"format_version":1}'
+    (root / "manifest.json").write_bytes(original)
+    with pytest.raises(ValueError, match="version"):
+        DatasetReader(root)
+    with pytest.raises(ValueError, match="version"):
+        Collection(root, ScriptedExecution())
+    assert (root / "manifest.json").read_bytes() == original
+
+
+@pytest.mark.parametrize("failure", ["receipt_write", "card_sync"])
+def test_interrupted_preparation_cannot_leave_a_stale_upload_receipt(
+    tmp_path, monkeypatch, failure
+):
+    import collector
+
+    root = tmp_path / "data"
+    with Collection(root, ScriptedExecution(), limits=Limits(max_steps=2)) as run:
+        run.run()
+    collector.prepare_huggingface(root)
+    with Collection(root, ScriptedExecution(), limits=Limits(max_steps=2)) as run:
+        run.run()
+    before = {p.name: p.read_bytes() for p in root.glob("*.parquet")}
+    original = collector.write_synced
+
+    def fail_receipt(path, data):
+        if failure == "receipt_write" and path.name.startswith(".upload.json-"):
+            raise OSError("injected receipt write failure")
+        return original(path, data)
+
+    original_sync = collector.sync_directory
+    sync_calls = 0
+
+    def fail_card_sync(path):
+        nonlocal sync_calls
+        sync_calls += 1
+        if failure == "card_sync" and sync_calls == 2:
+            raise OSError("injected receipt publication sync failure")
+        original_sync(path)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(collector, "sync_directory", fail_card_sync)
+        patch.setattr(collector, "write_synced", fail_receipt)
+        with pytest.raises(OSError, match="receipt"):
+            collector.prepare_huggingface(root)
+    assert not (root / "upload.json").exists()
+    assert before == {p.name: p.read_bytes() for p in root.glob("*.parquet")}
+    assert validate_dataset(root)["transitions"] == 4
+    assert collector.prepare_huggingface(root)["transitions"] == 4

@@ -97,15 +97,17 @@ Promotion, and emits no W&B metrics.
 
 ## Format and recovery
 
-Format version 1 is experimental. Migration is not guaranteed. Existing datasets
+Format version 2 is experimental. Version 1 datasets are preserved and rejected by
+this version; use the earlier collector revision to inspect them. Migration is not guaranteed. Existing datasets
 are preserved; use a new directory when changing the format or effective contract.
 
 - `manifest.json` records the immutable dataset contract and seed allocation.
 - `index.sqlite` holds the global frame hash index, committed file bindings, episode
   allocation, session references, transition batch lookup, and exact counters.
-- `rgb-*.bin` packs zlib-compressed full RGB images, with multiple images per batch.
-- `steps-*.parquet` stores ordered transitions with compact frame IDs and numerical
-  values serialized by GradLab's existing data-only tree codec.
+- `frames-*.parquet` stores lossless PNG images with the Hugging Face image feature,
+  frame IDs and RGB hashes, with multiple images per batch.
+- `steps-*.parquet` stores ordered transitions with typed numerical columns, action
+  JSON, compact frame IDs, and exact structured facts in `record_json`.
 - `episode-*.parquet` records immutable episode snapshots. SQLite selects the latest
   committed snapshot. `session-*.parquet` records Checkpoint/model/recipe identities,
   source/runtime provenance, collection settings, and classification once per session.
@@ -152,7 +154,9 @@ reported separately during collection.
 Collection reports recent image discovery per second and per occurrence, cumulative
 unique RGB, complete/incomplete episode counts, throughput, elapsed time, actual
 bytes, SQLite overhead, peak process RSS, and storage projections. Compression
-savings compare compressed bytes with raw bytes of unique images. Duplicate reuse
+savings compare complete committed frame-Parquet file bytes (including their IDs
+and metadata) with raw bytes of unique images. `non_rgb_bytes` covers everything
+outside those frame files, including SQLite, transition metadata and orphan files. Duplicate reuse
 is a separate fraction. Projections extrapolate observed growth and are not capacity
 guarantees. Headless progress updates every five seconds and at shutdown; display
 pacing changes throughput and time-limited sample counts.
@@ -160,72 +164,62 @@ pacing changes throughput and time-limited sample counts.
 HUD-only changes count as new images. Discovery attribution depends on collection
 order. A novelty plateau does not prove exhaustive state or action coverage.
 
-## Hugging Face export
+## Direct Hugging Face storage
 
-`export-hf` creates a standalone, upload-ready snapshot without changing the
-collection format. Stop the writer first; the export holds a shared dataset lock,
-validates the source, and writes into a temporary sibling directory. Only a
-completed export becomes the requested output directory. Existing destinations
-are refused. Failed exports clean up their own temporary files.
+Collection writes the final Hugging Face-compatible Parquet tables directly.
+There is no separate image format, data conversion, or second dataset copy.
+SQLite remains a local index for deduplication, random access and crash recovery.
+Each batch closes and syncs its Parquet files before SQLite commits visibility.
+Readers and the debugger use those same committed files.
+
+After stopping the writer, prepare the existing directory for Hugging Face:
 
 ```bash
-uv run --frozen python experiments/dataset-collector/collector.py export-hf \
-  /path/to/dataset /path/to/huggingface-export --max-gib 10
+uv run --frozen python experiments/dataset-collector/collector.py prepare-hf /path/to/dataset
 ```
 
-The export contains four Hugging Face configurations:
+This validates the dataset and generates `README.md` and `upload.json` in place.
+It does not rewrite or copy any Parquet bytes. The card selects exact committed
+files, including only the latest snapshot of each episode. Abandoned files and
+superseded snapshots remain locally preserved and are excluded from publication.
 
 | Configuration | Contents | Splits |
 | --- | --- | --- |
-| `frames` | One lossless PNG per unique frame, image feature and SHA-256 | `assets` |
-| `transitions` (default) | Ordered frame references, actions, rewards, temperatures, boundaries | `train`, `heldout` when present |
-| `episodes` | Initial frames, lengths, seeds, session IDs, completion status | Original episode splits |
+| `frames` | One PNG per unique RGB image, frame ID and hash | `assets` |
+| `transitions` (default) | Ordered frame references, actions, rewards and boundaries | `train`, `heldout` when present |
+| `episodes` | Initial frame, length, seed, session ID and completion status | Original episode splits |
 | `sessions` | Portable checkpoint provenance and collection settings | `metadata` |
-
-PNG bytes are embedded in Parquet using Hugging Face's image feature metadata.
-The Hub viewer can display the `frames` images; it does not automatically join
-transition frame IDs to images. Consumers join `source_frame_id` and
-`successor_frame_id` to `frames.frame_id`. IDs are not array offsets. The shared
-image pool is not a training split: select episodes first, then their referenced
-images, preserving held-out isolation. Incomplete episodes remain marked.
-
-The numerical columns and JSON action columns are directly readable without
-GradLab. `record_json` additionally preserves every original transition fact and
-exact array dtypes/shapes using the documented tree structure and base64 array
-bytes. The generated card describes decoding and loading. Manifest and session
-metadata use the existing portable metadata filter. No Policy weights, SQLite,
-private source paths, or custom Hugging Face loading script are required.
-
-Parquet row groups are bounded by 128 records and an 8 MiB target (one bounded
-record may exceed it). `--shard-rows` defaults to 4096. `--max-gib` limits the
-completed export, separately from collection storage; a failed private staging
-write can temporarily exceed it by a bounded row group and Parquet footer.
-`export.json` records source identity, counts and file checksums. Its hashes
-exclude `export.json` itself. This is a snapshot export, not incremental sync.
-
-Load locally, or substitute a Hub dataset ID after upload:
 
 ```python
 from datasets import load_dataset
-steps = load_dataset("/path/to/huggingface-export", "transitions", split="train")
-frames = load_dataset("/path/to/huggingface-export", "frames", split="assets")
-episodes = load_dataset("/path/to/huggingface-export", "episodes", split="train")
+steps = load_dataset("/path/to/dataset", "transitions", split="train")
+frames = load_dataset("/path/to/dataset", "frames", split="assets")
+episodes = load_dataset("/path/to/dataset", "episodes", split="train")
 ```
 
-The exporter uses existing dependencies. The `datasets` library is only needed by
-consumers; it is not added to GradLab. Upload is separate and requires a chosen
-repository and visibility. After setting the appropriate license and attribution
-in the generated dataset card, an example for a **new** dataset repository is:
+The Hub displays images in `frames`; transition IDs do not automatically render
+as images. Join source/successor frame IDs to `frames.frame_id`, not row offsets.
+Select episode splits before their referenced images. The shared `assets` pool is
+not a training split. Incomplete episodes remain marked. `record_json` retains
+all original facts and exact NumPy dtypes/shapes using the documented tree format
+with base64 array bytes; ordinary typed columns need no GradLab decoder.
 
-```bash
-uv run --frozen hf upload YOUR_NAMESPACE/YOUR_DATASET /path/to/huggingface-export . \
-  --type dataset --private
-```
+`upload.json` is the upload-readiness receipt: it lists file paths, sizes and
+SHA-256 checksums. Re-preparation invalidates the previous receipt before changing
+the card and publishes a new receipt last. If preparation is interrupted, rerun
+it before uploading. Upload only its listed
+files plus `upload.json`, excluding SQLite and stale/uncommitted files. Preparation
+records one snapshot: subsequent collection does not change its immutable data
+files, but rerun preparation to include new commits. Preparation regenerates the
+card and file list; it does not choose a license, repository or visibility, or
+upload anything. Select the applicable license and attribution before publishing,
+and refresh the card's checksum if you edit it after preparation. Do not overlay
+a replacement snapshot on obsolete remote shards without managing their removal.
 
-Do not overlay a shorter export on old shards: files absent locally are not
-removed by this command. Use a fresh repository or explicitly manage obsolete
-files when publishing a replacement snapshot. The collector never uploads data
-or creates a Hub repository automatically.
+The exporter command `export-hf` has been removed. No new dependencies are needed
+for collection or preparation; consumers can use the standard `datasets` library.
+Preparation metadata is capped at 8 MiB and does not rewrite the collection's byte
+budget. Leave room for the card and upload list outside that collection budget.
 
 ## Validation and pilot
 

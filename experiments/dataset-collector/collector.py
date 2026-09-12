@@ -6,6 +6,8 @@ from collections import deque
 from contextlib import AbstractContextManager
 from copy import deepcopy
 from dataclasses import asdict, dataclass
+import base64
+import io
 import fcntl
 import hashlib
 import json
@@ -15,14 +17,14 @@ from pathlib import Path
 import sqlite3
 import time
 import uuid
-import zlib
 
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
+from PIL import Image
 
 # Reuse the data-only codec, not Player's recording, session, or UI machinery.
-from gradlab.play_trajectory import pack_record, unpack_record
+from gradlab.play_trajectory import encode_tree, decode_tree, portable_metadata
 from gradlab.seeds import (
     EVAL_SEED_START,
     validate_eval_seed,
@@ -30,7 +32,7 @@ from gradlab.seeds import (
     validate_training_seed,
 )
 
-VERSION = 1
+VERSION = 2
 MAX_BATCH_BYTES = 8 * 1024**2
 MAX_IMAGE_BYTES = 4 * 1024**2
 DISK_RESERVE = 2 * 1024**2  # SQLite rollback journal, index growth, and progress replacement.
@@ -38,6 +40,129 @@ DISK_RESERVE = 2 * 1024**2  # SQLite rollback journal, index growth, and progres
 
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+
+
+def schema(fields):
+    return pa.schema([(name, getattr(pa, kind)()) for name, kind in fields])
+
+
+transition_schema = schema(
+    [
+        *[
+            (name, "int64")
+            for name in (
+                "episode_id",
+                "step",
+                "source_frame_id",
+                "successor_frame_id",
+                "policy_decision_id",
+                "configured_frame_skip",
+                "elapsed_native_frames",
+            )
+        ],
+        *[
+            (name, "bool_")
+            for name in (
+                "successor_frame_new",
+                "terminated",
+                "truncated",
+                "native_game_over",
+                "native_truncated",
+                "task_terminated",
+                "task_truncated",
+            )
+        ],
+        *[
+            (name, "float64")
+            for name in ("policy_reward", "native_reward", "task_reward", "temperature")
+        ],
+        *[
+            (name, "string")
+            for name in (
+                "session_id",
+                "action_selection_mode",
+                "action_override_rule_id",
+                "selected_action_json",
+                "effective_action_json",
+                "native_action_json",
+                "record_json",
+            )
+        ],
+    ]
+)
+episode_schema = schema(
+    [
+        *[(name, "int64") for name in ("episode_id", "seed", "initial_frame_id", "length")],
+        *[(name, "string") for name in ("session_id", "split", "status", "end_reason")],
+        ("initial_frame_new", "bool_"),
+    ]
+)
+session_schema = schema([("session_id", "string"), ("record_json", "string")])
+image_features = {
+    "frame_id": {"dtype": "int64", "_type": "Value"},
+    "sha256": {"dtype": "string", "_type": "Value"},
+    "image": {"_type": "Image"},
+}
+frame_schema = pa.schema(
+    [
+        ("frame_id", pa.int64()),
+        ("sha256", pa.string()),
+        ("image", pa.struct([("bytes", pa.binary()), ("path", pa.string())])),
+    ],
+    metadata={b"huggingface": canonical({"info": {"features": image_features}})},
+)
+
+
+TABLE_SCHEMAS = {
+    "frames": frame_schema,
+    "transitions": transition_schema,
+    "episodes": episode_schema,
+    "sessions": session_schema,
+}
+
+
+def record_json(value):
+    tree = encode_tree(value)
+    for leaf in tree["arrays"]:
+        leaf["data"] = base64.b64encode(leaf["data"]).decode("ascii")
+    return canonical(tree).decode()
+
+
+def read_record(value):
+    tree = json.loads(value)
+    for leaf in tree["arrays"]:
+        leaf["data"] = base64.b64decode(leaf["data"], validate=True)
+    return decode_tree(tree)
+
+
+def transition_record(row):
+    result = {key: row.get(key) for key in transition_schema.names}
+    for key in ("selected_action", "effective_action", "native_action"):
+        value = row.get(key)
+        if isinstance(value, np.ndarray | np.generic):
+            value = value.tolist()
+        result[f"{key}_json"] = json.dumps(value, allow_nan=False, separators=(",", ":"))
+    result["record_json"] = record_json(row)
+    return result
+
+
+def parquet_bytes(kind, rows):
+    stream = pa.BufferOutputStream()
+    pq.write_table(
+        pa.Table.from_pylist(rows, schema=TABLE_SCHEMAS[kind]),
+        stream,
+        compression="zstd",
+        row_group_size=64,
+        write_page_index=True,
+    )
+    return stream.getvalue().to_pybytes()
+
+
+def decode_rgb(data, shape):
+    with Image.open(io.BytesIO(data)) as image:
+        if image.format != "PNG" or image.mode != "RGB" or image.size != (shape[1], shape[0]):
+            raise ValueError("stored PNG disagrees with RGB contract")
+        return owned_rgb(np.asarray(image))
 
 
 def owned_rgb(image):
@@ -176,7 +301,7 @@ class DatasetReader(AbstractContextManager):
             raise ValueError("invalid dataset file path")
         return self.root / name
 
-    def _records(self, name):
+    def _table(self, name):
         binding = self.db.execute("SELECT sha256, size FROM files WHERE name=?", (name,)).fetchone()
         if binding is None:
             raise ValueError("uncommitted record file")
@@ -186,8 +311,12 @@ class DatasetReader(AbstractContextManager):
         data = path.read_bytes()
         if len(data) != binding["size"] or hashlib.sha256(data).hexdigest() != binding["sha256"]:
             raise ValueError(f"record file integrity failure: {name}")
+        return pq.read_table(pa.BufferReader(data))
+
+    def _records(self, name):
         return [
-            unpack_record(row["record"]) for row in pq.read_table(pa.BufferReader(data)).to_pylist()
+            read_record(row["record_json"]) if "record_json" in row else row
+            for row in self._table(name).to_pylist()
         ]
 
     def episodes(self):
@@ -233,14 +362,10 @@ class DatasetReader(AbstractContextManager):
         size = math.prod(shape)
         if len(shape) != 3 or shape[2] != 3 or not 0 < size <= MAX_IMAGE_BYTES:
             raise ValueError("invalid stored image dimensions")
-        with self._data(row["shard"]).open("rb") as stream:
-            stream.seek(row["offset"])
-            compressed = stream.read(row["size"])
-        decoder = zlib.decompressobj()
-        raw = decoder.decompress(compressed, size + 1)
-        if len(raw) != size or not decoder.eof or decoder.unused_data or decoder.unconsumed_tail:
-            raise ValueError("invalid compressed RGB frame")
-        image = np.frombuffer(raw, dtype=np.uint8).reshape(shape).copy()
+        frame = self._table(row["shard"]).slice(row["row_index"], 1).to_pylist()[0]
+        if frame["frame_id"] != frame_id or frame["sha256"] != row["sha256"]:
+            raise ValueError("frame index disagrees with Parquet row")
+        image = decode_rgb(frame["image"]["bytes"], shape)
         if image_hash(image) != row["sha256"]:
             raise ValueError("RGB hash mismatch")
         return image
@@ -251,7 +376,8 @@ class DatasetReader(AbstractContextManager):
             "coalesce((SELECT value FROM counters WHERE name='transitions'),0), "
             "(SELECT count(*) FROM episodes WHERE status='complete'), "
             "(SELECT count(*) FROM episodes), count(*), coalesce(sum(raw_size),0), "
-            "coalesce(sum(size),0) FROM frames"
+            "(SELECT coalesce(sum(size),0) FROM files WHERE name IN "
+            "(SELECT DISTINCT shard FROM frames)) FROM frames"
         ).fetchone()
         occurrences = captures
         actual = disk_bytes(self.root)
@@ -309,7 +435,7 @@ class DatasetWriter(AbstractContextManager):
             manifest_path = self.root / "manifest.json"
             manifest = {
                 "format_version": VERSION,
-                "contract": contract,
+                "contract": portable_metadata(contract),
                 "image_format": {"dtype": "uint8", "order": "HWC", "channels": "RGB"},
                 "seed_start": seed_start,
                 "heldout_seed_start": heldout_seed_start,
@@ -335,7 +461,7 @@ class DatasetWriter(AbstractContextManager):
                 CREATE TABLE IF NOT EXISTS identity(sha256 TEXT PRIMARY KEY);
                 CREATE TABLE IF NOT EXISTS files(name TEXT PRIMARY KEY, sha256 TEXT, size INTEGER);
                 CREATE TABLE IF NOT EXISTS frames(frame_id INTEGER PRIMARY KEY, sha256 TEXT UNIQUE,
-                    shape TEXT, shard TEXT, offset INTEGER, size INTEGER, raw_size INTEGER);
+                    shape TEXT, shard TEXT, row_index INTEGER, size INTEGER, raw_size INTEGER);
                 CREATE TABLE IF NOT EXISTS batches(name TEXT PRIMARY KEY, episode_id INTEGER,
                     first_step INTEGER, last_step INTEGER);
                 CREATE INDEX IF NOT EXISTS batch_episode ON batches(episode_id, first_step);
@@ -382,21 +508,21 @@ class DatasetWriter(AbstractContextManager):
 
     def session(self, provenance, settings):
         self.session_id = uuid.uuid4().hex
-        data = pack_record(
-            {"session_id": self.session_id, "provenance": provenance, "settings": settings}
-        )
+        data = {
+            "session_id": self.session_id,
+            "record_json": record_json(
+                {
+                    "session_id": self.session_id,
+                    "provenance": portable_metadata(provenance),
+                    "settings": settings,
+                }
+            ),
+        }
         name = f"session-{self.session_id}.parquet"
         self._commit_files(
-            {name: self._parquet([data])},
+            {name: parquet_bytes("sessions", [data])},
             lambda: self.db.execute("INSERT INTO sessions VALUES(?,?)", (self.session_id, name)),
         )
-
-    @staticmethod
-    def _parquet(records):
-        stream = pa.BufferOutputStream()
-        table = pa.table({"record": pa.array(records, type=pa.binary())})
-        pq.write_table(table, stream, compression="zstd")
-        return stream.getvalue().to_pybytes()
 
     def _commit_files(self, outputs, update):
         self._budget(sum(map(len, outputs.values())))
@@ -467,14 +593,16 @@ class DatasetWriter(AbstractContextManager):
         ).fetchone()
         if pending is not None or existing is not None:
             previous = (
-                np.frombuffer(zlib.decompress(pending[1]), dtype=np.uint8).reshape(self.shape)
+                decode_rgb(pending[1], self.shape)
                 if pending is not None
                 else self.reader.frame(existing[0])
             )
             if not np.array_equal(previous, image):
                 raise ValueError("RGB hash collision: matching hash has different bytes")
             return (pending[0] if pending is not None else existing[0]), False
-        encoded = zlib.compress(image.tobytes())
+        buffer = io.BytesIO()
+        Image.fromarray(image).save(buffer, format="PNG")
+        encoded = buffer.getvalue()
         frame_id = self.next_frame
         self.next_frame += 1
         self.frames[digest] = (frame_id, encoded)
@@ -495,19 +623,21 @@ class DatasetWriter(AbstractContextManager):
         row = {
             **deepcopy(facts),
             "episode_id": self.episode_record["episode_id"],
+            "session_id": self.episode_record["session_id"],
             "step": self.episode_record["length"],
             "source_frame_id": self.current_frame,
             # Upper-bound ID width and boolean size before staging this capture.
             "successor_frame_id": self.next_frame,
             "successor_frame_new": False,
         }
-        if len(pack_record(row)) > MAX_BATCH_BYTES:
+        candidate = transition_record(row)
+        if pa.Table.from_pylist([candidate], schema=transition_schema).nbytes > MAX_BATCH_BYTES:
             raise ValueError("transition metadata exceeds bounded batch size")
         frame_id, new = self._frame(image)
         row.update(successor_frame_id=frame_id, successor_frame_new=new)
-        encoded = pack_record(row)
+        encoded = transition_record(row)
         self.rows.append(encoded)
-        self.pending_bytes += len(encoded)
+        self.pending_bytes += pa.Table.from_pylist([encoded], schema=transition_schema).nbytes
         self.current_frame = frame_id
         self.delta_captures += 1
         self.episode_record["length"] += 1
@@ -527,29 +657,29 @@ class DatasetWriter(AbstractContextManager):
             return
         token = uuid.uuid4().hex
         shard_name, rows_name, episode_name = (
-            f"{kind}-{token}.{ext}"
-            for kind, ext in (("rgb", "bin"), ("steps", "parquet"), ("episode", "parquet"))
+            f"{kind}-{token}.parquet" for kind in ("frames", "steps", "episode")
         )
-        outputs = {episode_name: self._parquet([pack_record(self.episode_record)])}
-        frame_records, chunks, offset = [], [], 0
-        for digest, (frame_id, compressed) in self.frames.items():
+        outputs = {episode_name: parquet_bytes("episodes", [self.episode_record])}
+        frame_records, images = [], []
+        for index, (digest, (frame_id, png)) in enumerate(self.frames.items()):
             frame_records.append(
                 (
                     frame_id,
                     digest,
                     json.dumps(self.shape),
                     shard_name,
-                    offset,
-                    len(compressed),
+                    index,
+                    len(png),
                     math.prod(self.shape),
                 )
             )
-            chunks.append(compressed)
-            offset += len(compressed)
-        if chunks:
-            outputs[shard_name] = b"".join(chunks)
+            images.append(
+                {"frame_id": frame_id, "sha256": digest, "image": {"bytes": png, "path": None}}
+            )
+        if images:
+            outputs[shard_name] = parquet_bytes("frames", images)
         if self.rows:
-            outputs[rows_name] = self._parquet(self.rows)
+            outputs[rows_name] = parquet_bytes("transitions", self.rows)
         episode = self.episode_record
 
         def update():
@@ -1309,340 +1439,116 @@ def export_preview(root, destination, *, episode_id=1, max_steps=600, fps=30):
     return destination
 
 
-def export_huggingface(root, destination, *, shard_rows=4096, max_bytes=10 * 1024**3):
-    """Export a quiescent, validated dataset as standalone Hugging Face Parquet tables."""
-    import base64
-    import io
-    import tempfile
-    import shutil
+def prepare_huggingface(root):
+    """Describe an exact committed snapshot; never convert or copy data files."""
     import yaml
-    from PIL import Image
-    from gradlab.play_trajectory import encode_tree, portable_metadata
 
-    root, destination = Path(root).resolve(), Path(destination).absolute()
-    if destination.exists() or destination.is_symlink():
-        raise ValueError("export destination already exists")
-    if destination.resolve().is_relative_to(root):
-        raise ValueError("export destination cannot be inside the source dataset")
-    if type(shard_rows) is not int or not 1 <= shard_rows <= 1000000:
-        raise ValueError("shard_rows must be between 1 and 1000000")
-    if type(max_bytes) is not int or max_bytes < 1:
-        raise ValueError("export byte budget must be positive")
-
-    def readable(value):
-        if isinstance(value, np.ndarray | np.generic):
-            return value.tolist()
-        raise TypeError(f"unsupported JSON value: {type(value).__name__}")
-
-    def exact_record(value):
-        tree = encode_tree(value)
-        for leaf in tree["arrays"]:
-            leaf["data"] = base64.b64encode(leaf["data"]).decode("ascii")
-        return canonical(tree).decode()
-
-    def schema(fields):
-        return pa.schema([(name, getattr(pa, kind)()) for name, kind in fields])
-
-    transition_schema = schema(
-        [
-            *[
-                (name, "int64")
-                for name in (
-                    "episode_id",
-                    "step",
-                    "source_frame_id",
-                    "successor_frame_id",
-                    "policy_decision_id",
-                    "configured_frame_skip",
-                    "elapsed_native_frames",
-                )
-            ],
-            *[
-                (name, "bool_")
-                for name in (
-                    "successor_frame_new",
-                    "terminated",
-                    "truncated",
-                    "native_game_over",
-                    "native_truncated",
-                    "task_terminated",
-                    "task_truncated",
-                )
-            ],
-            *[
-                (name, "float64")
-                for name in ("policy_reward", "native_reward", "task_reward", "temperature")
-            ],
-            *[
-                (name, "string")
-                for name in (
-                    "session_id",
-                    "action_selection_mode",
-                    "action_override_rule_id",
-                    "selected_action_json",
-                    "effective_action_json",
-                    "native_action_json",
-                    "record_json",
-                )
-            ],
-        ]
-    )
-    episode_schema = schema(
-        [
-            *[(name, "int64") for name in ("episode_id", "seed", "initial_frame_id", "length")],
-            *[(name, "string") for name in ("session_id", "split", "status", "end_reason")],
-            ("initial_frame_new", "bool_"),
-        ]
-    )
-    session_schema = schema([("session_id", "string"), ("record_json", "string")])
-    image_features = {
-        "frame_id": {"dtype": "int64", "_type": "Value"},
-        "sha256": {"dtype": "string", "_type": "Value"},
-        "image": {"_type": "Image"},
-    }
-    frame_schema = pa.schema(
-        [
-            ("frame_id", pa.int64()),
-            ("sha256", pa.string()),
-            ("image", pa.struct([("bytes", pa.binary()), ("path", pa.string())])),
-        ],
-        metadata={b"huggingface": canonical({"info": {"features": image_features}})},
-    )
-
+    root = Path(root)
     with (root / ".writer.lock").open("rb") as lock:
         try:
             fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
         except BlockingIOError as error:
-            raise ValueError("stop the dataset writer before exporting") from error
+            raise ValueError("stop the dataset writer before preparing upload") from error
         summary = validate_dataset(root)
         if not summary["transitions"]:
-            raise ValueError("export requires at least one committed transition")
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        staging = Path(tempfile.mkdtemp(prefix=f".{destination.name}-", dir=destination.parent))
-        try:
-
-            def budget():
-                if disk_bytes(staging) > max_bytes:
-                    raise ValueError("export exceeds byte budget")
-
-            def write_table(config, split, rows, arrow_schema):
-                folder = staging / config / split
-                folder.mkdir(parents=True)
-                writer, pending, pending_bytes = None, [], 0
-                count, in_shard, shard = 0, 0, 0
-
-                def flush():
-                    nonlocal writer, pending, pending_bytes, in_shard, shard
-                    if not pending:
-                        return
-                    if writer is None:
-                        writer = pq.ParquetWriter(
-                            folder / f"{shard:05d}.parquet",
-                            arrow_schema,
-                            compression="zstd",
-                            write_page_index=True,
+            raise ValueError("preparation requires at least one committed transition")
+        with DatasetReader(root) as reader:
+            reader.db.execute("BEGIN")
+            tables = {
+                "frames": {
+                    "assets": [
+                        r[0]
+                        for r in reader.db.execute(
+                            "SELECT shard FROM frames GROUP BY shard ORDER BY min(frame_id)"
                         )
-                    writer.write_table(
-                        pa.Table.from_pylist(pending, schema=arrow_schema),
-                        row_group_size=len(pending),
+                    ]
+                },
+                "transitions": {},
+                "episodes": {},
+                "sessions": {
+                    "metadata": [
+                        r[0]
+                        for r in reader.db.execute(
+                            "SELECT record_file FROM sessions ORDER BY session_id"
+                        )
+                    ]
+                },
+            }
+            for split in ("train", "heldout"):
+                tables["transitions"][split] = [
+                    r[0]
+                    for r in reader.db.execute(
+                        "SELECT b.name FROM batches b JOIN episodes e USING(episode_id) "
+                        "WHERE e.split=? ORDER BY b.episode_id,b.first_step",
+                        (split,),
                     )
-                    in_shard += len(pending)
-                    pending, pending_bytes = [], 0
-                    if in_shard == shard_rows:
-                        writer.close()
-                        writer, in_shard, shard = None, 0, shard + 1
-                    budget()
-
+                ]
+                tables["episodes"][split] = [
+                    r[0]
+                    for r in reader.db.execute(
+                        "SELECT record_file FROM episodes WHERE split=? ORDER BY episode_id",
+                        (split,),
+                    )
+                ]
+            configs, names = [], {"manifest.json"}
+            for kind, splits in tables.items():
+                files = [
+                    {"split": split, "path": paths} for split, paths in splits.items() if paths
+                ]
+                configs.append(
+                    {
+                        "config_name": kind,
+                        "data_files": files,
+                        **({"default": True} if kind == "transitions" else {}),
+                    }
+                )
+                names.update(name for paths in splits.values() for name in paths)
+            card = {
+                "pretty_name": "GradLab RGB trajectories",
+                "tags": ["reinforcement-learning", "image"],
+                "configs": configs,
+            }
+            body = Path(__file__).with_name("dataset-card.md").read_text()
+            readme = ("---\n" + yaml.safe_dump(card, sort_keys=False) + "---\n" + body).encode()
+            report = {
+                "format_version": VERSION,
+                "transitions": summary["transitions"],
+                "unique_frames": summary["unique_frames"],
+                "complete_episodes": summary["complete_episodes"],
+                "incomplete_episodes": summary["incomplete_episodes"],
+                "source_manifest_sha256": hashlib.sha256(canonical(reader.manifest)).hexdigest(),
+                "files": [],
+            }
+            for name in sorted(names):
+                path = reader._data(name)
+                with path.open("rb") as stream:
+                    digest = hashlib.file_digest(stream, "sha256").hexdigest()
+                report["files"].append(
+                    {"path": name, "sha256": digest, "bytes": path.stat().st_size}
+                )
+            report["files"].append(
+                {
+                    "path": "README.md",
+                    "sha256": hashlib.sha256(readme).hexdigest(),
+                    "bytes": len(readme),
+                }
+            )
+            metadata = canonical(report)
+            if len(readme) + len(metadata) > MAX_BATCH_BYTES:
+                raise ValueError("upload metadata exceeds bounded metadata size")
+            # The receipt is the readiness marker. Invalidate it durably before
+            # changing the card, then publish the new receipt last.
+            (root / "upload.json").unlink(missing_ok=True)
+            sync_directory(root)
+            for name, content in (("README.md", readme), ("upload.json", metadata)):
+                temporary = root / f".{name}-{uuid.uuid4().hex}"
                 try:
-                    for row in rows:
-                        size = pa.Table.from_pylist([row], schema=arrow_schema).nbytes
-                        if size > 4 * MAX_BATCH_BYTES:
-                            raise ValueError("export record exceeds bounded row size")
-                        if pending and pending_bytes + size > MAX_BATCH_BYTES:
-                            flush()
-                        pending.append(row)
-                        pending_bytes += size
-                        count += 1
-                        if len(pending) >= min(128, shard_rows - in_shard):
-                            flush()
-                    flush()
+                    write_synced(temporary, content)
+                    os.replace(temporary, root / name)
+                    sync_directory(root)  # Card durability must precede the new receipt.
                 finally:
-                    if writer is not None:
-                        writer.close()
-                budget()
-                return count
-
-            with DatasetReader(root) as reader:
-                reader.db.execute("BEGIN")
-
-                def frames():
-                    for frame in reader.db.execute(
-                        "SELECT frame_id, sha256 FROM frames ORDER BY frame_id"
-                    ):
-                        buffer = io.BytesIO()
-                        Image.fromarray(reader.frame(frame["frame_id"])).save(buffer, format="PNG")
-                        yield {
-                            "frame_id": frame["frame_id"],
-                            "sha256": frame["sha256"],
-                            "image": {"bytes": buffer.getvalue(), "path": None},
-                        }
-
-                def transitions(split):
-                    for episode in reader.episodes():
-                        if episode["split"] != split:
-                            continue
-                        for row in reader.transitions(episode["episode_id"]):
-                            result = {key: row.get(key) for key in transition_schema.names}
-                            result["session_id"] = episode["session_id"]
-                            for key in ("selected_action", "effective_action", "native_action"):
-                                result[f"{key}_json"] = json.dumps(
-                                    row.get(key),
-                                    default=readable,
-                                    allow_nan=False,
-                                    separators=(",", ":"),
-                                )
-                            result["record_json"] = exact_record(row)
-                            yield result
-
-                configs = []
-                write_table("frames", "assets", frames(), frame_schema)
-                configs.append(
-                    {
-                        "config_name": "frames",
-                        "data_files": [{"split": "assets", "path": "frames/assets/*.parquet"}],
-                    }
-                )
-                for name, arrow_schema in [
-                    ("transitions", transition_schema),
-                    ("episodes", episode_schema),
-                ]:
-                    files = []
-                    for split in ("train", "heldout"):
-                        rows = (
-                            transitions(split)
-                            if name == "transitions"
-                            else (e for e in reader.episodes() if e["split"] == split)
-                        )
-                        if write_table(name, split, rows, arrow_schema):
-                            files.append({"split": split, "path": f"{name}/{split}/*.parquet"})
-                    configs.append(
-                        {
-                            "config_name": name,
-                            "data_files": files,
-                            **({"default": True} if name == "transitions" else {}),
-                        }
-                    )
-                sessions = (
-                    {
-                        "session_id": row[0],
-                        "record_json": exact_record(portable_metadata(reader.session(row[0]))),
-                    }
-                    for row in reader.db.execute(
-                        "SELECT session_id FROM sessions ORDER BY session_id"
-                    )
-                )
-                write_table("sessions", "metadata", sessions, session_schema)
-                configs.append(
-                    {
-                        "config_name": "sessions",
-                        "data_files": [
-                            {"split": "metadata", "path": "sessions/metadata/*.parquet"}
-                        ],
-                    }
-                )
-                (staging / "manifest.json").write_bytes(
-                    canonical(portable_metadata(reader.manifest))
-                )
-                report = {
-                    "export_version": 1,
-                    "source_format_version": VERSION,
-                    "source_manifest_sha256": hashlib.sha256(
-                        canonical(reader.manifest)
-                    ).hexdigest(),
-                    "transitions": summary["transitions"],
-                    "unique_frames": summary["unique_frames"],
-                    "complete_episodes": summary["complete_episodes"],
-                    "incomplete_episodes": summary["incomplete_episodes"],
-                }
-                card = {
-                    "pretty_name": "GradLab RGB trajectories",
-                    "tags": ["reinforcement-learning", "image"],
-                    "configs": configs,
-                }
-                (staging / "README.md").write_text(
-                    "---\n"
-                    + yaml.safe_dump(card, sort_keys=False)
-                    + """---
-# GradLab RGB trajectories
-
-A snapshot of recorded Policy execution for trajectory and neural-emulator research.
-Full RGB, including HUD pixels, is preserved as lossless PNG. Each image is stored
-once in `frames`; ordered `transitions` reference source/successor frame IDs.
-`episodes` includes initial frames, seeds, completion status and session IDs.
-`sessions` contains collection settings and portable checkpoint/runtime provenance.
-`manifest.json` records the collection contract. No checkpoint is needed to read it.
-
-## Loading
-
-```python
-from datasets import load_dataset
-repo = "YOUR_NAMESPACE/YOUR_DATASET"  # Or this local export directory.
-steps = load_dataset(repo, "transitions", split="train")
-frames = load_dataset(repo, "frames", split="assets")
-episodes = load_dataset(repo, "episodes", split="train")
-# Join source_frame_id / successor_frame_id to frames.frame_id.
-# Frame IDs are identifiers, not zero-based row offsets.
-```
-
-Each configuration is a separate table in the Hugging Face Dataset Viewer.
-The `frames` table previews images; the transition table shows IDs and numerical
-facts. The Hub does not automatically render frame-ID joins as image columns.
-Use `(episode_id, step)` for ordering and `session_id` for provenance.
-Action JSON columns preserve scalar/vector shape. Nullable fields mean unavailable.
-`record_json` retains every original fact and exact NumPy dtype/shape: parse its
-JSON, parse `structure` for the tagged tree, and base64-decode each `arrays[].data`
-using the declared NumPy dtype/shape. Array references index that array list.
-The tree tags are scalar, array, dict (key/value pairs), list, and tuple.
-
-## Splits and limitations
-
-Episode assignments are preserved as `train` and `heldout`; absent splits are
-omitted. `frames/assets` is a shared image pool, NOT an independent training split.
-Only join images referenced by your chosen episode split; sharing image bytes does
-not permit fitting on held-out trajectories, labels, or histories. Incomplete
-prefixes remain marked in `episodes` and must not be treated as game-over events.
-Boundaries and temperature changes are recorded in session settings; Counterfactual
-Playback remains ineligible as Acceptance or Promotion evidence. Capture cadence
-comes from the manifest, and omitted native intermediate frames are unavailable.
-Image uniqueness does not measure hidden simulator-state coverage.
-
-This exporter does not assign a dataset license. Set the applicable license and
-source attribution in this card before publication. `export.json` identifies the
-snapshot and hashes its files; this is collection evidence, not model performance.
-"""
-                )
-            report["files"] = []
-            for path in sorted(staging.rglob("*")):
-                if path.is_file():
-                    with path.open("rb") as stream:
-                        digest = hashlib.file_digest(stream, "sha256").hexdigest()
-                    report["files"].append(
-                        {
-                            "path": path.relative_to(staging).as_posix(),
-                            "sha256": digest,
-                            "bytes": path.stat().st_size,
-                        }
-                    )
-            (staging / "export.json").write_bytes(canonical(report))
-            budget()
-            # Destination must still be absent; preserve any concurrently created directory.
-            if destination.exists() or destination.is_symlink():
-                raise ValueError("export destination already exists")
-            os.rename(staging, destination)
+                    temporary.unlink(missing_ok=True)
             return report
-        finally:
-            if staging.exists():
-                shutil.rmtree(staging)
 
 
 def main(argv=None):
@@ -1671,13 +1577,9 @@ def main(argv=None):
     collect.add_argument("--schedule-seed", type=int, default=0)
     collect.add_argument("--device", default="cpu")
     collect.add_argument("--debug", action="store_true", help="start the local debugger paused")
-    for name in ("validate", "inspect", "progress", "preview", "export-hf"):
+    for name in ("validate", "inspect", "progress", "preview", "prepare-hf"):
         mode = modes.add_parser(name)
         mode.add_argument("dataset", type=Path)
-        if name == "export-hf":
-            mode.add_argument("output", type=Path)
-            mode.add_argument("--shard-rows", type=int, default=4096)
-            mode.add_argument("--max-gib", type=float, default=10)
         if name in {"inspect", "preview"}:
             mode.add_argument("--episode", type=int, default=1)
         if name == "preview":
@@ -1685,20 +1587,8 @@ def main(argv=None):
             mode.add_argument("--max-steps", type=int, default=600)
             mode.add_argument("--fps", type=float, default=30)
     args = parser.parse_args(argv)
-    if args.mode == "export-hf":
-        if not math.isfinite(args.max_gib) or args.max_gib <= 0:
-            parser.error("--max-gib must be positive and finite")
-        print(
-            json.dumps(
-                export_huggingface(
-                    args.dataset,
-                    args.output,
-                    shard_rows=args.shard_rows,
-                    max_bytes=int(args.max_gib * 1024**3),
-                ),
-                sort_keys=True,
-            )
-        )
+    if args.mode == "prepare-hf":
+        print(json.dumps(prepare_huggingface(args.dataset), sort_keys=True))
     elif args.mode == "validate":
         print(json.dumps(validate_dataset(args.dataset), sort_keys=True))
     elif args.mode == "progress":
