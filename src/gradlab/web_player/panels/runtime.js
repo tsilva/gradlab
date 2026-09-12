@@ -186,7 +186,7 @@ export class PanelRuntime {
       ))
       .map(([id]) => Promise.resolve(this.safeCall(id, "renderFrame", kind, blob, metadata))
         .catch((error) => {
-          this.onError?.(id, error);
+          if (metadata.isCurrent?.() !== false) this.onError?.(id, error);
           return false;
         }));
     const results = await Promise.all(tasks);
@@ -202,7 +202,7 @@ export class PanelRuntime {
       ))
       .map(([id]) => Promise.resolve(this.safeCall(id, "prepareFrame", kind, blob, metadata))
         .catch((error) => {
-          this.onError?.(id, error);
+          if (metadata.isCurrent?.() !== false) this.onError?.(id, error);
           return false;
         }));
     const results = await Promise.all(tasks);

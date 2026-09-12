@@ -319,3 +319,45 @@ test('speculative failure is retried on replay demand without emitting a specula
   assert.equal(h.inspection.view.snapshot.transition.step, 22);
   assert.equal(attempts, 2); assert.deepEqual(h.errors, []); h.inspection.dispose();
 });
+
+for (const supersede of ['seek', 'live', 'demand', 'episode', 'dispose', 'none']) {
+  test(`frame decode errors report only current work after ${supersede}`, async () => {
+    const held = deferred();
+    const h = harness({
+      fetchStep: async ({ step }) => ({ snapshot: framed(step), frames: [], points: [] }),
+      renderFrame: (kind, blob) => blob?.size ? held.promise : Promise.resolve(),
+    });
+    await h.inspection.admitSnapshot(snapshot(100));
+    await h.inspection.setFrameDemand({ kinds: [1] });
+    await h.inspection.selectStep(20); await flush();
+    const pending = h.inspection.receiveFrame({ epoch: 1, sequence: 20, kind: 1, blob: new Blob(['20']) });
+    if (supersede === 'seek') await h.inspection.selectStep(30);
+    if (supersede === 'live') h.inspection.returnToLive();
+    if (supersede === 'demand') await h.inspection.setFrameDemand({ kinds: [] });
+    if (supersede === 'episode') await h.inspection.admitSnapshot(snapshot(90, { episode: 2, episodeId: 'b' }));
+    if (supersede === 'dispose') h.inspection.dispose();
+    held.reject(new Error('decode error'));
+    await pending; await flush();
+    assert.deepEqual(h.errors, supersede === 'none' ? ['decode error'] : []);
+    h.inspection.dispose();
+  });
+}
+
+test('replacing a diagnostic generation suppresses its pending decode and error', async () => {
+  const held = deferred(); let metadata;
+  const h = harness({ renderFrame: (kind, blob, value) => {
+    if (blob) { metadata = value; return held.promise; }
+  } });
+  await h.inspection.setFrameDemand({ kinds: [3] });
+  await h.inspection.admitSnapshot(framed(100));
+  const pending = h.inspection.receiveFrame({ epoch: 1, sequence: 100, kind: 3, generation: 3, blob: new Blob(['diagnostic']) });
+  assert.equal(metadata.isCurrent(), true);
+  const replacement = framed(100);
+  replacement.transition.attribution.generation = 5;
+  await h.inspection.admitSnapshot(replacement);
+  assert.equal(metadata.isCurrent(), false);
+  held.reject(new Error('obsolete diagnostic'));
+  await pending;
+  assert.deepEqual(h.errors, []);
+  h.inspection.dispose();
+});

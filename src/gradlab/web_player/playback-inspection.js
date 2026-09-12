@@ -62,7 +62,7 @@ export function createPlaybackInspection({
         inspectionSequence: state.inspectionSequence, replayingInspection: state.replayingInspection,
         seekingStep: state.seekingStep, history: Object.freeze([...state.history]),
         currentHistory: Object.freeze([...currentEpisodeHistory()]),
-        range: episodeStepRange(state.liveSnapshot?.trajectory, retainedSnapshots),
+        range: freeze(episodeStepRange(state.liveSnapshot?.trajectory, retainedSnapshots)),
         eventPoints: Object.freeze([...state.eventOverview.buckets.values()].map(point => freeze({ ...point }))),
         canReplay: canReplayInspection(), running: playbackIsRunning(),
       });
@@ -264,11 +264,20 @@ export function createPlaybackInspection({
     return state.frameBlobs.get(kind)?.get(frameKey(sequence, generation)) || null;
   }
 
-  function frameMetadata(sequence, generation, { preparing = false } = {}) {
+  function frameMetadata(sequence, generation, { preparing = false, kind } = {}) {
     const episodeLifetime = lifetime, selection = cursorGeneration, demand = frameDemandGeneration;
     return { sequence, generation, isCurrent: () => !disposed && episodeLifetime === lifetime
       && selection === cursorGeneration && demand === frameDemandGeneration
-      && (preparing ? state.inspectionSequence === null : Number(state.snapshot?.sequence) === Number(sequence)) };
+      && (preparing ? state.inspectionSequence === null : Number(state.snapshot?.sequence) === Number(sequence))
+      && (!isGeneratedFrame(kind) || (generation > 0 && frameGeneration(kind, state.snapshot) === generation)) };
+  }
+
+  async function renderEligibleFrame(kind, blob, metadata) {
+    try {
+      await renderFrame(kind, blob, metadata);
+    } catch (error) {
+      if (metadata.isCurrent()) reportError(error);
+    }
   }
 
   async function showFramesForSequence(sequence) {
@@ -285,9 +294,9 @@ export function createPlaybackInspection({
       const blob = expected ? exactFrameBlob(kind, sequence, generation) : null;
       if (expected && !blob) missing.push(kind);
       if (blob) {
-        await renderFrame(kind, blob, frameMetadata(sequence, generation));
+        await renderEligibleFrame(kind, blob, frameMetadata(sequence, generation, { kind }));
       } else if (!expected || !retainMissing) {
-        await renderFrame(kind, null, frameMetadata(sequence, generation));
+        await renderEligibleFrame(kind, null, frameMetadata(sequence, generation, { kind }));
       }
     }));
     return missing;
@@ -511,7 +520,6 @@ export function createPlaybackInspection({
     state.snapshot = state.liveSnapshot;
     if (state.snapshot) {
       publish();
-      publish();
       void showFramesForSequence(Number(state.snapshot.sequence));
     }
     if (announce) broadcastInspection(null);
@@ -677,8 +685,14 @@ export function createPlaybackInspection({
     isReady: ({ snapshot }) => requiredFramesAvailable(snapshot),
     prepare: async ({ snapshot }) => {
       if (state.inspectionSequence !== null) return;
-      await Promise.all(requiredFrameKinds(snapshot).map(kind => prepareFrame(kind,
-        exactFrameBlob(kind, snapshot.sequence), frameMetadata(Number(snapshot.sequence), 0, { preparing: true }))));
+      await Promise.all(requiredFrameKinds(snapshot).map(async kind => {
+        const metadata = frameMetadata(Number(snapshot.sequence), 0, { preparing: true, kind });
+        try {
+          await prepareFrame(kind, exactFrameBlob(kind, snapshot.sequence), metadata);
+        } catch (error) {
+          if (metadata.isCurrent()) throw error;
+        }
+      }));
     },
     present: ({ snapshot, ticket }) => {
       state.liveSnapshot = snapshot;
@@ -719,7 +733,7 @@ export function createPlaybackInspection({
       && (!isGeneratedFrame(kind) || (frameGeneration(kind, selected) > 0 && frameGeneration(kind, selected) === generation));
     const currentLifetime = lifetime;
     try {
-      if (exact && frameKinds.includes(kind)) await renderFrame(kind, blob, frameMetadata(sequence, generation));
+      if (exact && frameKinds.includes(kind)) await renderEligibleFrame(kind, blob, frameMetadata(sequence, generation, { kind }));
       if (!disposed && currentLifetime === lifetime) await livePresentation.notifyReady();
     } catch (error) { if (currentLifetime === lifetime) reportError(error); }
   }
