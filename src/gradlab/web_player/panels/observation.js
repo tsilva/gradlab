@@ -226,7 +226,7 @@ export function mount({ definition }) {
     ) return true;
     const request = ++baseBitmapRequest;
     const bitmap = await createImageBitmap(blob);
-    if (!mounted || request !== baseBitmapRequest) {
+    if (!mounted || request !== baseBitmapRequest || metadata.isCurrent?.() === false) {
       bitmap.close();
       return true;
     }
@@ -264,7 +264,8 @@ export function mount({ definition }) {
         }
         await prepareFrame(kind, blob, metadata);
         if (
-          sameFrameIdentity(incoming, targetBaseIdentity())
+          metadata.isCurrent?.() !== false
+          && sameFrameIdentity(incoming, targetBaseIdentity())
           && promotePreparedBase()
         ) commitSnapshot(frameSnapshot);
         return true;
@@ -285,6 +286,7 @@ export function mount({ definition }) {
         const bitmap = await createImageBitmap(blob);
         if (
           !mounted
+          || metadata.isCurrent?.() === false
           || request !== attributionBitmapRequest
           || !sameFrameIdentity(incoming, targetAttributionIdentity())
         ) {
@@ -314,6 +316,7 @@ export function mount({ definition }) {
       const bitmap = await createImageBitmap(blob);
       if (
         !mounted
+        || metadata.isCurrent?.() === false
         || request !== cnnBitmapRequest
         || !sameFrameIdentity(incoming, targetCnnIdentity())
       ) {

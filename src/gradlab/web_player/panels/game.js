@@ -264,7 +264,7 @@ export function mount({ definition, services }) {
     }
     const decodeStarted = performance.now();
     const bitmap = await createImageBitmap(blob);
-    if (!mounted || request !== bitmapRequest) {
+    if (!mounted || request !== bitmapRequest || metadata.isCurrent?.() === false) {
       bitmap.close();
       return true;
     }
@@ -320,7 +320,7 @@ export function mount({ definition, services }) {
         return true;
       }
       await prepareFrame(kind, blob, metadata);
-      if (incomingSequence === targetSequence) commitPrepared(frameSnapshot);
+      if (metadata.isCurrent?.() !== false && incomingSequence === targetSequence) commitPrepared(frameSnapshot);
       return true;
     },
     resetFrames() {

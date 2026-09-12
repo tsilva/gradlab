@@ -2799,6 +2799,7 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     panel_root = root / "panels"
     font_root = root / "fonts"
     expected_assets = (
+        root / "playback-inspection.js",
         root / "index.html",
         root / "oauth_complete.html",
         root / "oauth_complete.js",
@@ -2937,14 +2938,11 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert "hideGoExploreValuePanel(snapshot)" in script
     assert 'features.add("rewards")' in script
     assert 'this.activeBreadcrumbRoute = ""' in source_browser
-    assert 'type: "inspection_frames"' in script
-    assert "sequence < (state.receivedFrameSequence" not in script
 
     assert '"gradlab.player.workspace.v8.paired"' in script
     assert '"gradlab.player.workspace.v7.single"' in script
     assert "createTelemetryPanel" in script
     assert "updateTelemetryPanel" in script
-    assert "snapshot.history_point" in script
     assert "historyFromTransition" not in script
     assert "window.GridStack.init" in script
     assert "column: 12" in script

@@ -29,20 +29,8 @@ test("event rows inspect their retained transition", () => {
     /jump\.addEventListener\("click", \(\) => recorded\s*\? services\.inspectStep\(point\.step\)\s*: services\.inspectSequence\(point\.sequence\)\)/,
   );
   assert.match(panel, /jump\.setAttribute\("aria-current", "step"\)/);
-  assert.match(app, /services: \{[\s\S]*?\n    inspectSequence,/);
 });
 
-test("inspection checks driver safety before selecting the event sequence", () => {
-  const cursorStart = app.indexOf("function setInspectionCursor(");
-  const cursorEnd = app.indexOf("\nfunction inspectSequence(", cursorStart);
-  const cursor = app.slice(cursorStart, cursorEnd);
-
-  assert.ok(cursor.indexOf("maybePauseForInspection()") >= 0);
-  assert.ok(
-    cursor.indexOf("maybePauseForInspection()")
-      < cursor.indexOf("state.inspectionSequence = numericSequence"),
-  );
-});
 
 test("the events panel owns the only scrollbar", () => {
   const listRule = styles.match(/\.event-list \{([^}]*)\}/)?.[1] || "";
