@@ -366,40 +366,14 @@ class PlaybackHost:
                 frames,
             )
 
-    def chart_history(self, epoch, episode_id, first=None, last=None):
+    def read_diagnostics(self, epoch, request):
         with self._lock:
             if epoch != self._session_epoch or self._active is None or self._phase != "active":
                 raise ValueError("the Playback Session has been replaced")
-            read = getattr(self._active.runner, "chart_history", None)
-            if read is None:
-                raise ValueError("episode chart history is unavailable")
-        result = read(episode_id, first, last)
-        with self._lock:
-            if epoch != self._session_epoch or self._phase != "active":
-                raise ValueError("the Playback Session has been replaced")
-        return result
-
-    def reward_history(self, epoch, episode_id, first=None, last=None):
-        with self._lock:
-            if epoch != self._session_epoch or self._active is None or self._phase != "active":
-                raise ValueError("the Playback Session has been replaced")
-            read = getattr(self._active.runner, "reward_history", None)
-            if read is None:
-                raise ValueError("episode reward history is unavailable")
-        result = read(episode_id, first, last)
-        with self._lock:
-            if epoch != self._session_epoch or self._phase != "active":
-                raise ValueError("the Playback Session has been replaced")
-        return result
-
-    def event_history(self, epoch, episode_id, first=None, last=None):
-        with self._lock:
-            if epoch != self._session_epoch or self._active is None or self._phase != "active":
-                raise ValueError("the Playback Session has been replaced")
-            read = getattr(self._active.runner, "event_history", None)
-            if read is None:
-                raise ValueError("episode event history is unavailable")
-        result = read(episode_id, first, last)
+            diagnostics = getattr(self._active.runner, "diagnostics", None)
+            if diagnostics is None:
+                raise ValueError(f"episode {request.kind} history is unavailable")
+        result = diagnostics.read(request)
         with self._lock:
             if epoch != self._session_epoch or self._phase != "active":
                 raise ValueError("the Playback Session has been replaced")

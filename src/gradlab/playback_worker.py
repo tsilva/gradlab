@@ -14,6 +14,7 @@ from multiprocessing.connection import Connection
 from multiprocessing.process import BaseProcess
 from typing import Any
 
+from gradlab.play_diagnostics import DiagnosticRead
 from gradlab.operator_credentials import PROTECTED_ENV_NAMES
 from gradlab.play_runtime import PlaySourceSpec
 from gradlab.play_web import idle_playback_snapshot
@@ -69,17 +70,18 @@ def _worker_main(
                         if len(read_jobs) >= 8:
                             raise ValueError("too many pending diagnostic reads")
                         kind = request["kind"]
-                        if kind not in {"chart_history", "reward_history", "event_history",
-                                       "inspect_recorded_step"}:
+                        if kind not in {"diagnostics", "inspect_recorded_step"}:
                             raise ValueError("unsupported diagnostic read")
                         value = uuid.uuid4().hex
-                        read_jobs[value] = reads.submit(
-                            getattr(host, kind),
-                            request["epoch"],
-                            request["episode_id"],
-                            *([request["step"]] if kind == "inspect_recorded_step" else
-                              [request.get("first"), request.get("last")]),
-                        )
+                        if kind == "inspect_recorded_step":
+                            future = reads.submit(
+                                host.inspect_recorded_step, request["epoch"],
+                                request["episode_id"], request["step"],
+                            )
+                        else:
+                            query = DiagnosticRead(**request["query"])
+                            future = reads.submit(host.read_diagnostics, request["epoch"], query)
+                        read_jobs[value] = future
                     else:
                         future = read_jobs[request["job_id"]]
                         value = {"done": future.done()}
@@ -130,45 +132,6 @@ def _worker_main(
                 value = host.drain_snapshot_updates()
             elif operation == "history_payload":
                 value = host.history_payload()
-            elif operation == "chart_history":
-                try:
-                    value = host.chart_history(
-                        request["epoch"],
-                        request["episode_id"],
-                        request.get("first"),
-                        request.get("last"),
-                    )
-                except (ValueError, OSError) as exc:
-                    connection.send(
-                        {"ok": False, "error_type": type(exc).__name__, "error": str(exc)}
-                    )
-                    continue
-            elif operation == "reward_history":
-                try:
-                    value = host.reward_history(
-                        request["epoch"],
-                        request["episode_id"],
-                        request.get("first"),
-                        request.get("last"),
-                    )
-                except (ValueError, OSError) as exc:
-                    connection.send(
-                        {"ok": False, "error_type": type(exc).__name__, "error": str(exc)}
-                    )
-                    continue
-            elif operation == "event_history":
-                try:
-                    value = host.event_history(
-                        request["epoch"],
-                        request["episode_id"],
-                        request.get("first"),
-                        request.get("last"),
-                    )
-                except (ValueError, OSError) as exc:
-                    connection.send(
-                        {"ok": False, "error_type": type(exc).__name__, "error": str(exc)}
-                    )
-                    continue
             elif operation == "episode_start_payload":
                 value = host.episode_start_payload()
             elif operation == "poll_response":
@@ -431,20 +394,10 @@ class IsolatedPlaybackHost:
                 return result["result"]
             time.sleep(poll_interval)
 
-    def chart_history(self, epoch, episode_id, first=None, last=None):
-        return dict(
-            self._read("chart_history", epoch=epoch, episode_id=episode_id, first=first, last=last)
-        )
+    def read_diagnostics(self, epoch, request: DiagnosticRead):
+        from dataclasses import asdict
 
-    def reward_history(self, epoch, episode_id, first=None, last=None):
-        return dict(
-            self._read("reward_history", epoch=epoch, episode_id=episode_id, first=first, last=last)
-        )
-
-    def event_history(self, epoch, episode_id, first=None, last=None):
-        return dict(
-            self._read("event_history", epoch=epoch, episode_id=episode_id, first=first, last=last)
-        )
+        return dict(self._read("diagnostics", epoch=epoch, query=asdict(request)))
 
     def inspect_recorded_step(self, epoch: int, episode_id: str, step: int) -> dict[str, Any]:
         return dict(

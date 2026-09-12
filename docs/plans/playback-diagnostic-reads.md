@@ -1,6 +1,6 @@
 # Playback Session diagnostic-read refactor
 
-Status: final implementation plan, following the approved design interview. No implementation is included.
+Status: implemented. See [verification and review outcomes](../playback-diagnostic-reads-verification.md). The baseline and implementation sequence below preserve the approved design context.
 
 ## Baseline and feasibility
 
@@ -26,12 +26,12 @@ Paths below are relative to the repository root. Symbols are authoritative when 
 
 | Module | Current responsibility | Planned treatment |
 | --- | --- | --- |
-| `src/gradlab/play_diagnostics.py` | `read_diagnostics`, `DiagnosticQueries`, `RecordedPrefix`, isolated calculation dispatch | Center the owned read lifecycle here; replace access to private runner fields with an explicit source adapter |
+| `src/gradlab/play_diagnostics.py` | `DiagnosticRead`, `DiagnosticReads`, `LiveRecordingSource`, `ImportedRecordingSource`, `DirectDiagnosticReader`, `DiagnosticQueries`, `RecordedPrefix` | Own reservation through final validation; adapters supply recording authority without private runner-state access |
 | `src/gradlab/play_trajectory.py` | `EpisodeRecording` and `ImportedTrajectory` reservations and retirement | Reuse both real adapters and shared retention accounting; narrowly add reservation support only if required |
 | `src/gradlab/play_web.py` | Live runner reads, recording replacement, HTTP handlers, `ChartResponses` ownership | Bind live diagnostic source; translate HTTP requests through one reader seam; retain encoding and response presentation |
 | `src/gradlab/play_trajectory_runner.py` | Imported runner diagnostic forwarding and close ordering | Bind imported source to the same lifecycle module |
-| `src/gradlab/play_application.py` | Active runner selection, phase and session-epoch checks | Consolidate repeated per-kind coordination into one session-aware read path |
-| `src/gradlab/playback_worker.py` | Bounded asynchronous admission, result polling, proxy methods, synchronous per-kind dispatch | Route the three kinds through one diagnostic operation; preserve scheduling and error translation |
+| `src/gradlab/play_application.py` | `PlaybackHost.read_diagnostics`: active runner selection, phase and session-epoch checks | One session-aware path computes outside the host lock |
+| `src/gradlab/playback_worker.py` | Bounded `begin_read`/`poll_read` admission and `IsolatedPlaybackHost.read_diagnostics` | One diagnostic operation; synchronous per-kind history dispatch removed; inspection remains separate |
 | `src/gradlab/play_chart_history.py`, `play_reward_history.py`, `play_event_history.py` | Scientific calculation and incremental indexes | Keep semantics and algorithms intact; adapt their private input representation only as necessary |
 | `src/gradlab/play_chart_transport.py` | Revisioned `chart-columns-v1` encoding | Keep at the HTTP output seam with its existing server-scoped cache |
 
