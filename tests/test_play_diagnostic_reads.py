@@ -577,7 +577,7 @@ def test_worker_cancellation_remains_http_400_for_every_kind(tmp_path, monkeypat
                     headers={"Authorization": f"Bearer {server.token}"},
                 )
                 assert response.status == 400
-                assert await response.json() == {"error": "playback worker CancelledError: "}
+                assert await response.json() == {"error": "playback worker CancelledError: unknown worker failure"}
 
     try:
         asyncio.run(scenario())
