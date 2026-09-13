@@ -1160,9 +1160,10 @@ def _record_pre_submit_failure(
 ) -> None:
     prefix = f"{authority.run_prefix(manifest.run_id)}/attempts/{manifest.attempt_id}"
     keys = sorted(authority.control.iter_keys(prefix))
-    expected = [f"{prefix}/manifest.json"]
+    expected = [f"{prefix}/coordinator.json", f"{prefix}/manifest.json"]
     if keys != expected:
         raise RuntimeError("not-found dstack task has attempt activity beyond its manifest")
+    authority.coordinator_binding(manifest.run_id, manifest.attempt_id)
     authority.create_attempt_terminal(
         TerminalReceipt(
             run_id=manifest.run_id,

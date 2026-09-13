@@ -1140,24 +1140,59 @@ def test_reconciliation_accepts_deployed_goal_variant_schema_one_without_mutatin
     assert document["goal_variant"]["schema_version"] == 1
 
 
-def test_pre_submit_failure_records_typed_attempt_evidence() -> None:
-    manifest = _manifest_only_run()
-    authority = mock.MagicMock()
-    prefix = f"runs/{manifest.run_id}"
-    authority.run_prefix.return_value = prefix
-    authority.control.iter_keys.return_value = iter(
-        [f"{prefix}/attempts/{manifest.attempt_id}/manifest.json"]
+def _pre_submit_authority(tmp_path: Path):
+    from gradlab.r2_store import BucketConfig, RunStorageConfig
+    from gradlab.run_authority import RunAuthority
+
+    return RunAuthority(
+        RunStorageConfig(
+            control=BucketConfig((tmp_path / "control").as_uri()),
+            evaluation=BucketConfig((tmp_path / "eval").as_uri()),
+            models=BucketConfig(
+                (tmp_path / "models").as_uri(),
+                public_base_url="https://models.example.test",
+            ),
+        )
     )
+
+
+def test_pre_submit_failure_records_typed_attempt_evidence(tmp_path: Path) -> None:
+    manifest = _manifest_only_run()
+    authority = _pre_submit_authority(tmp_path)
+    authority.create_attempt_manifest(manifest)
 
     _record_pre_submit_failure(authority, manifest)
 
-    receipt = authority.create_attempt_terminal.call_args.args[0]
-    assert receipt.run_id == manifest.run_id
-    assert receipt.attempt_id == manifest.attempt_id
-    assert receipt.state == "resumable_failure"
-    assert receipt.stop_reason == "pre_submit_failure"
-    assert receipt.final_step == 0
-    assert receipt.drain["complete"] is False
+    receipt = authority.semantic_state(manifest.run_id)["attempt_terminals"][0]
+    assert receipt["run_id"] == manifest.run_id
+    assert receipt["attempt_id"] == manifest.attempt_id
+    assert receipt["state"] == "resumable_failure"
+    assert receipt["stop_reason"] == "pre_submit_failure"
+    assert receipt["final_step"] == 0
+    assert receipt["drain"]["complete"] is False
+
+
+@pytest.mark.parametrize("invalid", ["activity", "binding_hash", "missing_binding"])
+def test_pre_submit_failure_rejects_activity_or_invalid_binding(
+    tmp_path: Path, invalid: str
+) -> None:
+    manifest = _manifest_only_run()
+    authority = _pre_submit_authority(tmp_path)
+    authority.create_attempt_manifest(manifest)
+    prefix = f"runs/{manifest.run_id}/attempts/{manifest.attempt_id}"
+    if invalid == "activity":
+        authority.control.put_json(f"{prefix}/activity.json", {"started": True})
+    elif invalid == "binding_hash":
+        key = f"{prefix}/coordinator.json"
+        binding = authority.control.get_json_optional(key)
+        binding["manifest_sha256"] = "0" * 64
+        authority.control.put_json(key, binding, create_only=False)
+    else:
+        (tmp_path / "control" / prefix / "coordinator.json").unlink()
+
+    with pytest.raises(RuntimeError):
+        _record_pre_submit_failure(authority, manifest)
+    assert authority.control.get_json_optional(f"{prefix}/terminal.json") is None
 
 
 def test_terminal_task_without_receipt_records_typed_startup_failure() -> None:

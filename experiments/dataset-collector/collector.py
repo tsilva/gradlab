@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections import deque
+from collections import OrderedDict, deque
 from contextlib import AbstractContextManager
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
@@ -14,7 +14,9 @@ import json
 import math
 import os
 from pathlib import Path
+import signal
 import sqlite3
+import threading
 import time
 import uuid
 
@@ -154,13 +156,24 @@ def transition_record(row):
     return result
 
 
+def record_byte_bound(row):
+    """Conservative Arrow allocation bound for this flat, scalar-only schema.
+
+    Each column has at most an eight-byte value, offset and validity bit. UTF-8
+    bytes are counted exactly. Avoid constructing two Arrow tables per step.
+    """
+    return 64 * len(transition_schema) + sum(
+        len(value.encode("utf-8")) for value in row.values() if isinstance(value, str)
+    )
+
+
 def parquet_bytes(kind, rows):
     stream = pa.BufferOutputStream()
     pq.write_table(
         pa.Table.from_pylist(rows, schema=TABLE_SCHEMAS[kind]),
         stream,
         compression="zstd",
-        row_group_size=64,
+        row_group_size=1024,
         write_page_index=True,
     )
     return stream.getvalue().to_pybytes()
@@ -231,12 +244,18 @@ def existing_size(path):
 
 def disk_bytes(root):
     total = 0
-    for parent, _, files in os.walk(root):
-        for name in files:
-            try:
-                total += (Path(parent) / name).stat().st_size
-            except FileNotFoundError:
-                pass
+    directories = [root]
+    while directories:
+        with os.scandir(directories.pop()) as entries:
+            for entry in entries:
+                try:
+                    if entry.is_dir():
+                        if not entry.is_symlink():
+                            directories.append(entry.path)
+                    else:
+                        total += entry.stat().st_size
+                except FileNotFoundError:
+                    pass
     return total
 
 
@@ -263,6 +282,8 @@ class Limits:
     batch_steps: int = 128
     target_reuse: float | None = None
     min_reuse_captures: int = 10000
+    reuse_window_episodes: int = 0
+    batch_bytes: int = MAX_BATCH_BYTES
 
     def __post_init__(self):
         for name in ("max_steps", "max_bytes", "batch_steps", "min_reuse_captures"):
@@ -272,6 +293,16 @@ class Limits:
             raise ValueError("max_seconds must be positive and finite")
         if self.batch_steps > 4096:
             raise ValueError("batch_steps must be <= 4096")
+        if (
+            type(self.batch_bytes) is not int
+            or not MAX_BATCH_BYTES <= self.batch_bytes <= 64 * 1024**2
+        ):
+            raise ValueError("batch_bytes must be between 8 MiB and 64 MiB")
+        if (
+            type(self.reuse_window_episodes) is not int
+            or not 0 <= self.reuse_window_episodes <= 10000
+        ):
+            raise ValueError("reuse_window_episodes must be between zero and 10000")
         if self.target_reuse is not None and (
             isinstance(self.target_reuse, bool)
             or not math.isfinite(self.target_reuse)
@@ -317,6 +348,8 @@ class DatasetReader(AbstractContextManager):
 
     def __init__(self, root):
         self.root = Path(root)
+        self.table_cache = OrderedDict()
+        self.table_cache_bytes = 0
         self.manifest = json.loads((self.root / "manifest.json").read_bytes())
         if self.manifest.get("format_version") != VERSION:
             raise ValueError("unsupported dataset version; preserve it and use a new directory")
@@ -333,6 +366,7 @@ class DatasetReader(AbstractContextManager):
             raise ValueError("dataset manifest integrity failure")
 
     def close(self):
+        self.table_cache.clear()
         self.db.close()
 
     def __exit__(self, *args):
@@ -349,12 +383,32 @@ class DatasetReader(AbstractContextManager):
         if binding is None:
             raise ValueError("uncommitted record file")
         path = self._data(name)
-        if binding["size"] > 4 * MAX_BATCH_BYTES or path.stat().st_size != binding["size"]:
+        stat = path.stat()
+        if binding["size"] > 128 * 1024**2 or stat.st_size != binding["size"]:
             raise ValueError("record file integrity failure: size disagrees with bounded contract")
+        key = (
+            name,
+            binding["sha256"],
+            stat.st_size,
+            stat.st_ino,
+            stat.st_mtime_ns,
+            stat.st_ctime_ns,
+        )
+        cached = self.table_cache.get(key)
+        if cached is not None:
+            self.table_cache.move_to_end(key)
+            return cached
         data = path.read_bytes()
         if len(data) != binding["size"] or hashlib.sha256(data).hexdigest() != binding["sha256"]:
             raise ValueError(f"record file integrity failure: {name}")
-        return pq.read_table(pa.BufferReader(data))
+        table = pq.read_table(pa.BufferReader(data))
+        if table.nbytes <= MAX_BATCH_BYTES:
+            while self.table_cache_bytes + table.nbytes > MAX_BATCH_BYTES:
+                _, old = self.table_cache.popitem(last=False)
+                self.table_cache_bytes -= old.nbytes
+            self.table_cache[key] = table
+            self.table_cache_bytes += table.nbytes
+        return table
 
     def _records(self, name):
         return [
@@ -401,6 +455,10 @@ class DatasetReader(AbstractContextManager):
         row = self.db.execute("SELECT * FROM frames WHERE frame_id=?", (frame_id,)).fetchone()
         if row is None:
             raise ValueError(f"missing frame {frame_id}")
+        return self._decode_frame(row)
+
+    def _decode_frame(self, row):
+        frame_id = row["frame_id"]
         shape = json.loads(row["shape"])
         size = math.prod(shape)
         if len(shape) != 3 or shape[2] != 3 or not 0 < size <= MAX_IMAGE_BYTES:
@@ -554,13 +612,12 @@ class DatasetWriter(AbstractContextManager):
     def _budget(self, additional):
         index = self.root / "index.sqlite"
         journal_reserve = index.stat().st_size * 2 if index.exists() else 0
-        if (
-            disk_bytes(self.root) + additional + journal_reserve + DISK_RESERVE
-            > self.limits.max_bytes
-        ):
+        actual = disk_bytes(self.root)
+        if actual + additional + journal_reserve + DISK_RESERVE > self.limits.max_bytes:
             raise ValueError(
                 "dataset disk limit reached, including pending bytes and index reserve"
             )
+        return actual
 
     def select_lane(self, lane):
         self.lane = self.lanes.setdefault(lane, WriterLane())
@@ -609,12 +666,12 @@ class DatasetWriter(AbstractContextManager):
         )
 
     def _commit_files(self, outputs, update):
-        self._budget(sum(map(len, outputs.values())))
+        actual = self._budget(sum(map(len, outputs.values())))
         index_size = (self.root / "index.sqlite").stat().st_size
         page_size = self.db.execute("PRAGMA page_size").fetchone()[0]
         remaining = (
             self.limits.max_bytes
-            - disk_bytes(self.root)
+            - actual
             - sum(map(len, outputs.values()))
             - 2 * index_size
             - DISK_RESERVE
@@ -664,7 +721,7 @@ class DatasetWriter(AbstractContextManager):
         self.flush()  # Persist identity and seed before the environment or Policy uses them.
         return deepcopy(self.episode_record)
 
-    def _frame(self, image):
+    def _frame(self, image, encoded_rgb=None):
         image = owned_rgb(image)
         if self.shape is None:
             self.shape = image.shape
@@ -684,7 +741,7 @@ class DatasetWriter(AbstractContextManager):
             if not np.array_equal(previous, image):
                 raise ValueError("RGB hash collision: matching hash has different bytes")
             return (pending[0] if pending is not None else existing[0]), False
-        encoded = encode_rgb(image)
+        encoded = encode_rgb(image) if encoded_rgb is None else encoded_rgb
         frame_id = self.next_frame
         self.next_frame += 1
         self.frames[digest] = (frame_id, encoded)
@@ -699,9 +756,9 @@ class DatasetWriter(AbstractContextManager):
         self.delta_captures += 1
         self.flush()
 
-    def append(self, image, facts):
+    def append(self, image, facts, *, encoded_rgb=None):
         # Flush before admitting another bounded item. No asynchronous queue can drop it.
-        if self.pending_bytes >= MAX_BATCH_BYTES:
+        if self.pending_bytes >= self.limits.batch_bytes:
             self.flush()
         row = {
             **deepcopy(facts),
@@ -714,18 +771,22 @@ class DatasetWriter(AbstractContextManager):
             "successor_frame_new": False,
         }
         candidate = transition_record(row)
-        if pa.Table.from_pylist([candidate], schema=transition_schema).nbytes > MAX_BATCH_BYTES:
+        byte_bound = record_byte_bound(candidate)
+        if byte_bound > MAX_BATCH_BYTES:
             raise ValueError("transition metadata exceeds bounded batch size")
-        frame_id, new = self._frame(image)
+        frame_id, new = self._frame(image, encoded_rgb)
         row.update(successor_frame_id=frame_id, successor_frame_new=new)
         encoded = transition_record(row)
         self.rows.append(encoded)
-        self.pending_bytes += pa.Table.from_pylist([encoded], schema=transition_schema).nbytes
+        self.pending_bytes += byte_bound
         self.current_frame = frame_id
         self.delta_captures += 1
         self.episode_record["length"] += 1
         self.lane.dirty = True
-        if len(self.rows) >= self.limits.batch_steps or self.pending_bytes >= MAX_BATCH_BYTES:
+        if (
+            len(self.rows) >= self.limits.batch_steps
+            or self.pending_bytes >= self.limits.batch_bytes
+        ):
             self.flush()
         return row
 
@@ -824,6 +885,8 @@ class Collection(AbstractContextManager):
         if type(mask_hud) is not bool:
             raise ValueError("mask_hud must be a boolean")
         self.mask_hud = mask_hud
+        if hasattr(execution, "configure_capture"):
+            execution.configure_capture(mask_hud)
         self.schedule = schedule
         self.execution, self.limits = execution, limits
         self.writer = None
@@ -858,6 +921,10 @@ class Collection(AbstractContextManager):
         self.schedule_rngs, self.temperatures = {}, {}
         self.finished = False
         self.stop_reason = None
+        self.stop_requested = None
+        self.signal_handlers = {}
+        self.episode_novelty = {}
+        self.reuse_window = deque(maxlen=limits.reuse_window_episodes or 1)
         self.latest_source = None
         self.latest_row = None
         self.progress_samples = deque(maxlen=120)
@@ -866,6 +933,32 @@ class Collection(AbstractContextManager):
         self.episode_starts = 0
         self.progress_samples.append((self.started, self.initial_progress))
         self.next_report = self.started + 5
+
+    def __enter__(self):
+        # A signal requests a stop between complete vector batches. Raising inside
+        # append could publish a row before its episode/capture counters advance.
+        if threading.current_thread() is threading.main_thread():
+            for signum in (signal.SIGINT, signal.SIGTERM):
+                self.signal_handlers[signum] = signal.getsignal(signum)
+                signal.signal(signum, self.request_stop)
+        return self
+
+    def request_stop(self, signum=None, frame=None):
+        self.stop_requested = "interrupted"
+
+    def window_progress(self):
+        captures = sum(item[0] for item in self.reuse_window)
+        new = sum(item[1] for item in self.reuse_window)
+        later = sum(item[2] for item in self.reuse_window)
+        later_new = sum(item[3] for item in self.reuse_window)
+        return {
+            "reuse_window_episodes": len(self.reuse_window),
+            "reuse_window_required_episodes": self.limits.reuse_window_episodes,
+            "reuse_window_captures": captures,
+            "reuse_window_fraction": None if not captures else (captures - new) / captures,
+            "reuse_window_post_500_captures": later,
+            "reuse_window_post_500_fraction": None if not later else (later - later_new) / later,
+        }
 
     def progress(self):
         import resource
@@ -880,6 +973,7 @@ class Collection(AbstractContextManager):
         elapsed = max(now - self.started, 1e-9)
         growth = max(0, current["actual_bytes"] - self.initial_progress["actual_bytes"])
         current.update(
+            **self.window_progress(),
             stop_reason=self.stop_reason,
             elapsed_seconds=elapsed,
             recent_window_seconds=interval,
@@ -917,6 +1011,14 @@ class Collection(AbstractContextManager):
         return current
 
     def reuse_target_reached(self):
+        if self.limits.reuse_window_episodes:
+            window = self.window_progress()
+            return (
+                self.limits.target_reuse is not None
+                and len(self.reuse_window) == self.limits.reuse_window_episodes
+                and window["reuse_window_captures"] >= self.limits.min_reuse_captures
+                and window["reuse_window_fraction"] >= self.limits.target_reuse
+            )
         captures = self.initial_progress["captured_occurrences"] + self.steps + self.episode_starts
         unique = (
             self.initial_progress["unique_frames"]
@@ -931,6 +1033,9 @@ class Collection(AbstractContextManager):
 
     def step(self):
         if self.finished:
+            return None
+        if self.stop_requested:
+            self.stop(self.stop_requested)
             return None
         if self.reuse_target_reached():
             self.stop("reuse_target")
@@ -958,6 +1063,12 @@ class Collection(AbstractContextManager):
                     else self.execution.reset_lane(lane, episode["seed"])
                 )
                 self.writer.initial(capture_rgb(image, mask_hud=self.mask_hud))
+                self.episode_novelty[lane] = [
+                    1,
+                    int(self.writer.episode_record["initial_frame_new"]),
+                    0,
+                    0,
+                ]
                 self.episode_starts += 1
             decision_id = self.writer.episode_record["length"]
             if decision_id % self.schedule.block_decisions == 0:
@@ -988,10 +1099,22 @@ class Collection(AbstractContextManager):
                 "configured_frame_skip": self.execution.contract["frame_skip"],
                 "lane_id": lane,
             }
-            self.latest_row = self.writer.append(image, facts)
+            encoded = getattr(self.execution, "encoded_frames", {}).get(lane)
+            self.latest_row = (
+                self.writer.append(image, facts)
+                if encoded is None
+                else self.writer.append(image, facts, encoded_rgb=encoded)
+            )
             self.steps += 1
+            novelty = self.episode_novelty[lane]
+            novelty[0] += 1
+            novelty[1] += int(self.latest_row["successor_frame_new"])
+            if self.latest_row["step"] >= 500:
+                novelty[2] += 1
+                novelty[3] += int(self.latest_row["successor_frame_new"])
             if facts["terminated"] or facts["truncated"]:
                 self.writer.end_episode("environment_boundary", complete=True)
+                self.reuse_window.append(tuple(self.episode_novelty.pop(lane)))
                 self.active.remove(lane)
         if self.reuse_target_reached():
             self.stop("reuse_target")
@@ -1011,7 +1134,12 @@ class Collection(AbstractContextManager):
             return
         for lane in sorted(self.active):
             self.writer.select_lane(lane)
-            self.writer.end_episode(reason, complete=False)
+            self.writer.episode_record.update(status="incomplete", end_reason=reason)
+            self.writer.lane.dirty = True
+        self.writer.flush()
+        for lane in sorted(self.active):
+            self.writer.select_lane(lane)
+            self.writer.episode_record = None
         self.active.clear()
         self.stop_reason = reason
         self.finished = True
@@ -1026,11 +1154,77 @@ class Collection(AbstractContextManager):
                     raise
                 # Preserve the original recording error; recovery marks the durable prefix.
         finally:
-            self.writer.close()
-            self.execution.close()
+            try:
+                self.writer.close()
+                self.execution.close()
+            finally:
+                for signum, handler in self.signal_handlers.items():
+                    signal.signal(signum, handler)
 
 
-def validate_dataset(root):
+def _validate_frame_chunk(task):
+    root, first, last = task
+    shape, count = None, 0
+    with DatasetReader(root) as reader:
+        masked = reader.manifest["contract"].get("capture_transform") == HUD_MASK
+        for row in reader.db.execute(
+            "SELECT * FROM frames WHERE frame_id BETWEEN ? AND ? ORDER BY frame_id", (first, last)
+        ):
+            image = reader._decode_frame(row)
+            if masked and (list(image.shape) != HUD_MASK["source_shape"] or np.any(image[:17])):
+                raise ValueError("stored RGB violates the HUD mask contract")
+            if shape is not None and shape != image.shape:
+                raise ValueError("dataset image dimensions disagree")
+            shape = image.shape
+            count += 1
+    return shape, count
+
+
+def validate_dataset(root, *, image_workers=1, progress_callback=None):
+    if type(image_workers) is not int or not 1 <= image_workers <= 32:
+        raise ValueError("image_workers must be between 1 and 32")
+    if image_workers == 1:
+        return _validate_dataset(root, progress_callback=progress_callback)
+    from concurrent.futures import ProcessPoolExecutor
+    import multiprocessing as mp
+
+    # Parallel readers must share a stopped, immutable snapshot, not different
+    # prefixes of a live writer. The shared lock spans both validation passes.
+    with (Path(root) / ".writer.lock").open("rb") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError as error:
+            raise ValueError("stop the dataset writer before parallel validation") from error
+        with DatasetReader(root) as reader:
+            first, last = reader.db.execute(
+                "SELECT min(frame_id),max(frame_id) FROM frames"
+            ).fetchone()
+        shape, checked = None, 0
+        tasks = (
+            []
+            if first is None
+            else [
+                (str(root), start, min(start + 16383, last))
+                for start in range(first, last + 1, 16384)
+            ]
+        )
+        with ProcessPoolExecutor(
+            max_workers=image_workers, mp_context=mp.get_context("spawn")
+        ) as pool:
+            for part_shape, count in pool.map(_validate_frame_chunk, tasks):
+                if count:
+                    if shape is not None and shape != part_shape:
+                        raise ValueError("dataset image dimensions disagree")
+                    shape = part_shape
+                checked += count
+                if progress_callback:
+                    progress_callback({"phase": "validating_images", "frames_checked": checked})
+        return _validate_dataset(
+            root, inventory=(shape, checked), progress_callback=progress_callback
+        )
+
+
+def _validate_dataset(root, *, inventory=None, progress_callback=None):
     with DatasetReader(root) as reader:
         transform = reader.manifest["contract"].get("capture_transform")
         if transform is not None and transform != HUD_MASK:
@@ -1052,14 +1246,21 @@ def validate_dataset(root):
                 == 1
             )
             if first:
-                image = reader.frame(frame_id)
-                if transform is not None and (
-                    list(image.shape) != HUD_MASK["source_shape"] or np.any(image[:17])
-                ):
-                    raise ValueError("stored RGB violates the HUD mask contract")
-                if shape is not None and shape != image.shape:
-                    raise ValueError("dataset image dimensions disagree")
-                shape = image.shape
+                if inventory is None:
+                    image = reader.frame(frame_id)
+                    if transform is not None and (
+                        list(image.shape) != HUD_MASK["source_shape"] or np.any(image[:17])
+                    ):
+                        raise ValueError("stored RGB violates the HUD mask contract")
+                    if shape is not None and shape != image.shape:
+                        raise ValueError("dataset image dimensions disagree")
+                    shape = image.shape
+                else:
+                    indexed = reader.db.execute(
+                        "SELECT shape FROM frames WHERE frame_id=?", (frame_id,)
+                    ).fetchone()
+                    if indexed is None or tuple(json.loads(indexed[0])) != inventory[0]:
+                        raise ValueError("missing or inconsistent prevalidated frame")
                 unique += 1
             if type(claimed_new) is not bool:
                 raise ValueError("image discovery attribution mismatch")
@@ -1105,6 +1306,10 @@ def validate_dataset(root):
             ):
                 raise ValueError("episode length or boundary mismatch")
             transitions += length
+            if progress_callback:
+                progress_callback(
+                    {"phase": "validating_trajectories", "transitions_checked": transitions}
+                )
         # Episode traversal differs from capture order when lanes interleave.
         # Each global image must still have exactly one discovering occurrence.
         if reader.db.execute("SELECT 1 FROM seen WHERE discoveries != 1 LIMIT 1").fetchone():
@@ -1114,6 +1319,7 @@ def validate_dataset(root):
             transitions != progress["transitions"]
             or occurrences != progress["captured_occurrences"]
             or unique != progress["unique_frames"]
+            or (inventory is not None and unique != inventory[1])
         ):
             raise ValueError("committed counter or frame inventory mismatch")
         return {"valid": True, **progress}
@@ -1267,7 +1473,7 @@ class VectorPolicyExecution:
         self.seeded = True
         return image
 
-    def step_batch(self, temperatures):
+    def decide_batch(self, temperatures):
         def concatenate(observations):
             if isinstance(observations[0], dict):
                 return {
@@ -1293,6 +1499,10 @@ class VectorPolicyExecution:
                     batch.actions[index : index + 1],
                     batch.decisions[index].raw_action,
                 )
+        return decisions
+
+    def step_batch(self, temperatures):
+        decisions = self.decide_batch(temperatures)
         return {lane: self.lanes[lane].apply(*decisions[lane]) for lane in temperatures}
 
     def close(self):
@@ -1566,6 +1776,7 @@ def load_execution(
     device="cpu",
     schedule=TemperatureSchedule(),
     n_envs=1,
+    environment_workers=0,
 ):
     from importlib.metadata import version
     import subprocess
@@ -1582,6 +1793,10 @@ def load_execution(
 
     if type(n_envs) is not int or not 1 <= n_envs <= 64:
         raise ValueError("n_envs must be an integer from 1 to 64")
+    if type(environment_workers) is not int or not 0 <= environment_workers <= n_envs:
+        raise ValueError("environment_workers must be between zero and n_envs")
+    if environment_workers and n_envs == 1:
+        raise ValueError("environment workers require vector collection")
     checkpoint = Path(checkpoint).expanduser()
     if checkpoint.is_dir():
         checkpoint = checkpoint / "model.zip"
@@ -1641,6 +1856,11 @@ def load_execution(
                 else {},
                 "source_commit": source,
                 "script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                "parallel_script_sha256": hashlib.sha256(
+                    Path(__file__).with_name("parallel.py").read_bytes()
+                ).hexdigest()
+                if environment_workers
+                else None,
                 "runtime_versions": runtime_versions_metadata(),
                 "device": device,
                 "provider_version": provider_version,
@@ -1654,6 +1874,14 @@ def load_execution(
             }
             # Normalize tuples once so JSON reload comparison remains exact.
             contract = json.loads(canonical(contract))
+            if environment_workers:
+                from parallel import ParallelPolicyExecution
+
+                env.close()
+                environments.clear()
+                return ParallelPolicyExecution(
+                    runtime, config, contract, provenance, n_envs, environment_workers
+                )
             for _ in range(n_envs - 1):
                 environments.append(
                     make_eval_vec_env(
@@ -1843,12 +2071,19 @@ def main(argv=None):
     collect.add_argument("--max-gib", type=float, default=10)
     collect.add_argument("--max-seconds", type=float, default=3600)
     collect.add_argument("--batch-steps", type=int, default=128)
+    collect.add_argument("--batch-mib", type=int, default=8)
     collect.add_argument(
         "--target-reuse",
         type=float,
         help="stop at this cumulative reused-capture fraction, e.g. 0.10",
     )
     collect.add_argument("--min-reuse-captures", type=int, default=10000)
+    collect.add_argument(
+        "--reuse-window-episodes",
+        type=int,
+        default=0,
+        help="use this many newly completed episodes instead of cumulative reuse",
+    )
     collect.add_argument("--seed-start", type=int, default=0)
     collect.add_argument("--heldout-seed-start", type=int, default=EVAL_SEED_START)
     collect.add_argument("--heldout-every", type=int, default=5)
@@ -1860,6 +2095,7 @@ def main(argv=None):
     collect.add_argument("--temperature-block", type=int, default=256)
     collect.add_argument("--schedule-seed", type=int, default=0)
     collect.add_argument("--device", default="cpu")
+    collect.add_argument("--environment-workers", type=int, default=0)
     collect.add_argument(
         "--n-envs",
         type=int,
@@ -1877,6 +2113,8 @@ def main(argv=None):
         mode.add_argument("dataset", type=Path)
         if name in {"inspect", "preview"}:
             mode.add_argument("--episode", type=int, default=1)
+        if name == "validate":
+            mode.add_argument("--image-workers", type=int, default=1)
         if name == "preview":
             mode.add_argument("output", type=Path)
             mode.add_argument("--max-steps", type=int, default=600)
@@ -1885,7 +2123,11 @@ def main(argv=None):
     if args.mode == "prepare-hf":
         print(json.dumps(prepare_huggingface(args.dataset), sort_keys=True))
     elif args.mode == "validate":
-        print(json.dumps(validate_dataset(args.dataset), sort_keys=True))
+        print(
+            json.dumps(
+                validate_dataset(args.dataset, image_workers=args.image_workers), sort_keys=True
+            )
+        )
     elif args.mode == "progress":
         with DatasetReader(args.dataset) as reader:
             print(json.dumps(reader.progress(), sort_keys=True))
@@ -1912,6 +2154,8 @@ def main(argv=None):
             args.batch_steps,
             args.target_reuse,
             args.min_reuse_captures,
+            args.reuse_window_episodes,
+            args.batch_mib * 1024**2,
         )
         schedule = TemperatureSchedule(
             args.explore,
@@ -1927,6 +2171,7 @@ def main(argv=None):
             device=args.device,
             schedule=schedule,
             n_envs=args.n_envs,
+            environment_workers=args.environment_workers,
         )
         with Collection(
             args.dataset,

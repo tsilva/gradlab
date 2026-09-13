@@ -865,7 +865,12 @@ def test_ppo_checkpoint_uses_existing_loader_and_collects_native_rgb(
         from collector import DebugController, image_hash, record_json
 
         execution = load_execution(
-            tmp_path, full_game=True, episode_steps=3, schedule=schedule, n_envs=n_envs
+            tmp_path,
+            full_game=True,
+            episode_steps=3,
+            schedule=schedule,
+            n_envs=n_envs,
+            environment_workers=2,
         )
         with Collection(
             tmp_path / "debug", execution, limits=Limits(max_steps=5 * n_envs), schedule=schedule
@@ -1243,3 +1248,77 @@ def test_reuse_target_waits_for_minimum_sample(tmp_path):
 def test_invalid_reuse_target_is_rejected(target):
     with pytest.raises(ValueError, match="target_reuse"):
         Limits(target_reuse=target)
+
+
+def test_reuse_window_counts_completed_episodes_and_forgets_old_discoveries(tmp_path):
+    limits = Limits(max_steps=100, target_reuse=0.9, min_reuse_captures=6, reuse_window_episodes=2)
+    with Collection(tmp_path, ScriptedExecution(), limits=limits) as run:
+        run.run()
+        assert run.steps == 6
+        assert run.stop_reason == "reuse_target"
+        assert run.window_progress()["reuse_window_fraction"] == 1
+        assert run.window_progress()["reuse_window_captures"] == 6
+        assert run.progress()["reuse_fraction"] < 0.9
+    with Collection(tmp_path, ScriptedExecution(), limits=limits) as resumed:
+        resumed.run()
+        assert resumed.steps == 4  # Two newly completed episodes warm up the window.
+    assert validate_dataset(tmp_path)["transitions"] == 10
+
+
+def test_signal_during_append_stops_after_a_consistent_vector_batch(tmp_path, monkeypatch):
+    import os
+    import signal
+
+    original_handler = signal.getsignal(signal.SIGINT)
+    with Collection(tmp_path, ScriptedVectorExecution(), limits=Limits(max_steps=100)) as run:
+        original_frame = run.writer._frame
+        sent = False
+
+        def interrupted_frame(image, encoded_rgb=None):
+            nonlocal sent
+            value = original_frame(image, encoded_rgb)
+            if run.writer.current_frame is not None and not sent:
+                sent = True
+                os.kill(os.getpid(), signal.SIGINT)
+            return value
+
+        monkeypatch.setattr(run.writer, "_frame", interrupted_frame)
+        run.run()
+        assert sent
+        assert run.stop_reason == "interrupted"
+        assert run.steps == 3
+    assert signal.getsignal(signal.SIGINT) == original_handler
+    result = validate_dataset(tmp_path)
+    assert result["transitions"] == 3
+    assert result["captured_occurrences"] == 6
+
+
+def test_parallel_validation_checks_images_and_detects_corruption(tmp_path):
+    import sqlite3
+
+    with Collection(tmp_path, ScriptedExecution(), limits=Limits(max_steps=6)) as run:
+        run.run()
+    assert validate_dataset(tmp_path, image_workers=2)["transitions"] == 6
+    with sqlite3.connect(tmp_path / "index.sqlite") as db:
+        name = db.execute("SELECT shard FROM frames LIMIT 1").fetchone()[0]
+    path = tmp_path / name
+    data = bytearray(path.read_bytes())
+    data[len(data) // 2] ^= 1
+    path.write_bytes(data)
+    with pytest.raises(ValueError, match="integrity failure"):
+        validate_dataset(tmp_path, image_workers=2)
+
+
+def test_scalar_record_byte_bound_covers_arrow_storage():
+    import pyarrow as pa
+    from collector import transition_record, transition_schema, record_byte_bound
+
+    row = transition_record(
+        {
+            "episode_id": 1,
+            "step": 0,
+            "labels": {"unicode": "café 🔥"},
+            "native_action": np.array([0], dtype=np.int64),
+        }
+    )
+    assert record_byte_bound(row) >= pa.Table.from_pylist([row], schema=transition_schema).nbytes
