@@ -2,10 +2,10 @@ defaults:
 - ../../../recipes/_presets/breakout-ball-state-ablation-ppo@_global_
 - _self_
 recipe_id: ppo
-description: Default Breakout custom PPO with batch size 512, ball-state, paddle-velocity, and remaining-lives inputs, equal reward per destroyed brick, terminal success after clearing one wall, and first-wall quarter occupancy tracking.
-# Extends the 1B-step baseline with native paddle velocity from Breakout Turbo 0.5.12.
+description: Default Breakout PPO with scheduled learning-rate reductions, gamma 0.999, and a +20 first-wall completion bonus. The seed123 reference run reached 95/100 stochastic research clears from scratch; held-out 100/100 remains unverified.
+# Training settings from gradlab-7d0a6b7fd44d3720c1a82daad90f639d; checkpoint cadence remains goal-owned.
 train:
-  timesteps: 1000000000
+  timesteps: 191561728
   occupancy:
     cell:
       dimensions:
@@ -21,9 +21,20 @@ train:
     id: gradlab.ppo
     config:
       batch_size: 512
-      gamma: 0.99
+      gamma: 0.999
       gae_lambda: 0.95
       n_steps: 128
+      learning_rate: 0.00025
+      learning_rate_final: null
+      learning_rate_schedule_timesteps: 0
+      learning_rate_milestones:
+      - {step: 40001536, value: 5.0e-05}
+      - {step: 171016192, value: 5.0e-05}
+      - {step: 171024384, value: 2.5e-05}
+      - {step: 171540480, value: 2.5e-05}
+      - {step: 171548672, value: 1.0e-05}
+      - {step: 176545792, value: 1.0e-05}
+      - {step: 176553984, value: 5.0e-06}
   environment:
     env_config:
       n_envs: 64
@@ -87,3 +98,5 @@ train:
         reward_mode: events
         event_delta_rewards:
           brick_destroyed: 1.0
+        event_rewards:
+          one_wall_cleared: 20.0

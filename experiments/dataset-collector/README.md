@@ -15,7 +15,7 @@ it adds no new model format or shared loader changes.
 PPO checkpoint loading and collection are integration-tested with exploration
 both disabled and enabled. Action-program and cell-graph artifacts retain their
 existing action-selection modes and do not support temperature exploration.
-The 10 GiB pilot has not been authorized or run.
+Published collection snapshots and machine-specific run receipts are maintained outside this directory.
 
 ## Commands
 
@@ -46,8 +46,12 @@ read failures; it does not display a second copy of the live buffer as evidence.
 
 Add `--n-envs 16` to batch PPO/A2C inference across sixteen independently seeded
 environments. The default is one; supported counts are 1–64. One model serves
-all lanes. Environments step sequentially in lane order within the same process;
-batching accelerates policy inference.
+all lanes. By default environments step sequentially in lane order. Add
+`--environment-workers 8` to distribute stepping, rendering and lossless WebP
+encoding across eight spawned CPU processes. The parent retains one model and
+one writer, batches GPU inference, and restores lane order before recording.
+Workers never own a policy RNG or CUDA context. Each worker has one pending batch;
+there is no unbounded queue. Benchmark worker counts alongside other host workloads.
 Lanes with the same current exploration temperature share one forward pass.
 Stateful action-program/cell-graph execution and state-dependent exploration
 remain single-environment only.
@@ -56,7 +60,9 @@ remain single-environment only.
 OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 uv run --frozen python \
   experiments/dataset-collector/collector.py collect \
   ~/.config/gradlab/runs/dataset-vector /path/to/checkpoint-bundle \
-  --n-envs 16 --max-gib 1 --max-steps 100000 --max-seconds 120
+  --n-envs 32 --environment-workers 8 --device cuda \
+  --batch-steps 1024 --batch-mib 32 \
+  --max-gib 1 --max-steps 100000 --max-seconds 120
 ```
 
 Benchmark lane counts and CPU thread settings on the target machine. Larger
@@ -96,7 +102,9 @@ These commands need neither a Checkpoint nor a running environment. The preview
 is a display artifact at the requested playback FPS; it is not a lossless copy of
 the dataset and does not synthesize omitted native frames. Existing preview files
 are never overwritten. Offline validation verifies stored data, not its equality
-to a no-longer-available live source image.
+to a no-longer-available live source image. Add `validate --image-workers 8` to
+check image hashes, decoding and HUD pixels in parallel before validating all
+trajectory chains and counters. The writer must be stopped throughout validation.
 
 ## Contracts and exploration
 
@@ -176,7 +184,7 @@ One process holds an exclusive advisory writer lock. Collection writes synchrono
 bounded batches, so storage latency applies backpressure. The batch target defaults
 to 128 transitions per environment; reaching it flushes all pending lanes together.
 Encoded records and compressed images across all lanes trigger an 8 MiB flush
-threshold; at most one additional bounded image and record can cross it. Each RGB
+threshold by default (`--batch-mib` accepts 8–64); at most one additional bounded image and record can cross it. Each RGB
 image is limited to 4 MiB and each metadata record to 8 MiB. SQLite's page cache is
 bounded. There is no dataset-sized in-memory frame index or asynchronous write queue.
 
@@ -213,6 +221,22 @@ are recorded before stopping. `--min-reuse-captures` defaults to 10,000 to avoid
 tiny startup samples triggering the target. Step, time and disk limits still
 apply. The disk limit includes temporary-write and index headroom, so collection
 may stop below the nominal file-size cap. Progress records the stop reason.
+
+For a recent, capture-weighted target, use `--target-reuse 0.20
+--reuse-window-episodes 100`. Collection waits for 100 newly completed episodes,
+then stops when at least 20% of their captures reused an image already discovered
+anywhere in the dataset. Initial frames and successors each count once; source
+references do not count again. Incomplete episodes are excluded from this window.
+A resumed invocation starts a fresh window while retaining the global image index.
+`reuse_window_fraction` reports this target metric. The additional
+`reuse_window_post_500_fraction` excludes the first 500 transitions and initial
+frame of each episode to reveal how much reuse persists beyond the opening;
+it is diagnostic and does not impose another stopping condition. Neither metric
+proves that a world model has enough training coverage.
+
+SIGINT and SIGTERM request a stop between complete vector batches so recorded
+transitions and episode counters stay aligned. All active prefixes are flushed
+before the writer closes.
 
 New datasets declare `image_encoding` in the immutable manifest: lossless WebP,
 method 4, compression effort 100. Images decode to exactly the original RGB bytes;
@@ -315,10 +339,9 @@ alignment, recovery across all lanes, a 64-lane storage budget, native headless/
 equivalence across lane resets, early rejection of unsupported execution, and
 Hugging Face split/frame/record integrity.
 
-The 10 GiB pilot has **not run**. Before launch, obtain explicit pilot authorization
-and record the selected Checkpoint, episode
-cap, compute target, seed allocation, exact source, and resource limits under the
-operator's run directory. Follow `COMPUTE.md` and the private operator inventory.
+For each authorized collection, record the selected Checkpoint, episode cap,
+compute target, seed allocation, exact source, stop rule and resource limits under
+the operator's run directory. Follow `COMPUTE.md` and the private operator inventory.
 Use the explicit full-game override and exploratory schedule after fidelity checks
 pass. Keep generated datasets, previews, and measurements outside tracked source.
 
