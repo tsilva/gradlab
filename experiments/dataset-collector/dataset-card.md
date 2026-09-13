@@ -1,7 +1,7 @@
 # GradLab RGB trajectories
 
 A snapshot of recorded Policy execution for trajectory and neural-emulator research.
-Full RGB, including HUD pixels, is preserved as lossless PNG. Each image is stored
+{{CAPTURE_DESCRIPTION}} Captures are encoded as lossless {{IMAGE_ENCODING}}. Each image is stored
 once in `frames`; ordered `transitions` reference source/successor frame IDs.
 `episodes` includes initial frames, seeds, completion status and session IDs.
 `sessions` contains collection settings and portable checkpoint/runtime provenance.

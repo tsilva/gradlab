@@ -21,7 +21,7 @@ import uuid
 import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
-from PIL import Image
+from PIL import Image, features
 
 # Reuse the data-only codec, not Player's recording, session, or UI machinery.
 from gradlab.play_trajectory import encode_tree, decode_tree, portable_metadata
@@ -36,6 +36,14 @@ VERSION = 2
 MAX_BATCH_BYTES = 8 * 1024**2
 MAX_IMAGE_BYTES = 4 * 1024**2
 DISK_RESERVE = 2 * 1024**2  # SQLite rollback journal, index growth, and progress replacement.
+IMAGE_ENCODING = {"codec": "webp", "lossless": True, "quality": 100, "method": 4, "exact": True}
+HUD_MASK = {
+    "kind": "hud_mask",
+    "source_shape": [210, 160, 3],
+    "rectangle_xyxy": [0, 0, 160, 17],
+    "fill_rgb": [0, 0, 0],
+    "stage": "capture_before_hashing",
+}
 
 
 def canonical(value):
@@ -158,10 +166,24 @@ def parquet_bytes(kind, rows):
     return stream.getvalue().to_pybytes()
 
 
-def decode_rgb(data, shape):
+def encode_rgb(image):
+    buffer = io.BytesIO()
+    Image.fromarray(image).save(
+        buffer, format="WEBP", **{k: v for k, v in IMAGE_ENCODING.items() if k != "codec"}
+    )
+    return buffer.getvalue()
+
+
+def decode_rgb(data, shape, *, encoding=IMAGE_ENCODING):
     with Image.open(io.BytesIO(data)) as image:
-        if image.format != "PNG" or image.mode != "RGB" or image.size != (shape[1], shape[0]):
-            raise ValueError("stored PNG disagrees with RGB contract")
+        expected = "PNG" if encoding is None else "WEBP"
+        if encoding is not None and encoding != IMAGE_ENCODING:
+            raise ValueError("unsupported image encoding")
+        if image.format != expected or image.mode != "RGB" or image.size != (shape[1], shape[0]):
+            raise ValueError("stored image disagrees with RGB encoding contract")
+        # This writer emits a single lossless VP8L chunk, without metadata or animation.
+        if expected == "WEBP" and (data[:4] != b"RIFF" or data[8:16] != b"WEBPVP8L"):
+            raise ValueError("stored WebP is not the declared lossless encoding")
         return owned_rgb(np.asarray(image))
 
 
@@ -172,6 +194,16 @@ def owned_rgb(image):
     if min(value.shape) < 1 or value.nbytes > MAX_IMAGE_BYTES:
         raise ValueError("invalid or excessive provider image dimensions")
     return value.copy(order="C")
+
+
+def capture_rgb(image, *, mask_hud=False):
+    """Transform an owned capture without changing the provider or policy input."""
+    value = owned_rgb(image)
+    if mask_hud:
+        if list(value.shape) != HUD_MASK["source_shape"]:
+            raise ValueError("Breakout HUD masking requires 210x160 RGB captures")
+        value[:17, :, :] = 0
+    return value
 
 
 def image_header(shape):
@@ -229,15 +261,23 @@ class Limits:
     max_bytes: int = 10 * 1024**3
     max_seconds: float = 3600
     batch_steps: int = 128
+    target_reuse: float | None = None
+    min_reuse_captures: int = 10000
 
     def __post_init__(self):
-        for name in ("max_steps", "max_bytes", "batch_steps"):
+        for name in ("max_steps", "max_bytes", "batch_steps", "min_reuse_captures"):
             if type(getattr(self, name)) is not int or getattr(self, name) < 1:
                 raise ValueError(f"{name} must be a positive integer")
         if not math.isfinite(self.max_seconds) or self.max_seconds <= 0:
             raise ValueError("max_seconds must be positive and finite")
         if self.batch_steps > 4096:
             raise ValueError("batch_steps must be <= 4096")
+        if self.target_reuse is not None and (
+            isinstance(self.target_reuse, bool)
+            or not math.isfinite(self.target_reuse)
+            or not 0 < self.target_reuse <= 1
+        ):
+            raise ValueError("target_reuse must be in (0, 1]")
 
 
 @dataclass(frozen=True)
@@ -280,6 +320,9 @@ class DatasetReader(AbstractContextManager):
         self.manifest = json.loads((self.root / "manifest.json").read_bytes())
         if self.manifest.get("format_version") != VERSION:
             raise ValueError("unsupported dataset version; preserve it and use a new directory")
+        self.image_encoding = self.manifest.get("image_encoding")
+        if "image_encoding" in self.manifest and self.image_encoding != IMAGE_ENCODING:
+            raise ValueError("unsupported image encoding")
         self.db = sqlite3.connect(
             f"{(self.root / 'index.sqlite').resolve().as_uri()}?mode=ro", uri=True
         )
@@ -365,7 +408,7 @@ class DatasetReader(AbstractContextManager):
         frame = self._table(row["shard"]).slice(row["row_index"], 1).to_pylist()[0]
         if frame["frame_id"] != frame_id or frame["sha256"] != row["sha256"]:
             raise ValueError("frame index disagrees with Parquet row")
-        image = decode_rgb(frame["image"]["bytes"], shape)
+        image = decode_rgb(frame["image"]["bytes"], shape, encoding=self.image_encoding)
         if image_hash(image) != row["sha256"]:
             raise ValueError("RGB hash mismatch")
         return image
@@ -419,6 +462,8 @@ class DatasetWriter(AbstractContextManager):
         heldout_seed_start=EVAL_SEED_START,
         heldout_every=5,
     ):
+        if not features.check("webp"):
+            raise ValueError("lossless WebP collection requires Pillow with libwebp support")
         validate_training_seed(seed_start)
         validate_eval_seed(heldout_seed_start)
         validate_playback_seed(heldout_seed_start)
@@ -447,6 +492,7 @@ class DatasetWriter(AbstractContextManager):
                 "format_version": VERSION,
                 "contract": portable_metadata(contract),
                 "image_format": {"dtype": "uint8", "order": "HWC", "channels": "RGB"},
+                "image_encoding": deepcopy(IMAGE_ENCODING),
                 "seed_start": seed_start,
                 "heldout_seed_start": heldout_seed_start,
                 "heldout_every": heldout_every,
@@ -638,9 +684,7 @@ class DatasetWriter(AbstractContextManager):
             if not np.array_equal(previous, image):
                 raise ValueError("RGB hash collision: matching hash has different bytes")
             return (pending[0] if pending is not None else existing[0]), False
-        buffer = io.BytesIO()
-        Image.fromarray(image).save(buffer, format="PNG")
-        encoded = buffer.getvalue()
+        encoded = encode_rgb(image)
         frame_id = self.next_frame
         self.next_frame += 1
         self.frames[digest] = (frame_id, encoded)
@@ -714,7 +758,7 @@ class DatasetWriter(AbstractContextManager):
                 outputs[rows_name] = parquet_bytes("transitions", rows)
                 batches.append((rows_name, episode_id, rows[0]["step"], rows[-1]["step"]))
         frame_records, images = [], []
-        for index, (digest, (frame_id, png)) in enumerate(self.frames.items()):
+        for index, (digest, (frame_id, encoded)) in enumerate(self.frames.items()):
             frame_records.append(
                 (
                     frame_id,
@@ -722,12 +766,12 @@ class DatasetWriter(AbstractContextManager):
                     json.dumps(self.shape),
                     shard_name,
                     index,
-                    len(png),
+                    len(encoded),
                     math.prod(self.shape),
                 )
             )
             images.append(
-                {"frame_id": frame_id, "sha256": digest, "image": {"bytes": png, "path": None}}
+                {"frame_id": frame_id, "sha256": digest, "image": {"bytes": encoded, "path": None}}
             )
         if images:
             outputs[shard_name] = parquet_bytes("frames", images)
@@ -767,19 +811,33 @@ class Collection(AbstractContextManager):
     """Collection and debug controls share this sole step entry point."""
 
     def __init__(
-        self, root, execution, *, limits=Limits(), schedule=TemperatureSchedule(), **store_options
+        self,
+        root,
+        execution,
+        *,
+        limits=Limits(),
+        schedule=TemperatureSchedule(),
+        mask_hud=False,
+        **store_options,
     ):
         schedule.validate_execution(execution)
+        if type(mask_hud) is not bool:
+            raise ValueError("mask_hud must be a boolean")
+        self.mask_hud = mask_hud
         self.schedule = schedule
         self.execution, self.limits = execution, limits
         self.writer = None
         try:
-            self.writer = DatasetWriter(root, execution.contract, limits, **store_options)
+            contract = deepcopy(execution.contract)
+            if mask_hud:
+                contract["capture_transform"] = deepcopy(HUD_MASK)
+            self.writer = DatasetWriter(root, contract, limits, **store_options)
             self.writer.session(
                 execution.provenance,
                 {
                     "limits": asdict(limits),
                     "n_envs": getattr(execution, "n_envs", 1),
+                    "mask_hud": mask_hud,
                     "schedule": asdict(schedule),
                     "classification": "Counterfactual Playback"
                     if schedule.enabled or execution.provenance.get("overrides")
@@ -799,10 +857,13 @@ class Collection(AbstractContextManager):
         self.active = set()
         self.schedule_rngs, self.temperatures = {}, {}
         self.finished = False
+        self.stop_reason = None
         self.latest_source = None
         self.latest_row = None
         self.progress_samples = deque(maxlen=120)
         self.initial_progress = self.writer.reader.progress()
+        self.initial_next_frame = self.writer.next_frame
+        self.episode_starts = 0
         self.progress_samples.append((self.started, self.initial_progress))
         self.next_report = self.started + 5
 
@@ -819,6 +880,7 @@ class Collection(AbstractContextManager):
         elapsed = max(now - self.started, 1e-9)
         growth = max(0, current["actual_bytes"] - self.initial_progress["actual_bytes"])
         current.update(
+            stop_reason=self.stop_reason,
             elapsed_seconds=elapsed,
             recent_window_seconds=interval,
             recent_new_images_per_second=unique / interval,
@@ -854,8 +916,24 @@ class Collection(AbstractContextManager):
         sync_directory(self.writer.root)
         return current
 
+    def reuse_target_reached(self):
+        captures = self.initial_progress["captured_occurrences"] + self.steps + self.episode_starts
+        unique = (
+            self.initial_progress["unique_frames"]
+            + self.writer.next_frame
+            - self.initial_next_frame
+        )
+        return (
+            self.limits.target_reuse is not None
+            and captures >= self.limits.min_reuse_captures
+            and (captures - unique) / captures >= self.limits.target_reuse
+        )
+
     def step(self):
         if self.finished:
+            return None
+        if self.reuse_target_reached():
+            self.stop("reuse_target")
             return None
         if (
             self.steps >= self.limits.max_steps
@@ -879,7 +957,8 @@ class Collection(AbstractContextManager):
                     if self.n_envs == 1
                     else self.execution.reset_lane(lane, episode["seed"])
                 )
-                self.writer.initial(image)
+                self.writer.initial(capture_rgb(image, mask_hud=self.mask_hud))
+                self.episode_starts += 1
             decision_id = self.writer.episode_record["length"]
             if decision_id % self.schedule.block_decisions == 0:
                 self.temperatures[lane] = (
@@ -899,7 +978,8 @@ class Collection(AbstractContextManager):
         )
         for lane, (image, facts) in results.items():
             self.writer.select_lane(lane)
-            self.latest_source = owned_rgb(image)
+            image = capture_rgb(image, mask_hud=self.mask_hud)
+            self.latest_source = image
             facts = {
                 **facts,
                 "policy_decision_id": self.writer.episode_record["length"],
@@ -913,6 +993,8 @@ class Collection(AbstractContextManager):
             if facts["terminated"] or facts["truncated"]:
                 self.writer.end_episode("environment_boundary", complete=True)
                 self.active.remove(lane)
+        if self.reuse_target_reached():
+            self.stop("reuse_target")
         return self.latest_row
 
     def run(self, progress_callback=None):
@@ -931,6 +1013,7 @@ class Collection(AbstractContextManager):
             self.writer.select_lane(lane)
             self.writer.end_episode(reason, complete=False)
         self.active.clear()
+        self.stop_reason = reason
         self.finished = True
         self.publish_progress()
 
@@ -949,6 +1032,9 @@ class Collection(AbstractContextManager):
 
 def validate_dataset(root):
     with DatasetReader(root) as reader:
+        transform = reader.manifest["contract"].get("capture_transform")
+        if transform is not None and transform != HUD_MASK:
+            raise ValueError("unsupported capture transform")
         reader.db.execute("PRAGMA temp_store=FILE")
         reader.db.execute(
             "CREATE TEMP TABLE seen(frame_id INTEGER PRIMARY KEY, discoveries INTEGER NOT NULL DEFAULT 0)"
@@ -967,6 +1053,10 @@ def validate_dataset(root):
             )
             if first:
                 image = reader.frame(frame_id)
+                if transform is not None and (
+                    list(image.shape) != HUD_MASK["source_shape"] or np.any(image[:17])
+                ):
+                    raise ValueError("stored RGB violates the HUD mask contract")
                 if shape is not None and shape != image.shape:
                     raise ValueError("dataset image dimensions disagree")
                 shape = image.shape
@@ -1242,6 +1332,7 @@ class DebugController:
             self.playing = False
         return {
             "classification": run.session["settings"]["classification"],
+            "mask_hud": run.mask_hud,
             "overrides": {
                 **run.session["provenance"].get("overrides", {}),
                 **(
@@ -1298,6 +1389,7 @@ class Inspector(AbstractContextManager):
         frame_id = self.episode["initial_frame_id"] if row is None else row["successor_frame_id"]
         return {
             "classification": self.session["settings"]["classification"],
+            "mask_hud": self.reader.manifest["contract"].get("capture_transform") == HUD_MASK,
             "overrides": {
                 **self.session["provenance"].get("overrides", {}),
                 **(
@@ -1350,6 +1442,8 @@ class Renderer(AbstractContextManager):
             )
             overrides = snapshot["overrides"]
             details = []
+            if snapshot.get("mask_hud"):
+                details.append("stored HUD masked: top 17 rows")
             if overrides.get("full_game"):
                 details.append(f"full game, cap {overrides['episode_steps']} steps")
             if "temperature_schedule" in overrides:
@@ -1363,7 +1457,7 @@ class Renderer(AbstractContextManager):
                 x = 20 + column * 490
                 self.screen.blit(
                     self.font.render(
-                        ("Copied live RGB" if live else "Stored source RGB")
+                        ("Captured live RGB" if live else "Stored source RGB")
                         if key == "source"
                         else "Decoded committed RGB",
                         True,
@@ -1684,6 +1778,15 @@ def prepare_huggingface(root):
                 "configs": configs,
             }
             body = Path(__file__).with_name("dataset-card.md").read_text()
+            capture_description = (
+                "The top 17 rows of each 210×160 RGB capture are filled with black before hashing and storage. "
+                "The full canvas is retained; pixels outside the HUD region are unchanged. "
+                "Policy inputs and transition facts are unaffected."
+                if reader.manifest["contract"].get("capture_transform") == HUD_MASK
+                else "Full RGB, including HUD pixels, is preserved."
+            )
+            body = body.replace("{{CAPTURE_DESCRIPTION}}", capture_description)
+            body = body.replace("{{IMAGE_ENCODING}}", "WebP" if reader.image_encoding else "PNG")
             readme = ("---\n" + yaml.safe_dump(card, sort_keys=False) + "---\n" + body).encode()
             report = {
                 "format_version": VERSION,
@@ -1740,6 +1843,12 @@ def main(argv=None):
     collect.add_argument("--max-gib", type=float, default=10)
     collect.add_argument("--max-seconds", type=float, default=3600)
     collect.add_argument("--batch-steps", type=int, default=128)
+    collect.add_argument(
+        "--target-reuse",
+        type=float,
+        help="stop at this cumulative reused-capture fraction, e.g. 0.10",
+    )
+    collect.add_argument("--min-reuse-captures", type=int, default=10000)
     collect.add_argument("--seed-start", type=int, default=0)
     collect.add_argument("--heldout-seed-start", type=int, default=EVAL_SEED_START)
     collect.add_argument("--heldout-every", type=int, default=5)
@@ -1758,6 +1867,11 @@ def main(argv=None):
         help="independent environments sharing batched PPO/A2C inference (1–64)",
     )
     collect.add_argument("--debug", action="store_true", help="start the local debugger paused")
+    collect.add_argument(
+        "--mask-hud",
+        action="store_true",
+        help="black out the top 17 rows of stored Breakout RGB before deduplication",
+    )
     for name in ("validate", "inspect", "progress", "preview", "prepare-hf"):
         mode = modes.add_parser(name)
         mode.add_argument("dataset", type=Path)
@@ -1792,7 +1906,12 @@ def main(argv=None):
         if not math.isfinite(args.max_gib) or args.max_gib <= 0:
             parser.error("--max-gib must be positive and finite")
         limits = Limits(
-            args.max_steps, int(args.max_gib * 1024**3), args.max_seconds, args.batch_steps
+            args.max_steps,
+            int(args.max_gib * 1024**3),
+            args.max_seconds,
+            args.batch_steps,
+            args.target_reuse,
+            args.min_reuse_captures,
         )
         schedule = TemperatureSchedule(
             args.explore,
@@ -1814,6 +1933,7 @@ def main(argv=None):
             execution,
             limits=limits,
             schedule=schedule,
+            mask_hud=args.mask_hud,
             seed_start=args.seed_start,
             heldout_seed_start=args.heldout_seed_start,
             heldout_every=args.heldout_every,

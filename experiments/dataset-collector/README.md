@@ -100,8 +100,22 @@ to a no-longer-available live source image.
 
 ## Contracts and exploration
 
-Collection preserves the full uint8 HWC provider-rendered RGB, including HUD
-pixels, at the provider's dimensions. It stores the initial frame and one successor
+By default, collection preserves full uint8 HWC provider-rendered RGB, including
+HUD pixels, at the provider's dimensions. Add `--mask-hud` to fill the top 17 rows
+of each native Breakout capture with black **before hashing and storage**. The
+210×160 canvas and all pixels from row 17 onward are preserved. The region matches
+the checked-in Breakout HUD mask and includes the score band and separator.
+The collector transforms its own capture copy; policy observations, actions,
+rewards, episode boundaries and transition occurrences remain unchanged.
+
+The mask geometry, fill and capture stage are recorded in
+`manifest.json` → `contract.capture_transform`. Masked and unmasked datasets cannot
+be mixed through append; use a new dataset directory and repeat `--mask-hud` on
+resume. Validation checks that every stored masked image satisfies the contract.
+The debugger compares the masked live capture with masked disk readback, and the
+inspector and generated Hugging Face card identify masked data explicitly.
+
+Collection stores the initial frame and one successor
 per contracted step. The Checkpoint determines frame skip, preprocessing, actions,
 and structured Policy inputs. Processed observations and frame stacks are not
 stored. The current native Breakout provider does not expose actual native frames
@@ -144,7 +158,7 @@ are preserved; use a new directory when changing the format or effective contrac
 - `manifest.json` records the immutable dataset contract and seed allocation.
 - `index.sqlite` holds the global frame hash index, committed file bindings, episode
   allocation, session references, transition batch lookup, and exact counters.
-- `frames-*.parquet` stores lossless PNG images with the Hugging Face image feature,
+- `frames-*.parquet` stores lossless WebP images with the Hugging Face image feature,
   frame IDs and RGB hashes, with multiple images per batch.
 - `steps-*.parquet` stores ordered transitions with typed numerical columns, action
   JSON, compact frame IDs, and exact structured facts in `record_json`.
@@ -192,6 +206,21 @@ Cumulative reuse is `1 - unique_frames / captured_occurrences` and is unavailabl
 before the first capture. Pending transitions, captures, and buffer bytes are
 reported separately during collection.
 
+Set `--target-reuse 0.10` to stop when cumulative reuse reaches 10%. The target
+uses the whole dataset, including earlier sessions and pending captures, and is
+checked after each complete vector batch. All transitions from the final batch
+are recorded before stopping. `--min-reuse-captures` defaults to 10,000 to avoid
+tiny startup samples triggering the target. Step, time and disk limits still
+apply. The disk limit includes temporary-write and index headroom, so collection
+may stop below the nominal file-size cap. Progress records the stop reason.
+
+New datasets declare `image_encoding` in the immutable manifest: lossless WebP,
+method 4, compression effort 100. Images decode to exactly the original RGB bytes;
+hashing and deduplication remain based on those pixels. Pillow must have libwebp
+support. Existing version-2 PNG datasets remain readable and inspectable, but
+cannot be appended to by the WebP writer. An explicit verified conversion to a
+new directory is required to retain their trajectories in a WebP collection.
+
 Collection reports recent image discovery per second and per occurrence, cumulative
 unique RGB, complete/incomplete episode counts, throughput, elapsed time, actual
 bytes, SQLite overhead, peak process RSS, and storage projections. Compression
@@ -202,8 +231,10 @@ is a separate fraction. Projections extrapolate observed growth and are not capa
 guarantees. Headless progress updates every five seconds and at shutdown; display
 pacing changes throughput and time-limited sample counts.
 
-HUD-only changes count as new images. Discovery attribution depends on collection
-order. A novelty plateau does not prove exhaustive state or action coverage.
+With `--mask-hud`, HUD-only changes share the same image identity; without it they
+count as new images. All other pixels must still match exactly for reuse. Discovery
+attribution depends on collection order. Fewer unique images do not imply fewer
+hidden simulator states or prove exhaustive state/action coverage.
 
 ## Direct Hugging Face storage
 
@@ -226,7 +257,7 @@ superseded snapshots remain locally preserved and are excluded from publication.
 
 | Configuration | Contents | Splits |
 | --- | --- | --- |
-| `frames` | One PNG per unique RGB image, frame ID and hash | `assets` |
+| `frames` | One lossless WebP per unique RGB image, frame ID and hash | `assets` |
 | `transitions` (default) | Ordered frame references, actions, rewards and boundaries | `train`, `heldout` when present |
 | `episodes` | Initial frame, length, seed, session ID and completion status | Original episode splits |
 | `sessions` | Portable checkpoint provenance and collection settings | `metadata` |

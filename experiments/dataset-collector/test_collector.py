@@ -64,6 +64,104 @@ class ScriptedVectorExecution(ScriptedExecution):
         return {lane: self.lanes[lane].step(temp) for lane, temp in temperatures.items()}
 
 
+def test_hud_mask_reuses_hud_only_changes_and_preserves_provider_and_facts(tmp_path):
+    from collector import HUD_MASK
+
+    class HudChanges(ScriptedExecution):
+        def reset(self, seed):
+            image = super().reset(seed)
+            image[:17] = 50
+            image[17] = 123
+            return image
+
+        def step(self, temperature):
+            image, facts = super().step(temperature)
+            image[:17] = 50 + self.steps
+            image[100, 50] = 0
+            return image, facts
+
+    for masked in (False, True):
+        execution = HudChanges()
+        with Collection(
+            tmp_path / str(masked), execution, limits=Limits(max_steps=2), mask_hud=masked
+        ) as run:
+            run.run()
+        assert np.all(execution.image[:17] == 52)
+        result = validate_dataset(tmp_path / str(masked))
+        assert result["transitions"] == 2
+        assert result["captured_occurrences"] == 3
+        assert result["unique_frames"] == (1 if masked else 3)
+    with DatasetReader(tmp_path / "True") as masked, DatasetReader(tmp_path / "False") as raw:
+        assert masked.manifest["contract"]["capture_transform"] == HUD_MASK
+        for masked_row, raw_row in zip(masked.transitions(1), raw.transitions(1), strict=True):
+            image = masked.frame(masked_row["successor_frame_id"])
+            original = raw.frame(raw_row["successor_frame_id"])
+            assert image.shape == (210, 160, 3)
+            assert not image[:17].any()
+            np.testing.assert_array_equal(image[17:], original[17:])
+            np.testing.assert_array_equal(masked_row["selected_action"], raw_row["selected_action"])
+            assert masked_row["policy_reward"] == raw_row["policy_reward"]
+            assert masked_row["terminated"] == raw_row["terminated"]
+
+
+@pytest.mark.parametrize("first_mask", [False, True])
+def test_hud_mask_is_an_immutable_append_contract(tmp_path, first_mask):
+    with Collection(
+        tmp_path, ScriptedExecution(), limits=Limits(max_steps=2), mask_hud=first_mask
+    ) as run:
+        run.run()
+    with pytest.raises(ValueError, match="incompatible append"):
+        Collection(tmp_path, ScriptedExecution(), mask_hud=not first_mask)
+    with Collection(
+        tmp_path, ScriptedExecution(), limits=Limits(max_steps=1), mask_hud=first_mask
+    ) as run:
+        run.run()
+    assert validate_dataset(tmp_path)["transitions"] == 3
+
+
+def test_masked_vector_debug_reads_back_masked_terminal_and_initial_frames(tmp_path):
+    from collector import DebugController, Inspector, prepare_huggingface
+
+    with Collection(
+        tmp_path, ScriptedVectorExecution(), limits=Limits(max_steps=6), mask_hud=True
+    ) as run:
+        controller = DebugController(run)
+        for _ in range(3):
+            controller.command("step")
+            snapshot = controller.tick()
+            assert snapshot["mask_hud"] and snapshot["pixel_equal"]
+            assert not snapshot["source"][:17].any()
+        assert snapshot["row"]["terminated"]
+        assert run.writer.reader.session(run.writer.session_id)["settings"]["mask_hud"]
+    with Inspector(tmp_path) as inspector:
+        assert inspector.snapshot()["mask_hud"]
+        assert not inspector.snapshot()["decoded"][:17].any()
+    assert prepare_huggingface(tmp_path)["transitions"] == 6
+    card = (tmp_path / "README.md").read_text()
+    assert "top 17 rows" in card
+    assert "{{CAPTURE_DESCRIPTION}}" not in card
+    assert "Full RGB, including HUD pixels, is preserved" not in card
+
+
+def test_hud_mask_rejects_unrecognized_capture_dimensions():
+    from collector import capture_rgb
+
+    with pytest.raises(ValueError, match="210x160"):
+        capture_rgb(np.zeros((84, 84, 3), np.uint8), mask_hud=True)
+
+
+def test_validation_rejects_nonzero_hud_in_a_masked_dataset(tmp_path):
+    from collector import DatasetWriter, HUD_MASK
+
+    with DatasetWriter(tmp_path, {"capture_transform": HUD_MASK}, Limits()) as writer:
+        writer.session({}, {})
+        writer.reserve_episode()
+        writer.initial(np.ones((210, 160, 3), np.uint8))
+        writer.end_episode("collection_cutoff", complete=False)
+    with pytest.raises(ValueError, match="HUD mask contract"):
+        validate_dataset(tmp_path)
+
+
 def test_vector_collection_preserves_lanes_dedup_seeds_and_exact_cutoff(tmp_path):
     execution = ScriptedVectorExecution()
     with Collection(tmp_path, execution, limits=Limits(max_steps=11, batch_steps=4)) as run:
@@ -1046,3 +1144,102 @@ def test_interrupted_preparation_cannot_leave_a_stale_upload_receipt(
     assert before == {p.name: p.read_bytes() for p in root.glob("*.parquet")}
     assert validate_dataset(root)["transitions"] == 4
     assert collector.prepare_huggingface(root)["transitions"] == 4
+
+
+def test_lossless_webp_preserves_arbitrary_rgb_and_rejects_lossy_bytes():
+    import io
+    from PIL import Image
+    from collector import IMAGE_ENCODING, decode_rgb, encode_rgb
+
+    image = np.random.default_rng(47).integers(0, 256, (37, 53, 3), dtype=np.uint8)
+    encoded = encode_rgb(image)
+    assert encoded[8:16] == b"WEBPVP8L"
+    np.testing.assert_array_equal(decode_rgb(encoded, image.shape), image)
+    buffer = io.BytesIO()
+    Image.fromarray(image).save(buffer, format="WEBP", lossless=False, quality=100)
+    with pytest.raises(ValueError, match="lossless"):
+        decode_rgb(buffer.getvalue(), image.shape)
+    with pytest.raises(ValueError, match="encoding"):
+        decode_rgb(encoded, image.shape, encoding={**IMAGE_ENCODING, "lossless": False})
+
+
+def test_existing_png_dataset_remains_readable_but_requires_explicit_conversion(tmp_path):
+    import hashlib
+    import io
+    from PIL import Image
+    from collector import canonical, parquet_bytes, prepare_huggingface
+
+    with Collection(tmp_path, ScriptedExecution(), limits=Limits(max_steps=2)) as run:
+        run.run()
+        writer = run.writer
+        with DatasetReader(tmp_path) as reader:
+            expected = {i: reader.frame(i) for i in (1, 2)}
+        for (name,) in list(writer.db.execute("SELECT DISTINCT shard FROM frames")):
+            rows = writer.reader._table(name).to_pylist()
+            for row in rows:
+                buffer = io.BytesIO()
+                Image.fromarray(expected[row["frame_id"]]).save(buffer, format="PNG")
+                row["image"]["bytes"] = buffer.getvalue()
+                writer.db.execute(
+                    "UPDATE frames SET size=? WHERE frame_id=?",
+                    (len(buffer.getvalue()), row["frame_id"]),
+                )
+            data = parquet_bytes("frames", rows)
+            (tmp_path / name).write_bytes(data)
+            writer.db.execute(
+                "UPDATE files SET sha256=?,size=? WHERE name=?",
+                (hashlib.sha256(data).hexdigest(), len(data), name),
+            )
+        manifest = dict(writer.manifest)
+        del manifest["image_encoding"]
+        data = canonical(manifest)
+        (tmp_path / "manifest.json").write_bytes(data)
+        writer.db.execute("UPDATE identity SET sha256=?", (hashlib.sha256(data).hexdigest(),))
+        writer.db.commit()
+    assert validate_dataset(tmp_path)["unique_frames"] == 2
+    with DatasetReader(tmp_path) as reader:
+        for i, image in expected.items():
+            np.testing.assert_array_equal(reader.frame(i), image)
+    prepare_huggingface(tmp_path)
+    assert "lossless PNG" in (tmp_path / "README.md").read_text()
+    with pytest.raises(ValueError, match="incompatible append"):
+        Collection(tmp_path, ScriptedExecution())
+
+
+def test_reuse_target_includes_pending_captures_and_records_full_vector_batch(tmp_path):
+    execution = ScriptedVectorExecution()
+    limits = Limits(max_steps=30, batch_steps=128, target_reuse=0.8, min_reuse_captures=6)
+    with Collection(tmp_path, execution, limits=limits) as run:
+        run.run()
+        assert run.stop_reason == "reuse_target"
+        assert execution.batch_sizes == [3]
+        assert run.progress()["reuse_fraction"] == pytest.approx(5 / 6)
+        assert run.progress()["stop_reason"] == "reuse_target"
+    result = validate_dataset(tmp_path)
+    assert result["transitions"] == 3
+    assert result["captured_occurrences"] == 6
+    assert result["incomplete_episodes"] == 3
+    resumed = ScriptedVectorExecution()
+    with Collection(tmp_path, resumed, limits=limits) as run:
+        run.run()
+        assert run.steps == 0 and not resumed.seeds
+        assert run.stop_reason == "reuse_target"
+    assert validate_dataset(tmp_path)["transitions"] == 3
+
+
+def test_reuse_target_waits_for_minimum_sample(tmp_path):
+    with Collection(
+        tmp_path,
+        ScriptedVectorExecution(),
+        limits=Limits(max_steps=30, target_reuse=0.2, min_reuse_captures=10),
+    ) as run:
+        run.run()
+        assert run.steps == 9
+        assert run.progress()["captured_occurrences"] == 15
+        assert run.stop_reason == "reuse_target"
+
+
+@pytest.mark.parametrize("target", [0, -0.1, 1.01, float("nan"), float("inf"), True])
+def test_invalid_reuse_target_is_rejected(target):
+    with pytest.raises(ValueError, match="target_reuse"):
+        Limits(target_reuse=target)
