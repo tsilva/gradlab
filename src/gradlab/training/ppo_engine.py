@@ -997,6 +997,29 @@ def _entropy_coefficient(config: Mapping[str, Any], step: int, total: int) -> fl
     )
 
 
+class _UpdateCheckpoints:
+    """Publish requested branch points only after their rollout has been consumed."""
+
+    def __init__(self, steps: Sequence[int], *, initial_step: int, quantum: int, limit: int):
+        self.pending = {step for step in steps if initial_step < step < limit}
+        if any((step - initial_step) % quantum for step in self.pending):
+            raise ValueError("checkpoint_update_steps must align with completed PPO updates")
+
+    def after_update(self, model: Any, context: BackendContext, game: str) -> None:
+        step = int(model.num_timesteps)
+        if step not in self.pending:
+            return
+        save_model_bundle(
+            model=model,
+            context=context,
+            model_path=context.checkpoint_dir
+            / f"{checkpoint_prefix(game, algorithm_id='ppo')}_{step}_steps.zip",
+            kind="checkpoint",
+            step=step,
+        )
+        self.pending.remove(step)
+
+
 def run_gradlab_ppo(
     context: BackendContext,
     *,
@@ -1101,6 +1124,12 @@ def run_gradlab_ppo(
             progress_fields=progress_fields,
         )
         model._total_timesteps = int(budget.execution_total)
+        update_checkpoints = _UpdateCheckpoints(
+            backend_config["checkpoint_update_steps"],
+            initial_step=int(model.num_timesteps),
+            quantum=rollout_quantum,
+            limit=int(budget.execution_total),
+        )
         graceful_stop = GracefulStopHelper(
             context.stop_flag,
             marker_path=context.run_dir / "learner_stop_observed.json",
@@ -1322,6 +1351,7 @@ def run_gradlab_ppo(
                 extra_metric_tensors=rollout_metric_tensors,
                 omit_if_nonfinite=optional_rollout_metrics,
             )
+            update_checkpoints.after_update(model, context, config.game)
             rollout_metrics = dict(curriculum_metrics)
             rollout_metrics.update(reward_stats.flush())
             rollout_metrics.update(update_metrics)

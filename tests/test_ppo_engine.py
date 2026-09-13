@@ -22,6 +22,7 @@ from gradlab.training.ppo_engine import (
     _normalize_grouped_advantages,
     _ppo_update,
     _Precision,
+    _UpdateCheckpoints,
 )
 
 
@@ -43,6 +44,36 @@ def _add_rollout_step(
         log_probs,
         **kwargs,
     )
+
+
+def test_update_checkpoint_saves_consumed_optimizer_state_once(monkeypatch, tmp_path):
+    parameter = torch.nn.Parameter(torch.tensor(1.0))
+    optimizer = torch.optim.Adam([parameter], lr=0.01)
+    model = SimpleNamespace(num_timesteps=108, policy=SimpleNamespace(optimizer=optimizer))
+    context = SimpleNamespace(checkpoint_dir=tmp_path)
+    saved = []
+
+    def save(**kwargs):
+        saved.append((kwargs["step"], parameter.item(), optimizer.state[parameter]["step"].item()))
+
+    monkeypatch.setattr(ppo_engine, "save_model_bundle", save)
+    checkpoints = _UpdateCheckpoints([100, 116, 124], initial_step=100, quantum=8, limit=124)
+    checkpoints.after_update(model, context, "Breakout-Atari2600-v0")
+    assert not saved
+    parameter.square().backward()
+    optimizer.step()
+    model.num_timesteps = 116
+    checkpoints.after_update(model, context, "Breakout-Atari2600-v0")
+    checkpoints.after_update(model, context, "Breakout-Atari2600-v0")
+    model.num_timesteps = 124
+    checkpoints.after_update(model, context, "Breakout-Atari2600-v0")
+    assert saved == [(116, parameter.item(), 1.0)]
+    assert saved[0][1] < 1.0
+
+
+def test_update_checkpoint_rejects_partial_rollout_branch():
+    with pytest.raises(ValueError, match="align with completed PPO updates"):
+        _UpdateCheckpoints([115], initial_step=100, quantum=8, limit=124)
 
 
 def test_device_rollout_bootstraps_only_truncated_transitions() -> None:
@@ -381,13 +412,9 @@ def test_rollout_diagnostics_remain_on_device_until_one_materialization() -> Non
     assert all(isinstance(value, torch.Tensor) for value in pending.values())
     metrics = ppo_engine._materialize_metrics(pending, omit_if_nonfinite=optional)
     assert metrics["train/value/mean"] == pytest.approx(3.0)
-    assert metrics["train/value/std"] == pytest.approx(
-        np.std([1.0, 3.0, 5.0])
-    )
+    assert metrics["train/value/std"] == pytest.approx(np.std([1.0, 3.0, 5.0]))
     assert metrics["train/advantage/mean"] == pytest.approx(2.5)
-    assert metrics["train/advantage/std"] == pytest.approx(
-        np.std([1.0, 2.0, 3.0, 4.0])
-    )
+    assert metrics["train/advantage/std"] == pytest.approx(np.std([1.0, 2.0, 3.0, 4.0]))
     assert metrics["train/action/fraction/max"] == pytest.approx(0.75)
 
 
