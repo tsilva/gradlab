@@ -280,16 +280,33 @@ def test_gradlab_ppo_schema_matches_sb3_and_adds_explicit_precision() -> None:
     assert config["batch_size"] == 256
     assert config["precision"] == "fp32"
     assert config["execution_profile"] == "max-throughput"
+    assert config["checkpoint_update_steps"] == []
 
     with pytest.raises(ValueError, match="precision must be one of"):
-        validate_and_normalize_train_config(
-            backend_config("gradlab.ppo", precision="int8")
-        )
+        validate_and_normalize_train_config(backend_config("gradlab.ppo", precision="int8"))
 
     with pytest.raises(ValueError, match="execution_profile must be one of"):
         validate_and_normalize_train_config(
             backend_config("gradlab.ppo", execution_profile="unknown")
         )
+
+
+@pytest.mark.parametrize("steps", [[True], [-1], [1.5], [8, 8], [16, 8], "8"])
+def test_gradlab_ppo_rejects_invalid_update_checkpoint_steps(steps):
+    with pytest.raises(ValueError, match="checkpoint_update_steps"):
+        validate_and_normalize_train_config(
+            backend_config("gradlab.ppo", checkpoint_update_steps=steps)
+        )
+
+
+def test_gradlab_ppo_update_checkpoints_exclude_transition_checkpoint_cadence():
+    from gradlab.training.ppo import GradLabPPOBackend
+
+    backend = GradLabPPOBackend()
+    config = backend.normalize_config({"checkpoint_update_steps": [8192]}, label="ppo")
+    with pytest.raises(ValueError, match="checkpoint_freq=0"):
+        backend.validate({"checkpoint_freq": 500000}, config)
+    backend.validate({"checkpoint_freq": 0, "policy_model": {}}, config)
 
 
 def test_materialized_config_preserves_nested_backend_ownership() -> None:

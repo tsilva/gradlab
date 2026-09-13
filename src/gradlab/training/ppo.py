@@ -18,6 +18,7 @@ GRADLAB_PPO_DEFAULT_CONFIG: dict[str, Any] = {
     **PPO_DEFAULT_CONFIG,
     "precision": "fp32",
     "execution_profile": "max-throughput",
+    "checkpoint_update_steps": [],
 }
 
 
@@ -36,16 +37,25 @@ def _normalize_gradlab_ppo(config: Mapping[str, Any], *, label: str) -> dict[str
     if execution_profile not in PPO_EXECUTION_PROFILES:
         choices = ", ".join(PPO_EXECUTION_PROFILES)
         raise ValueError(f"{label}.execution_profile must be one of {choices}")
+    checkpoint_steps = config.get("checkpoint_update_steps", [])
+    if not isinstance(checkpoint_steps, list) or any(
+        not isinstance(step, int) or isinstance(step, bool) or step <= 0
+        for step in checkpoint_steps
+    ):
+        raise ValueError(f"{label}.checkpoint_update_steps must be a list of positive integers")
+    if checkpoint_steps != sorted(set(checkpoint_steps)):
+        raise ValueError(f"{label}.checkpoint_update_steps must be strictly increasing")
     normalized = _normalize_ppo(
         {
             key: value
             for key, value in config.items()
-            if key not in {"precision", "execution_profile"}
+            if key not in {"precision", "execution_profile", "checkpoint_update_steps"}
         },
         label=label,
     )
     normalized["precision"] = precision
     normalized["execution_profile"] = execution_profile
+    normalized["checkpoint_update_steps"] = list(checkpoint_steps)
     return normalized
 
 
@@ -65,7 +75,8 @@ class GradLabPPOBackend:
         common_config: Mapping[str, Any],
         backend_config: Mapping[str, Any],
     ) -> None:
-        del backend_config
+        if backend_config["checkpoint_update_steps"] and common_config.get("checkpoint_freq", 0):
+            raise ValueError("checkpoint_update_steps requires checkpoint_freq=0")
         if common_config.get("policy_model") is None:
             raise ValueError("gradlab.ppo requires train_config.policy_model")
 
