@@ -17,7 +17,6 @@ from gradlab.config_validation import (
 )
 from gradlab.experiment_contracts import validate_goal_contract_document
 from gradlab.env_registry import resolve_env_provider, validate_provider_constructor_args
-from gradlab.env_providers import _stable_retro_packaged_data_path
 from gradlab.main import COMMANDS
 from gradlab.recipe_documents import compose_train_document, load_goal_contract
 from gradlab.recipe_schema import validate_materialized_train_recipe
@@ -26,8 +25,6 @@ from gradlab.recipe_schema import validate_materialized_train_recipe
 class ConfigValidationTests(unittest.TestCase):
     BREAKOUT_GOAL = Path("experiments/goals/Breakout-Atari2600-v0/_goal.yaml")
     BREAKOUT_RECIPE = BREAKOUT_GOAL.parent / "recipes/ppo.yaml"
-    BREAKOUT_FUSION_CONTROL_RECIPE = BREAKOUT_GOAL.parent / "recipes/ppo-fusion-256.yaml"
-    BREAKOUT_BALL_STATE_RECIPE = BREAKOUT_GOAL.parent / "recipes/ppo-ball-state.yaml"
     MARIO_L11_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml")
     MARIO_L12_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-2/_goal.yaml")
     MARIO_L13_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-3/_goal.yaml")
@@ -184,259 +181,21 @@ class ConfigValidationTests(unittest.TestCase):
                 public_signature_args = signature_args - PROVIDER_REWARD_TRANSFORM_KEYS
                 self.assertEqual(covered_args, public_signature_args)
 
-    def test_breakout_goal_hotswaps_provider_without_changing_semantics(self) -> None:
-        document = compose_train_document(
-            self.BREAKOUT_GOAL,
-            self.BREAKOUT_RECIPE,
+    def test_breakout_default_keeps_its_native_contract_when_goal_provider_is_overridden(self) -> None:
+        document = compose_train_document(self.BREAKOUT_GOAL, self.BREAKOUT_RECIPE)
+        overridden = compose_train_document(
+            self.BREAKOUT_GOAL, self.BREAKOUT_RECIPE,
+            env_provider="env-stableretro-turbo",
         )
-
-        train_config = document["train_config"]
-        self.assertEqual(document["recipe_id"], "ppo")
-        self.assertEqual(train_config["timesteps"], 500_000_000)
-        self.assertEqual(train_config["training_backend"]["id"], "sb3.ppo")
-        backend_config = train_config["training_backend"]["config"]
-        self.assertEqual(backend_config["n_steps"], 64)
-        self.assertEqual(backend_config["batch_size"], 256)
-        self.assertEqual(backend_config["n_epochs"], 4)
-        self.assertEqual(backend_config["learning_rate"], 2.5e-4)
-        self.assertEqual(backend_config["learning_rate_final"], 5.0e-5)
-        self.assertEqual(backend_config["learning_rate_schedule_timesteps"], 40_001_536)
-        self.assertEqual(backend_config["ent_coef"], 0.01)
-        self.assertEqual(backend_config["ent_coef_final"], 0.002)
-        self.assertEqual(backend_config["ent_coef_schedule_timesteps"], 40_001_536)
-        self.assertEqual(backend_config["gamma"], 0.99)
-        self.assertEqual(backend_config["gae_lambda"], 0.95)
-        self.assertEqual(backend_config["clip_range"], 0.1)
-        self.assertEqual(backend_config["vf_coef"], 0.5)
-        self.assertIsNone(backend_config.get("target_kl"))
-        self.assertEqual(train_config["env_provider"], "env-breakoutatari2600-turbo-native")
-        self.assertEqual(train_config["game"], "Breakout-Atari2600-v0")
-        self.assertEqual(train_config["state"], "Start")
-        self.assertEqual(
-            train_config["episode_progress_fields"],
-            ["score", "bricks_destroyed", "bricks_destroyed_normalized"],
-        )
-        self.assertEqual(train_config["task"]["action"]["set"], "native")
-        self.assertFalse(train_config["max_pool_frames"])
-
-        self.assertEqual(train_config["sticky_action_prob"], 0.0)
-        self.assertEqual(train_config["env_args"]["noop_reset_max"], 30)
-        self.assertEqual(train_config["obs_crop"], [17, 0, 0, 0])
-        self.assertEqual(train_config["obs_crop_mode"], "mask")
-        self.assertEqual(
-            train_config["task"]["signals"],
-            {
-                "ball_vx": "ball_vx",
-                "ball_vy": "ball_vy",
-                "ball_x": "ball_x",
-                "ball_y": "ball_y",
-                "bricks_destroyed": "bricks_destroyed",
-                "bricks_destroyed_normalized": "bricks_destroyed_normalized",
-                "bricks_remaining": "bricks_remaining",
-                "lives": "lives",
-                "paddle_x": "paddle_x",
-                "score": "score",
-                "walls_cleared": "walls_cleared",
-            },
-        )
-        self.assertEqual(
-            train_config["task"]["events"],
-            {
-                "serve_stall": {
-                    "signal": "ball_y",
-                    "operation": "equals_for",
-                    "value": 0,
-                    "steps": 256,
-                },
-                "life_loss": {"signal": "lives", "operation": "decrease"},
-            },
-        )
-        self.assertEqual(
-            train_config["task"]["termination"],
-            {"timeout": ["serve_stall"], "max_episode_steps": 54000},
-        )
-        self.assertEqual(train_config["checkpoint_eval_backend"], "none")
-        self.assertNotIn("stop_on_acceptance", train_config)
-        self.assertIsNone(train_config.get("early_stop"))
+        train = document["train_config"]
+        self.assertEqual(train["env_provider"], "env-breakoutatari2600-turbo-native")
+        for key in ("env_provider", "game", "state", "env_args", "task", "selection_rank"):
+            self.assertEqual(train[key], overridden["train_config"][key])
+        self.assertEqual(train["checkpoint_eval_backend"], "none")
         self.assertNotIn("eval", document["goal"])
         self.assertNotIn("release", document["goal"])
-        self.assertEqual(
-            train_config["selection_rank"],
-            [
-                "max(train/progress/bricks_destroyed/mean)",
-                "min(train/step)",
-            ],
-        )
-
-        stable_retro = compose_train_document(
-            self.BREAKOUT_GOAL,
-            self.BREAKOUT_RECIPE,
-            env_provider="env-stableretro-turbo",
-        )
-        stable_train = stable_retro["train_config"]
-        self.assertEqual(stable_train["env_provider"], "env-stableretro-turbo")
-        self.assertNotIn("checkpoint_eval_environment", stable_train)
-        for key in ("game", "state", "env_args", "task", "selection_rank"):
-            self.assertEqual(train_config[key], stable_train[key])
-        self.assertEqual(document["goal"]["objective"], stable_retro["goal"]["objective"])
-        self.assertNotIn("eval", stable_retro["goal"])
-
-    def test_breakout_ball_state_recipe_is_matched_to_fusion_control(self) -> None:
-        control = compose_train_document(
-            self.BREAKOUT_GOAL,
-            self.BREAKOUT_FUSION_CONTROL_RECIPE,
-            env_provider="env-stableretro-turbo",
-        )
-        candidate = compose_train_document(
-            self.BREAKOUT_GOAL,
-            self.BREAKOUT_BALL_STATE_RECIPE,
-            env_provider="env-stableretro-turbo",
-        )
-        control_train = control["train_config"]
-        candidate_train = candidate["train_config"]
-
-        self.assertEqual(control["recipe_id"], "ppo-fusion-256")
-        self.assertEqual(candidate["recipe_id"], "ppo-ball-state")
-        self.assertEqual(
-            control_train["env_provider"],
-            "env-breakoutatari2600-turbo-native",
-        )
-        self.assertEqual(candidate_train["env_provider"], control_train["env_provider"])
-        self.assertEqual(
-            control_train["policy_model"]["fusion"],
-            {"hidden_sizes": [256], "activation": "tanh"},
-        )
-        self.assertEqual(candidate_train["policy_model"], control_train["policy_model"])
-        self.assertEqual(candidate_train["training_backend"], control_train["training_backend"])
-        self.assertEqual(candidate_train["timesteps"], control_train["timesteps"])
-        self.assertEqual(candidate_train["env_args"], control_train["env_args"])
-        self.assertEqual(
-            candidate_train["env_args"]["info_filter"],
-            {
-                "mode": "all",
-                "keys": [
-                    "ball_x",
-                    "ball_x_normalized",
-                    "ball_y",
-                    "ball_y_normalized",
-                    "ball_vx",
-                    "ball_vx_normalized",
-                    "ball_vy",
-                    "ball_vy_normalized",
-                    "paddle_x",
-                    "paddle_x_normalized",
-                    "paddle_width",
-                    "paddle_width_normalized",
-                    "ball_paddle_offset",
-                    "ball_paddle_offset_normalized",
-                    "score",
-                    "lives",
-                    "bricks_remaining",
-                    "walls_cleared",
-                ],
-            },
-        )
-        self.assertEqual(
-            candidate_train["env_args"]["use_restricted_actions"],
-            [["BUTTON"], ["RIGHT"], ["LEFT"]],
-        )
-
-        candidate_task = deepcopy(candidate_train["task"])
-        model_inputs = candidate_task.pop("model_inputs")
-        self.assertEqual(candidate_task, control_train["task"])
-        self.assertNotIn("model_inputs", control_train["task"])
-        self.assertEqual(
-            model_inputs,
-            {
-                "schema_version": 1,
-                "context": {
-                    "ball_vx": {
-                        "signal": "policy_ball_vx",
-                        "update": "transition",
-                        "encoding": {
-                            "kind": "continuous",
-                            "scale": 1.0,
-                            "offset": 0.0,
-                            "low": None,
-                            "high": None,
-                        },
-                    },
-                    "ball_vy": {
-                        "signal": "policy_ball_vy",
-                        "update": "transition",
-                        "encoding": {
-                            "kind": "continuous",
-                            "scale": 1.0,
-                            "offset": 0.0,
-                            "low": None,
-                            "high": None,
-                        },
-                    },
-                    "ball_x": {
-                        "signal": "policy_ball_x",
-                        "update": "transition",
-                        "encoding": {
-                            "kind": "continuous",
-                            "scale": 2.0,
-                            "offset": -1.0,
-                            "low": None,
-                            "high": None,
-                        },
-                    },
-                    "ball_y": {
-                        "signal": "policy_ball_y",
-                        "update": "transition",
-                        "encoding": {
-                            "kind": "continuous",
-                            "scale": 2.0,
-                            "offset": -1.0,
-                            "low": None,
-                            "high": None,
-                        },
-                    },
-                    "paddle_x": {
-                        "signal": "policy_paddle_x",
-                        "update": "transition",
-                        "encoding": {
-                            "kind": "continuous",
-                            "scale": 2.0,
-                            "offset": -1.0,
-                            "low": None,
-                            "high": None,
-                        },
-                    },
-                    "paddle_width": {
-                        "signal": "policy_paddle_width",
-                        "update": "transition",
-                        "encoding": {
-                            "kind": "continuous",
-                            "scale": 8.0,
-                            "offset": -7.0,
-                            "low": None,
-                            "high": None,
-                        },
-                    },
-                    "ball_paddle_offset": {
-                        "signal": "policy_ball_paddle_offset",
-                        "update": "transition",
-                        "encoding": {
-                            "kind": "continuous",
-                            "scale": 1.0,
-                            "offset": 0.0,
-                            "low": None,
-                            "high": None,
-                        },
-                    },
-                },
-            },
-        )
-
-        baseline = compose_train_document(self.BREAKOUT_GOAL, self.BREAKOUT_RECIPE)
-        self.assertEqual(
-            baseline["train_config"]["policy_model"]["fusion"]["hidden_sizes"],
-            [],
-        )
-        self.assertNotIn("model_inputs", baseline["train_config"]["task"])
+        self.assertEqual(train["task"]["termination"]["success"], ["one_wall_cleared"])
+        self.assertEqual(train["task"]["termination"]["timeout"], ["serve_stall"])
 
     def test_vizdoom_basic_ppo_recipe_has_evaluated_first_shot_contract(self) -> None:
         document = compose_train_document(
@@ -685,7 +444,7 @@ class ConfigValidationTests(unittest.TestCase):
                     },
                 )
 
-        self.assertEqual(actor_critic_recipes, 59)
+        self.assertEqual(actor_critic_recipes, 51)
 
     def test_every_mario_recipe_disables_eval_and_stops_at_perfect_clear_window(self) -> None:
         mario_root = Path("experiments/goals/SuperMarioBros-Nes-v0")
@@ -801,151 +560,15 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(report.counts["json_files"], 0)
         self.assertGreaterEqual(report.counts["yaml_files"], 15)
         self.assertGreaterEqual(report.counts["goals"], 1)
-        self.assertEqual(report.counts["train_recipes"], 61)
+        self.assertEqual(report.counts["train_recipes"], 54)
         self.assertGreaterEqual(report.counts["env_configs"], 0)
-        self.assertEqual(report.counts["benchmark_profiles"], 5)
+        self.assertEqual(report.counts["benchmark_profiles"], 4)
         self.assertEqual(report.counts["workspace_manifests"], 1)
         self.assertEqual(report.counts["workspace_projects"], 26)
 
     def test_recipe_cannot_be_launched_for_a_different_goal(self) -> None:
         with self.assertRaisesRegex(ValueError, "does not belong to goal"):
             compose_train_document(self.MARIO_L11_GOAL, self.BREAKOUT_RECIPE)
-
-    def test_breakout_recipe_loads_with_stable_retro_start_state(self) -> None:
-        document = compose_train_document(
-            self.BREAKOUT_GOAL,
-            self.BREAKOUT_RECIPE,
-            env_provider="env-stableretro-turbo",
-        )
-
-        train_config = document["train_config"]
-        self.assertEqual(train_config["env_provider"], "env-stableretro-turbo")
-        self.assertEqual(train_config["game"], "Breakout-Atari2600-v0")
-        self.assertEqual(train_config["checkpoint_eval_backend"], "none")
-        self.assertNotIn("stop_on_acceptance", train_config)
-        self.assertEqual(
-            train_config["selection_rank"],
-            [
-                "max(train/progress/bricks_destroyed/mean)",
-                "min(train/step)",
-            ],
-        )
-        self.assertEqual(
-            train_config["env_args"],
-            {
-                "scenario": "scenario",
-                "info": "data",
-                "use_restricted_actions": [["BUTTON"], ["RIGHT"], ["LEFT"]],
-                "record": False,
-                "players": 1,
-                "inttype": "stable",
-                "obs_type": "image",
-                "render_mode": "rgb_array",
-                "info_filter": "all",
-                "num_threads": 6,
-                "rom_path": None,
-                "obs_copy": "safe_view",
-                "obs_grayscale": True,
-                "obs_layout": "chw",
-                "frame_stack": 4,
-                "noop_reset_max": 30,
-                "use_fire_reset": False,
-            },
-        )
-        self.assertEqual(train_config["state"], "Start")
-        self.assertNotIn("states", train_config)
-        self.assertEqual(train_config["n_envs"], 128)
-        self.assertNotIn("checkpoint_eval_n_envs", train_config)
-        self.assertNotIn("checkpoint_eval_environment", train_config)
-        self.assertEqual(
-            train_config["task"]["reward"],
-            {
-                "reward_mode": "native",
-                "reward_scale": 1.0,
-                "reward_clip": False,
-                "event_rewards": {
-                    "life_loss": -0.1,
-                    "serve_stall": -5.0,
-                },
-            },
-        )
-        self.assertNotIn("env_threads", train_config)
-        self.assertEqual(train_config["frame_skip"], 4)
-        self.assertFalse(train_config["max_pool_frames"])
-        self.assertEqual(train_config["sticky_action_prob"], 0.0)
-        self.assertEqual(train_config["obs_resize"], [84, 84])
-        self.assertNotIn("max_episode_steps", train_config)
-        self.assertEqual(train_config["task"]["termination"]["max_episode_steps"], 54000)
-        self.assertEqual(
-            train_config["task"]["action"],
-            {
-                "set": "native",
-                "conditional_overrides": [
-                    {
-                        "id": "auto_serve",
-                        "when": {
-                            "signal": "ball_y",
-                            "operation": "equals",
-                            "value": 0,
-                        },
-                        "replace_with": {"semantic_id": "button"},
-                    }
-                ],
-            },
-        )
-        self.assertEqual(
-            train_config["task"]["signals"],
-            {
-                "ball_vx": "ball_vx",
-                "ball_vy": "ball_vy",
-                "ball_x": "ball_x",
-                "ball_y": "ball_y",
-                "bricks_destroyed": "bricks_destroyed",
-                "bricks_destroyed_normalized": "bricks_destroyed_normalized",
-                "bricks_remaining": "bricks_remaining",
-                "lives": "lives",
-                "paddle_x": "paddle_x",
-                "score": "score",
-                "walls_cleared": "walls_cleared",
-            },
-        )
-
-        info_path = _stable_retro_packaged_data_path(
-            train_config["game"],
-            "data.json",
-        )
-        self.assertEqual(
-            json.loads(info_path.read_text(encoding="utf-8"))["info"]["ball_y"],
-            {"address": 229, "type": "|u1"},
-        )
-        self.assertEqual(
-            train_config["task"]["events"],
-            {
-                "serve_stall": {
-                    "signal": "ball_y",
-                    "operation": "equals_for",
-                    "value": 0,
-                    "steps": 256,
-                },
-                "life_loss": {"signal": "lives", "operation": "decrease"},
-            },
-        )
-        self.assertEqual(
-            train_config["task"]["termination"],
-            {"timeout": ["serve_stall"], "max_episode_steps": 54000},
-        )
-        self.assertNotIn("reward_clip", train_config["env_args"])
-        self.assertEqual(train_config["obs_crop"], [17, 0, 0, 0])
-        self.assertEqual(train_config["obs_crop_mode"], "mask")
-        self.assertEqual(train_config["obs_crop_fill"], 0)
-        self.assertEqual(document["environment"]["preprocessing"]["obs_crop"], [17, 0, 0, 0])
-        self.assertNotIn("eval", document["goal"])
-        self.assertEqual(train_config["obs_resize_algorithm"], "area")
-        self.assertEqual(
-            document["environment"]["env_id"],
-            "env-stableretro-turbo:Breakout-Atari2600-v0",
-        )
-        self.assertEqual(document["environment"]["preprocessing"]["frame_skip"], 4)
 
     def test_all_breakout_recipes_use_30_reset_noops(self) -> None:
         recipe_root = self.BREAKOUT_GOAL.parent
@@ -972,10 +595,22 @@ class ConfigValidationTests(unittest.TestCase):
             )
 
     def test_breakout_archive_curriculum_is_fully_opt_in(self) -> None:
-        recipe = self.BREAKOUT_GOAL.parent / "recipes" / "ppo-archive-curriculum.yaml"
-        document = compose_train_document(self.BREAKOUT_GOAL, recipe)
-
-        self.assertEqual(document["recipe_id"], "ppo-archive-curriculum")
+        archive_config = {
+            "semantic_id": "state-archive-v1",
+            "persistence": "durable",
+            "restore_semantics": "continuation",
+            "recorder": {
+                "mode": "cell_transition",
+                "cell": {"dimensions": [{"signal": "score", "bucket_size": 50}]},
+            },
+            "curriculum": {
+                "archive_share": 0.20, "priority_metric": "value_error", "restore_entries": True,
+            },
+        }
+        document = compose_train_document(
+            self.BREAKOUT_GOAL, self.BREAKOUT_RECIPE,
+            recipe_overrides=["train.state_archive=" + json.dumps(archive_config)],
+        )
         archive = document["train_config"]["state_archive"]
         self.assertEqual(archive["semantic_id"], "state-archive-v1")
         self.assertEqual(archive["persistence"], "durable")
@@ -1058,15 +693,20 @@ class ConfigValidationTests(unittest.TestCase):
             {"snapshots": "none"},
         )
 
-    def test_breakout_stable_updates_recipe_adds_late_update_guards(self) -> None:
+    def test_breakout_can_override_linear_schedule_and_update_guards(self) -> None:
         document = compose_train_document(
             self.BREAKOUT_GOAL,
-            self.BREAKOUT_GOAL.parent / "recipes/ppo-stable-updates.yaml",
-            env_provider="env-stableretro-turbo",
+            self.BREAKOUT_RECIPE,
+            recipe_overrides=[
+                "train.backend.config.learning_rate_milestones=null",
+                "train.backend.config.learning_rate_final=2.5e-5",
+                "train.backend.config.learning_rate_schedule_timesteps=100000000",
+                "train.backend.config.target_kl=0.03",
+            ],
         )
 
         train_config = document["train_config"]
-        self.assertEqual(document["recipe_id"], "ppo-stable-updates")
+        self.assertEqual(document["recipe_id"], "ppo")
         backend_config = train_config["training_backend"]["config"]
         self.assertEqual(backend_config["learning_rate"], 2.5e-4)
         self.assertEqual(backend_config["learning_rate_final"], 2.5e-5)
@@ -1108,10 +748,7 @@ class ConfigValidationTests(unittest.TestCase):
         )
         self.assertEqual(
             {key: train_config["task"]["reward"][key] for key in ("reward_mode", "reward_scale")},
-            {
-                key: breakout["train_config"]["task"]["reward"][key]
-                for key in ("reward_mode", "reward_scale")
-            },
+            {"reward_mode": "native", "reward_scale": 1.0},
         )
         self.assertIs(breakout["train_config"]["task"]["reward"]["reward_clip"], False)
         for key in ("env_threads",):

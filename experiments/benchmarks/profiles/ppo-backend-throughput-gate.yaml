@@ -23,7 +23,7 @@ cases:
   - train.timesteps=65536
 - name: breakout
   goal_file: experiments/goals/Breakout-Atari2600-v0/_goal.yaml
-  recipe_file: experiments/goals/Breakout-Atari2600-v0/recipes/ppo-128x64.yaml
+  recipe_file: experiments/goals/Breakout-Atari2600-v0/recipes/ppo.yaml
   recipe_overrides:
   - train.timesteps=65536
 - name: vizdoom
