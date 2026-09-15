@@ -15,7 +15,7 @@ from gradlab.gymnasium_vec_env import (
 from gradlab.turbo_api import validate_turbo_vector_env
 
 
-def _env(game: str, num_envs: int = 2) -> GymnasiumTurboVecEnv:
+def _env(game: str, num_envs: int = 2, **options) -> GymnasiumTurboVecEnv:
     return GymnasiumTurboVecEnv(
         game,
         num_envs,
@@ -27,7 +27,25 @@ def _env(game: str, num_envs: int = 2) -> GymnasiumTurboVecEnv:
         daemon=True,
         observation_mode="same",
         render_mode="rgb_array",
+        **options,
     )
+
+
+def test_deterministic_frozenlake_follows_actions_across_seeded_lanes() -> None:
+    env = _env("FrozenLake-v1", is_slippery=False)
+    try:
+        env.reset(seed=[101, 202])
+        for action, state in ((1, 4), (1, 8), (2, 9), (1, 13), (2, 14), (2, 15)):
+            observations, rewards, terminated, truncated, infos = env.step(
+                np.full(2, action, dtype=np.int64)
+            )
+            np.testing.assert_array_equal(observations, [state, state])
+            np.testing.assert_array_equal(infos["prob"], [1.0, 1.0])
+            np.testing.assert_array_equal(terminated, [state == 15] * 2)
+            assert not truncated.any()
+        np.testing.assert_array_equal(rewards, [1.0, 1.0])
+    finally:
+        env.close()
 
 
 @pytest.mark.parametrize("game", tuple(GYMNASIUM_ENV_CONTRACTS))

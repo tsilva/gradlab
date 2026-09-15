@@ -12,10 +12,12 @@ import threading
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
+from uuid import uuid4
 from urllib.parse import unquote, urlparse
 
 from gradlab.cli_parser import ExactArgumentParser
 from gradlab.local_paths import default_runs_dir
+from gradlab.local_wandb import local_wandb_writer
 from gradlab.clock import utc_now as _utc_now
 from gradlab.config_loader import RECIPE_TEMPLATE_VALUES, render_template_vars
 from gradlab.env import task_termination
@@ -93,8 +95,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--wandb",
-        action="store_true",
-        help="Preserve the recipe's W&B logging settings. Local training disables W&B by default.",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Log metrics to W&B by default; --no-wandb keeps metrics local without credentials.",
     )
     parser.add_argument(
         "--rom-path",
@@ -291,6 +294,7 @@ def main(argv: list[str] | None = None) -> int:
     run_dir = _safe_run_dir(args.runs_dir, run_name)
 
     config = dict(document["train_config"])
+    local_run_id = f"gradlab-{uuid4().hex}"
     config.update(
         {
             "seed": int(args.seed),
@@ -309,6 +313,11 @@ def main(argv: list[str] | None = None) -> int:
             "recipe_slug": recipe_id,
             "source_sha": source_commit or "",
             "checkpoint_eval_backend": "none",
+            "wandb_run_id": local_run_id,
+            "wandb_group": local_run_id,
+            "wandb_display_name": run_name,
+            "attempt_id": f"attempt-{uuid4().hex[:16]}",
+            "compute_target": "local",
         }
     )
     provider = resolve_env_provider(str(config["env_provider"]))
@@ -364,6 +373,8 @@ def main(argv: list[str] | None = None) -> int:
         "document_type": "gradlab.local-run",
         "format_version": 1,
         "status": "running",
+        "run_id": local_run_id,
+        "attempt_id": config["attempt_id"],
         "training_execution": TrainingExecutionPolicy.for_mode(
             TrainingExecutionMode.LOCAL_DEMO
         ).to_document(),
@@ -404,7 +415,11 @@ def main(argv: list[str] | None = None) -> int:
                 kwargs = {"runtime_rom_binding": runtime_rom_binding}
                 if runtime_control is not None:
                     kwargs["runtime_control"] = runtime_control
-                return learner_main(learner_args, **kwargs)
+                with local_wandb_writer(run_dir, config) as wandb_url:
+                    if wandb_url:
+                        receipt["wandb_url"] = wandb_url
+                        _write_receipt(run_dir, receipt)
+                    return learner_main(learner_args, **kwargs)
 
             if use_training_tui:
                 try:

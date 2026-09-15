@@ -150,7 +150,7 @@ def _start_wandb(
 
 
 class WandbProjector:
-    """The sole W&B SDK owner for one logical dstack run."""
+    """The sole W&B SDK owner for one logical training run."""
 
     def __init__(
         self,

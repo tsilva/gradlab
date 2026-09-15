@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 import hashlib
 import json
 import os
@@ -30,6 +31,15 @@ from gradlab.recipe_catalog import (
 from gradlab.train import INTERNAL_LEARNER_ENV
 from gradlab.training_lifecycle import TRAINING_RESULT_FILENAME
 from gradlab.rom_runtime import RomRuntimeBinding
+
+
+@pytest.fixture(autouse=True)
+def isolate_local_wandb_transport():
+    # These tests exercise CLI/materialization; transport has real-outbox tests separately.
+    with mock.patch(
+        "gradlab.local_train.local_wandb_writer", side_effect=lambda *a, **k: nullcontext(None)
+    ):
+        yield
 
 
 def _write_training_result(
@@ -186,9 +196,11 @@ def test_local_train_rejects_non_main_thread_before_recipe_resolution() -> None:
     resolve.assert_not_called()
 
 
-def test_local_train_materializes_credential_free_playable_run(
+@pytest.mark.parametrize("wandb_enabled", [True, False])
+def test_local_train_materializes_playable_run_with_explicit_logging_mode(
     tmp_path: Path,
     monkeypatch,
+    wandb_enabled: bool,
 ) -> None:
     observed_internal_values: list[str | None] = []
 
@@ -220,6 +232,7 @@ def test_local_train_materializes_credential_free_playable_run(
                     "--set",
                     "train.timesteps=64",
                     "--no-tui",
+                    *([] if wandb_enabled else ["--no-wandb"]),
                 ]
             )
             == 0
@@ -235,7 +248,9 @@ def test_local_train_materializes_credential_free_playable_run(
     assert config["checkpoint_eval_backend"] == "none"
     assert "stop_on_acceptance" not in config
     assert "wandb" not in config
-    assert config["wandb_mode"] == "disabled"
+    assert config["wandb_mode"] == ("online" if wandb_enabled else "disabled")
+    assert config["wandb_run_id"].startswith("gradlab-")
+    assert config["wandb_group"] == config["wandb_run_id"]
     assert config["timesteps"] == 64
     assert config["run_description"] == (
         "PPO smoke test for the ROM-free native-vector gradlab__bandit target."

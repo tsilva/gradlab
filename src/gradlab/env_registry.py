@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import Any
 
 from gradlab.reward_transform import PROVIDER_REWARD_TRANSFORM_KEYS
-from gradlab.gymnasium_vec_env import GYMNASIUM_ENV_IDS
+from gradlab.gymnasium_vec_env import GYMNASIUM_ENV_IDS, validate_gymnasium_env_options
 
 
 EXTERNAL_ROM_ASSET_NONE = "none"
@@ -566,6 +566,7 @@ GYMNASIUM_PROVIDER = EnvProvider(
     turbo_api_version=2,
     constructor_contract=ProviderConstructorContract(
         canonical_args=frozenset({"game", "num_envs"}),
+        optional_env_args=frozenset({"is_slippery", "desc"}),
         explicit_env_args=frozenset(
             {
                 "autoreset_mode",
@@ -884,6 +885,14 @@ def validate_provider_resolved_config(
     label: str,
 ) -> None:
     provider = resolve_env_provider(provider_id)
+    if provider.provider_id == "gymnasium":
+        game = config.get("game") if isinstance(config, Mapping) else getattr(config, "game", None)
+        options = (
+            config.get("env_args", {})
+            if isinstance(config, Mapping)
+            else getattr(config, "env_args", {})
+        )
+        validate_gymnasium_env_options(str(game), options)
     contract = provider.constructor_contract
     if contract is None:
         return
