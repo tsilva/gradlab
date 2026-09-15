@@ -58,6 +58,16 @@ def with_enabled_termination_conditions(
 
     task = deepcopy(config.task)
     termination = dict(task.get("termination", {}))
+    if task.get("id") == "identity":
+        events = task.get("events", {})
+        for condition_id in configured - enabled:
+            if not condition_id.startswith("event:"):
+                continue
+            rule = events.get(condition_id.removeprefix("event:"))
+            if rule is not None and rule.get("operation") == "equals":
+                # Continuing past a boundary must not repeatedly emit its event
+                # or pay its bonus while the terminal condition remains true.
+                rule.update(operation="equals_for", steps=1)
     for outcome in TERMINATION_OUTCOMES:
         if outcome not in termination:
             continue
