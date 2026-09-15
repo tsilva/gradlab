@@ -8,7 +8,7 @@ import socket
 import tempfile
 import traceback
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextlib import redirect_stdout
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -97,6 +97,7 @@ DEFAULT_SCENARIOS = (
     "wandb-retry-deduplication",
     "wandb-visibility-gating",
     "checkpoint-upload-retry",
+    "blocking-publication-lease-renewal",
     "state-archive-lease-fencing",
     "eval-result-reconciliation",
     "modal-ambiguous-submit",
@@ -119,6 +120,8 @@ class DeterministicClock:
     def __init__(self) -> None:
         self._wall = datetime(2026, 1, 1, tzinfo=UTC).timestamp()
         self._monotonic = 0.0
+        self.maintenance: list[Callable[[], None]] = []
+        self._in_maintenance = False
 
     def time(self) -> float:
         return self._wall
@@ -133,8 +136,19 @@ class DeterministicClock:
         increment = float(seconds)
         if increment < 0:
             raise ValueError("deterministic clock cannot move backwards")
-        self._wall += increment
-        self._monotonic += increment
+        remaining = increment
+        while remaining > 0:
+            step = min(remaining, 1.0) if self.maintenance else remaining
+            self._wall += step
+            self._monotonic += step
+            remaining -= step
+            if not self._in_maintenance:
+                self._in_maintenance = True
+                try:
+                    for callback in tuple(self.maintenance):
+                        callback()
+                finally:
+                    self._in_maintenance = False
 
     def utc_datetime(self) -> datetime:
         return datetime.fromtimestamp(self._wall, UTC)
@@ -268,6 +282,14 @@ class CertificationRuntime(SupervisorRuntime):
     def holder_id(self) -> str:
         return self.writer_id
 
+    @contextmanager
+    def maintain_lease(self, renew: Callable[[], None]) -> Iterator[None]:
+        self.clock.maintenance.append(renew)
+        try:
+            yield
+        finally:
+            self.clock.maintenance.remove(renew)
+
     def disk_usage(self, path: Path) -> Any:
         del path
         return SimpleNamespace(total=100, used=10, free=90)
@@ -279,10 +301,13 @@ class CertificationRuntime(SupervisorRuntime):
         *,
         limit: int,
         event_seq_offset: int = 0,
+        heartbeat: Callable[[], None] | None = None,
     ) -> int:
         del projector
         published = 0
         for row in store.pending_metric_frames(limit=limit):
+            if heartbeat is not None:
+                heartbeat()
             frame_id = int(row["id"])
             if not store.claim_metric_frame(frame_id):
                 continue
@@ -1281,9 +1306,94 @@ def _scenario_checkpoint_upload_retry(root: Path) -> dict[str, Any]:
     }
 
 
+def _scenario_blocking_publication_lease_renewal(root: Path) -> dict[str, Any]:
+    recorder = ScenarioRecorder("blocking-publication-lease-renewal", [])
+    for mode in ("slow-upload", "lost-during-upload", "renewal-outage", "expired"):
+        fixture = CertificationFixture(root / mode)
+        prepared = fixture.prepare(run_number=39)
+        supervisor = prepared.supervisor
+        fixture.record_checkpoint(prepared, step=390, kind="checkpoint")
+        fixture.record_checkpoint(prepared, step=391, kind="checkpoint")
+        authority = supervisor.authority
+        original_put = authority.models.put_file
+        original_renew = authority.renew_lease
+        stalled = False
+
+        def put_file(key: str, *args: Any, **kwargs: Any) -> Any:
+            nonlocal stalled
+            if key.endswith("model.zip") and not stalled:
+                stalled = True
+                # A single SDK call blocks beyond the original lease lifetime.
+                fixture.clock.advance(LEASE_TTL_SECONDS + 30)
+            return original_put(key, *args, **kwargs)
+
+        def renew(*args: Any, **kwargs: Any) -> Any:
+            if mode == "lost-during-upload":
+                raise LeaseUnavailable("simulated writer CAS takeover")
+            if mode == "renewal-outage":
+                raise TimeoutError("simulated lease storage outage")
+            return original_renew(*args, **kwargs)
+
+        if mode == "expired":
+            fixture.clock.advance(LEASE_TTL_SECONDS + 1)
+        failure = None
+        with (
+            patch.object(authority.models, "put_file", side_effect=put_file),
+            patch.object(authority, "renew_lease", side_effect=renew),
+            prepared.runtime.maintain_lease(
+                lambda: supervisor._renew_lease(fixture.clock.monotonic(), background=True)
+            ),
+        ):
+            try:
+                supervisor.active_iteration()
+            except LeaseUnavailable as exc:
+                failure = str(exc)
+        index = authority.models.get_json_optional(f"runs/{supervisor.manifest.run_id}/index.json")
+        publications = supervisor.store.checkpoint_publications()
+        if mode == "slow-upload":
+            recorder.require(
+                "blocked-upload-retains-writer-and-publishes-all-checkpoints",
+                failure is None
+                and not supervisor.lease_lost
+                and len(publications) == 2
+                and len((index or {}).get("checkpoints", [])) == 2
+                and supervisor.lease.generation >= 7,
+                evidence={
+                    "published": len(publications),
+                    "lease_generation": supervisor.lease.generation,
+                },
+            )
+        else:
+            keys = list(
+                authority.models.iter_keys(f"runs/{supervisor.manifest.run_id}/checkpoints/")
+            )
+            fenced = supervisor.lease_lost and not publications and index is None
+            if mode == "expired":
+                fenced = fenced and not keys and supervisor.lease_misses == 1
+            else:
+                fenced = (
+                    fenced
+                    and failure is not None
+                    and not any(key.endswith("manifest.json") for key in keys)
+                )
+            recorder.require(
+                f"{mode}-fences-publication",
+                fenced,
+                evidence={
+                    "failure": failure,
+                    "published": len(publications),
+                    "misses": supervisor.lease_misses,
+                },
+            )
+    return {
+        "invariants": recorder.invariants,
+        "evidence": {"blocked_seconds": LEASE_TTL_SECONDS + 30},
+    }
+
+
 def _scenario_state_archive_lease_fencing(root: Path) -> dict[str, Any]:
     recorder = ScenarioRecorder("state-archive-lease-fencing", [])
-    modes = ("expired", "stalled-upload", "slow-upload", "slow-list")
+    modes = ("expired", "stalled-upload", "slow-upload", "slow-list", "background-prune")
     for mode in modes:
         fixture = CertificationFixture(root / mode)
         prepared = fixture.prepare(run_number=38)
@@ -1330,7 +1440,7 @@ def _scenario_state_archive_lease_fencing(root: Path) -> dict[str, Any]:
 
         def slow_iter(*args: Any, **kwargs: Any) -> Iterator[str]:
             for key in original_iter(*args, **kwargs):
-                if mode == "slow-list" and key.startswith(prefix):
+                if mode in {"slow-list", "background-prune"} and key.startswith(prefix):
                     fixture.clock.advance(8)
                 yield key
 
@@ -1340,6 +1450,11 @@ def _scenario_state_archive_lease_fencing(root: Path) -> dict[str, Any]:
         with (
             patch.object(authority.control, "put_bytes", side_effect=slow_put),
             patch.object(authority.control, "iter_keys", side_effect=slow_iter),
+            prepared.runtime.maintain_lease(
+                lambda: supervisor._renew_lease(fixture.clock.monotonic(), background=True)
+            )
+            if mode == "background-prune"
+            else nullcontext(),
         ):
             try:
                 supervisor._publish_state_archive(require_closed=True)
@@ -2369,6 +2484,7 @@ SCENARIOS: dict[str, Callable[[Path], dict[str, Any]]] = {
     "wandb-retry-deduplication": _scenario_wandb_retry_deduplication,
     "wandb-visibility-gating": _scenario_wandb_visibility_gating,
     "checkpoint-upload-retry": _scenario_checkpoint_upload_retry,
+    "blocking-publication-lease-renewal": _scenario_blocking_publication_lease_renewal,
     "state-archive-lease-fencing": _scenario_state_archive_lease_fencing,
     "eval-result-reconciliation": _scenario_eval_result_reconciliation,
     "modal-ambiguous-submit": _scenario_modal_ambiguous_submit,

@@ -5,8 +5,10 @@ import shutil
 import signal
 import subprocess
 import uuid
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from pathlib import Path
+from threading import Event, Thread
 from typing import Any, Protocol
 
 from gradlab.clock import Clock, SystemClock
@@ -50,6 +52,23 @@ class SupervisorRuntime:
 
     def __init__(self, *, clock: Clock | None = None) -> None:
         self.clock = clock or SystemClock()
+
+    @contextmanager
+    def maintain_lease(self, renew: Callable[[], None]) -> Iterator[None]:
+        """Keep writer renewal independent of blocking storage and SDK calls."""
+        stopped = Event()
+
+        def work() -> None:
+            while not stopped.wait(1.0):
+                renew()
+
+        worker = Thread(target=work, name="gradlab-writer-lease", daemon=True)
+        worker.start()
+        try:
+            yield
+        finally:
+            stopped.set()
+            worker.join()
 
     def runtime_contract(self, *, runtime_image_ref: str) -> dict[str, Any]:
         return runtime_contract(runtime_image_ref=runtime_image_ref)
@@ -95,6 +114,7 @@ class SupervisorRuntime:
         *,
         limit: int,
         event_seq_offset: int = 0,
+        heartbeat: Callable[[], None] | None = None,
     ) -> int:
         return publish_pending_frames(
             store,
@@ -102,6 +122,7 @@ class SupervisorRuntime:
             limit=limit,
             event_seq_offset=event_seq_offset,
             metrics_schema_version=projector.metrics_schema_version,
+            heartbeat=heartbeat,
         )
 
     def publish_promotion(

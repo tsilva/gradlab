@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from functools import partial
 from pathlib import Path
+from threading import RLock
 from typing import Any
 
 from gradlab.checkpoint_contract import checkpoint_manifest_contract_sha256
@@ -307,6 +308,8 @@ class RunSupervisor:
         self.lease: Lease | None = None
         self.last_lease_renewal = 0.0
         self.lease_misses = 0
+        self._lease_lock = RLock()
+        self._lease_events: list[tuple[str, dict[str, Any]]] = []
         self.last_segment = 0.0
         self.last_eval_poll = 0.0
         self.last_health_sample = 0.0
@@ -943,6 +946,7 @@ class RunSupervisor:
         config = resolve_env_config(env_config_from_mapping(train_config))
         receipt_key = f"runs/{self.manifest.run_id}/wandb.json"
         existing = self.authority.control.get_json_optional(receipt_key)
+        self._lease_heartbeat()
         if existing is None:
             self.projector = self.runtime.start_wandb(
                 train_config,
@@ -950,6 +954,7 @@ class RunSupervisor:
                 config=config,
                 goal_variant=self.manifest.goal_variant,
             )
+            self._lease_heartbeat()
             run = self.projector.run
             receipt = {
                 "schema_version": 1,
@@ -978,6 +983,7 @@ class RunSupervisor:
             )
 
     def _start_learner(self) -> None:
+        self._lease_heartbeat()
         self._archive_pre_spawn_learner_state()
         environment = os.environ.copy()
         for name in tuple(environment):
@@ -1450,27 +1456,49 @@ class RunSupervisor:
                 result=result.to_dict(),
             )
 
-    def _renew_lease(self, now: float) -> None:
-        if now - self.last_lease_renewal < LEASE_RENEW_SECONDS:
-            return
-        assert self.lease is not None
-        try:
-            self.lease = self.authority.renew_lease(self.lease)
-        except Exception as exc:
-            self.lease_misses += 1
-            print(
-                f"writer lease renewal failed ({self.lease_misses}/"
-                f"{LEASE_MISSES_BEFORE_STOP}): {exc}",
-                flush=True,
-            )
-            if self.lease_misses >= LEASE_MISSES_BEFORE_STOP:
-                self.lease_lost = True
-                self._emit("writer_lease_lost", misses=self.lease_misses)
-                self._request_learner_stop("writer_lease_lost")
-        else:
-            self.lease_misses = 0
-            self.last_lease_renewal = now
-            self._emit("writer_lease_renewed", holder_id=self.lease.holder_id)
+    def _renew_lease(self, now: float, *, background: bool = False) -> None:
+        # Only this lock's owner may advance the lease's CAS token. The background
+        # worker touches neither the ledger, the observer, nor learner stop state.
+        with self._lease_lock:
+            lease = self.lease
+            if lease is not None and not self.lease_lost:
+                expired = parse_utc_datetime(lease.expires_at) <= self.clock.utc_datetime()
+                if expired or now - self.last_lease_renewal >= LEASE_RENEW_SECONDS:
+                    try:
+                        self.lease = self.authority.renew_lease(lease)
+                        if parse_utc_datetime(self.lease.expires_at) <= self.clock.utc_datetime():
+                            raise LeaseUnavailable("writer lease expired during renewal")
+                    except Exception as exc:
+                        self.lease_misses += 1
+                        print(
+                            f"writer lease renewal failed ({self.lease_misses}/"
+                            f"{LEASE_MISSES_BEFORE_STOP}): {exc}",
+                            flush=True,
+                        )
+                        # Expiry or a CAS conflict is definitive loss, not a
+                        # transient request failure that permits another iteration.
+                        self.lease_lost = (
+                            isinstance(exc, LeaseUnavailable)
+                            or self.lease_misses >= LEASE_MISSES_BEFORE_STOP
+                            or parse_utc_datetime(lease.expires_at) <= self.clock.utc_datetime()
+                        )
+                        if self.lease_lost:
+                            self._lease_events.append(
+                                ("writer_lease_lost", {"misses": self.lease_misses})
+                            )
+                    else:
+                        self.lease_misses = 0
+                        self._lease_events.append(
+                            ("writer_lease_renewed", {"holder_id": self.lease.holder_id})
+                        )
+                    self.last_lease_renewal = now
+            events = [] if background else self._lease_events[:]
+            if not background:
+                self._lease_events.clear()
+        for kind, payload in events:
+            self._emit(kind, **payload)
+        if not background and self.lease_lost:
+            self._request_learner_stop("writer_lease_lost")
 
     def _lease_heartbeat(self) -> None:
         self._renew_lease(self.clock.monotonic())
@@ -1509,12 +1537,14 @@ class RunSupervisor:
         return len(events)
 
     def _publish_wandb(self) -> int:
+        self._lease_heartbeat()
         if self.projector is None:
             return 0
         return self.runtime.publish_frames(
             self.store,
             self.projector,
             limit=250,
+            heartbeat=self._lease_heartbeat,
         )
 
     def _publish_checkpoints(self) -> int:
@@ -1526,6 +1556,7 @@ class RunSupervisor:
             "evaluation_contract_sha256": checkpoint_manifest_contract_sha256(self.recipe_document),
         }
         for checkpoint in self.store.checkpoints():
+            self._lease_heartbeat()
             ledger_id = int(checkpoint["id"])
             if self.store.checkpoint_publication(ledger_id) is not None:
                 continue
@@ -1550,7 +1581,10 @@ class RunSupervisor:
                         "local_path": str(path),
                     },
                     created_at=utc_timestamp(float(checkpoint["created_at"])),
+                    heartbeat=self._lease_heartbeat,
                 )
+            except LeaseUnavailable:
+                raise
             except Exception as exc:
                 self.store.mark_checkpoint_upload_failed(ledger_id, repr(exc))
                 print(f"checkpoint publication failed id={ledger_id}: {exc}", flush=True)
@@ -2122,7 +2156,7 @@ class RunSupervisor:
                 archive_root=archive_root,
                 heartbeat=heartbeat,
             )
-            self.lease = self.authority.prune_state_archive(self.lease)
+            self.authority.prune_state_archive(self.lease, heartbeat=heartbeat)
             if require_closed and publication.get("status") != "closed":
                 raise RuntimeError("state archive final closure is not closed")
             self.state_archive_publication = publication
@@ -2147,16 +2181,22 @@ class RunSupervisor:
         self._observe_cancel_request()
         self._maintain_learner_stop(instant)
         activity += self._seal_metrics(instant)
+        self._lease_heartbeat()
         activity += self._publish_checkpoints()
+        self._lease_heartbeat()
         activity += self._publish_state_archive()
+        self._lease_heartbeat()
         if self.cancel_requested:
             self._cancel_outstanding_evals()
         else:
             activity += self._reconcile_evals_before_submission()
             activity += self._submit_pending_evals()
         activity += self._poll_evals(instant)
+        self._lease_heartbeat()
         activity += self._publish_wandb()
+        self._lease_heartbeat()
         self._emit_health(instant)
+        self._lease_heartbeat()
         self._scratch_guard()
         unpublished_age = self._oldest_unpublished_age()
         if unpublished_age >= WANDB_WARNING_SECONDS:
@@ -2184,15 +2224,20 @@ class RunSupervisor:
             raise LeaseUnavailable("writer lease was lost while draining")
         self._observe_cancel_request()
         activity += self._seal_metrics(instant, force=True)
+        self._lease_heartbeat()
         activity += self._publish_checkpoints()
+        self._lease_heartbeat()
         activity += self._publish_state_archive()
+        self._lease_heartbeat()
         if self.cancel_requested:
             self._cancel_outstanding_evals()
         else:
             activity += self._reconcile_evals_before_submission()
             activity += self._submit_pending_evals()
         activity += self._poll_evals(instant, force=True)
+        self._lease_heartbeat()
         activity += self._publish_wandb()
+        self._lease_heartbeat()
         pending_frames = self.store.metric_outbox_stats()["frames"]
         converged = (
             self._all_ready_checkpoints_published()
@@ -2542,6 +2587,9 @@ class RunSupervisor:
         *,
         phase: str = "startup",
     ) -> int:
+        if self.lease_lost:
+            print(f"startup stopped after writer lease loss: {failure!r}", flush=True)
+            return 1
         receipt = TerminalReceipt(
             run_id=self.manifest.run_id,
             attempt_id=self.manifest.attempt_id,
@@ -2578,6 +2626,18 @@ class RunSupervisor:
         return 1
 
     def run(self) -> int:
+        with self.runtime.maintain_lease(
+            lambda: self._renew_lease(self.clock.monotonic(), background=True)
+        ):
+            try:
+                return self._run()
+            except LeaseUnavailable:
+                if not self.lease_lost:
+                    raise
+                print("run stopped after writer lease loss; publication is fenced", flush=True)
+                return 1
+
+    def _run(self) -> int:
         try:
             self.validate_runtime()
             self.materialize()
@@ -2595,11 +2655,13 @@ class RunSupervisor:
             self.store.init()
             self.store.reset_interrupted_metric_frames()
             self._recover_durable_state()
+            self._lease_heartbeat()
             self.recovered_early_stop = (
                 self._authoritative_early_stop_receipt(attempt_id=self.manifest.attempt_id)
                 or self._prior_early_stop_receipt()
             )
             self._start_wandb()
+            self._lease_heartbeat()
             self._observe_cancel_request()
             provisional_stop = self.eval_admission_closed or self.recovered_early_stop is not None
             final_checkpoint_published = self._has_public_final_checkpoint()
@@ -2632,7 +2694,7 @@ class RunSupervisor:
         except BaseException as failure:
             projector = self.projector
             self.projector = None
-            if projector is not None:
+            if projector is not None and not self.lease_lost:
                 try:
                     self.runtime.close_wandb(
                         projector,
@@ -2820,6 +2882,7 @@ class RunSupervisor:
             early_stop=(early_stop.to_dict() if early_stop is not None else None),
             state_archive=self.state_archive_publication,
         )
+        self._lease_heartbeat()
         self.authority.create_attempt_terminal(
             receipt,
             metrics=self.store.latest_metrics(),
@@ -2831,6 +2894,7 @@ class RunSupervisor:
             final_step=receipt.final_step,
         )
         try:
+            self._lease_heartbeat()
             self.runtime.publish_terminal(
                 self.train_config,
                 receipt,
@@ -2842,6 +2906,7 @@ class RunSupervisor:
             print(f"run failed: {failure!r}", flush=True)
             return 1
         if self.evaluation_required and state == "succeeded":
+            self._lease_heartbeat()
             self.authority.create_terminal(receipt)
         if state == "failed":
             print(
