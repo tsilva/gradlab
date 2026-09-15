@@ -317,10 +317,60 @@ class _TupleObservationAdapter(gym.ObservationWrapper):
         return encoded.copy()
 
 
-def _make_scalar_env(env_id: str, observation_kind: str, categories: tuple[int, ...]):
+def validate_gymnasium_env_options(game: str, options: Mapping[str, Any]) -> None:
+    frozenlake_options = {"is_slippery", "desc"} & options.keys()
+    if frozenlake_options and game not in {"FrozenLake-v1", "FrozenLake8x8-v1"}:
+        raise ValueError(
+            f"{', '.join(sorted(frozenlake_options))} supported only for FrozenLake environments"
+        )
+    if "is_slippery" in options:
+        if not isinstance(options["is_slippery"], bool):
+            raise ValueError("is_slippery must be a boolean")
+    if "desc" not in options:
+        return
+    desc = options["desc"]
+    size = 4 if game == "FrozenLake-v1" else 8
+    if (
+        not isinstance(desc, (list, tuple))
+        or len(desc) != size
+        or any(not isinstance(row, str) or len(row) != size for row in desc)
+    ):
+        raise ValueError(f"desc must contain {size} strings of {size} tiles for {game}")
+    tiles = "".join(desc)
+    if set(tiles) - set("SFHG"):
+        raise ValueError("desc tiles must be S (start), F (ice), H (hole), or G (goal)")
+    if tiles.count("S") != 1 or tiles.count("G") != 1:
+        raise ValueError("desc must contain exactly one start S and one goal G")
+    start = divmod(tiles.index("S"), size)
+    goal = divmod(tiles.index("G"), size)
+    visited = {start}
+    pending = [start]
+    while pending:
+        row, column = pending.pop()
+        for dr, dc in ((0, 1), (1, 0), (0, -1), (-1, 0)):
+            neighbor = (row + dr, column + dc)
+            nr, nc = neighbor
+            if (
+                0 <= nr < size
+                and 0 <= nc < size
+                and desc[nr][nc] != "H"
+                and neighbor not in visited
+            ):
+                visited.add(neighbor)
+                pending.append(neighbor)
+    if goal not in visited:
+        raise ValueError("desc must have a safe path from start S to goal G")
+
+
+def _make_scalar_env(
+    env_id: str,
+    observation_kind: str,
+    categories: tuple[int, ...],
+    options: Mapping[str, Any] | None = None,
+):
     """Create one scalar lane from a spawn-pickleable module-level callable."""
 
-    env = gym.make(env_id, render_mode="rgb_array")
+    env = gym.make(env_id, render_mode="rgb_array", **dict(options or {}))
     if observation_kind == "multi_discrete":
         return _TupleObservationAdapter(env, categories)
     return env
@@ -401,6 +451,8 @@ class GymnasiumTurboVecEnv:
         daemon: bool,
         observation_mode: str,
         render_mode: str,
+        is_slippery: bool | None = None,
+        desc: Sequence[str] | None = None,
     ):
         try:
             contract = GYMNASIUM_ENV_CONTRACTS[str(game)]
@@ -425,6 +477,12 @@ class GymnasiumTurboVecEnv:
                 "Gymnasium adapter requires fixed execution value(s): " + ", ".join(invalid)
             )
         _validate_registered_contract(contract)
+        options = {} if is_slippery is None else {"is_slippery": is_slippery}
+        if desc is not None:
+            options["desc"] = desc
+        validate_gymnasium_env_options(str(game), options)
+        if desc is not None:
+            options["desc"] = tuple(desc)
 
         self.contract = contract
         self.num_envs = num_envs
@@ -475,6 +533,7 @@ class GymnasiumTurboVecEnv:
                         contract.env_id,
                         contract.observation_kind,
                         contract.observation_categories,
+                        options,
                     )
                     for _ in range(num_envs)
                 ),

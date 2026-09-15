@@ -27,8 +27,12 @@ authority for that decision.
   scrubbing do not count; the rate falls to zero when playback stops. The tooltip
   identifies this mode and omits decode/draw timings. Switching RGB mode, changing
   episodes, or moving backward resets the sample history.
-- W&B is the authoritative scientific metric surface. One supervisor process inside the training
-  container is the only process allowed to open and write the logical W&B run.
+- W&B is the authoritative scientific metric surface. The supervisor is the only W&B writer:
+  the training-container supervisor for queued runs, or the local training host holding the
+  exclusive per-run writer lock for local runs. Both publish the learner's SQLite outbox through
+  the same projector and metric registry. Local runs enable W&B by default; `--no-wandb` is
+  an explicit credential-free opt-out. Successful online local completion requires SDK finish
+  and remote confirmation of the outbox high-water mark, recorded in `wandb-delivery.json`.
 - The learner writes structured events only to its embedded SQLite WAL outbox. It performs no
   network I/O for metrics, checkpoint publication, or evaluation dispatch.
 - W&B-disabled runs retain history frames in SQLite with `local_only` delivery status so bounded

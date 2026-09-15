@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import deque
 from pathlib import Path
 
 import gymnasium as gym
@@ -13,7 +14,7 @@ from gradlab.env_config import env_config_from_mapping
 from gradlab.env_registry import environment_spec
 from gradlab.gymnasium_vec_env import GYMNASIUM_ENV_CONTRACTS
 from gradlab.play_catalog import PlayCatalog
-from gradlab.recipe_documents import compose_train_document
+from gradlab.recipe_documents import compose_train_document, compose_resolved_train_documents
 from gradlab.recipe_schema import validate_materialized_train_recipe
 from gradlab.task_kernels import IdentityTaskDefinition, Outcome
 
@@ -159,6 +160,99 @@ EXPECTED = {
 def _document(game: str) -> dict:
     root = GOALS / game
     return compose_train_document(root / "_goal.yaml", root / "recipes/ppo.yaml")
+
+
+def test_deterministic_frozenlake_override_changes_environment_identity() -> None:
+    root = GOALS / "FrozenLake-v1"
+    documents = compose_resolved_train_documents(
+        root / "_goal.yaml",
+        root / "recipes/ppo.yaml",
+        recipe_overrides=["train.environment.env_config.env_args.is_slippery=false"],
+    )
+    assert documents.effective["train_config"]["env_args"]["is_slippery"] is False
+    assert documents.effective["environment_hash"] != documents.base["environment_hash"]
+
+
+@pytest.mark.parametrize(
+    "game,value", [("CartPole-v1", False), ("FrozenLake-v1", "false"), ("FrozenLake-v1", None)]
+)
+def test_invalid_slippery_options_fail_recipe_validation(game, value) -> None:
+    document = _document(game)
+    document["train_config"]["env_args"]["is_slippery"] = value
+    with pytest.raises(ValueError, match="is_slippery"):
+        validate_materialized_train_recipe(document)
+
+
+@pytest.mark.parametrize(
+    "game,desc",
+    [
+        ("CartPole-v1", ["SFFF", "FFFF", "FFFF", "FFFG"]),
+        ("FrozenLake-v1", None),
+        ("FrozenLake-v1", "SFFFFFFFFFFFFFFG"),
+        ("FrozenLake-v1", ["SFFF", "FFFF", "FFFF"]),
+        ("FrozenLake-v1", ["SFFF", "FFFF", "FFFF", "FFFFG"]),
+        ("FrozenLake-v1", ["SFFF", "FXFF", "FFFF", "FFFG"]),
+        ("FrozenLake-v1", ["SSFF", "FFFF", "FFFF", "FFFG"]),
+        ("FrozenLake-v1", ["SFFF", "FFFF", "FFFF", "FFFF"]),
+        ("FrozenLake-v1", ["SHHH", "HHHH", "HHHH", "HHHG"]),
+        ("FrozenLake8x8-v1", ["SFFF", "FFFF", "FFFF", "FFFG"]),
+    ],
+)
+def test_invalid_frozenlake_layouts_fail_before_environment_creation(game, desc) -> None:
+    document = _document(game)
+    document["train_config"]["env_args"]["desc"] = desc
+    with pytest.raises(ValueError, match="desc"):
+        validate_materialized_train_recipe(document)
+
+
+def test_maze_layout_changes_environment_and_goal_identity() -> None:
+    root = GOALS / "FrozenLake8x8-v1/Deterministic"
+    documents = compose_resolved_train_documents(
+        root / "_goal.yaml",
+        root / "recipes/ppo.yaml",
+        recipe_overrides=[
+            'train.environment.env_config.env_args.desc=["SFFFFFFF","FFFFFFFF",'
+            '"FFFFFFFF","FFFFFFFF","FFFFFFFF","FFFFFFFF","FFFFFFFF","FFFFFFFG"]'
+        ],
+    )
+    assert documents.effective["environment_hash"] != documents.base["environment_hash"]
+    assert documents.effective["goal"] != documents.base["goal"]
+
+
+def test_maze_is_reachable_through_the_training_environment() -> None:
+    document = _document("FrozenLake8x8-v1/Deterministic")
+    config = document["train_config"]
+    rows = config["env_args"]["desc"]
+    frontier = deque([(0, [])])
+    visited = {0}
+    route = None
+    while frontier:
+        state, actions = frontier.popleft()
+        if state == 63:
+            route = actions
+            break
+        row, col = divmod(state, 8)
+        for action, (dr, dc) in enumerate(((0, -1), (1, 0), (0, 1), (-1, 0))):
+            nr, nc = row + dr, col + dc
+            target = nr * 8 + nc
+            if 0 <= nr < 8 and 0 <= nc < 8 and rows[nr][nc] != "H" and target not in visited:
+                visited.add(target)
+                frontier.append((target, [*actions, action]))
+    assert route is not None and len(route) == 26
+    env = make_vec_envs(resolve_env_config(env_config_from_mapping(config)), n_envs=2, seed=31)
+    try:
+        np.testing.assert_array_equal(env.reset(), [0, 0])
+        for step, action in enumerate(route, start=1):
+            _obs, rewards, dones, _infos = env.step(np.full(2, action, dtype=np.int64))
+            np.testing.assert_array_equal(dones, [step == 26] * 2)
+            np.testing.assert_array_equal(rewards, [float(step == 26)] * 2)
+        env.reset()
+        # Moving down from S enters a hole in this maze, unlike the default board.
+        _obs, rewards, dones, _infos = env.step(np.ones(2, dtype=np.int64))
+        assert dones.all()
+        assert not rewards.any()
+    finally:
+        env.close()
 
 
 def test_gymnasium_goals_are_registered_in_player_catalog() -> None:

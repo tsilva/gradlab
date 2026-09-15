@@ -57,11 +57,15 @@ gradlab train Acrobot-v1/ppo
 gradlab train LunarLander-v3/ppo
 gradlab train FrozenLake-v1/ppo
 gradlab train FrozenLake8x8-v1/ppo
+gradlab train FrozenLake8x8-v1/Deterministic/ppo
 gradlab train CliffWalking-v1/ppo
 gradlab train CliffWalkingSlippery-v1/ppo
 gradlab train Taxi-v3/ppo
 gradlab train Blackjack-v1/ppo
 ```
+
+`FrozenLake8x8-v1/Deterministic/ppo` uses a fixed maze with 31 holes, two dead
+ends, and a 26-move shortest safe route. It shares the 4×4 PPO parameters.
 
 Use `gymnasium:<environment-id>` for the qualified environment ID. These goals
 use isolated spawned lanes, explicit masked resets, native rewards, and RGB
@@ -153,7 +157,10 @@ explicitly authorized. See [COMPUTE.md](COMPUTE.md) and the
 - GradLab requires Python 3.14 and uses `uv` with a committed lockfile and a
   seven-day dependency age gate. Supported binary targets are macOS arm64 and
   Linux x86_64.
-- Local `gradlab train` Runs disable W&B and acceptance evaluation by default.
+- Local `gradlab train` Runs log metrics to W&B by default using the same project
+  routing as queued Runs. Use `--no-wandb` for credential-free execution, or
+  `--set logging.wandb_mode=offline` to retain an offline W&B run. Acceptance
+  evaluation remains disabled for local training.
   They can establish Training Success but cannot establish Acceptance or
   Promotion.
 - `gradlab.ppo` is the opt-in tensor-native PPO backend. It accepts the
