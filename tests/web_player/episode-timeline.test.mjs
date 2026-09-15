@@ -10,6 +10,9 @@ test("episode range retains the first recorded step after cache eviction", () =>
     { first: 90, last: 189 });
   assert.deepEqual(episodeStepRange({ imported: true, first_step: 1, last_step: 18005 }, []),
     { first: 1, last: 18005 });
+  assert.deepEqual(episodeStepRange({ episode_id: "episode", transitions: 18005,
+    initial_step: 0, first_step: 1, last_step: 18005 }, snapshots),
+  { first: 0, last: 18005 });
 });
 
 test("rapid scrubbing coalesces reads and suppresses stale responses", async () => {

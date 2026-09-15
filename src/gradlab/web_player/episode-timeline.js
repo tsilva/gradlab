@@ -1,7 +1,7 @@
 // Keep the navigable episode independent of the bounded presentation cache.
 export function episodeStepRange(trajectory, snapshots) {
   if (trajectory?.imported || (trajectory?.episode_id && trajectory?.transitions > 0)) {
-    return { first: Number(trajectory.first_step), last: Number(trajectory.last_step) };
+    return { first: Number(trajectory.initial_step ?? trajectory.first_step), last: Number(trajectory.last_step) };
   }
   const steps = snapshots.map((snapshot) => Number(snapshot.transition?.step ?? snapshot.session?.step))
     .filter(Number.isFinite);

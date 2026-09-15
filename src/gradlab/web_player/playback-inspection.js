@@ -250,7 +250,7 @@ export function createPlaybackInspection({
 
   function frameExpected(kind, snapshot) {
     if (isGeneratedFrame(kind)) return frameGeneration(kind, snapshot) > 0;
-    if (!snapshot?.transition) return true;
+    if (!snapshot?.transition) return snapshot?.initial_frames?.includes(Number(kind)) ?? true;
     if (Number(kind) === FRAME_GAME) {
       return Boolean(snapshot.transition.after?.game_frame);
     }
@@ -445,7 +445,7 @@ export function createPlaybackInspection({
     if (state.liveSnapshot?.trajectory?.transitions > 0) {
       const point = currentEpisodeHistory().find((item) => Number(item.sequence) === Number(sequence));
       const snapshot = state.snapshots.get(Number(sequence));
-      const step = point?.step ?? snapshot?.transition?.step;
+      const step = point?.step ?? snapshot?.transition?.step ?? snapshot?.session?.step;
       if (Number.isInteger(step)) void inspectStep(step);
       return;
     }
@@ -480,7 +480,7 @@ export function createPlaybackInspection({
       else if (entry) inspectSequence(entry[0]);
       return;
     }
-    if (step < trajectory.first_step || step > trajectory.last_step) return;
+    if (step < (trajectory.initial_step ?? trajectory.first_step) || step > trajectory.last_step) return;
     if (step === trajectory.last_step && step === Number(state.liveSnapshot?.transition?.step)) {
       returnToLive();
       return;
@@ -560,7 +560,7 @@ export function createPlaybackInspection({
   function canReplayInspection() {
     if (state.liveSnapshot?.trajectory?.imported) return false;
     if (state.liveSnapshot?.trajectory?.transitions > 0 && state.inspectionSequence !== null) {
-      return Number(state.snapshot?.transition?.step) < state.liveSnapshot.trajectory.last_step;
+      return Number(state.snapshot?.transition?.step ?? state.snapshot?.session?.step) < state.liveSnapshot.trajectory.last_step;
     }
     const sequences = inspectionEpisodeSequences();
     const selectedIndex = sequences.indexOf(Number(state.inspectionSequence));
@@ -601,7 +601,7 @@ export function createPlaybackInspection({
       const startedAt = now();
       if (startedAt - nextReplayAt >= interval) nextReplayAt = startedAt;
       if (state.liveSnapshot?.trajectory?.transitions > 0) {
-        const nextStep = Number(state.snapshot.transition.step) + 1;
+        const nextStep = Number(state.snapshot.transition?.step ?? state.snapshot.session?.step) + 1;
         if (nextStep > state.liveSnapshot.trajectory.last_step) {
           returnToLive();
           return;
@@ -771,7 +771,7 @@ export function createPlaybackInspection({
     }
     if (selection === cursorGeneration) await livePresentation.notifyReady().catch(reportError);
     if (rgbChanged && state.rgbEnabled && state.inspectionSequence !== null && selection === cursorGeneration) {
-      await inspectStep(Number(state.snapshot?.transition?.step));
+      await inspectStep(Number(state.snapshot?.transition?.step ?? state.snapshot?.session?.step));
     }
   }
 
