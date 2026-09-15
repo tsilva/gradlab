@@ -373,6 +373,9 @@ resuming as its cause without a matched uninterrupted continuation.
   success rule when interpreting completion and progress-based occupancy buckets.
   The default recipe enables four occupancy buckets for quarters of the first
   wall, using provider-signal edges `0`, `0.125`, `0.25`, `0.375`, and `0.5`.
+  The `ppo-two-walls` variant ends at `1.0` and uses eight quarter-wall occupancy
+  buckets across both walls. Its `two_walls_cleared` reward event pays +20 only
+  at the second wall; the first wall has no completion bonus.
   Bucket percentages describe collected pre-action policy transitions; the
   terminal wall-clear state is not an additional collected transition.
   All three statistics
