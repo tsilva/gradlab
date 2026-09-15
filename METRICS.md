@@ -472,6 +472,10 @@ resuming as its cause without a matched uninterrupted continuation.
   whose post-transition signal matches; `previous_equals` contributes when the signal at the start
   of the transition matches, using the reset signal on the first transition when available;
   `equals_for` contributes only when the consecutive-match counter first reaches its threshold.
+  Counterfactual Playback converts disabled identity `equals` termination events to
+  `equals_for` with one step, emitting the event and its reward only on the first matching
+  transition of each consecutive match. Enabled termination events and nonterminal per-step
+  reward rules retain their recorded semantics.
   ViZDoom Deathmatch's optional `sample-factory-v0` shape
   exposes `kill`, `death`, `hit`, `damage`, `health`, `armor`, `weapon`, `ammo`, and `weapon_hold`
   components; their sum is the pre-transform task reward and excludes the replaced provider reward.
@@ -520,8 +524,8 @@ resuming as its cause without a matched uninterrupted continuation.
   smoothing, when enabled, is applied on top of that already-rolling value. Under the root Breakout
   goal contract (`reward_mode: native`, unclipped), shaped episode return is the sum of Atari
   row-score deltas unless a recipe declares additional shaping. The checked-in Breakout `ppo`
-  recipe uses event-only reward: one per destroyed brick, minus 0.1 per life-loss event and five
-  per serve-stall event, with scale one and clipping disabled. Its shaped episode return is
+  recipe uses event-only reward: one per destroyed brick, plus 20 for clearing the first wall,
+  minus 0.1 per life-loss event and five per serve-stall event, with scale one and clipping disabled. Its shaped episode return is
   therefore distinct from native Atari score. An individual high-return episode can coexist
   with a much lower mean when other lanes finish with lower returns.
 - Episode returns, success rates, failure reasons, policy entropy, and optimizer diagnostics
