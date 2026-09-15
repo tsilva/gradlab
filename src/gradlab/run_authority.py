@@ -1058,18 +1058,26 @@ class RunAuthority:
             beat()
             return latest
 
-    def prune_state_archive(self, lease: Lease) -> Lease:
+    def prune_state_archive(
+        self, lease: Lease, *, heartbeat: Callable[[], None] | None = None
+    ) -> Lease:
         """Reclaim obsolete recovery bytes under the exclusive Run writer lease.
 
         Recovery acquires this same lease before reading a generation, so its
         current inventory cannot be retired concurrently. Checkpoint-owned exports
         use other prefixes and are never candidates for this reclamation.
         """
-        lease = self.renew_lease(lease)
+        if heartbeat is None:
+            lease = self.renew_lease(lease)
+        else:
+            heartbeat()
         last_renewal = self.clock.monotonic()
 
         def beat() -> None:
             nonlocal lease, last_renewal
+            if heartbeat is not None:
+                heartbeat()
+                return
             now = self.clock.monotonic()
             if now - last_renewal >= LEASE_RENEW_SECONDS:
                 lease = self.renew_lease(lease)
@@ -1143,7 +1151,13 @@ class RunAuthority:
         contract_hashes: Mapping[str, str],
         recovery_sidecar: Mapping[str, Any],
         created_at: str | None = None,
+        heartbeat: Callable[[], None] | None = None,
     ) -> CheckpointManifest:
+        def beat() -> None:
+            if heartbeat is not None:
+                heartbeat()
+
+        beat()
         digest = file_sha256(model_path)
         model_sidecar = model_document_path(model_path)
         recipe_sidecar = recipe_document_path(model_path)
@@ -1158,7 +1172,9 @@ class RunAuthority:
         recipe_document_key = f"{public_prefix}/recipe.json"
         manifest_key = f"{public_prefix}/manifest.json"
         sidecar_key = f"{self.run_prefix(run_id)}/checkpoints/{identifier}/recovery-sidecar.json"
+        beat()
         self.control.put_json(sidecar_key, recovery_sidecar, create_only=True)
+        beat()
         self.models.put_file(
             model_key,
             model_path,
@@ -1166,6 +1182,7 @@ class RunAuthority:
             content_type="application/zip",
             cache_control="public, max-age=31536000, immutable",
         )
+        beat()
         self.models.put_file(
             model_document_key,
             model_sidecar,
@@ -1173,6 +1190,7 @@ class RunAuthority:
             content_type="application/json",
             cache_control="public, max-age=31536000, immutable",
         )
+        beat()
         self.models.put_file(
             recipe_document_key,
             recipe_sidecar,
@@ -1199,13 +1217,16 @@ class RunAuthority:
             recovery_sidecar_key=sidecar_key,
             created_at=str(created_at or self.clock.utc_now()),
         )
+        beat()
         self.models.put_json(
             manifest_key,
             manifest.to_dict(),
             create_only=True,
             cache_control="public, max-age=31536000, immutable",
         )
-        self._upsert_public_index(manifest)
+        beat()
+        self._update_public_index(run_id, checkpoint=manifest, heartbeat=heartbeat)
+        beat()
         return manifest
 
     def _update_public_index(
@@ -1214,9 +1235,12 @@ class RunAuthority:
         *,
         checkpoint: CheckpointManifest | None = None,
         promotion: PromotionReceipt | None = None,
+        heartbeat: Callable[[], None] | None = None,
     ) -> None:
         key = f"{self.run_prefix(run_id)}/index.json"
         for _attempt in range(8):
+            if heartbeat is not None:
+                heartbeat()
             current = self.models.get_json_optional(key)
             etag = str(self.models.head(key)["etag"]) if current is not None else None
             rows = list((current or {}).get("checkpoints") or [])
@@ -1255,6 +1279,8 @@ class RunAuthority:
                 "promotion": promoted,
             }
             try:
+                if heartbeat is not None:
+                    heartbeat()
                 self.models.put_json(
                     key,
                     document,

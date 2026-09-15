@@ -4,7 +4,7 @@ import json
 import math
 import os
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -389,9 +389,12 @@ def publish_pending_frames(
     limit: int,
     event_seq_offset: int = 0,
     metrics_schema_version: int = METRICS_SCHEMA_VERSION,
+    heartbeat: Callable[[], None] | None = None,
 ) -> int:
     published = 0
     for row in store.pending_metric_frames(limit=limit):
+        if heartbeat is not None:
+            heartbeat()
         frame_id = int(row["id"])
         if not store.claim_metric_frame(frame_id):
             continue
@@ -416,6 +419,8 @@ def publish_pending_frames(
             step=int(row["step"]) if row.get("step") is not None else None,
         )
         published += 1
+        if heartbeat is not None:
+            heartbeat()
     return published
 
 

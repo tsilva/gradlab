@@ -6,12 +6,27 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from threading import Event, current_thread
 from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 
 import pytest
 
 from gradlab.supervisor_runtime import SupervisorRuntime
+
+
+def test_lease_maintenance_runs_while_caller_blocks_and_joins_on_exit() -> None:
+    renewed = Event()
+    workers = []
+
+    def renew() -> None:
+        workers.append(current_thread())
+        renewed.set()
+
+    with SupervisorRuntime().maintain_lease(renew):
+        assert renewed.wait(5), "a blocked caller must not starve lease renewal"
+        assert workers[0] is not current_thread()
+    assert not workers[0].is_alive()
 
 
 def test_learner_starts_in_a_dedicated_process_group(tmp_path: Path) -> None:
