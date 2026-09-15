@@ -593,7 +593,7 @@ def test_native_breakout_recording_and_visible_controls_preserve_seeded_policy_p
     from collector import DebugController, PolicyExecution
 
     goal = Path("experiments/goals/Breakout-Atari2600-v0")
-    train = compose_train_document(goal / "_goal.yaml", goal / "recipes/ppo-ball-state.yaml")[
+    train = compose_train_document(goal / "_goal.yaml", goal / "recipes/ppo.yaml")[
         "train_config"
     ]
     config = resolve_env_config(env_config_from_mapping(train))

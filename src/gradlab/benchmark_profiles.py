@@ -518,6 +518,9 @@ def _assert_ppo_backend_equivalence(
         backend_config = dict(backend["config"])
         backend_config.pop("precision", None)
         backend_config.pop("execution_profile", None)
+        # Only GradLab PPO materializes an empty checkpoint update schedule.
+        if backend_config.get("checkpoint_update_steps") == []:
+            backend_config.pop("checkpoint_update_steps")
         backend["config"] = backend_config
         result["training_backend"] = backend
         return result

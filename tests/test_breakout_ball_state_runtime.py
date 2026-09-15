@@ -15,9 +15,9 @@ def test_default_ppo_injects_native_paddle_velocity() -> None:
     document = compose_train_document(BREAKOUT_ROOT / "_goal.yaml", BREAKOUT_ROOT / "recipes/ppo.yaml")
     train = document["train_config"]
     assert train["frame_skip"] == 2
-    assert train["training_backend"]["config"]["gamma"] == 0.99
-    assert train["timesteps"] == 1_000_000_000
-    assert len(train["task"]["model_inputs"]["context"]) == 8
+    assert train["training_backend"]["config"]["gamma"] == 0.999
+    assert train["timesteps"] == 191_561_728
+    assert len(train["task"]["model_inputs"]["context"]) == 9
     config = resolve_env_config(env_config_from_mapping(train))
     config.env_args["noop_reset_max"] = 0
     env = make_training_vec_env(config, n_envs=2, seed=12)
@@ -41,7 +41,7 @@ def test_default_ppo_injects_native_paddle_velocity() -> None:
             env.observation_space, env.action_space, lambda _: 1e-3,
             policy_model=train["policy_model"],
         )
-        assert policy.features_extractor.fusion[0].in_features == 520
+        assert policy.features_extractor.fusion[0].in_features == 521
         assert policy.predict(observations, deterministic=True)[0].shape == (2,)
     finally:
         env.close()
@@ -49,21 +49,16 @@ def test_default_ppo_injects_native_paddle_velocity() -> None:
 
 def test_brick_reward_recipe_matches_provider_deltas_without_native_score() -> None:
     document = compose_train_document(
-        BREAKOUT_ROOT / "_goal.yaml", BREAKOUT_ROOT / "recipes/ppo-ball-state-brick-reward.yaml"
+        BREAKOUT_ROOT / "_goal.yaml", BREAKOUT_ROOT / "recipes/ppo.yaml"
     )
     train = document["train_config"]
     assert train["n_envs"] == 64
-    assert train["timesteps"] == 100000000
-    assert len(train["task"]["model_inputs"]["context"]) == 7
-    baseline = compose_train_document(
-        BREAKOUT_ROOT / "_goal.yaml", BREAKOUT_ROOT / "recipes/ppo-ball-state.yaml"
-    )["train_config"]
-    assert train["task"]["model_inputs"] == baseline["task"]["model_inputs"]
-    assert train["policy_model"] == baseline["policy_model"]
-    assert train["training_backend"]["config"]["gamma"] == 0.99
+    assert train["timesteps"] == 191_561_728
+    assert len(train["task"]["model_inputs"]["context"]) == 9
+    assert train["training_backend"]["config"]["gamma"] == 0.999
     assert train["training_backend"]["config"]["gae_lambda"] == 0.95
     assert train["frame_skip"] == 2
-    assert train["task"]["reward"]["event_rewards"] == {"life_loss": -0.1, "serve_stall": -5.0}
+    assert train["task"]["reward"]["event_rewards"] == {"life_loss": -0.1, "serve_stall": -5.0, "one_wall_cleared": 20.0}
     config = resolve_env_config(env_config_from_mapping(train))
     env = make_eval_vec_env(config, n_envs=2, seed=10000)
     try:
@@ -78,6 +73,7 @@ def test_brick_reward_recipe_matches_provider_deltas_without_native_score() -> N
             for lane, info in enumerate(infos):
                 if dones[lane]:
                     expected = int(info["bricks_destroyed"]) - 0.1 * (5 - int(info["lives"]))
+                    expected += 20.0 * (int(info["walls_cleared"]) == 1)
                     np.testing.assert_allclose(returns[lane], expected, atol=1e-5)
                     scored |= int(info["bricks_destroyed"]) > 0
                     completed += 1
@@ -113,7 +109,7 @@ def test_plain_ppo_recipe_exposes_brick_progress_through_the_real_vector_runtime
 def test_ball_state_recipe_runs_through_the_real_vector_runtime() -> None:
     document = compose_train_document(
         BREAKOUT_ROOT / "_goal.yaml",
-        BREAKOUT_ROOT / "recipes/ppo-ball-state.yaml",
+        BREAKOUT_ROOT / "recipes/ppo.yaml",
     )
     config = resolve_env_config(env_config_from_mapping(document["train_config"]))
     env = make_training_vec_env(config, n_envs=2, seed=1701)
@@ -127,6 +123,8 @@ def test_ball_state_recipe_runs_through_the_real_vector_runtime() -> None:
             "context/ball_vx",
             "context/ball_vy",
             "context/paddle_x",
+            "context/paddle_vx",
+            "context/lives_normalized",
             "context/paddle_width",
             "context/ball_paddle_offset",
         }
@@ -162,7 +160,7 @@ def test_ball_state_recipe_runs_through_the_real_vector_runtime() -> None:
             policy_model=document["train_config"]["policy_model"],
         )
         fusion = policy.features_extractor.fusion[0]
-        assert fusion.in_features == 519
+        assert fusion.in_features == 521
         assert fusion.out_features == 256
         assert policy.action_net.in_features == 256
         assert policy.value_net.in_features == 256
