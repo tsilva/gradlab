@@ -15,6 +15,40 @@ from gradlab.play_web import HISTORY_LIMIT, PlaybackWebServer
 from tests.test_play_trajectory import command, live_runner, wait_step
 
 
+def test_completed_episode_retains_initial_state_and_rejects_replaced_recording(tmp_path):
+    runner = live_runner(tmp_path, length=2)
+    try:
+        command(runner, "step", count=2)
+        latest = wait_step(runner, 2)
+        assert latest["session"]["awaiting_next_episode"]
+        episode = runner.recording_status()["episode_id"]
+        initial = runner.inspect_recorded_step(episode, 0)
+        assert initial["snapshot"]["transition"] is None
+        assert initial["snapshot"]["session"]["episode"] == 1
+        assert initial["snapshot"]["session"]["step"] == 0
+        assert initial["snapshot"]["initial_frames"] == [1]
+        assert initial["frames"]
+        assert runner.snapshot() == latest
+        assert runner.session.sequence == 2
+        runner.rgb_enabled = False
+        assert runner.inspect_recorded_step(episode, 0)["frames"] == []
+        runner.rgb_enabled = True
+        assert runner.inspect_recorded_step(episode, 0)["frames"] == initial["frames"]
+        with pytest.raises(ValueError, match="outside"):
+            runner.inspect_recorded_step(episode, False)
+        # A recording started partway through another episode has no step zero.
+        runner.session.episode = 3
+        runner.session.step_index = 7
+        runner._begin_recording()
+        assert "initial_step" not in runner.recording_status()
+        with pytest.raises(ValueError, match="replaced"):
+            runner.inspect_recorded_step(episode, 0)
+        with pytest.raises(ValueError, match="outside"):
+            runner.inspect_recorded_step(runner.recording_status()["episode_id"], 0)
+    finally:
+        runner.stop()
+
+
 @pytest.mark.parametrize("filtered", [False, True])
 def test_recording_reuses_transition_projection_without_changing_inspection(
     tmp_path, monkeypatch, filtered
@@ -99,7 +133,16 @@ def test_seek_before_memory_window_preserves_live_trajectory_and_exact_frames(
         assert runner.history[0]["step"] > 1
         status = runner.recording_status()
         assert status["first_step"] == 1
+        assert status["initial_step"] == 0
         assert status["last_step"] == HISTORY_LIMIT + 5
+        initial = runner.inspect_recorded_step(status["episode_id"], 0)
+        assert initial["snapshot"]["transition"] is None
+        assert initial["snapshot"]["session"]["step"] == 0
+        assert initial["snapshot"]["session"]["total_reward"] == 0
+        assert initial["points"] == []
+        initial_game = next(frame for frame in initial["frames"] if frame["kind"] == 1)
+        pixels = np.asarray(Image.open(io.BytesIO(base64.b64decode(initial_game["png"]))))
+        assert np.all(pixels == 0)
         result = runner.inspect_recorded_step(status["episode_id"], 1)
         snapshot = result["snapshot"]
         assert snapshot["transition"]["step"] == 1
@@ -133,7 +176,7 @@ def test_seek_before_memory_window_preserves_live_trajectory_and_exact_frames(
         assert runner._inspection_history is history_cache
         with pytest.raises(ValueError, match="replaced"):
             runner.inspect_recorded_step("old-episode", 1)
-        for step in (0, HISTORY_LIMIT + 6):
+        for step in (-1, HISTORY_LIMIT + 6):
             with pytest.raises(ValueError, match="outside"):
                 runner.inspect_recorded_step(status["episode_id"], step)
     finally:
@@ -182,6 +225,11 @@ def test_isolated_worker_inspects_recorded_steps_and_survives_stale_requests(tmp
         )
         assert result["snapshot"]["transition"]["step"] == 1
         assert result["frames"]
+        initial = host.inspect_recorded_step(
+            live["session_epoch"], live["trajectory"]["episode_id"], 0
+        )
+        assert initial["snapshot"]["session"]["step"] == 0
+        assert initial["frames"]
         with pytest.raises(RuntimeError, match="replaced"):
             host.inspect_recorded_step(999, live["trajectory"]["episode_id"], 1)
         assert host.snapshot()["transition"]["step"] == 2

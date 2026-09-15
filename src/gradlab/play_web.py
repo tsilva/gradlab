@@ -1113,13 +1113,21 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         return "faithful"
 
     def recording_status(self) -> dict[str, Any]:
-        return {
+        status = {
             "available": self._checkpoint_root is not None,
             "enabled": self.recording_enabled,
             "activation": "automatic",
             "scientific_evidence": False,
             **(self.recording.status() if self.recording is not None else {}),
         }
+        initial, _ = self.episode_start_payload()
+        if (
+            status.get("episode_id")
+            and initial.get("trajectory", {}).get("episode_id") == status["episode_id"]
+        ):
+            # The initial state is seekable but is not an action transition.
+            status["initial_step"] = initial["session"]["step"]
+        return status
 
     def history_payload(self) -> dict[str, Any]:
         payload = super().history_payload()
@@ -1146,6 +1154,23 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             if recording is None or recording.metadata["episode_id"] != episode_id:
                 raise ValueError("the recorded episode has been replaced")
             status = self.recording_status()
+            if type(step) is int and step == status.get("initial_step"):
+                snapshot, packets = self.episode_start_payload()
+                snapshot["trajectory"] = status
+                snapshot["initial_frames"] = list(packets)
+                return {
+                    "snapshot": snapshot,
+                    "points": [],
+                    "frames": [
+                        {
+                            "kind": kind,
+                            "generation": 0,
+                            "png": base64.b64encode(packet[FRAME_HEADER.size:]).decode("ascii"),
+                        }
+                        for kind, (_, packet) in packets.items()
+                        if kind != FRAME_GAME or getattr(self, "rgb_enabled", True)
+                    ],
+                }
             if type(step) is not int or not status["first_step"] <= step <= status["last_step"]:
                 raise ValueError("step is outside the recorded episode")
             cached = self._inspection_history

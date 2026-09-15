@@ -10,6 +10,35 @@ async function player(options = {}) {
 }
 const names = h => h.commands.map(command => command.name);
 
+test('completed episodes seek and replay from the initial state after cache eviction', async () => {
+  const trajectory = { episode_id: 'episode-a', transitions: 100,
+    initial_step: 0, first_step: 1, last_step: 100 };
+  const initial = snapshot(0, { trajectory, transition: null, initial_frames: [],
+    session: { episode: 1, step: 0, target_fps: 30 } });
+  const h = harness({ fetchStep: async ({ step }) => step === 0
+    ? { snapshot: initial, points: [], frames: [] } : recorded(step, { trajectory }) });
+  h.inspection.updateConnection({ historyLimit: 1 });
+  await h.inspection.setFrameDemand({ kinds: [1, 2] });
+  await h.inspection.admitSnapshot(initial);
+  await h.inspection.admitSnapshot(snapshot(100, { trajectory,
+    session: { episode: 1, step: 100, awaiting_next_episode: true, target_fps: 30 } }));
+  assert.deepEqual(h.inspection.view.range, { first: 0, last: 100 });
+  await h.inspection.selectStep(0);
+  assert.equal(h.inspection.view.snapshot.transition, null);
+  assert.equal(h.inspection.view.snapshot.session.step, 0);
+  assert.equal(h.inspection.view.inspectionSequence, 0);
+  assert.equal(h.inspection.view.liveSnapshot.transition.step, 100);
+  assert.equal(h.inspection.view.canReplay, true);
+  assert.ok(h.frames.some(frame => frame.kind === 2 && frame.sequence === 0 && frame.blob === null));
+  assert.deepEqual(names(h), []);
+  h.inspection.play();
+  await h.tick();
+  assert.equal(h.inspection.view.snapshot.transition.step, 1);
+  assert.deepEqual(names(h), []);
+  assert.deepEqual(h.errors, []);
+  h.inspection.dispose();
+});
+
 test('pause stops both clocks and play behind the head resumes unfinished inference', async () => {
   const h = await player();
   await h.inspection.admitSnapshot(snapshot(100, { run_state: 'playing' }));
