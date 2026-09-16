@@ -908,9 +908,9 @@ export function environmentSuccessStatus(item, badge) {
     };
   }
   return {
-    label: "N/A",
+    label: "∅",
     className: "not-applicable",
-    description: "No runs yet",
+    description: "No results recorded",
   };
 }
 
@@ -3024,11 +3024,7 @@ export class SourceBrowser {
     differences.id = "selected-goal-configuration-differences";
     const differencesSummary = document.createElement("summary");
     differencesSummary.textContent = `${presentation.differenceLabel.replace(/changes?$/, (word) => word === "change" ? "difference" : "differences")} from current`;
-    const differencesIntro = document.createElement("p");
-    differencesIntro.textContent = (
-      "Baseline: current checked-in goal · Exact contract paths and typed values."
-    );
-    differences.append(differencesSummary, differencesIntro);
+    differences.append(differencesSummary);
     const finishDifferences = (content) => {
       differences.append(content);
       return differences;
@@ -3072,7 +3068,7 @@ export class SourceBrowser {
     table.className = "goal-configuration-diff-table";
     const head = document.createElement("thead");
     const headerRow = document.createElement("tr");
-    ["Operation", "Exact contract path", "Before", "After"].forEach((label) => {
+    ["Exact contract path", "Before", "After"].forEach((label) => {
       const cell = document.createElement("th");
       cell.scope = "col";
       cell.textContent = label;
@@ -3085,9 +3081,6 @@ export class SourceBrowser {
       const kind = ["added", "removed", "changed"].includes(String(entry?.kind))
         ? String(entry.kind)
         : "changed";
-      const operation = document.createElement("td");
-      operation.className = `goal-configuration-operation ${kind}`;
-      operation.textContent = kind[0].toUpperCase() + kind.slice(1);
       const path = document.createElement("td");
       path.className = "goal-configuration-path";
       const pathCode = document.createElement("code");
@@ -3103,7 +3096,7 @@ export class SourceBrowser {
       const afterCode = document.createElement("code");
       afterCode.textContent = formatGoalDiffValue(entry?.after, { unavailable: kind === "removed" });
       after.append(afterCode);
-      row.append(operation, path, before, after);
+      row.append(path, before, after);
       body.append(row);
     });
     table.append(head, body);
