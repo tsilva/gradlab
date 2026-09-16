@@ -1240,3 +1240,23 @@ test("late-opened value legend uses recorded calibration at the exact cursor", (
     lineLegendPresentationAtIndex(descriptors, view.chartHistory, 0),
   );
 });
+
+test("action decision explains recorded environment dynamics separately from policy probability", () => {
+  const note = "Slippery ice: commands can move perpendicular to the chosen direction.";
+  const snapshot = {
+    policy: { introspection: ["actor_distribution"] },
+    transition: {
+      effective_action: 0,
+      decision: { selected_action: 0, probabilities: [0.973, 0.016, 0.01, 0.001] },
+    },
+    session: {
+      playback_contract: { environment_action_note: note },
+      action_contract: { policy: { space: { type: "discrete", n: 4, start: 0 } } },
+    },
+  };
+  const presentation = policyDecisionPresentation(snapshot, [], {});
+  assert.equal(presentation.environmentActionNote, note);
+  assert.equal(presentation.stepProbability, 0.973);
+  delete snapshot.session.playback_contract;
+  assert.equal(policyDecisionPresentation(snapshot, [], {}).environmentActionNote, null);
+});

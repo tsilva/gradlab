@@ -70,6 +70,22 @@ def _with_playback_device_override(config: EnvConfig) -> dict[str, Any]:
     return {"device": PLAYBACK_DEVICE}
 
 
+def _environment_action_note(config: EnvConfig) -> str | None:
+    """Explain action effects from the active artifact, never today's goal recipe."""
+    if config.env_provider != "gymnasium" or config.game not in {
+        "FrozenLake-v1", "FrozenLake8x8-v1",
+    }:
+        return None
+    # Omission preserves Gymnasium's default in historical checkpoints, just as
+    # GymnasiumTurboVecEnv does when constructing their scalar environments.
+    if config.env_args.get("is_slippery", True):
+        return (
+            "Slippery ice: a command moves in the chosen direction or either "
+            "perpendicular direction with equal probability. Walls block movement."
+        )
+    return "Slipping is disabled: commands move in the chosen direction. Walls block movement."
+
+
 @dataclass(frozen=True)
 class PlaySourceSpec:
     kind: ModelSourceKind
@@ -419,6 +435,7 @@ class PlaybackLoader:
         progress("verifying", "Hashing executable model closure")
         source_identity = str(source.artifact_name or artifact_ref or source.model_path)
         staged = stage_model_input(source.model_path, source_identity=source_identity)
+        contract_details["environment_action_note"] = _environment_action_note(artifact_config)
         return PlaybackCandidate(
             spec=spec,
             args=args,

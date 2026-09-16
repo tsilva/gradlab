@@ -33,13 +33,14 @@ def test_with_playback_device_override_only_applies_to_gradoom() -> None:
 def test_playback_contract_reports_training_and_active_frame_skip(monkeypatch) -> None:
     training_environment = {
         "env_provider": "gymnasium",
-        "game": "CartPole-v1",
+        "game": "FrozenLake-v1",
         "frame_skip": 4,
         "task": {},
     }
     evaluation_environment = {
         **training_environment,
         "frame_skip": 2,
+        "env_args": {"is_slippery": False},
     }
     source = type(
         "Source",
@@ -121,3 +122,23 @@ def test_playback_contract_reports_training_and_active_frame_skip(monkeypatch) -
         "training": 4,
         "playback": 2,
     }
+    assert "Slipping is disabled" in candidate.contract_details["environment_action_note"]
+
+
+def test_frozenlake_action_note_uses_the_recorded_environment() -> None:
+    from gradlab.play_runtime import _environment_action_note
+
+    historical = EnvConfig(env_provider="gymnasium", game="FrozenLake-v1", env_args={})
+    note = _environment_action_note(historical)
+    assert "Slippery ice" in note
+    assert "perpendicular" in note
+    assert "equal probability" in note
+    assert _environment_action_note(
+        EnvConfig(env_provider="gymnasium", game="FrozenLake8x8-v1", env_args={"is_slippery": True})
+    ) == note
+    assert "Slipping is disabled" in _environment_action_note(
+        EnvConfig(env_provider="gymnasium", game="FrozenLake-v1", env_args={"is_slippery": False})
+    )
+    assert _environment_action_note(
+        EnvConfig(env_provider="gymnasium", game="CartPole-v1", env_args={})
+    ) is None

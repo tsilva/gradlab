@@ -316,6 +316,7 @@ export function policyDecisionPresentation(snapshot, history, view) {
       ? "Unavailable · not recorded"
       : formatActionValue(snapshot.transition.effective_action, snapshot),
     overrideRuleId: snapshot?.transition?.action_override_rule_id || null,
+    environmentActionNote: snapshot?.session?.playback_contract?.environment_action_note || null,
     mode: modeMetric.value,
     rank: policyDecisionRank(comparison.rows, selected),
     choiceCount: comparison.rows.length,
@@ -735,17 +736,25 @@ function makePolicyDecisionBlock(statsBlock, distributionBlock) {
   mode.className = "policy-decision-mode";
   modeLine.append(mode, rank);
   hero.append(choiceLabel, heroLine, modeLine);
+  const probabilityMeaning = document.createElement("div");
+  probabilityMeaning.className = "policy-decision-context-label";
+  probabilityMeaning.textContent = "Probability of choosing this command";
+  hero.append(probabilityMeaning);
   const execution = document.createElement("div");
   execution.className = "policy-decision-execution";
   const executionLabel = document.createElement("span");
   executionLabel.className = "policy-decision-context-label";
-  executionLabel.textContent = "Environment received";
+  executionLabel.textContent = "Command sent to environment";
   const effectiveAction = document.createElement("strong");
   effectiveAction.className = "policy-decision-effective-action";
   const overrideReason = document.createElement("span");
   overrideReason.className = "policy-decision-override-reason";
   execution.append(executionLabel, effectiveAction, overrideReason);
   hero.append(execution);
+  const environmentNote = document.createElement("div");
+  environmentNote.className = "policy-decision-context-label";
+  environmentNote.hidden = true;
+  hero.append(environmentNote);
 
   const comparison = document.createElement("div");
   comparison.className = "policy-decision-comparison";
@@ -814,6 +823,8 @@ function makePolicyDecisionBlock(statsBlock, distributionBlock) {
       section.dataset.telemetryStatus = "available";
       action.textContent = presentation.action;
       effectiveAction.textContent = presentation.effectiveAction;
+      environmentNote.textContent = presentation.environmentActionNote || "";
+      environmentNote.hidden = !presentation.environmentActionNote;
       overrideReason.textContent = presentation.overrideRuleId
         ? `Override: ${presentation.overrideRuleId}`
         : "";

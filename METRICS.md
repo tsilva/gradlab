@@ -250,11 +250,16 @@ resuming as its cause without a matched uninterrupted continuation.
   would fabricate a misleading residual.
 - Playback's Action decision panel separates the Policy's selected action and its probability
   from `transition.effective_action`, the action after conditional overrides expressed in the
-  Policy action space. It labels that effective action as “Environment received” using the recorded
+  Policy action space. It labels that effective action as “Command sent to environment” using the recorded
   Policy action semantics and shows `action_override_rule_id` when present. The provider-native
   encoding is recorded separately as `native_action`; it must not be decoded as a Policy index.
   Missing effective-action evidence remains unavailable rather than falling back to the selected
   action or pre-override `executed_action`. These are local transition diagnostics, not W&B metrics.
+  The displayed probability describes the Policy's choice, not the probability of the resulting
+  movement. FrozenLake's adjacent movement explanation follows the active artifact's `is_slippery`
+  setting, including Gymnasium's slippery default when historical artifacts omit it. With slipping
+  enabled, the environment can move in the chosen direction or either perpendicular direction with
+  equal probability; a blocked direction leaves the character in place.
 - Playback reward analysis “Episode to cursor” sums steps 1 through the selected step using
   recorded cumulative accounting, independent of the bounded inspection window. Positive and
   negative activity and per-component absolute activity accumulate before cancellation; scaling,

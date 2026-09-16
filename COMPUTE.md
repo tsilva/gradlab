@@ -41,13 +41,27 @@ compute fails closed when the selected fleet is not configured.
 total-cost bounds. On-demand remains opt-in even with a budget. Every task has a
 finite `max_duration`.
 
-GradLab v1 schedules one training container per single-GPU host. The generic
-workload floor remains 12 CPU, 40 GiB memory, one GPU, and 50 GiB disk; local
+GradLab schedules one training container per single-GPU host or explicitly
+configured CPU-only local worker. The generic GPU workload floor remains
+12 CPU, 40 GiB memory, one GPU, and 50 GiB disk; local
 inventory records whether a particular host satisfies it. An explicitly
 authorized host-specific exception may declare a different task request under
 `[dstack.fleets.<fleet>]` in private `operator.toml`; the resolved CPU, memory,
 GPU, and disk request is frozen into the run manifest and applies only to that
 fleet.
+
+CPU-only local workers declare `gpu = "0"` and explicit CPU, memory, and disk
+requests in private fleet configuration. They use the same exact-source image
+receipt, supervisor, storage, evaluation policy, and terminal drain as GPU
+workers. Select a CPU-compatible recipe or record an explicit device override;
+target selection does not rewrite learning parameters.
+
+The current training image is `linux/amd64`. An Apple silicon worker using that
+exact image needs verified x86-64 emulation inside a Linux worker with Docker,
+SSH, and systemd. Installing Docker Desktop alone does not enroll such a
+worker. Verify image import, a CPU learning update, and provider compatibility
+before enrollment is recorded as ready. Capacity must account for the expanded
+image, VM storage, checkpoints, and space left for the operator workstation.
 
 ## dstack control plane
 

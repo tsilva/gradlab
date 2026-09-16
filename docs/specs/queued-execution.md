@@ -6,7 +6,8 @@ This specification applies to GradLab's current local queue and dstack-backed ex
 
 - Operator-initiated background work must use one durable and extensible local queue.
 - One on-demand local worker must outlive requesting clients, recover safely after interruption, expose evidence-backed status, and exit when no work remains.
-- Each current queued training Run must execute in one training container on one single-GPU host.
+- Each current queued training Run must execute in one training container on one single-GPU host or one explicitly configured CPU-only local worker.
+- CPU-only local workers must use the same exact-source immutable training image and orchestration lifecycle as GPU workers; target selection must not silently change the training recipe.
 - Checkpoint Acceptance evaluation must use separately scheduled Modal compute and state isolated from active training.
 - The execution architecture must minimize separately operated services and must not require a project-operated relational database service, as recorded in [`ADR-0001`](../adr/0001-avoid-project-operated-database-service.md).
 - Embedded file-backed state such as SQLite is allowed.
