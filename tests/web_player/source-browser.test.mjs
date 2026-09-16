@@ -380,21 +380,21 @@ test("selecting a goal configuration updates the master-detail selection", () =>
 
 test("run evidence status distinguishes missing evaluation from failed evaluation", () => {
   assert.deepEqual(runTrainingEvidenceStatus({ success_badges: ["train/success"] }), {
-    label: "Met",
+    label: "✅",
     className: "met",
     description: "The Run met its declared Training Success proxy",
   });
-  assert.equal(runTrainingEvidenceStatus({ state: "running" }).label, "In progress");
-  assert.equal(runTrainingEvidenceStatus({ state: "finished" }).label, "Not met");
+  assert.equal(runTrainingEvidenceStatus({ state: "running" }).label, "⏳");
+  assert.equal(runTrainingEvidenceStatus({ state: "finished" }).label, "❌");
 
   assert.deepEqual(runEvaluationEvidenceStatus({ evaluation_status: "not_evaluated" }), {
-    label: "Not evaluated",
+    label: "∅",
     className: "not-evaluated",
     description: "No evaluation evidence is available for this Run",
   });
-  assert.equal(runEvaluationEvidenceStatus({ evaluation_status: "in_progress" }).label, "In progress");
-  assert.equal(runEvaluationEvidenceStatus({ evaluation_status: "not_accepted" }).label, "Not accepted");
-  assert.equal(runEvaluationEvidenceStatus({ success_badges: ["eval/success"] }).label, "Accepted");
+  assert.equal(runEvaluationEvidenceStatus({ evaluation_status: "in_progress" }).label, "⏳");
+  assert.equal(runEvaluationEvidenceStatus({ evaluation_status: "not_accepted" }).label, "❌");
+  assert.equal(runEvaluationEvidenceStatus({ success_badges: ["eval/success"] }).label, "✅");
 });
 
 const METRIC = "eval/return/mean";

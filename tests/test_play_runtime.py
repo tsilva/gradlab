@@ -122,7 +122,7 @@ def test_playback_contract_reports_training_and_active_frame_skip(monkeypatch) -
         "training": 4,
         "playback": 2,
     }
-    assert "Slipping is disabled" in candidate.contract_details["environment_action_note"]
+    assert candidate.contract_details["environment_action_note"] is None
 
 
 def test_frozenlake_action_note_uses_the_recorded_environment() -> None:
@@ -136,9 +136,9 @@ def test_frozenlake_action_note_uses_the_recorded_environment() -> None:
     assert _environment_action_note(
         EnvConfig(env_provider="gymnasium", game="FrozenLake8x8-v1", env_args={"is_slippery": True})
     ) == note
-    assert "Slipping is disabled" in _environment_action_note(
+    assert _environment_action_note(
         EnvConfig(env_provider="gymnasium", game="FrozenLake-v1", env_args={"is_slippery": False})
-    )
+    ) is None
     assert _environment_action_note(
         EnvConfig(env_provider="gymnasium", game="CartPole-v1", env_args={})
     ) is None

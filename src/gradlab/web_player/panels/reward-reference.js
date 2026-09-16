@@ -37,8 +37,13 @@ export function rewardReferenceStore(storage, workspaceId) {
   return {
     get(snapshot, epoch) {
       const episode = rewardReferenceEpisode(snapshot, epoch);
-      return read().find(item => item?.episode === episode && Number.isInteger(item.step))
-        || save(createRewardReference(snapshot, epoch));
+      const existing = read().find(item => item?.episode === episode && Number.isInteger(item.step));
+      if (existing) return existing;
+      const reference = createRewardReference(snapshot, epoch);
+      if (!reference) return null;
+      // A stats window may first receive an episode after it has already advanced.
+      // Its arrival timing must not choose the discount origin or invent step-zero facts.
+      return save({ ...reference, step: 0, sample: reference.step === 0 ? reference.sample : null });
     },
     set(snapshot, epoch) { return save(createRewardReference(snapshot, epoch)); },
   };

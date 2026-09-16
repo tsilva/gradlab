@@ -83,7 +83,7 @@ def _environment_action_note(config: EnvConfig) -> str | None:
             "Slippery ice: a command moves in the chosen direction or either "
             "perpendicular direction with equal probability. Walls block movement."
         )
-    return "Slipping is disabled: commands move in the chosen direction. Walls block movement."
+    return None
 
 
 @dataclass(frozen=True)

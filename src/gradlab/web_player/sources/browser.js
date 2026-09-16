@@ -917,7 +917,7 @@ export function environmentSuccessStatus(item, badge) {
 export function runTrainingEvidenceStatus(item) {
   if (successBadgeLabels(item).includes("train/success")) {
     return {
-      label: "Met",
+      label: "✅",
       className: "met",
       description: "The Run met its declared Training Success proxy",
     };
@@ -925,13 +925,13 @@ export function runTrainingEvidenceStatus(item) {
   const state = String(item?.state || "").trim().toLowerCase();
   if (["pending", "queued", "starting", "running"].includes(state)) {
     return {
-      label: "In progress",
+      label: "⏳",
       className: "in-progress",
       description: "The Run is still in progress",
     };
   }
   return {
-    label: "Not met",
+    label: "❌",
     className: "not-met",
     description: "The Run did not meet its declared Training Success proxy",
   };
@@ -940,7 +940,7 @@ export function runTrainingEvidenceStatus(item) {
 export function runEvaluationEvidenceStatus(item) {
   if (successBadgeLabels(item).includes("eval/success")) {
     return {
-      label: "Accepted",
+      label: "✅",
       className: "accepted",
       description: "Verified evaluation evidence satisfied Acceptance",
     };
@@ -948,21 +948,21 @@ export function runEvaluationEvidenceStatus(item) {
   const projected = String(item?.evaluation_status || "").trim().toLowerCase();
   if (projected === "in_progress") {
     return {
-      label: "In progress",
+      label: "⏳",
       className: "in-progress",
       description: "Evaluation is in progress",
     };
   }
   if (projected === "not_accepted") {
     return {
-      label: "Not accepted",
+      label: "❌",
       className: "not-accepted",
       description: "Available evaluation evidence did not satisfy Acceptance",
     };
   }
   if (projected === "not_evaluated") {
     return {
-      label: "Not evaluated",
+      label: "∅",
       className: "not-evaluated",
       description: "No evaluation evidence is available for this Run",
     };
@@ -975,20 +975,20 @@ export function runEvaluationEvidenceStatus(item) {
   const statuses = records.map((record) => String(record.status || "").trim().toLowerCase());
   if (statuses.some((status) => ["pending", "queued", "submitted", "running", "evaluating"].includes(status))) {
     return {
-      label: "In progress",
+      label: "⏳",
       className: "in-progress",
       description: "Evaluation is in progress",
     };
   }
   if (records.length) {
     return {
-      label: "Not accepted",
+      label: "❌",
       className: "not-accepted",
       description: "Available evaluation evidence did not satisfy Acceptance",
     };
   }
   return {
-    label: "Not evaluated",
+    label: "∅",
     className: "not-evaluated",
     description: "No evaluation evidence is available for this Run",
   };
