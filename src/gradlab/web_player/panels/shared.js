@@ -246,18 +246,14 @@ export function drawLines(canvas, series, { cursorIndex = null, steps = null, cu
   if (showStepTicks && steps?.length) {
     const first = steps[0], last = steps.at(-1);
     const interval = Math.max(1, niceTickStep(Math.max(1, last - first), Math.max(1, Math.floor((plot.right - plot.left) / 75))));
-    const ticks = [first];
+    const ticks = [];
     for (let tick = Math.ceil(first / interval) * interval; tick <= last; tick += interval) {
-      if (tick > first && (tick - first) / Math.max(1, last - first) * (plot.right - plot.left) >= 42) ticks.push(tick);
-    }
-    if (last > first && ticks.at(-1) !== last) {
-      if (ticks.length > 1 && (last - ticks.at(-1)) / (last - first) * (plot.right - plot.left) < 42) ticks.pop();
-      ticks.push(last);
+      ticks.push(tick);
     }
     context.textBaseline = "top";
-    ticks.forEach((tick, index) => {
+    ticks.forEach((tick) => {
       const x = plot.left + (tick - first) / Math.max(1, last - first) * (plot.right - plot.left);
-      context.textAlign = index === 0 ? "left" : x > plot.right - 24 ? "right" : "center";
+      context.textAlign = x < plot.left + 24 ? "left" : x > plot.right - 24 ? "right" : "center";
       context.fillText(String(tick), x, plot.bottom + 9);
     });
   }

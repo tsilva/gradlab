@@ -29,14 +29,17 @@ export function createChartStatus(retry) {
   return {
     element,
     render(chart) {
-      element.hidden = !chart || chart.status === "ready" || chart.status === "refreshing";
+      const empty = chart?.status === "idle"
+        || chart?.status === "ready" && chart.data?.length === 0;
+      element.hidden = !chart || !empty && ["ready", "refreshing"].includes(chart.status);
+      element.classList.toggle("widget-empty", empty);
       button.hidden = chart?.status !== "error";
-      message.textContent = chart?.status === "error"
+      message.textContent = empty ? "No data available yet" : chart?.status === "error"
         ? chart.error || "Unable to load episode charts"
         : chart?.status === "recovering" ? "Recovering chart history…"
           : chart?.status === "loading" ? "Loading chart history…"
             : chart?.status === "refreshing" || chart?.status === "ready" ? ""
-              : "No recorded chart history";
+              : "No data available yet";
     },
   };
 }

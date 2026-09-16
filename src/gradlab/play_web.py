@@ -14,7 +14,6 @@ import threading
 import tempfile
 import time
 import uuid
-import webbrowser
 from collections import deque
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import asdict, dataclass, is_dataclass
@@ -27,6 +26,7 @@ from aiohttp import WSMsgType, web
 from PIL import Image
 
 from gradlab.action_contract import action_contract_payload
+from gradlab.play_browser import PlaybackBrowser
 from gradlab.play_session import (
     _PlaybackSession,
     _PlaybackTransition,
@@ -4361,18 +4361,28 @@ class PlaybackWebServer:
         await self._prepare_initial_catalog()
         await asyncio.to_thread(self.runner.start)
         pump = asyncio.create_task(self.pump())
-        if not bool(getattr(self.args, "no_open", False)):
-            webbrowser.open(urls[0], new=1, autoraise=True)
+        browser = PlaybackBrowser()
         try:
+            if not bool(getattr(self.args, "no_open", False)):
+                browser.open(urls[0])
             await self.stop_event.wait()
         finally:
-            pump.cancel()
-            await asyncio.gather(pump, return_exceptions=True)
-            for client in tuple(self.clients.values()):
-                await client.socket.close(code=1001, message=b"player shutting down")
-            await asyncio.to_thread(self.runner.stop)
-            await app_runner.cleanup()
-            self.trajectory_transfers.close()
+            try:
+                pump.cancel()
+                await asyncio.gather(pump, return_exceptions=True)
+                for client in tuple(self.clients.values()):
+                    await client.socket.close(code=1001, message=b"player shutting down")
+                try:
+                    # Socket closure does not await the request handler's finally block.
+                    # Drain handlers while the worker can still clear input and processing.
+                    await app_runner.cleanup()
+                finally:
+                    try:
+                        await asyncio.to_thread(self.runner.stop)
+                    finally:
+                        self.trajectory_transfers.close()
+            finally:
+                await asyncio.to_thread(browser.close)
         return 0
 
 

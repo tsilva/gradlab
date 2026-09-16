@@ -1290,7 +1290,6 @@ export class SourceBrowser {
     this.selectedCheckpoints = new Set();
     this.evaluating = false;
     this.selectedGoalVariantId = "";
-    this.collapsedGoalVariantId = "";
     this.goalVariantDiff = null;
     this.goalVariantDiffController = null;
     this.goalVariantDiffSerial = 0;
@@ -1595,7 +1594,6 @@ export class SourceBrowser {
     this.goalVariantDiffController = null;
     this.goalVariantDiffSerial += 1;
     this.selectedGoalVariantId = "";
-    this.collapsedGoalVariantId = "";
     this.goalVariantDiff = null;
     this.goalVariantRunPages.clear();
     this.activityRevision = "";
@@ -1660,7 +1658,6 @@ export class SourceBrowser {
       this.goalVariantDiffController = null;
       this.goalVariantDiffSerial += 1;
       this.selectedGoalVariantId = variantId;
-      this.collapsedGoalVariantId = "";
       this.goalVariantDiff = this.goalVariantDiffFromActivity(variant);
     }
     this.renderView();
@@ -2181,6 +2178,17 @@ export class SourceBrowser {
     return true;
   }
 
+  goBack() {
+    if (!this.selection.view.sourceMode) {
+      this.browseCurrentSource();
+      return;
+    }
+    const items = sourceBreadcrumbItems(this.selection.view.route || this.route);
+    const current = items.findIndex((item) => item.current);
+    const parent = items[current - 1];
+    if (parent?.route) this.navigate(parent.route);
+  }
+
   browseCurrentSource() {
     const route = this.selection.view.route || this.route;
     const next = route.run_id
@@ -2290,7 +2298,8 @@ export class SourceBrowser {
     eyebrow.textContent = "PLAYBACK SOURCE";
     const heading = document.createElement("h2");
     heading.textContent = this.heading();
-    titleBlock.append(eyebrow, heading);
+    titleBlock.append(eyebrow);
+    titleBlock.append(heading);
     if (this.route.level === "runs" && this.route.run_id) {
       titleBlock.append(this.renderSelectedRunStatus());
     }
@@ -2339,12 +2348,6 @@ export class SourceBrowser {
     } else if (["resolving", "verifying", "loading"].includes(this.app.phase)) {
       shell.append(this.renderProgress());
     } else {
-      if (this.route.level === "goal_variants") {
-        const description = document.createElement("p");
-        description.className = "source-description";
-        description.textContent = "Select the scientific goal configuration used by the Run you want to inspect.";
-        shell.append(description);
-      }
       if (
         this.route.level !== "goal_variants"
         || this.sourceItems.length > 8
@@ -2372,7 +2375,7 @@ export class SourceBrowser {
       return "Runs · choose a checkpoint";
     }
     if (this.route.level === "goal_variants") {
-      return "Choose a goal configuration";
+      return "Choose a run";
     }
     if (this.route.level === "goals") return "Choose a goal";
     return "Choose an environment";
@@ -2576,6 +2579,7 @@ export class SourceBrowser {
   renderResults() {
     const body = document.createElement("div");
     body.className = "source-results";
+    if (this.route.level === "goal_variants") body.classList.add("source-results-configurations");
     if (this.error) {
       const error = document.createElement("div");
       error.className = "source-inline-error";
@@ -2902,15 +2906,18 @@ export class SourceBrowser {
     const list = document.createElement("aside");
     list.className = "goal-configuration-list";
     list.setAttribute("aria-label", "Goal configurations");
-    const listHeading = document.createElement("h3");
-    listHeading.textContent = "Goal configurations";
-    list.append(listHeading);
-
+    let previousGroupLabel = "";
     groups.forEach((group) => {
       const section = document.createElement("section");
       section.className = "goal-configuration-group";
       const heading = document.createElement("h4");
-      heading.append(group.current ? "Current revision" : "Previous revision");
+      const groupLabel = group.current ? "Current" : "History";
+      if (groupLabel !== previousGroupLabel) {
+        const label = document.createElement("h3");
+        label.textContent = groupLabel;
+        list.append(label);
+        previousGroupLabel = groupLabel;
+      }
       const revision = document.createElement("code");
       revision.textContent = group.revisionId.slice(0, 8);
       revision.title = group.revisionId;
@@ -2934,7 +2941,6 @@ export class SourceBrowser {
   renderGoalConfigurationOption(entry, selected) {
     const { variant, presentation } = entry;
     const isSelected = variant.variant_id === selected.variant.variant_id;
-    const expanded = isSelected && this.collapsedGoalVariantId !== variant.variant_id;
     const row = document.createElement("div");
     row.className = `goal-configuration-entry${isSelected ? " selected" : ""}`;
     const option = document.createElement("button");
@@ -2942,26 +2948,12 @@ export class SourceBrowser {
     option.id = `goal-configuration-${encodeURIComponent(variant.variant_id)}`;
     option.className = `goal-configuration-option${isSelected ? " selected" : ""}`;
     option.setAttribute("aria-pressed", String(isSelected));
-    option.setAttribute("aria-expanded", String(expanded));
-    const preview = document.createElement("div");
-    preview.id = `${option.id}-preview`;
-    preview.className = "goal-configuration-preview";
-    preview.hidden = !expanded;
-    option.setAttribute("aria-controls", preview.id);
     option.addEventListener("click", () => {
-      if (isSelected) {
-        preview.hidden = !preview.hidden;
-        this.collapsedGoalVariantId = preview.hidden ? variant.variant_id : "";
-        option.setAttribute("aria-expanded", String(!preview.hidden));
-      } else {
+      if (!isSelected) {
         this.selectGoalVariant(variant);
         document.getElementById(option.id)?.focus({ preventScroll: true });
       }
     });
-    const chevron = document.createElement("img");
-    chevron.src = "/assets/tabler-chevron-down.svg";
-    chevron.alt = "";
-    chevron.className = "goal-configuration-chevron";
     const title = document.createElement("strong");
     title.textContent = presentation.behaviorLabel;
     const count = document.createElement("span");
@@ -2972,63 +2964,17 @@ export class SourceBrowser {
     summary.textContent = goalConfigurationSummary(variant, presentation).replace(/ changes total$/, " changes");
     const activity = document.createElement("span");
     activity.className = "goal-configuration-option-meta";
-    activity.append(
-      goalConfigurationTime("First used", variant.first_used_at, presentation.firstUsedDate),
-      goalConfigurationTime("Last activity", variant.last_activity_at, presentation.lastActivityDate),
-    );
-    option.append(chevron, title, count, summary, activity);
-    if (isSelected) preview.append(this.renderGoalConfigurationPreview(entry));
-    row.append(option, preview);
-    return row;
-  }
-
-  renderGoalConfigurationPreview({ variant, presentation }) {
-    const content = document.createElement("div");
-    content.className = "goal-configuration-preview-content";
-    if (presentation.kind === "current_default") {
-      content.textContent = "No contract differences. Matches the checked-in goal.";
-      return content;
-    }
-    const state = this.goalVariantDiff?.variantId === variant.variant_id
-      ? this.goalVariantDiff
-      : null;
-    const first = state?.availability === "exact" ? state.entries[0] : null;
-    if (first) {
-      const change = document.createElement("div");
-      change.className = "goal-configuration-preview-change";
-      const path = document.createElement("code");
-      path.textContent = String(first.path || "");
-      const values = document.createElement("code");
-      values.textContent = (
-        `${formatGoalDiffValue(first.before, { unavailable: first.kind === "added" })}`
-        + ` → ${formatGoalDiffValue(first.after, { unavailable: first.kind === "removed" })}`
-      );
-      change.append(path, values);
-      const count = document.createElement("span");
-      count.className = "goal-configuration-preview-count";
-      count.textContent = `1 of ${presentation.differenceLabel}`;
-      content.append(change, count);
+    if (presentation.runCount === 0) {
+      activity.textContent = "No runs yet...";
     } else {
-      const message = document.createElement("p");
-      message.textContent = presentation.comparisonAvailable
-        ? "No field-level differences available in this preview."
-        : "Exact comparison unavailable.";
-      content.append(message);
+      activity.append(
+        goalConfigurationTime("First used", variant.first_used_at, presentation.firstUsedDate),
+        goalConfigurationTime("Last activity", variant.last_activity_at, presentation.lastActivityDate),
+      );
     }
-    const view = button(
-      variant.current_diff_truncated || !first ? "View differences" : "View all differences",
-      { quiet: true },
-    );
-    view.classList.add("goal-configuration-preview-link");
-    view.addEventListener("click", () => {
-      const differences = document.getElementById("selected-goal-configuration-differences");
-      if (!differences) return;
-      differences.open = true;
-      differences.querySelector("summary")?.focus({ preventScroll: true });
-      differences.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    });
-    content.append(view);
-    return content;
+    option.append(title, count, summary, activity);
+    row.append(option);
+    return row;
   }
 
   renderGoalConfigurationPanel({ variant, presentation }) {
@@ -3040,15 +2986,14 @@ export class SourceBrowser {
     const identity = document.createElement("div");
     const title = document.createElement("h3");
     const currentRevision = presentation.kind.startsWith("current_");
-    title.textContent = `${currentRevision ? "Current" : "Historical"} revision · ${presentation.behaviorLabel}`;
-    const summary = document.createElement("p");
-    summary.textContent = presentation.kind === "current_default"
-      ? "Matches the checked-in goal contract"
-      : goalConfigurationSummary(variant, presentation);
-    const revision = document.createElement("small");
-    revision.textContent = `Goal Revision ${String(variant.goal_contract_sha256 || "").slice(0, 8) || "unknown"}`;
-    identity.append(title, summary, revision);
-    const inspect = button("View goal YAML", { iconName: "code", quiet: true });
+    title.textContent = `${presentation.behaviorLabel} · ${currentRevision ? "Current" : "Historical"}`;
+    const revision = document.createElement("code");
+    revision.textContent = String(variant.goal_contract_sha256 || "").slice(0, 8) || "unknown";
+    revision.title = String(variant.goal_contract_sha256 || "");
+    identity.className = "goal-configuration-identity";
+    identity.append(title, revision);
+    const inspect = button("YAML", { iconName: "code", quiet: true });
+    inspect.setAttribute("aria-label", "View goal YAML");
     inspect.classList.add("goal-configuration-inspect");
     inspect.addEventListener("click", () => {
       const inspection = presentation.kind === "current_default"
@@ -3059,9 +3004,10 @@ export class SourceBrowser {
       );
     });
     header.append(identity, inspect);
-    panel.append(header, this.renderEmbeddedGoalRuns(variant));
+    panel.append(header);
     const differences = this.renderGoalConfigurationDifferences({ variant, presentation });
     if (differences) panel.append(differences);
+    panel.append(this.renderEmbeddedGoalRuns(variant));
     return panel;
   }
 
@@ -3077,7 +3023,7 @@ export class SourceBrowser {
     differences.className = "goal-configuration-differences";
     differences.id = "selected-goal-configuration-differences";
     const differencesSummary = document.createElement("summary");
-    differencesSummary.textContent = `Exact contract differences · ${presentation.differenceLabel}`;
+    differencesSummary.textContent = `${presentation.differenceLabel.replace(/changes?$/, (word) => word === "change" ? "difference" : "differences")} from current`;
     const differencesIntro = document.createElement("p");
     differencesIntro.textContent = (
       "Baseline: current checked-in goal · Exact contract paths and typed values."
@@ -3120,11 +3066,6 @@ export class SourceBrowser {
       notice.textContent = state.message;
       differences.append(notice);
     }
-    const count = document.createElement("span");
-    count.className = "goal-configuration-detail-count";
-    const changeCount = state.changeCount ?? state.entries.length;
-    count.textContent = `${changeCount.toLocaleString()} ${changeCount === 1 ? "changed key" : "changed keys"}`;
-    differencesSummary.append(" · ", count);
     const scroll = document.createElement("div");
     scroll.className = "goal-configuration-diff-scroll";
     const table = document.createElement("table");
@@ -3249,7 +3190,7 @@ export class SourceBrowser {
     table.className = "goal-configuration-run-table";
     const head = document.createElement("thead");
     const headings = document.createElement("tr");
-    ["Status", "Run", "train/success", "eval/success", "Last activity", ""].forEach((label) => {
+    ["Run", "State", "Training", "Evaluation", ""].forEach((label) => {
       const cell = document.createElement("th");
       cell.scope = "col";
       cell.textContent = label;
@@ -3264,30 +3205,46 @@ export class SourceBrowser {
       state.className = `goal-run-state ${presentation.tone}`;
       state.title = humanizeMetricPart(run?.state || "unknown");
       state.setAttribute("aria-label", state.title);
-      state.append(icon(presentation.iconName));
+      state.textContent = presentation.label;
       const identityCell = document.createElement("td");
       const navigate = document.createElement("button");
       navigate.type = "button";
       navigate.className = "goal-configuration-run-identity";
       navigate.disabled = !this.hasControl();
       const name = document.createElement("strong");
-      name.textContent = String(run?.description || run?.name || run?.run_id || "Run");
-      const metadata = document.createElement("small");
-      metadata.textContent = String(run?.name || run?.run_id || "");
-      metadata.title = String(run?.run_id || "");
-      navigate.append(name, metadata);
-      identityCell.append(navigate);
+      name.textContent = [run?.recipe || run?.name || run?.run_id || "Run", run?.seed != null ? `seed ${run.seed}` : ""].filter(Boolean).join(" · ");
+      navigate.append(name);
+      const activity = document.createElement("small");
+      activity.className = "goal-run-activity";
+      activity.textContent = run?.updated_at ? formatGoalConfigurationDate(run.updated_at) : "Activity unavailable";
+      activity.title = run?.updated_at ? formatDate(run.updated_at) : "";
+      const details = document.createElement("details");
+      details.className = "goal-run-details";
+      const summary = document.createElement("summary");
+      summary.textContent = "Details";
+      const purpose = document.createElement("p");
+      purpose.textContent = String(run?.description || "No run description available.");
+      const provenance = document.createElement("p");
+      provenance.textContent = [run?.name, recipeVariantPresentation(run).detail].filter(Boolean).join(" · ");
+      const identifier = document.createElement("code");
+      identifier.textContent = String(run?.run_id || "");
+      const copy = button("Copy ID", { quiet: true });
+      copy.addEventListener("click", () => {
+        void navigator.clipboard.writeText(String(run?.run_id || "")).catch(
+          () => this.showToast("Could not copy run ID", true),
+        );
+      });
+      details.append(summary, purpose, provenance, identifier, copy);
+      identityCell.append(navigate, activity, details);
       const addEvidence = (badge, status) => {
         const cell = document.createElement("td");
-        cell.className = "goal-run-success";
-        // Match the catalog success convention without hiding the exact evidence state.
+        cell.className = `goal-run-success ${status.className}`;
+        // Preserve missing, pending, failed, and accepted evidence states.
         if (status.label === "Loading…") {
           cell.append(this.tableSkeleton(status.description));
           cell.setAttribute("aria-busy", "true");
         } else {
-          cell.textContent = status.label === "Unavailable"
-            ? status.label
-            : successBadgeLabels(run).includes(badge) ? "✅" : "❌";
+          cell.textContent = status.label;
         }
         cell.title = `${badge}: ${status.label}. ${status.description}`;
         cell.setAttribute("aria-label", cell.title);
@@ -3295,9 +3252,6 @@ export class SourceBrowser {
       };
       const training = addEvidence("train/success", runTrainingEvidenceStatus(run));
       const evaluation = addEvidence("eval/success", runEvaluationEvidenceStatus(run));
-      const activity = document.createElement("td");
-      activity.className = "goal-run-activity";
-      activity.textContent = run?.updated_at ? formatDate(run.updated_at) : "—";
       const actionCell = document.createElement("td");
       const action = button("", { iconName: "arrow-right", quiet: true });
       action.classList.add("icon-only");
@@ -3314,9 +3268,9 @@ export class SourceBrowser {
       navigate.addEventListener("click", openRun);
       action.addEventListener("click", openRun);
       row.addEventListener("click", (event) => {
-        if (!event.target.closest("button") && this.hasControl()) openRun();
+        if (!event.target.closest("button, details") && this.hasControl()) openRun();
       });
-      row.append(state, identityCell, training, evaluation, activity, actionCell);
+      row.append(identityCell, state, training, evaluation, actionCell);
       body.append(row);
     });
     table.append(head, body);

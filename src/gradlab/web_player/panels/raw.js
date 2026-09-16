@@ -6,7 +6,7 @@ export function mount({ definition }) {
     label: definition.label,
     className: "raw-panel",
     body: `
-      <details open><summary>Selected transition</summary><pre data-transition class="json-view">No transition yet.</pre></details>
+      <details open><summary>Selected transition</summary><pre data-transition class="json-view widget-empty">No data available yet</pre></details>
       <details><summary>Resolved playback configuration</summary><pre data-config>Waiting…</pre></details>
     `,
   });
@@ -14,10 +14,11 @@ export function mount({ definition }) {
   return {
     element,
     render(snapshot) {
+      element.querySelector("[data-transition]").classList.toggle("widget-empty", !snapshot?.transition);
       renderJson(
         element.querySelector("[data-transition]"),
         snapshot?.transition,
-        "No transition yet.",
+        "No data available yet",
       );
       element.querySelector("[data-config]").textContent = snapshot?.session?.config
         || "No configuration supplied.";

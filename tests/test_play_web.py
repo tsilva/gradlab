@@ -993,7 +993,8 @@ def test_paired_playback_server_opens_only_player_window() -> None:
             human_args(no_open=False),
             paired_windows=True,
         )
-        with patch("gradlab.play_web.webbrowser.open") as open_browser:
+        with patch("gradlab.play_web.PlaybackBrowser") as browser_type:
+            open_browser = browser_type.return_value.open
             task = asyncio.create_task(server.run())
             try:
                 deadline = asyncio.get_running_loop().time() + 3.0
@@ -1008,13 +1009,10 @@ def test_paired_playback_server_opens_only_player_window() -> None:
                 )
                 await server._announce_session_change()
                 assert [call.args[0] for call in open_browser.call_args_list] == [urls[0]]
-                assert all(
-                    call.kwargs == {"new": 1, "autoraise": True}
-                    for call in open_browser.call_args_list
-                )
             finally:
                 runner.stop()
                 await asyncio.wait_for(task, timeout=3.0)
+            browser_type.return_value.close.assert_called_once()
 
     asyncio.run(scenario())
 
@@ -1275,6 +1273,57 @@ def test_player_connection_and_checkpoint_load_wait_for_explicit_play(paired, de
             await task
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+def test_shutdown_drains_disconnect_handlers_before_stopping_worker(cancel, caplog) -> None:
+    async def scenario() -> None:
+        runner = HumanRecordingRunner(FakeHumanSession(), human_args())
+        runner.stop = Mock(wraps=runner.stop)
+        server = PlaybackWebServer(runner, human_args())
+        sync_processing = server._sync_player_processing
+        disconnected = asyncio.Event()
+
+        async def delayed_disconnect() -> None:
+            if not server.clients:
+                # Keep request cleanup alive after the websocket close handshake.
+                await asyncio.sleep(0.05)
+                assert not runner.stop.called
+                disconnected.set()
+            await sync_processing()
+
+        server._sync_player_processing = delayed_disconnect
+        task = asyncio.create_task(server.run())
+        try:
+            async with asyncio.timeout(3):
+                while not server.origin:
+                    await asyncio.sleep(0.01)
+                async with ClientSession() as client:
+                    socket = await client.ws_connect(f"{server.origin}/ws", origin=server.origin)
+                    await socket.send_json({"type": "hello", "token": server.token})
+                    while True:
+                        message = await socket.receive()
+                        if message.type == WSMsgType.TEXT and message.json()["type"] == "welcome":
+                            break
+                    if cancel:
+                        task.cancel()
+                    else:
+                        server.stop_event.set()
+                    while (await socket.receive()).type != WSMsgType.CLOSE:
+                        pass
+                    if cancel:
+                        with pytest.raises(asyncio.CancelledError):
+                            await task
+                    else:
+                        await task
+                    assert disconnected.is_set()
+                    runner.stop.assert_called_once()
+        finally:
+            server.stop_event.set()
+            await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(scenario())
+    assert "Error handling request" not in caplog.text
 
 
 def test_server_aggregates_processing_only_from_connected_windows() -> None:

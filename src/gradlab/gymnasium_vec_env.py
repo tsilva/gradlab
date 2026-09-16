@@ -217,23 +217,6 @@ GYMNASIUM_ENV_CONTRACTS: Mapping[str, GymnasiumEnvContract] = MappingProxyType(
             render_fps=4,
             signals=(GymnasiumSignalContract("prob", "float64"),),
         ),
-        "CliffWalkingSlippery-v1": GymnasiumEnvContract(
-            env_id="CliffWalkingSlippery-v1",
-            entry_point="gymnasium.envs.toy_text.cliffwalking:CliffWalkingEnv",
-            registered_kwargs=(("is_slippery", True),),
-            observation_kind="discrete",
-            observation_shape=(),
-            observation_dtype="int64",
-            observation_categories=(48,),
-            buttons=("up", "right", "down", "left"),
-            action_meanings=("move_up", "move_right", "move_down", "move_left"),
-            action_controls=(("up",), ("right",), ("down",), ("left",)),
-            registered_max_episode_steps=None,
-            goal_max_episode_steps=200,
-            reward_threshold=None,
-            render_fps=4,
-            signals=(GymnasiumSignalContract("prob", "float64"),),
-        ),
         "Taxi-v3": GymnasiumEnvContract(
             env_id="Taxi-v3",
             entry_point="gymnasium.envs.toy_text.taxi:TaxiEnv",
@@ -318,11 +301,12 @@ class _TupleObservationAdapter(gym.ObservationWrapper):
 
 
 def validate_gymnasium_env_options(game: str, options: Mapping[str, Any]) -> None:
-    frozenlake_options = {"is_slippery", "desc"} & options.keys()
-    if frozenlake_options and game not in {"FrozenLake-v1", "FrozenLake8x8-v1"}:
-        raise ValueError(
-            f"{', '.join(sorted(frozenlake_options))} supported only for FrozenLake environments"
-        )
+    if "desc" in options and game not in {"FrozenLake-v1", "FrozenLake8x8-v1"}:
+        raise ValueError("desc supported only for FrozenLake environments")
+    if "is_slippery" in options and game not in {
+        "FrozenLake-v1", "FrozenLake8x8-v1", "CliffWalking-v1"
+    }:
+        raise ValueError("is_slippery supported only for FrozenLake and CliffWalking environments")
     if "is_slippery" in options:
         if not isinstance(options["is_slippery"], bool):
             raise ValueError("is_slippery must be a boolean")

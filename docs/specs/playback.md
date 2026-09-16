@@ -10,7 +10,7 @@ This specification applies to the public checkpoint browser and interactive web 
 - Discovery must use a rebuildable precomputed catalog and must not perform synchronous storage scans.
 - Discovery must show only available Acceptance evidence and must resolve CLI references progressively.
 - Goal selection must distinguish the current Goal Revision, current Goal Variants, and historical Goal Revisions in plain language.
-- Each Goal Variant entry must show its normalized scientific difference, first-used date, last-activity date, and Run count.
+- Each Goal Variant entry must show its normalized scientific difference and Run count; show first-used and last-activity dates when it has Runs, or “No runs yet...” in their place when it has none.
 - Run selection must distinguish checked-in recipes from launch-time overrides without requiring a new recipe.
 - Playback must expose the resolved Research Goal and Run Configuration as YAML.
 - Goal Variants and overridden Run Configurations must show their proven differences from their authoritative bases.

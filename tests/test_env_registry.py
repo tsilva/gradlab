@@ -269,7 +269,6 @@ def test_gymnasium_provider_registers_only_certified_discrete_environments() -> 
         "FrozenLake-v1",
         "FrozenLake8x8-v1",
         "CliffWalking-v1",
-        "CliffWalkingSlippery-v1",
         "Taxi-v3",
         "Blackjack-v1",
     )

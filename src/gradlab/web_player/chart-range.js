@@ -44,7 +44,16 @@ export function bindChartRange(canvas, geometry, context, services) {
   });
   canvas.addEventListener("pointercancel", () => { drag = null; selection.hidden = true; });
   canvas.addEventListener("click", (event) => {
-    if (suppressClick) { event.stopImmediatePropagation(); suppressClick = false; }
+    if (suppressClick) {
+      event.stopImmediatePropagation();
+      suppressClick = false;
+      return;
+    }
+    if (context().view?.chartRange) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      services.setChartRange?.(null);
+    }
   }, true);
   canvas.addEventListener("dblclick", (event) => {
     event.preventDefault();

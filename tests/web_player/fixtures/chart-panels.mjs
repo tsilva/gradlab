@@ -67,6 +67,15 @@ try {
     for (const fraction of [0.35, 0.7]) {
       cursors.clear();
       source.dispatchEvent(new PointerEvent('pointermove', { clientX: bounds.left + bounds.width * fraction }));
+      for (const canvas of canvases) {
+        const tooltip = canvas.parentElement.querySelector('[role="tooltip"]');
+        check(tooltip && !tooltip.hidden, 'Every history chart shows its synchronized tooltip');
+        const nearest = chartHoverStep < 3.5 ? 2 : 5;
+        check(tooltip.querySelector('strong').textContent === `Step ${nearest}`, 'Tooltip labels the actual recorded step');
+        check([...tooltip.querySelectorAll('.chart-tooltip-value')].some(value => value.textContent === String(nearest)), 'Tooltip shows the plotted sample value');
+        const box = tooltip.getBoundingClientRect(), chartBox = canvas.getBoundingClientRect();
+        check(box.left >= chartBox.left - 1 && box.right <= chartBox.right + 1, 'Tooltip stays inside the chart horizontally');
+      }
       check(Number.isFinite(chartHoverStep), 'Hover publishes a shared step');
       check(cursors.size === canvases.length, 'Every chart draws a hover cursor, including reward and signals');
       // Both fixture canvases have the same plot size and episode domain.
@@ -76,8 +85,9 @@ try {
     }
     source.dispatchEvent(new PointerEvent('pointerleave'));
     check(chartHoverStep === null, 'Leaving a chart clears the shared hover');
+    check(canvases.every(canvas => canvas.parentElement.querySelector('[role="tooltip"]').hidden), 'Leaving hides all synchronized tooltips');
   }
-  results.textContent = 'PASS: actual line, signal explorer and reward-table panels share loading, refresh, failure and Retry; obsolete plots are hidden; cursor and reference are unchanged; hover cursors synchronize from reward and signal charts and clear on leave.';
+  results.textContent = 'PASS: actual line, signal explorer and reward-table panels share loading, refresh, failure and Retry; obsolete plots are hidden; cursor and reference are unchanged; hover cursors and tooltips synchronize, show recorded values, fit within charts, and clear on leave.';
 } catch (error) {
   results.textContent = `FAIL: ${error.message}`;
   console.error(error);

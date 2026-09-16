@@ -1,8 +1,8 @@
 defaults:
-- ../../../recipes/_presets/gymnasium-discrete-ppo@_global_
+- ../../../../recipes/_presets/gymnasium-discrete-ppo@_global_
 - _self_
 recipe_id: ppo
-description: Gymnasium CliffWalkingSlippery-v1 PPO baseline for stochastic transitions.
+description: Gymnasium CliffWalking-v1 Slippery PPO baseline for stochastic transitions.
 train:
   timesteps: 1000000
   early_stop:

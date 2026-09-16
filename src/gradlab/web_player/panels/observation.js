@@ -44,7 +44,7 @@ export function mount({ definition }) {
         <span data-diagnostic-explanation></span>
         <div class="cnn-winner-legend" data-cnn-winner-legend aria-label="CNN winner-map filters"></div>
       </div>
-      <pre data-input class="compact-pre">No policy input yet.</pre>
+      <pre data-input class="compact-pre widget-empty">No data available yet</pre>
     `,
   });
   const baseCanvas = element.querySelector("[data-observation-canvas]");
@@ -203,7 +203,8 @@ export function mount({ definition }) {
     activity = nextActivity;
     activityInitialized = true;
     input.textContent = snapshot?.transition?.before?.model_input?.join("\n")
-      || "No policy input yet.";
+      || "No data available yet";
+    input.classList.toggle("widget-empty", !snapshot?.transition?.before?.model_input?.length);
     updateStatus();
     updateContext();
     draw();
