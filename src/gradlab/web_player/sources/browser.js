@@ -2969,7 +2969,7 @@ export class SourceBrowser {
     count.textContent = presentation.runLabel;
     const summary = document.createElement("span");
     summary.className = "goal-configuration-option-summary";
-    summary.textContent = goalConfigurationSummary(variant, presentation);
+    summary.textContent = goalConfigurationSummary(variant, presentation).replace(/ changes total$/, " changes");
     const activity = document.createElement("span");
     activity.className = "goal-configuration-option-meta";
     activity.append(
@@ -2984,6 +2984,7 @@ export class SourceBrowser {
 
   renderGoalConfigurationPreview({ variant, presentation }) {
     const content = document.createElement("div");
+    content.className = "goal-configuration-preview-content";
     if (presentation.kind === "current_default") {
       content.textContent = "No contract differences. Matches the checked-in goal.";
       return content;
@@ -3005,7 +3006,7 @@ export class SourceBrowser {
       change.append(path, values);
       const count = document.createElement("span");
       count.className = "goal-configuration-preview-count";
-      count.textContent = `Showing 1 · ${presentation.differenceLabel}`;
+      count.textContent = `1 of ${presentation.differenceLabel}`;
       content.append(change, count);
     } else {
       const message = document.createElement("p");
@@ -3014,7 +3015,10 @@ export class SourceBrowser {
         : "Exact comparison unavailable.";
       content.append(message);
     }
-    const view = button("View all differences", { quiet: true });
+    const view = button(
+      variant.current_diff_truncated || !first ? "View differences" : "View all differences",
+      { quiet: true },
+    );
     view.classList.add("goal-configuration-preview-link");
     view.addEventListener("click", () => {
       const differences = document.getElementById("selected-goal-configuration-differences");
@@ -3111,6 +3115,11 @@ export class SourceBrowser {
       ));
     }
 
+    if (state.message) {
+      const notice = document.createElement("p");
+      notice.textContent = state.message;
+      differences.append(notice);
+    }
     const count = document.createElement("span");
     count.className = "goal-configuration-detail-count";
     const changeCount = state.changeCount ?? state.entries.length;
