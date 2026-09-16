@@ -955,6 +955,11 @@ function renderTimeline() {
 function restoreTimelineHome() {
   const timeline = $("#timeline");
   const home = $("#timeline-home");
+  const actions = timeline?.querySelector(".timeline-actions");
+  for (const selector of ["#timeline-reset", "#playback-settings-toggle"]) {
+    const button = $(selector);
+    if (actions && button) actions.append(button);
+  }
   timeline?.classList.remove("game-timeline-docked", "visible");
   if (timeline && home && timeline.previousElementSibling !== home) home.after(timeline);
 }
@@ -966,6 +971,10 @@ function syncTimelineDock() {
   if (!timeline || !stage) return;
   stage.append(timeline);
   timeline.classList.add("game-timeline-docked");
+  const actions = stage.querySelector(".game-actions");
+  if (actions) {
+    actions.append($("#timeline-reset"), $("#playback-settings-toggle"));
+  }
 }
 
 function maxPanelRow(targetWindow = state.windowId) {
