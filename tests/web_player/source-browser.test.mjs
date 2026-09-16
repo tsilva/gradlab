@@ -664,14 +664,14 @@ test("goal configurations render as a master-detail browser with exact changes",
   assert.match(source, /layout\.className = "goal-configuration-layout";/);
   assert.match(source, /list\.setAttribute\("aria-label", "Goal configurations"\);/);
   assert.match(source, /groupGoalConfigurations\(this\.items\)/);
-  assert.match(source, /group.current \? "Current revision" : "Previous revision"/);
+  assert.match(source, /group.current \? "Current" : "History"/);
   assert.match(source, /renderGoalConfigurationOption\(entry, selected/);
   assert.match(source, /option\.setAttribute\("aria-pressed", String\(isSelected\)\);/);
   assert.match(source, /goalConfigurationTime\("First used", variant.first_used_at, presentation.firstUsedDate\)/);
   assert.match(source, /goalConfigurationTime\("Last activity", variant.last_activity_at, presentation.lastActivityDate\)/);
   assert.doesNotMatch(source, /Older goal/);
   assert.doesNotMatch(source, /Selected goal version/);
-  assert.match(source, /button\("View goal YAML"/);
+  assert.match(source, /button\("YAML"/);
   assert.doesNotMatch(source, /role", "treegrid"/);
   assert.doesNotMatch(styles, /\.goal-configuration-table/);
   assert.match(styles, /\.goal-configuration-layout \{[^}]*grid-template-columns: 22rem minmax\(0, 1fr\);/);
@@ -718,7 +718,7 @@ test("goal activity renders recent runs as a compact success table", async () =>
   assert.match(source, /runEvaluationEvidenceStatus\(run\)/);
   assert.match(source, /addEvidence\("train\/success"/);
   assert.match(source, /addEvidence\("eval\/success"/);
-  assert.match(source, /state\.append\(icon\(presentation\.iconName\)\);/);
+  assert.match(source, /state\.textContent = presentation\.label;/);
   assert.match(source, /button\("Load more runs"/);
 
   const styles = await readFile(
@@ -953,7 +953,7 @@ test("source discovery progressively discloses secondary controls", async () => 
     "utf8",
   );
 
-  assert.match(source, /return "Choose a goal configuration"/);
+  assert.match(source, /return "Choose a run"/);
   assert.match(source, /source-search-disclosure/);
   assert.match(source, /disclosure\.open = this\.searchOpen/);
   assert.match(source, /close\.setAttribute\("aria-label", "Close search"\);/);
@@ -962,7 +962,7 @@ test("source discovery progressively discloses secondary controls", async () => 
   assert.match(styles, /grid-template-columns: auto minmax\(0, 1fr\) auto;/);
   assert.doesNotMatch(source, /resultCount > 8/);
   assert.match(html, /id="contract-search-disclosure" class="contract-search-disclosure"/);
-  assert.match(source, /Exact contract differences · \$\{presentation\.differenceLabel\}/);
+  assert.match(source, /differencesSummary\.textContent = .* from current`/);
   assert.doesNotMatch(source, /Evaluation & technical details/);
   assert.doesNotMatch(source, /Compare all checkpoints/);
   assert.match(source, /body\.append\(this\.renderEvaluationActions\(\), results\)/);

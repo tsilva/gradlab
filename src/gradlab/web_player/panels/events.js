@@ -13,7 +13,7 @@ export function mount({ definition, services }) {
   const element = createPanel({
     id: definition.id,
     label: definition.label,
-    body: '<ol data-list class="event-list"><li class="empty-state">No events observed.</li></ol>',
+    body: '<ol data-list class="event-list"><li class="empty-state widget-empty">No data available yet</li></ol>',
   });
   const list = element.querySelector("[data-list]");
 
@@ -80,8 +80,8 @@ export function mount({ definition, services }) {
     const selected = visible.find((point) => eventAtCursor(point, view));
     if (!visible.length) {
       const empty = document.createElement("li");
-      empty.className = "empty-state";
-      empty.textContent = "No events observed.";
+      empty.className = "empty-state widget-empty";
+      empty.textContent = "No data available yet";
       list.replaceChildren(empty);
       return;
     }

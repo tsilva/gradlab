@@ -31,11 +31,16 @@ export function formatRewardCell(value, digits = 3) {
   return value.toFixed(digits);
 }
 
+export const REWARD_LABELS = Object.freeze({
+  "reward/provider": "Native reward",
+  "reward/shaped": "Shaped reward",
+});
+
 export function createRewardLegend(legend) {
   legend.classList.add("reward-history-legend");
   legend.replaceChildren(...[
-    ["Native reward", "seriesViolet"],
-    ["Shaped reward", "seriesTeal"],
+    [REWARD_LABELS["reward/provider"], "seriesViolet"],
+    [REWARD_LABELS["reward/shaped"], "seriesTeal"],
     ["Discounted contribution", "seriesAmber"],
   ].map(([label, color], index) => {
     const item = document.createElement("span");

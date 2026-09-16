@@ -37,6 +37,10 @@ gradlab play --recipe gradlab__bandit/ppo
 ```
 
 `gradlab play` starts the local web player and prints its loopback URL.
+It opens an installed Chrome or Chromium browser in a separate instance with a
+temporary profile. Ctrl+C closes that instance and its player tabs without closing
+your normal browser windows. Each session starts with fresh browser preferences.
+Use `--no-open` to open the printed URL yourself instead.
 Use `gradlab play --latest` to open the highest-step published checkpoint from the
 newest run in the player catalog that has a published checkpoint. It starts paused; click **Play** to begin inference.
 Runs without published checkpoints are skipped; the command reports when none are available.
@@ -57,8 +61,8 @@ gradlab train Acrobot-v1/ppo
 gradlab train LunarLander-v3/ppo
 gradlab train FrozenLake-v1/Default/ppo
 gradlab train FrozenLake-v1/Maze/ppo
-gradlab train CliffWalking-v1/ppo
-gradlab train CliffWalkingSlippery-v1/ppo
+gradlab train CliffWalking-v1/Default/ppo
+gradlab train CliffWalking-v1/Slippery/ppo
 gradlab train Taxi-v3/ppo
 gradlab train Blackjack-v1/ppo
 ```

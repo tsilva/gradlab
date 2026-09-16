@@ -1,5 +1,5 @@
 defaults:
-- ../_gymnasium-discrete-common@_global_
+- ../../_gymnasium-discrete-common@_global_
 - _self_
 title: Gymnasium slippery CliffWalking benchmark
 train:
@@ -8,7 +8,7 @@ train:
     env_provider: &provider gymnasium
     env_config:
       <<: &env_config
-        game: CliffWalkingSlippery-v1
+        game: CliffWalking-v1
         n_envs: 32
         env_args: &env_args
           autoreset_mode: disabled
@@ -19,6 +19,7 @@ train:
           daemon: true
           observation_mode: same
           render_mode: rgb_array
+          is_slippery: true
     preprocessing: &preprocessing
       frame_skip: 1
       max_pool_frames: false

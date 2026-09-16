@@ -101,7 +101,7 @@ EXPECTED = {
         "ent_coef": 0.01,
         "min_delta": 0.01,
     },
-    "CliffWalking-v1": {
+    "CliffWalking-v1/Default": {
         "threshold": -13.0,
         "timesteps": 500_000,
         "n_envs": 32,
@@ -114,7 +114,7 @@ EXPECTED = {
         "plateau": 125_000,
         "ent_coef": 0.01,
     },
-    "CliffWalkingSlippery-v1": {
+    "CliffWalking-v1/Slippery": {
         "threshold": -75.0,
         "timesteps": 1_000_000,
         "n_envs": 32,
@@ -264,6 +264,9 @@ def test_gymnasium_goals_are_registered_in_player_catalog() -> None:
     environment_names = {item["name"] for item in catalog.environments().items}
 
     assert {game.split("/")[0] for game in EXPECTED} <= environment_names
+    assert "CliffWalkingSlippery-v1" not in environment_names
+    cliff_goals = catalog.goals(environment_id="CliffWalking-v1", include_evidence=False)
+    assert [item["goal_id"] for item in cliff_goals.items] == ["Default", "Slippery"]
     assert "FrozenLake8x8-v1" not in environment_names
     goals = catalog.goals(environment_id="FrozenLake-v1", include_evidence=False)
     assert [item["goal_id"] for item in goals.items] == ["Default", "Maze"]
@@ -289,6 +292,8 @@ def test_gymnasium_goal_and_recipe_materialize_exact_contract(game: str) -> None
     assert "release" not in goal
     assert config["env_provider"] == "gymnasium"
     assert config["game"] == runtime_game
+    if runtime_game == "CliffWalking-v1":
+        assert config["env_args"]["is_slippery"] is (game.endswith("/Slippery"))
     assert config["n_envs"] == expected["n_envs"]
     assert config["checkpoint_eval_backend"] == "none"
     assert "checkpoint_eval_n_envs" not in config

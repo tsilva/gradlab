@@ -1,6 +1,7 @@
+import { createChartTooltip } from "./chart-tooltip.js";
 import { chartHistoryBlock, chartPoints, createChartStatus, usesChartHistory } from "./chart-status.js";
 import { rewardContribution } from "./reward-discount.js";
-import { createRewardInspector, createRewardLegend } from "./reward-inspector.js";
+import { createRewardInspector, createRewardLegend, REWARD_LABELS } from "./reward-inspector.js";
 import { bindChartRange } from "../chart-range.js";
 import {
   createPanel,
@@ -361,6 +362,7 @@ function makeLineBlock(block, services, definition) {
   const legend = document.createElement("div");
   legend.className = "legend";
   section.append(canvas, legend);
+  const renderTooltip = createChartTooltip(canvas);
   const foot = appendFoot(section, block.foot, { force: true });
   const rewardLayout = definition.id === "step-reward"
     && block.metrics.length === 2
@@ -391,6 +393,7 @@ function makeLineBlock(block, services, definition) {
   const renderChart = ({ history, view }) => {
     history = chartPoints(history, view);
     const series = descriptors.map((descriptor) => ({
+      label: rewardLayout ? REWARD_LABELS[descriptor.key] : descriptor.shortLabel,
       values: seriesForMetric(descriptor.key, history),
       color: themeColor(descriptor.color || "chartBar"),
     }));
@@ -400,7 +403,7 @@ function makeLineBlock(block, services, definition) {
     const gamma = session?.value_discount ?? session?.critic_comparison?.discount;
     const validDiscount = typeof gamma === "number" && Number.isFinite(gamma) && gamma >= 0 && gamma <= 1;
     if (discountEnabled && validDiscount) {
-      series.push({ values: history.map(point => rewardContribution(point, referenceStep, gamma)?.contribution ?? NaN),
+      series.push({ label: "Discounted contribution", values: history.map(point => rewardContribution(point, referenceStep, gamma)?.contribution ?? NaN),
         color: themeColor("seriesAmber"), dash: [4, 3] });
     }
     const hoverStep = view?.chartHoverStep;
@@ -413,6 +416,7 @@ function makeLineBlock(block, services, definition) {
       cursorIndex: displayedIndex, steps: history.map((point) => point.step),
       cursorStep: hovering ? hoverStep : selectedStep, ...chartOptions,
     });
+    renderTooltip({ steps: history.map(point => point.step), series, step: hoverStep, geometry: chartGeometry });
     const legendPresentation = hovering
       ? lineLegendPresentationAtIndex(descriptors, history, displayedIndex)
       : lineLegendPresentation(descriptors, currentContext.history, view);
@@ -784,7 +788,11 @@ function makePolicyDecisionBlock(statsBlock, distributionBlock) {
     makeDistributionBlock(distributionBlock),
   ];
   fallback.append(...fallbackBlocks.map((block) => block.element));
-  section.append(discrete, fallback);
+  const empty = document.createElement("div");
+  empty.className = "widget-empty";
+  empty.textContent = "No data available yet";
+  empty.hidden = true;
+  section.append(discrete, fallback, empty);
 
   return {
     element: section,
@@ -794,8 +802,10 @@ function makePolicyDecisionBlock(statsBlock, distributionBlock) {
         context.history,
         context.view,
       );
-      discrete.hidden = !presentation.discrete;
-      fallback.hidden = presentation.discrete;
+      empty.hidden = Boolean(context.snapshot?.transition);
+      discrete.hidden = !empty.hidden || !presentation.discrete;
+      fallback.hidden = !empty.hidden || presentation.discrete;
+      if (!empty.hidden) return;
       if (!presentation.discrete) {
         delete section.dataset.telemetryStatus;
         fallbackBlocks.forEach((block) => block.render(context));
@@ -876,6 +886,8 @@ function makeHistogramBlock(block) {
     element: section,
     render({ snapshot, history, view }) {
       const values = histogramValues(descriptor, history);
+      canvas.hidden = !values.length;
+      caption.classList.toggle("widget-empty", !values.length);
       const actionIndices = values.map(scalarActionIndex);
       const numeric = actionIndices.every((value) => value !== null && value >= 0);
       const names = numeric
@@ -914,7 +926,7 @@ function makeHistogramBlock(block) {
         ? `${values.length} values in the retained episode${
           selectedLabel === null ? "." : ` · selected ${selectedLabel}.`
         }`
-        : `No ${descriptor?.shortLabel.toLowerCase() || "metric"} values observed.`;
+        : "No data available yet";
     },
   };
 }
@@ -969,8 +981,8 @@ function makeDistributionBlock(block) {
       }
       const decision = descriptorValue(descriptor, { snapshot });
       if (!decision) {
-        target.className = "action-probabilities empty-state";
-        target.textContent = availability.message || "N/A";
+        target.className = "action-probabilities empty-state widget-empty";
+        target.textContent = "No data available yet";
         section.dataset.telemetryStatus = "not-yet-observed";
         foot.textContent = footMessages.join(" ");
         foot.hidden = !foot.textContent;
@@ -1035,7 +1047,12 @@ function makeNamespaceBlock(block, definition, services) {
   const body = document.createElement("tbody");
   tableElement.append(body);
   table.append(tableElement);
-  section.append(toolbar, canvas, table);
+  const empty = document.createElement("div");
+  empty.className = "widget-empty";
+  empty.textContent = "No data available yet";
+  empty.hidden = true;
+  section.append(toolbar, canvas, table, empty);
+  const renderTooltip = createChartTooltip(canvas);
   appendFoot(
     section,
     block.foot || (
@@ -1056,6 +1073,8 @@ function makeNamespaceBlock(block, definition, services) {
     currentContext = { snapshot, history, view };
     const chartHistory = chartPoints(history, view);
     const descriptors = namespaceDescriptors(block.namespace, snapshot, history);
+    empty.hidden = descriptors.length > 0;
+    toolbar.hidden = canvas.hidden = table.hidden = !empty.hidden;
     if (!descriptors.some((descriptor) => descriptor.key === selected)) {
       selected = descriptors[0]?.key || "";
     }
@@ -1080,10 +1099,13 @@ function makeNamespaceBlock(block, definition, services) {
         : prior;
     }
     const descriptor = descriptorFor(selected);
-    chartGeometry = drawLines(canvas, [{
+    const series = [{
+      label: descriptor?.label || "Signal",
       values: descriptor ? seriesForMetric(descriptor.key, chartHistory) : [],
       color: themeColor(descriptor?.color || "chartHighlight"),
-    }], { cursorIndex: cursorIndex(chartHistory, view), steps: chartHistory.map((point) => point.step), cursorStep: view?.chartHoverStep ?? snapshot?.transition?.step });
+    }];
+    chartGeometry = drawLines(canvas, series, { cursorIndex: cursorIndex(chartHistory, view), steps: chartHistory.map((point) => point.step), cursorStep: view?.chartHoverStep ?? snapshot?.transition?.step });
+    renderTooltip({ steps: chartHistory.map(point => point.step), series, step: view?.chartHoverStep, geometry: chartGeometry });
     const point = selectedPoint(history, snapshot, view);
     body.replaceChildren(...descriptors.map((item) => {
       const row = document.createElement("tr");
@@ -1241,7 +1263,9 @@ function makeRewardBreakdownBlock(block, definition, services) {
     );
     if (!available) {
       state.className = `reward-analysis-state empty-state ${presentation.status}`;
-      state.textContent = presentation.message;
+      const empty = presentation.status === "not-yet-observed";
+      state.classList.toggle("widget-empty", empty);
+      state.textContent = empty ? "No data available yet" : presentation.message;
       return;
     }
     const maxMagnitude = Math.max(
@@ -1347,7 +1371,7 @@ export function mount({ definition, services }) {
       chartStatus?.render(chart);
       if (chartStatus && chart) element.dataset.chartStatus = chart.status;
       blocks.forEach((block, index) => {
-        const waiting = chart && chart.data === null
+        const waiting = chart && (chart.data === null || chart.status === "ready" && chart.data?.length === 0)
           && chartHistoryBlock(definition.config.blocks[index]);
         block.element.hidden = Boolean(waiting);
       });

@@ -1,5 +1,5 @@
 defaults:
-- ../_gymnasium-discrete-common@_global_
+- ../../_gymnasium-discrete-common@_global_
 - _self_
 title: Gymnasium CliffWalking benchmark
 train:
@@ -19,6 +19,7 @@ train:
           daemon: true
           observation_mode: same
           render_mode: rgb_array
+          is_slippery: false
     preprocessing: &preprocessing
       frame_skip: 1
       max_pool_frames: false

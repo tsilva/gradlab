@@ -1,5 +1,5 @@
 defaults:
-- ../../../recipes/_presets/gymnasium-discrete-ppo@_global_
+- ../../../../recipes/_presets/gymnasium-discrete-ppo@_global_
 - _self_
 recipe_id: ppo
 description: Gymnasium CliffWalking-v1 PPO baseline over native categorical observations.

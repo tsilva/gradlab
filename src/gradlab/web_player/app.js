@@ -278,11 +278,8 @@ function renderSourceMode(snapshot = null) {
   $("#source-browser").hidden = !sourceMode;
   $("#checkpoint-navigation").hidden = Boolean(sourceMode || !activeCheckpointRoute);
   $("#page-title").hidden = Boolean(sourceMode || activeRecordingRoute);
-  $("#source-back").hidden = Boolean(
-    sourceMode
-    || activeRecordingRoute
-    || !(snapshot?.app?.has_active_runner || inspection.view.liveSnapshot?.app?.has_active_runner)
-  );
+  $("#source-back").hidden = false;
+  $("#source-back").disabled = Boolean(sourceMode && route?.level === "environments");
   $("#more-toggle").hidden = sourceMode;
   $("#inspect-active").hidden = !(
     snapshot?.app?.has_active_runner || inspection.view.liveSnapshot?.app?.has_active_runner
@@ -344,7 +341,7 @@ function connect() {
     if (typeof event.data === "string") handleMessage(JSON.parse(event.data));
     else handleFrame(event.data);
   });
-  socket.addEventListener("close", () => {
+  socket.addEventListener("close", (event) => {
     state.connected = false;
     state.hasControl = false;
     inspection.updateConnection({ connected: false, hasControl: false });
@@ -353,6 +350,11 @@ function connect() {
     checkpointSelection.terminate();
     updateConnection("Disconnected", "error");
     updateControlState();
+    if (event.code === 1001 && event.reason === "player shutting down") {
+      updateConnection("Player stopped — you can close this tab", "warning");
+      // Browsers may refuse to close the initial tab opened by the CLI.
+      window.close();
+    }
   });
   socket.addEventListener("error", () => {
     checkpointSelection.terminate();
@@ -1438,7 +1440,7 @@ function bindWorkspaceMenus() {
   };
   $("#source-back").addEventListener("click", () => {
     void ensureSourceBrowser()
-      .then((browser) => browser.browseCurrentSource())
+      .then((browser) => browser.goBack())
       .catch((error) => showToast(`Source browser failed: ${error.message || error}`, true));
   });
   $("#more-toggle").addEventListener("click", (event) => {
