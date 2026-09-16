@@ -1,0 +1,15 @@
+defaults:
+- ../_goal-common@_global_
+- _self_
+goal_id: TwoWalls
+title: Clear both Breakout walls
+train:
+  environment:
+    task:
+      events:
+        two_walls_cleared:
+          signal: walls_cleared
+          operation: equals
+          value: 2
+      termination:
+        success: [two_walls_cleared]

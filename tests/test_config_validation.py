@@ -23,7 +23,7 @@ from gradlab.recipe_schema import validate_materialized_train_recipe
 
 
 class ConfigValidationTests(unittest.TestCase):
-    BREAKOUT_GOAL = Path("experiments/goals/Breakout-Atari2600-v0/_goal.yaml")
+    BREAKOUT_GOAL = Path("experiments/goals/Breakout-Atari2600-v0/FirstWall/_goal.yaml")
     BREAKOUT_RECIPE = BREAKOUT_GOAL.parent / "recipes/ppo.yaml"
     MARIO_L11_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml")
     MARIO_L12_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-2/_goal.yaml")
@@ -571,7 +571,7 @@ class ConfigValidationTests(unittest.TestCase):
             compose_train_document(self.MARIO_L11_GOAL, self.BREAKOUT_RECIPE)
 
     def test_all_breakout_recipes_use_30_reset_noops(self) -> None:
-        recipe_root = self.BREAKOUT_GOAL.parent
+        recipe_root = self.BREAKOUT_GOAL.parent.parent
         recipes = sorted(recipe_root.glob("**/recipes/*.yaml"))
         self.assertTrue(recipes)
         for recipe in recipes:
@@ -1078,7 +1078,7 @@ class ConfigValidationTests(unittest.TestCase):
     def test_all_smb_and_breakout_recipes_classify_stalls_as_timeouts(self) -> None:
         recipe_roots = (
             self.MARIO_L11_GOAL.parent.parent,
-            self.BREAKOUT_GOAL.parent,
+            self.BREAKOUT_GOAL.parent.parent,
         )
         recipes = sorted(
             recipe for root in recipe_roots for recipe in root.glob("**/recipes/*.yaml")
@@ -1088,7 +1088,7 @@ class ConfigValidationTests(unittest.TestCase):
         for recipe in recipes:
             goal = recipe.parent.parent / "_goal.yaml"
             document = compose_train_document(goal, recipe)
-            event = "serve_stall" if goal.parent.name == "Breakout-Atari2600-v0" else "stalled"
+            event = "serve_stall" if "Breakout-Atari2600-v0" in goal.parts else "stalled"
             tasks = [("train", document["train_config"]["task"])]
             evaluation = document["goal"].get("eval")
             if evaluation is not None:

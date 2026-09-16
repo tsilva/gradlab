@@ -47,7 +47,7 @@ See the [trajectory format and controls](docs/player-trajectories.md).
 
 ## Gymnasium discrete environments
 
-GradLab includes strict Turbo-vector goals for ten Gymnasium discrete-action
+GradLab includes strict Turbo-vector goals for nine Gymnasium discrete-action
 environments:
 
 ```bash
@@ -55,17 +55,17 @@ gradlab train CartPole-v1/ppo
 gradlab train MountainCar-v0/ppo
 gradlab train Acrobot-v1/ppo
 gradlab train LunarLander-v3/ppo
-gradlab train FrozenLake-v1/ppo
-gradlab train FrozenLake8x8-v1/ppo
-gradlab train FrozenLake8x8-v1/Deterministic/ppo
+gradlab train FrozenLake-v1/Default/ppo
+gradlab train FrozenLake-v1/Maze/ppo
 gradlab train CliffWalking-v1/ppo
 gradlab train CliffWalkingSlippery-v1/ppo
 gradlab train Taxi-v3/ppo
 gradlab train Blackjack-v1/ppo
 ```
 
-`FrozenLake8x8-v1/Deterministic/ppo` uses a fixed maze with 31 holes, two dead
-ends, and a 26-move shortest safe route. It shares the 4×4 PPO parameters.
+`FrozenLake-v1/Maze/ppo` uses a fixed maze with 31 holes, two dead
+ends, and a 26-move shortest safe route. `FrozenLake-v1/Default/ppo` uses
+the standard 4×4 map. Both goals use deterministic, non-slippery movement.
 
 Use `gymnasium:<environment-id>` for the qualified environment ID. These goals
 use isolated spawned lanes, explicit masked resets, native rewards, and RGB

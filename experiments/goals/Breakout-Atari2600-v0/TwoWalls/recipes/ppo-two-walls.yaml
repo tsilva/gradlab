@@ -1,8 +1,8 @@
 defaults:
-- ../../../recipes/_presets/breakout-ball-state-ablation-ppo@_global_
+- ../../../../recipes/_presets/breakout-ball-state-ablation-ppo@_global_
 - _self_
 recipe_id: ppo-two-walls
-description: Breakout PPO two-wall variant of the default recipe, trained from scratch with identical optimizer settings and budget. Episodes end and receive the +20 completion bonus only after clearing both walls.
+description: Breakout PPO for the TwoWalls goal, trained from scratch with identical optimizer settings and budget. Episodes end and receive the +20 completion bonus only after clearing both walls.
 # Keep the default PPO learning schedule, model inputs, and transition budget.
 train:
   timesteps: 191561728
@@ -86,13 +86,6 @@ train:
         brick_destroyed:
           signal: bricks_destroyed
           operation: increase
-        two_walls_cleared:
-          signal: walls_cleared
-          operation: equals
-          value: 2
-      termination:
-        # Clearing the second wall ends the episode without value bootstrapping.
-        success: [two_walls_cleared]
       reward:
         # Exclude native score; retain inherited life-loss and serve-stall rewards.
         reward_mode: events

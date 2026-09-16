@@ -14,8 +14,6 @@ namespaces:
     environment_id: CliffWalkingSlippery-v1
   FrozenLake-v1:
     environment_id: FrozenLake-v1
-  FrozenLake8x8-v1:
-    environment_id: FrozenLake8x8-v1
   LunarLander-v3:
     environment_id: LunarLander-v3
   MountainCar-v0:

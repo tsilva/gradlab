@@ -1,9 +1,9 @@
 defaults:
-- ../_gymnasium-discrete-common@_global_
+- ../../_gymnasium-discrete-common@_global_
 - _self_
-title: Gymnasium FrozenLake 8x8 benchmark
+title: Gymnasium FrozenLake deterministic 8x8 maze
 train:
-  checkpoint_freq: 200000
+  checkpoint_freq: 50000
   environment:
     env_provider: &provider gymnasium
     env_config:
@@ -19,6 +19,17 @@ train:
           daemon: true
           observation_mode: same
           render_mode: rgb_array
+          is_slippery: false
+          # Fixed maze: 31 holes, two dead ends, and a 26-move shortest safe route.
+          desc:
+          - SFFHFFFH
+          - HHFHHHFH
+          - FHFHFFFH
+          - FHFHFHFH
+          - FFFHFHFH
+          - FHHHFHFH
+          - FFFFFHFF
+          - HHHHHHHG
     preprocessing: &preprocessing
       frame_skip: 1
       max_pool_frames: false
