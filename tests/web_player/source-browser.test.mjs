@@ -524,9 +524,9 @@ test("environment success is rendered as table status columns", async () => {
     run_count: 0,
     success_badges: [],
   }, "train/success"), {
-    label: "N/A",
+    label: "∅",
     className: "not-applicable",
-    description: "No runs yet",
+    description: "No results recorded",
   });
 
   const source = await readFile(
@@ -677,22 +677,22 @@ test("goal configurations render as a master-detail browser with exact changes",
   assert.match(styles, /\.goal-configuration-layout \{[^}]*grid-template-columns: 22rem minmax\(0, 1fr\);/);
   assert.match(styles, /\.goal-configuration-option\.selected \{/);
   assert.match(styles, /@media \(max-width: 1100px\)[\s\S]*\.goal-configuration-layout \{ grid-template-columns: 1fr; \}/);
-  assert.match(source, /\["Operation", "Exact contract path", "Before", "After"\]/);
+  assert.match(source, /\["Exact contract path", "Before", "After"\]/);
   assert.match(
     source,
     /goal-configuration-value goal-configuration-after \$\{kind\}/,
   );
   assert.match(
     styles,
-    /\.goal-configuration-operation\.added,\s*\.goal-configuration-after\.added \{ color: var\(--color-evaluation-text\); \}/,
+    /\.goal-configuration-after\.added \{ color: var\(--color-evaluation-text\); \}/,
   );
   assert.match(
     styles,
-    /\.goal-configuration-operation\.removed,\s*\.goal-configuration-after\.removed \{ color: var\(--color-error-text\); \}/,
+    /\.goal-configuration-after\.removed \{ color: var\(--color-error-text\); \}/,
   );
   assert.match(
     styles,
-    /\.goal-configuration-operation\.changed,\s*\.goal-configuration-after\.changed \{ color: var\(--color-interaction-active\); \}/,
+    /\.goal-configuration-after\.changed \{ color: var\(--color-interaction-active\); \}/,
   );
 });
 
