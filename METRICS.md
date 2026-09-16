@@ -371,13 +371,13 @@ resuming as its cause without a matched uninterrupted continuation.
   while `train/progress/{progress}/max` and `/min` report the maximum and minimum
   over that same window. Minimum bricks describes the worst episode in the current window,
   including failures; it is not an all-time minimum or a fourth ranking criterion. The normalized value is the `0.0..1.0` two-wall completion fraction.
-  The default `ppo` recipe terminates successfully after the first cleared wall,
+  The `FirstWall` goal terminates successfully after the first cleared wall,
   which corresponds to `0.5` on this provider-normalized metric. It does not
   rescale the metric to the recipe's episode boundary; use the run's recorded
   success rule when interpreting completion and progress-based occupancy buckets.
   The default recipe enables four occupancy buckets for quarters of the first
   wall, using provider-signal edges `0`, `0.125`, `0.25`, `0.375`, and `0.5`.
-  The `ppo-two-walls` variant ends at `1.0` and uses eight quarter-wall occupancy
+  The `TwoWalls` goal ends at `1.0`; its `ppo-two-walls` recipe uses eight quarter-wall occupancy
   buckets across both walls. Its `two_walls_cleared` reward event pays +20 only
   at the second wall; the first wall has no completion bonus.
   Bucket percentages describe collected pre-action policy transitions; the

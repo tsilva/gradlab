@@ -592,7 +592,7 @@ def test_native_breakout_recording_and_visible_controls_preserve_seeded_policy_p
     from gradlab.recipe_documents import compose_train_document
     from collector import DebugController, PolicyExecution
 
-    goal = Path("experiments/goals/Breakout-Atari2600-v0")
+    goal = Path("experiments/goals/Breakout-Atari2600-v0/FirstWall")
     train = compose_train_document(goal / "_goal.yaml", goal / "recipes/ppo.yaml")[
         "train_config"
     ]
@@ -778,7 +778,7 @@ def test_ppo_checkpoint_uses_existing_loader_and_collects_native_rgb(
     from gradlab.policy_execution import compile_policy_execution_contract
     from collector import TemperatureSchedule
 
-    goal = Path("experiments/goals/Breakout-Atari2600-v0")
+    goal = Path("experiments/goals/Breakout-Atari2600-v0/FirstWall")
     resolved = compose_resolved_train_documents(
         goal / "_goal.yaml", goal / "recipes/ppo.yaml", source_sha="a" * 40
     )

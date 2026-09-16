@@ -8,7 +8,7 @@ from gradlab.env_config import env_config_from_mapping
 from gradlab.recipe_documents import compose_train_document
 
 
-BREAKOUT_ROOT = Path("experiments/goals/Breakout-Atari2600-v0")
+BREAKOUT_ROOT = Path("experiments/goals/Breakout-Atari2600-v0/FirstWall")
 
 
 def test_default_ppo_injects_native_paddle_velocity() -> None:

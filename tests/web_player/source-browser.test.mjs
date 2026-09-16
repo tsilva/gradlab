@@ -20,6 +20,7 @@ import {
   readEnvironmentFavorites,
   environmentSuccessStatus,
   formatGoalDiffValue,
+  formatGoalConfigurationDate,
   formatMetricValue,
   groupGoalConfigurations,
   goalConfigurationPresentation,
@@ -406,7 +407,7 @@ test("checkpoint selection boxes are centered and distinguish enabled from disab
 
   assert.match(
     styles,
-    /\.source-table \.source-selection-cell \{[^}]*vertical-align: middle;/,
+    /\.source-table\.checkpoint-table \.source-selection-cell \{[^}]*vertical-align: middle;/,
   );
   assert.match(
     styles,
@@ -607,9 +608,27 @@ test("goal configurations expose exact diff counts and date columns", () => {
     first_used_at: "2026-07-29T10:00:00Z",
     last_activity_at: "2026-07-30T11:00:00Z",
   }, now);
-  assert.equal(older.firstUsedDate, "29 Jul 2026");
-  assert.equal(older.lastActivityDate, "30 Jul 2026");
+  assert.equal(older.firstUsedDate, "3 days ago");
+  assert.equal(older.lastActivityDate, "2 days ago");
   assert.equal(older.differenceLabel, "Exact diff unavailable");
+});
+
+test("goal configuration ages cross midnight and fall back to dates at 30 days", () => {
+  const now = Date.parse("2026-09-16T00:05:00Z");
+  const ago = (milliseconds) => new Date(now - milliseconds).toISOString();
+  assert.equal(formatGoalConfigurationDate(ago(0), now), "just now");
+  assert.equal(formatGoalConfigurationDate(ago(1_000), now), "1 second ago");
+  assert.equal(formatGoalConfigurationDate(ago(59_000), now), "59 seconds ago");
+  assert.equal(formatGoalConfigurationDate(ago(60_000), now), "1 minute ago");
+  assert.equal(formatGoalConfigurationDate(ago(600_000), now), "10 minutes ago");
+  assert.equal(formatGoalConfigurationDate(ago(3_600_000), now), "1 hour ago");
+  assert.equal(formatGoalConfigurationDate(ago(86_400_000), now), "1 day ago");
+  assert.equal(formatGoalConfigurationDate(ago(29 * 86_400_000), now), "29 days ago");
+  assert.equal(formatGoalConfigurationDate(ago(30 * 86_400_000), now), "17 Aug 2026");
+  assert.equal(formatGoalConfigurationDate(ago(-3_600_000), now), "in 1 hour");
+  assert.equal(formatGoalConfigurationDate("invalid", now), "—");
+  assert.equal(formatGoalConfigurationDate(null, now), "—");
+  assert.equal(formatGoalConfigurationDate("2025-01-02T23:00:00Z", now), "2 Jan 2025");
 });
 
 test("goal diff values preserve JSON types", () => {
@@ -645,18 +664,17 @@ test("goal configurations render as a master-detail browser with exact changes",
   assert.match(source, /layout\.className = "goal-configuration-layout";/);
   assert.match(source, /list\.setAttribute\("aria-label", "Goal configurations"\);/);
   assert.match(source, /groupGoalConfigurations\(this\.items\)/);
-  assert.match(source, /appendGroups\("Current revision"/);
-  assert.match(source, /appendGroups\("Previous revisions"/);
+  assert.match(source, /group.current \? "Current revision" : "Previous revision"/);
   assert.match(source, /renderGoalConfigurationOption\(entry, selected/);
   assert.match(source, /option\.setAttribute\("aria-pressed", String\(isSelected\)\);/);
-  assert.match(source, /presentation\.runLabel} · Last activity/);
-  assert.match(source, /First used \$\{presentation\.firstUsedDate}/);
+  assert.match(source, /goalConfigurationTime\("First used", variant.first_used_at, presentation.firstUsedDate\)/);
+  assert.match(source, /goalConfigurationTime\("Last activity", variant.last_activity_at, presentation.lastActivityDate\)/);
   assert.doesNotMatch(source, /Older goal/);
   assert.doesNotMatch(source, /Selected goal version/);
   assert.match(source, /button\("View goal YAML"/);
   assert.doesNotMatch(source, /role", "treegrid"/);
   assert.doesNotMatch(styles, /\.goal-configuration-table/);
-  assert.match(styles, /\.goal-configuration-layout \{[^}]*grid-template-columns: 19rem minmax\(0, 1fr\);/);
+  assert.match(styles, /\.goal-configuration-layout \{[^}]*grid-template-columns: 22rem minmax\(0, 1fr\);/);
   assert.match(styles, /\.goal-configuration-option\.selected \{/);
   assert.match(styles, /@media \(max-width: 1100px\)[\s\S]*\.goal-configuration-layout \{ grid-template-columns: 1fr; \}/);
   assert.match(source, /\["Operation", "Exact contract path", "Before", "After"\]/);

@@ -1,0 +1,15 @@
+defaults:
+- ../_goal-common@_global_
+- _self_
+goal_id: FirstWall
+title: Clear the first Breakout wall
+train:
+  environment:
+    task:
+      events:
+        one_wall_cleared:
+          signal: walls_cleared
+          operation: equals
+          value: 1
+      termination:
+        success: [one_wall_cleared]

@@ -12,7 +12,7 @@ from gradlab.reward_programs import validate_reward_shape_catalog
 
 MARIO_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml")
 MARIO_RECIPE = MARIO_GOAL.parent / "recipes/ppo.yaml"
-BREAKOUT_GOAL = Path("experiments/goals/Breakout-Atari2600-v0/_goal.yaml")
+BREAKOUT_GOAL = Path("experiments/goals/Breakout-Atari2600-v0/FirstWall/_goal.yaml")
 BREAKOUT_RECIPE = BREAKOUT_GOAL.parent / "recipes/ppo.yaml"
 VIZDOOM_GOAL = Path("experiments/goals/VizdoomBasic-v1/_goal.yaml")
 VIZDOOM_RECIPE = VIZDOOM_GOAL.parent / "recipes/ppo.yaml"
@@ -99,6 +99,7 @@ def test_breakout_base_recipe_penalizes_life_loss_and_serve_stall() -> None:
     assert config["task"]["reward"]["event_rewards"] == {
         "life_loss": -0.1,
         "serve_stall": -5.0,
+        "one_wall_cleared": 20.0,
     }
 
 

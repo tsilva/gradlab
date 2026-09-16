@@ -1,7 +1,7 @@
 defaults:
-- ../_gymnasium-discrete-common@_global_
+- ../../_gymnasium-discrete-common@_global_
 - _self_
-title: Gymnasium FrozenLake 4x4 benchmark
+title: Gymnasium FrozenLake deterministic default 4x4 map
 train:
   checkpoint_freq: 50000
   environment:
@@ -19,6 +19,7 @@ train:
           daemon: true
           observation_mode: same
           render_mode: rgb_array
+          is_slippery: false
     preprocessing: &preprocessing
       frame_skip: 1
       max_pool_frames: false

@@ -712,7 +712,7 @@ def test_launch_operator_preflight_runs_before_runtime_readiness(
 
 def test_launch_rejects_invalid_recipe_override_before_external_preflight() -> None:
     root = Path.cwd().resolve()
-    goal = (root / "experiments/goals/Breakout-Atari2600-v0/_goal.yaml").resolve()
+    goal = (root / "experiments/goals/Breakout-Atari2600-v0/FirstWall/_goal.yaml").resolve()
     recipe = (goal.parent / "recipes/ppo.yaml").resolve()
     args = SimpleNamespace(
         goal_file=None,

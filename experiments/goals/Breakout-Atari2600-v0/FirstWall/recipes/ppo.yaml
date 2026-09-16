@@ -1,5 +1,5 @@
 defaults:
-- ../../../recipes/_presets/breakout-ball-state-ablation-ppo@_global_
+- ../../../../recipes/_presets/breakout-ball-state-ablation-ppo@_global_
 - _self_
 recipe_id: ppo
 description: Default Breakout PPO with scheduled learning-rate reductions, gamma 0.999, and a +20 first-wall completion bonus. The seed123 reference run reached 95/100 stochastic research clears from scratch; held-out 100/100 remains unverified.
@@ -86,13 +86,6 @@ train:
         brick_destroyed:
           signal: bricks_destroyed
           operation: increase
-        one_wall_cleared:
-          signal: walls_cleared
-          operation: equals
-          value: 1
-      termination:
-        # Clearing the first wall ends the episode without value bootstrapping.
-        success: [one_wall_cleared]
       reward:
         # Exclude native score; retain inherited life-loss and serve-stall rewards.
         reward_mode: events

@@ -173,7 +173,7 @@ def test_breakout_tracking_uses_actual_width_and_preserves_policy_trajectory():
     from gradlab.env_config import env_config_from_mapping
     from gradlab.env import resolve_env_config
 
-    goal = Path("experiments/goals/Breakout-Atari2600-v0")
+    goal = Path("experiments/goals/Breakout-Atari2600-v0/FirstWall")
     train = compose_train_document(goal / "_goal.yaml", goal / "recipes/ppo.yaml")[
         "train_config"
     ]
