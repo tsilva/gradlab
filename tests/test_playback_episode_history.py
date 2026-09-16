@@ -50,7 +50,7 @@ def test_completed_episode_retains_initial_state_and_rejects_replaced_recording(
 
 
 @pytest.mark.parametrize("filtered", [False, True])
-def test_recording_reuses_transition_projection_without_changing_inspection(
+def test_recording_reuses_full_projection_even_when_live_inspection_is_filtered(
     tmp_path, monkeypatch, filtered
 ):
     import gradlab.play_web as player
@@ -71,7 +71,12 @@ def test_recording_reuses_transition_projection_without_changing_inspection(
         assert transition is not None
         live = runner.snapshot()
         row = runner.recording.transition(1)
-        assert row["inspection_snapshot"]["transition"] == live["transition"]
+        assert row["inspection_snapshot"]["transition"] == project(
+            transition, reward_accounting=runner.reward_accounting,
+        )
+        assert row["inspection_snapshot"]["transition"]["decision"]["value"] == 2.5
+        if filtered:
+            assert live["transition"]["decision"] is None
         assert live["history_point"] == player.history_point_payload(live["transition"])
         assert row["presentation"]["decision"]["value"] == 2.5
         assert row["presentation"]["cnn"]["status"] == "not-recorded"

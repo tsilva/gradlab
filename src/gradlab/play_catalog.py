@@ -1197,7 +1197,8 @@ class PlayCatalog:
         exact_resolution_run_id: str = "",
     ) -> dict[str, Any]:
         validated = validate_goal_variant_descriptor(descriptor)
-        authored_current = validated["goal_contract_sha256"] == current["goal_contract_sha256"]
+        authored_current = (validated["goal_slug"] == current["goal_slug"]
+            and validated["goal_contract_sha256"] == current["goal_contract_sha256"])
         effective_current = (
             validated["effective_goal_contract_sha256"] == current["effective_goal_contract_sha256"]
         )
@@ -1274,7 +1275,7 @@ class PlayCatalog:
         return GoalVariantSummary(
             environment_id=repository_goal.environment_id,
             goal_id=repository_goal.goal_id,
-            goal_slug=repository_goal.goal_slug,
+            goal_slug=str(validated["goal_slug"]),
             variant_id=str(validated["variant_id"]),
             label=str(validated["label"]),
             goal_contract_sha256=str(validated["goal_contract_sha256"]),
@@ -1436,7 +1437,78 @@ class PlayCatalog:
             )
         return deepcopy(dict(resolved_goal))
 
+    def _historical_goal_slugs(self, goal_slug: str) -> tuple[str, ...]:
+        document = load_mapping_document(
+            self.goals_root / CATALOG_INDEX_FILENAME, label="repository goal catalog"
+        )
+        historical = document.get("historical_goals", {})
+        if not isinstance(historical, Mapping):
+            raise ValueError("historical_goals must map current goal scopes to historical scopes")
+        seen = set()
+        for target, sources in historical.items():
+            if not isinstance(target, str) or not isinstance(sources, list):
+                raise ValueError("historical_goals entries must contain a list of goal scopes")
+            for source in sources:
+                if (
+                    not isinstance(source, str)
+                    or not source
+                    or source in historical
+                    or source in seen
+                ):
+                    raise ValueError(
+                        "historical goal scopes must be nonempty, unique, and non-recursive"
+                    )
+                seen.add(source)
+        return tuple(historical.get(goal_slug, ()))
+
     def _control_generation_scope(
+        self,
+        *,
+        goal_slug: str,
+        include_archives: bool = False,
+        pointer_document: object = _CONTROL_DOCUMENT_UNSET,
+        generation_document: object = _CONTROL_DOCUMENT_UNSET,
+    ) -> dict[str, Any] | None:
+        current = self._single_control_generation_scope(
+            goal_slug=goal_slug,
+            include_archives=include_archives,
+            pointer_document=pointer_document,
+            generation_document=generation_document,
+        )
+        historical = self._historical_goal_slugs(goal_slug)
+        if not historical:
+            return current
+        scopes = [
+            scope
+            for scope in [
+                current,
+                *(
+                    self._single_control_generation_scope(
+                        goal_slug=source, include_archives=include_archives
+                    )
+                    for source in historical
+                ),
+            ]
+            if scope is not None
+        ]
+        if not scopes:
+            return None
+        # Each scope is independently hash-verified. Only the browse grouping changes;
+        # descriptors, run identities, and exact contract proofs retain their source scope.
+        return {
+            "goal_slug": goal_slug,
+            "goal_slugs": [goal_slug, *historical],
+            "generation_sha256": compact_json_sha256(
+                [scope["generation_sha256"] for scope in scopes]
+            ),
+            "generated_at": max(scope["generated_at"] for scope in scopes),
+            **{
+                key: [item for scope in scopes for item in scope[key]]
+                for key in ("variants", "runs", "archive_pages")
+            },
+        }
+
+    def _single_control_generation_scope(
         self,
         *,
         goal_slug: str,
@@ -1815,7 +1887,7 @@ class PlayCatalog:
                     page_document,
                     expected_digest=str(reference["page_sha256"]),
                 )
-                if page["goal_slug"] != selected_goal_slug:
+                if page["goal_slug"] not in generation_scope.get("goal_slugs", [selected_goal_slug]):
                     raise CatalogIntegrityError("catalog archive page belongs to another goal")
                 generation_scope["runs"].extend(dict(run) for run in page["runs"])
         if generation_scope is None:
@@ -1853,7 +1925,7 @@ class PlayCatalog:
                 effective_hash = str(raw.get("effective_goal_contract_sha256") or "")
                 if (
                     RUN_ID_PATTERN.fullmatch(run_id) is None
-                    or raw.get("goal_slug") != selected_goal_slug
+                    or raw.get("goal_slug") not in generation_scope.get("goal_slugs", [selected_goal_slug])
                     or raw.get("goal_variant_id") != variant_id
                     or not isinstance(metrics, Mapping)
                     or (
@@ -1875,7 +1947,7 @@ class PlayCatalog:
                             if isinstance(raw.get("early_stop"), Mapping)
                             else None
                         ),
-                        goal=selected_goal_slug,
+                        goal=str(raw["goal_slug"]),
                         recipe=str(raw.get("recipe_slug") or ""),
                         recipe_sha256=str(raw.get("recipe_sha256") or ""),
                         recipe_overrides=tuple(
@@ -2973,11 +3045,11 @@ class PlayCatalog:
             environment_id = goal_slug
         if not environment_id:
             raise ValueError("public run goal slug is empty")
-        for goal in self._repository_goals(environment_id=environment_id):
-            if goal.goal_slug == goal_slug:
+        for goal in self._repository_goals():
+            if goal_slug in (goal.goal_slug, *self._historical_goal_slugs(goal.goal_slug)):
                 return {
                     "level": "runs",
-                    "environment_id": environment_id,
+                    "environment_id": goal.environment_id,
                     "goal_id": goal.goal_id,
                     "goal_variant_id": str(descriptor["variant_id"]),
                     "run_id": run_id,
@@ -3017,7 +3089,7 @@ class PlayCatalog:
         validated = validate_goal_variant_descriptor(descriptor)
         goal_slug = str(validated["goal_slug"])
         for goal in self._repository_goals(environment_id=environment_id):
-            if goal.goal_slug == goal_slug:
+            if goal_slug in (goal.goal_slug, *self._historical_goal_slugs(goal.goal_slug)):
                 return goal.goal_id, str(validated["variant_id"])
         raise ValueError(f"run goal is not declared in the repository: {goal_slug}")
 

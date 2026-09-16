@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 import json
 from types import SimpleNamespace
 from unittest import mock
@@ -33,6 +34,7 @@ def transport():
             "gradlab.local_wandb.WandbProjector.start_live", return_value=projector
         ) as start,
         mock.patch("gradlab.local_wandb.resolve_env_config"),
+        mock.patch("gradlab.local_wandb.local_publication", return_value=nullcontext(None)),
         mock.patch("gradlab.local_wandb._verify_remote_delivery") as verify,
     ):
         yield projector, start, verify

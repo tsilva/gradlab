@@ -18,7 +18,7 @@ This specification applies to the public checkpoint browser and interactive web 
 
 ## Evidence and Inspection
 
-- Default Playback must open two separate synchronized windows: the main window shows the game on the left with Input above Action decision on the right; the second window shows Step reward and Reward table in its first row, Value estimate and Episode return in its second row, and Reward analysis, Events, and Live signals in its third row. Controls, Transition inspector, Attribution, and CNN feature explorer remain available to add manually but are hidden by default.
+- Default Playback must open only the player window, with the game on the left and Input above Action decision on the right. A visible Stats button must open a separate synchronized stats tab or focus that tab if it is already open, without requesting a popup window. The stats tab must provide a Player button with the same open-or-focus behavior for the player tab. The stats window shows Step reward and Reward table in its first row, Value estimate and Episode return in its second row, and Reward analysis, Events, and Live signals in its third row. Controls, Transition inspector, Attribution, and CNN feature explorer remain available to add manually but are hidden by default.
 
 - Launching gradplay or loading a Policy must leave Playback and inference paused until the user presses Play in the player.
 - Checkpoint lists must show the exact Goal Variant's Acceptance and ranking measures with applicable Training Success proxies.
@@ -41,6 +41,7 @@ This specification applies to the public checkpoint browser and interactive web 
 
 - History charts must match the active Playback Session, episode, and selected range. Changing any of these must immediately replace obsolete plots with loading; refreshing the same selection must retain valid data without a refresh-status indicator.
 - Episode replacement must reset the chart window to the full episode. Seeking and chart navigation must preserve the independent reward reference and must not advance Playback or Policy inference.
+- Closing or hiding Stats must not discard the episode facts needed by its scalar diagnostics. Opening Stats later, including after episode completion, must reconstruct applicable metrics from recorded history without advancing Playback or Policy inference.
 - Recorded history must preserve its annotations and sampling. Eligible live points may extend only its tail, without duplicates or backfilling sampled gaps; the inspection cursor must limit only the live tail.
 - Transient chart failures must retry three times after delays of 1, 2, and 4 seconds, including while paused. An unusable revision must receive one full-history recovery attempt without its unusable base; reconstruction failures must not create an unbounded loop.
 - Exhausted recovery and permanent failures must leave a persistent error and Retry action inside affected panels, without repeated toasts. Live updates must not restart exhausted recovery; explicit Retry, a changed selection, or returning chart visibility may start a fresh attempt.

@@ -29,10 +29,16 @@ authority for that decision.
   episodes, or moving backward resets the sample history.
 - W&B is the authoritative scientific metric surface. The supervisor is the only W&B writer:
   the training-container supervisor for queued runs, or the local training host holding the
-  exclusive per-run writer lock for local runs. Both publish the learner's SQLite outbox through
+  exclusive per-run lock and R2 writer lease for online local runs. Both publish the learner's SQLite outbox through
   the same projector and metric registry. Local runs enable W&B by default; `--no-wandb` is
   an explicit credential-free opt-out. Successful online local completion requires SDK finish
   and remote confirmation of the outbox high-water mark, recorded in `wandb-delivery.json`.
+  It also requires R2 checkpoint publication, the matching private metric-journal high-water
+  mark, and an attempt terminal receipt projected into the shared playback catalog.
+  `publication-delivery.json` records that drain; `gradlab sync <run-directory>` retries
+  publication with the original run identity and recorded goal contract. W&B config links
+  to the public checkpoint index through `public_run_index_url`; checkpoint bytes remain in R2.
+  Offline and explicitly disabled local runs make no R2 publication requests.
 - The learner writes structured events only to its embedded SQLite WAL outbox. It performs no
   network I/O for metrics, checkpoint publication, or evaluation dispatch.
 - W&B-disabled runs retain history frames in SQLite with `local_only` delivery status so bounded
@@ -194,7 +200,11 @@ resuming as its cause without a matched uninterrupted continuation.
   Changing the session, episode, or chart window clears obsolete plots until the new
   history loads. Refreshing the same selection preserves valid recorded samples.
   Loading, recovery, and error status are shared by affected panels in each window;
-  they are display state, not scientific measures. Recovery retries transient failures
+  they are display state, not scientific measures. Recorded scalar diagnostics and critic
+  comparison eligibility do not depend on whether their widgets are open. Opening Stats later
+  reconstructs completed return-to-go and value error from the recorded episode, including
+  the recorded truncation bootstrap when applicable, without advancing Policy inference.
+  Recovery retries transient failures
   after 1, 2, and 4 seconds even while paused, then requires explicit Retry, a new
   selection, or restored visibility. Hidden or suspended chart panels do not fetch.
   A line chart legend reports the hovered point while the pointer is over the chart;

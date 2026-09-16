@@ -60,6 +60,8 @@ const workspaceId = localStorage.getItem(WORKSPACE_ID_KEY) || crypto.randomUUID(
 localStorage.setItem(WORKSPACE_ID_KEY, workspaceId);
 const rewardReferences = rewardReferenceStore(localStorage, workspaceId);
 const windowId = panelName ? `panel-${panelName}` : (workspaceWindowName || "main");
+const workspaceWindowTarget = (id) => `gradlab-${workspaceId}-${id}`;
+window.name = workspaceWindowTarget(windowId);
 
 function defaultLayout() {
   return createDefaultWorkspace({ paired: pairedWorkspace, writer: windowId });
@@ -640,12 +642,25 @@ function updateChartDemand() {
   chartHistory.setDemand(enabledPanelDefinitions().some(usesChartHistory));
 }
 
+let chartHover = null;
+
+function chartHoverKey() {
+  return JSON.stringify([inspection.view.sessionEpoch, inspection.view.liveSnapshot?.trajectory?.episode_id, chartHistory.read().range]);
+}
+
+function setChartHoverStep(step) {
+  chartHover = Number.isFinite(step) ? { step, key: chartHoverKey() } : null;
+  scheduleHistoryRender();
+}
+
 function panelView() {
   updateChartContext();
   const chart = chartHistory.read();
+  if (chartHover && chartHover.key !== chartHoverKey()) chartHover = null;
   return {
     history: currentEpisodeHistory(),
     chartHistory: chart.data,
+    chartHoverStep: chartHover?.step ?? null,
     chartStatus: chart,
     rewardReference: rewardReferences.get(inspection.view.snapshot, inspection.view.sessionEpoch),
     chartRange: chart.range,
@@ -1402,6 +1417,21 @@ function removeTelemetryPanel(name) {
 }
 
 function bindWorkspaceMenus() {
+  const switchWindow = $("#switch-window");
+  const targetWindow = windowId === "main" ? STATS_WINDOW_ID : "main";
+  const targetLabel = targetWindow === "main" ? "Player" : "Stats";
+  switchWindow.hidden = !pairedWorkspace;
+  switchWindow.querySelector("span").textContent = targetLabel;
+  switchWindow.title = `Open or focus ${targetLabel.toLowerCase()}`;
+  switchWindow.addEventListener("click", () => {
+    const tab = window.open("", workspaceWindowTarget(targetWindow));
+    if (!tab) {
+      showToast("The browser blocked the workspace tab. Allow popups and try again.", true);
+      return;
+    }
+    if (tab.location.href === "about:blank") tab.location.replace(windowUrl(targetWindow));
+    tab.focus();
+  });
   const closePlayerMenu = () => {
     $("#player-menu").hidden = true;
     $("#more-toggle").setAttribute("aria-expanded", "false");
@@ -1851,6 +1881,7 @@ panelRuntime = new PanelRuntime({
     inspectStep: inspection.selectStep,
     setRewardReference,
     setChartRange,
+    setChartHoverStep,
     retryChartHistory: () => chartHistory.retry(),
     showToast,
     setAttributionPreference: (config) => {

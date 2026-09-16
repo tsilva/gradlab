@@ -8,6 +8,7 @@ from gradlab.cli_parser import ExactArgumentParser
 
 
 COMMANDS: dict[str, tuple[str, str]] = {
+    "sync": ("sync a finished local run to W&B, R2, and playback", "gradlab.local_wandb"),
     "train": ("train a checked-in recipe locally", "gradlab.local_train"),
     "experiment": ("launch and observe dstack training experiments", "gradlab.experiment_cli"),
     "eval": ("run a direct local evaluation", "gradlab.eval"),

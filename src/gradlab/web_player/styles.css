@@ -1309,7 +1309,7 @@ body.source-selection #new-window { display: none !important; }
   container-type: inline-size;
   min-width: 0;
   min-height: 0;
-  padding: .78rem;
+  padding: .78rem .78rem .4rem;
   overflow: auto;
   border: 1px solid var(--color-border);
   border-radius: .66rem;
@@ -1957,6 +1957,20 @@ select {
 .telemetry-block .stat-grid { margin-bottom: 0; padding-bottom: 0; border-bottom: 0; }
 .telemetry-chart { height: 7rem; }
 .telemetry-plot .telemetry-chart { cursor: crosshair; }
+.panel:has(> .telemetry-blocks > .telemetry-plot:only-child) {
+  display: flex;
+  flex-direction: column;
+}
+.panel > .telemetry-blocks:has(> .telemetry-plot:only-child),
+.panel > .telemetry-blocks > .telemetry-plot:only-child {
+  display: flex;
+  flex-direction: column;
+  flex: 1 0 auto;
+}
+.panel > .telemetry-blocks > .telemetry-plot:only-child > .telemetry-chart {
+  flex: 1 0 auto;
+  min-height: 7rem;
+}
 .reward-analysis-toolbar {
   display: flex;
   align-items: center;

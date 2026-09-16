@@ -1166,7 +1166,10 @@ class _PlaybackSession:
             self.model_obs,
             action_selection_mode=requested_mode,
             sampling_temperature=sampling_temperature,
-            include_diagnostics=bool(self.processing_features & {"policy", "raw"}),
+            include_diagnostics=(
+                bool(getattr(self, "trajectory_recording", False))
+                or bool(self.processing_features & {"policy", "raw"})
+            ),
             execution_context=(
                 self.env.policy_execution_context(self.model)
                 if callable(getattr(self.env, "policy_execution_context", None))
@@ -1294,7 +1297,7 @@ class _PlaybackSession:
 
         return_bootstrap_value = None
         return_bootstrap_reason = None
-        if truncated and "critic-calibration" in processing:
+        if truncated and (recording or "critic-calibration" in processing):
             return_bootstrap_value, return_bootstrap_reason = _truncation_bootstrap_value(
                 policy_runtime=self.policy_runtime,
                 model=self.model,

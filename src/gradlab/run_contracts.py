@@ -216,8 +216,18 @@ class RunManifest(_CurrentContract):
         source_sha = _require_text(self.source_sha, "source_sha")
         if re.fullmatch(r"[0-9a-f]{40}", source_sha) is None:
             raise ValueError("source_sha must be a full lowercase Git SHA")
+        local_process = (
+            isinstance(self.compute, Mapping)
+            and self.compute.get("execution_backend") == "local-process"
+        )
         image = _require_text(self.image_digest, "image_digest")
-        if re.fullmatch(r"docker:[^\s]+@sha256:[0-9a-f]{64}", image) is None:
+        if local_process:
+            runtime = self.compute.get("runtime")
+            if not isinstance(runtime, Mapping) or not runtime.get("packages"):
+                raise ValueError("local-process compute requires recorded runtime packages")
+            if image != f"local:sha256:{document_sha256(runtime)}":
+                raise ValueError("local-process runtime digest mismatch")
+        elif re.fullmatch(r"docker:[^\s]+@sha256:[0-9a-f]{64}", image) is None:
             raise ValueError("image_digest must be a docker: immutable image reference")
         _require_text(self.goal_slug, "goal_slug")
         _require_sha256(self.goal_sha256, "goal_sha256")
@@ -263,31 +273,51 @@ class RunManifest(_CurrentContract):
                 "on-demand",
             }:
                 raise ValueError(f"compute.{label}.kind is invalid")
+            if local_process:
+                steps = value.get("max_steps")
+                if (
+                    value.get("kind") != "local"
+                    or isinstance(steps, bool)
+                    or not isinstance(steps, int)
+                    or steps <= 0
+                ):
+                    raise ValueError(
+                        f"local-process compute.{label} requires local kind and positive max_steps"
+                    )
+                continue
             duration = value.get("max_duration_seconds")
             if isinstance(duration, bool) or not isinstance(duration, int) or duration <= 0:
                 raise ValueError(f"compute.{label}.max_duration_seconds must be positive")
         resume_checkpoint = self.compute.get("resume_checkpoint")
         if resume_checkpoint is not None:
             CheckpointManifest.from_dict(resume_checkpoint)
-        validate_liveness_policy(
-            self.liveness,
-            max_duration_seconds=int(selected["max_duration_seconds"]),
-        )
-        _require_text(self.compute.get("dstack_task"), "compute.dstack_task")
-        _require_text(
-            self.compute.get("runtime_workflow_run_id"),
-            "compute.runtime_workflow_run_id",
-        )
-        _require_sha256(
-            self.compute.get("runtime_input_sha256"),
-            "compute.runtime_input_sha256",
-        )
-        runtime_build_source_sha = _require_text(
-            self.compute.get("runtime_build_source_sha"),
-            "compute.runtime_build_source_sha",
-        )
-        if re.fullmatch(r"[0-9a-f]{40,64}", runtime_build_source_sha) is None:
-            raise ValueError("compute.runtime_build_source_sha must be a full lowercase Git SHA")
+        if local_process:
+            if self.liveness is not None or self.modal.get("enabled") is not False:
+                raise ValueError(
+                    "local-process runs cannot declare remote liveness or Modal evaluation"
+                )
+        else:
+            validate_liveness_policy(
+                self.liveness,
+                max_duration_seconds=int(selected["max_duration_seconds"]),
+            )
+            _require_text(self.compute.get("dstack_task"), "compute.dstack_task")
+            _require_text(
+                self.compute.get("runtime_workflow_run_id"),
+                "compute.runtime_workflow_run_id",
+            )
+            _require_sha256(
+                self.compute.get("runtime_input_sha256"),
+                "compute.runtime_input_sha256",
+            )
+            runtime_build_source_sha = _require_text(
+                self.compute.get("runtime_build_source_sha"),
+                "compute.runtime_build_source_sha",
+            )
+            if re.fullmatch(r"[0-9a-f]{40,64}", runtime_build_source_sha) is None:
+                raise ValueError(
+                    "compute.runtime_build_source_sha must be a full lowercase Git SHA"
+                )
         if str(self.wandb.get("run_id") or "") != self.run_id:
             raise ValueError("wandb.run_id must equal run_id")
         _require_text(self.wandb.get("entity"), "wandb.entity")

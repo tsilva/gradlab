@@ -1,3 +1,5 @@
+import pytest
+
 from gradlab.play_diagnostics import DiagnosticRead
 from tests.test_play_trajectory import live_runner
 
@@ -204,3 +206,83 @@ def test_incremental_returns_match_exact_suffixes_and_stop_at_invalid_transition
             result = chart_history(runner, "test", 299,301)
             assert "estimated_return" not in result["points"][0]
             assert "estimated_return" in result["points"][-1]
+
+
+@pytest.mark.parametrize("processing", [set(), {"game", "observation", "policy"}])
+def test_stats_opened_after_episode_recovers_calibration_without_advancing(tmp_path, processing):
+    runner = live_runner(tmp_path, length=3, value_contract={"discount": 0.9})
+    try:
+        # Only the player is connected while the episode runs.
+        runner.set_processing(processing)
+        for _ in range(3):
+            runner._step_once()
+        episode = runner.recording_status()["episode_id"]
+        before = runner.session.sequence
+        # Calibration must come from disk even after the bounded live history is gone.
+        runner.history.clear()
+        runner.set_processing({"game", "observation", "policy", "history", "critic-calibration"})
+        inspected = runner.inspect_recorded_step(episode, 3)
+        assert inspected["snapshot"]["session"]["critic_comparison"]["available"] is True
+        result = runner.diagnostics.read(DiagnosticRead("chart", episode))
+        assert [point["realized_return"] for point in result["points"]] == pytest.approx(
+            [1.355, 0.95, 0.5]
+        )
+        assert runner.session.sequence == before
+        assert runner.run_state == "paused"
+    finally:
+        runner.stop()
+
+
+@pytest.mark.parametrize("truncated,bootstrap", [(False, None), (True, 4.0), (True, None)])
+def test_late_chart_calibration_preserves_boundary_and_sampling_contract(tmp_path, truncated, bootstrap):
+    from dataclasses import replace
+
+    runner = live_runner(
+        tmp_path, length=3,
+        value_contract={"discount": 0.9, "truncation_bootstrap": "terminal-value"},
+    )
+    step = runner.session.step
+
+    def advance(**kwargs):
+        transition = step(**kwargs)
+        if transition.boundary and truncated:
+            transition = replace(
+                transition, terminated=False, truncated=True,
+                return_bootstrap_value=bootstrap,
+            )
+        return transition
+
+    runner.session.step = advance
+    runner.set_processing(set())
+    try:
+        for _ in range(3):
+            runner._step_once()
+        episode = runner.recording_status()["episode_id"]
+        result = runner.diagnostics.read(DiagnosticRead("chart", episode, 1, 2))
+        if truncated and bootstrap is None:
+            assert all("realized_return" not in point for point in result["points"])
+        else:
+            extra = bootstrap or 0
+            assert [point["realized_return"] for point in result["points"]] == pytest.approx(
+                [1.355 + 0.9**3 * extra, 0.95 + 0.9**2 * extra]
+            )
+            assert all(point["realized_return_bootstrapped"] == truncated for point in result["points"])
+    finally:
+        runner.stop()
+
+
+def test_late_chart_does_not_calibrate_an_episode_with_changed_sampling(tmp_path):
+    runner = live_runner(tmp_path, length=3, value_contract={"discount": 0.9})
+    runner.set_processing(set())
+    try:
+        runner.sampling_mode = "deterministic"
+        runner._step_once()
+        runner.sampling_mode = "stochastic"
+        runner._step_once()
+        runner._step_once()
+        runner.history.clear()
+        result = runner.diagnostics.read(DiagnosticRead("chart", runner.recording_status()["episode_id"]))
+        assert all("realized_return" not in point for point in result["points"])
+        assert result["points"][0]["value_comparison_reasons"]
+    finally:
+        runner.stop()

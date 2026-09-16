@@ -116,7 +116,7 @@ def chart_history(runner, episode_id: str, first: int | None, last: int | None):
     cached = getattr(runner, "_chart_history_cache", None)
     if cached is not None and cached[0] == cache_key:
         return cached[1]
-    with closing(sqlite3.connect(Path(recording.root) / "chart-index-v2.sqlite")) as db, db:
+    with closing(sqlite3.connect(Path(recording.root) / "chart-index-v3.sqlite")) as db, db:
         db.execute(
             "CREATE TABLE IF NOT EXISTS points (step INTEGER PRIMARY KEY, payload TEXT, annotation TEXT)"
         )
@@ -162,6 +162,14 @@ def chart_history(runner, episode_id: str, first: int | None, last: int | None):
                 if "inspection_snapshot" in row
                 else row["presentation"]
             )
+            session = (
+                row["inspection_snapshot"].get("session", {})
+                if "inspection_snapshot" in row
+                else row["presentation"].get("recorded_session", {})
+            )
+            reasons = session.get("critic_comparison", {}).get("reasons", [])
+            if reasons:
+                point["value_comparison_reasons"] = reasons
             db.execute(
                 "INSERT INTO points VALUES (?, ?, NULL)",
                 (step, json.dumps(point, separators=(",", ":"))),
@@ -212,6 +220,35 @@ def chart_history(runner, episode_id: str, first: int | None, last: int | None):
             tail = json.loads(
                 db.execute("SELECT payload FROM points WHERE step=?", (end,)).fetchone()[0]
             )
+            # Complete episodes can be calibrated from recorded evidence even if
+            # no Stats viewer was connected, or the live history buffer rolled over.
+            terminal = bool(tail.get("boundary"))
+            terminal_point = {**tail, "boundary": False, "terminated": False, "truncated": False}
+            bootstrap = tail.get("return_bootstrap") or {}
+            bootstrap_value = bootstrap.get("value") if tail.get("truncated") else 0.0
+            completed_comparable = (
+                terminal
+                and comparable(terminal_point)
+                and finite(tail.get("reward_shaped"))
+                and finite(bootstrap_value)
+                and (not tail.get("truncated") or bootstrap.get("source") == "terminal_state_value")
+                and all(get(step, level)["valid"] for step, level in blocks(start, end - 1, start))
+            )
+            if completed_comparable:
+                realized = tail["reward_shaped"] + gamma * bootstrap_value
+                cursor = end
+                for point in reversed(points):
+                    for step, level in reversed(list(blocks(point["step"], cursor - 1, start))):
+                        node = get(step, level)
+                        realized = node["reward"] + node["discount"] * realized
+                    point.update(
+                        realized_return=realized,
+                        realized_return_bootstrapped=bool(tail.get("truncated")),
+                        value_comparison_reasons=[],
+                    )
+                    if finite(point.get("value")):
+                        point["value_error"] = point["value"] - realized
+                    cursor = point["step"]
             estimate = tail.get("value")
             if finite(estimate) and comparable(tail):
                 cursor = end
