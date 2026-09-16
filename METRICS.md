@@ -796,7 +796,8 @@ diagnostic and does not participate in ranking.
 The standard Step reward panel shows a dashed amber overlay of shaped reward contributions
 using a separately pinned reference step and recorded discount: `gamma**(reward_step - reference_step) *
 reward_shaped`. Rewards before the reference are excluded and dimmed; the reference has delay zero.
-The reference initializes at the first displayed transition of each episode and changes only
+The reference initializes at step zero of each episode, even when Stats first receives a later
+transition, and changes only
 when the user presses “Set return reference to cursor”.
 Hovering does not change the reference state, table rows, values, or highlighted row.
 The compact table stays anchored to the selected Playback step and shows up to five current and future

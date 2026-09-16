@@ -12,8 +12,8 @@ test("independent windows preserve one explicit reference through seeking and re
   const storage = { getItem: key => data.get(key), setItem: (key, value) => data.set(key, value) };
   const chart = rewardReferenceStore(storage, "workspace");
   const table = rewardReferenceStore(storage, "workspace");
-  assert.equal(chart.get(snapshot(10), 1).step, 10);
-  assert.equal(table.get(snapshot(40), 1).step, 10);
+  assert.equal(chart.get(snapshot(10), 1).step, 0);
+  assert.equal(table.get(snapshot(40), 1).step, 0);
   table.set(snapshot(40), 1);
   assert.equal(chart.get(snapshot(20), 1).step, 40);
   const remounted = rewardReferenceStore(storage, "workspace");
@@ -25,8 +25,8 @@ test("independent windows preserve one explicit reference through seeking and re
   // A delayed old-episode window must not overwrite the new episode's reference.
   chart.get(snapshot(90), 1);
   assert.equal(table.get(snapshot(50, "episode-b"), 1).step, 0);
-  assert.equal(table.get(snapshot(5, "episode-b"), 2).step, 5);
-  assert.equal(rewardReferenceStore(storage, "another-workspace").get(snapshot(70), 1).step, 70);
+  assert.equal(table.get(snapshot(5, "episode-b"), 2).step, 0);
+  assert.equal(rewardReferenceStore(storage, "another-workspace").get(snapshot(70), 1).step, 0);
 });
 
 test("invalid persisted state resets and retained reference storage remains bounded", () => {
@@ -36,5 +36,18 @@ test("invalid persisted state resets and retained reference storage remains boun
   assert.equal(reference.get(null, 1), null);
   for (let i = 0; i < 20; i++) reference.get(snapshot(i, `episode-${i}`), 1);
   assert.equal(JSON.parse(value).length, 8);
-  assert.equal(reference.get(snapshot(100, "episode-19"), 1).step, 19);
+  assert.equal(reference.get(snapshot(100, "episode-19"), 1).step, 0);
+});
+
+test("late episode delivery does not move the reference or fabricate a sample", () => {
+  const data = new Map();
+  const storage = { getItem: key => data.get(key), setItem: (key, value) => data.set(key, value) };
+  const reference = rewardReferenceStore(storage, "workspace");
+  assert.equal(reference.get(snapshot(0), 1).step, 0);
+  const next = reference.get(snapshot(6, "episode-b"), 1);
+  assert.equal(next.step, 0);
+  assert.equal(next.sample, null);
+  assert.equal(reference.get(snapshot(12, "episode-b"), 1).step, 0);
+  reference.set(snapshot(6, "episode-b"), 1);
+  assert.equal(reference.get(snapshot(12, "episode-b"), 1).step, 6);
 });
