@@ -97,7 +97,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--wandb",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Log metrics to W&B by default; --no-wandb keeps metrics local without credentials.",
+        help="Sync metrics to W&B and checkpoints to R2 by default; --no-wandb keeps the run local.",
     )
     parser.add_argument(
         "--rom-path",
@@ -368,6 +368,11 @@ def main(argv: list[str] | None = None) -> int:
     config_path = run_dir / "train-config.json"
     write_canonical_json(config_path, config)
 
+    execution_mode = (
+        TrainingExecutionMode.LOCAL_TRAINING
+        if config.get("wandb_mode", "online") == "online"
+        else TrainingExecutionMode.LOCAL_DEMO
+    )
     started_at = _utc_now()
     receipt = {
         "document_type": "gradlab.local-run",
@@ -375,9 +380,7 @@ def main(argv: list[str] | None = None) -> int:
         "status": "running",
         "run_id": local_run_id,
         "attempt_id": config["attempt_id"],
-        "training_execution": TrainingExecutionPolicy.for_mode(
-            TrainingExecutionMode.LOCAL_DEMO
-        ).to_document(),
+        "training_execution": TrainingExecutionPolicy.for_mode(execution_mode).to_document(),
         "recipe_ref": source.reference,
         "goal_id": goal_id,
         "recipe_id": recipe_id,
@@ -408,7 +411,7 @@ def main(argv: list[str] | None = None) -> int:
                 "--train-config-json",
                 str(config_path),
                 "--execution-mode",
-                TrainingExecutionMode.LOCAL_DEMO.value,
+                execution_mode.value,
             ]
 
             def invoke_learner(runtime_control=None) -> int:
@@ -510,7 +513,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         _write_receipt(run_dir, receipt)
         raise RuntimeError("local learner produced an invalid terminal result") from exc
-    if terminal_execution_mode != TrainingExecutionMode.LOCAL_DEMO.value:
+    if terminal_execution_mode != execution_mode.value:
         receipt.update(
             {
                 "status": "failed",

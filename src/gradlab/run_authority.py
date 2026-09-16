@@ -186,7 +186,9 @@ class RunAuthority:
         return binding
 
     def create_manifest(self, manifest: RunManifest) -> str:
-        self.create_coordinator_binding(self.coordinator_binding_for_manifest(manifest))
+        manifest.validate()
+        if manifest.compute.get("execution_backend") != "local-process":
+            self.create_coordinator_binding(self.coordinator_binding_for_manifest(manifest))
         event = self._goal_catalog_event_for_manifest(manifest)
         self._put_goal_catalog_event(event)
         etag = self.control.put_json(
@@ -206,7 +208,9 @@ class RunAuthority:
         return etag
 
     def create_attempt_manifest(self, manifest: RunManifest) -> str:
-        self.create_coordinator_binding(self.coordinator_binding_for_manifest(manifest))
+        manifest.validate()
+        if manifest.compute.get("execution_backend") != "local-process":
+            self.create_coordinator_binding(self.coordinator_binding_for_manifest(manifest))
         event = self._goal_catalog_event_for_manifest(manifest)
         self._put_goal_catalog_event(event)
         etag = self.control.put_json(

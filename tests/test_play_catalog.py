@@ -1944,3 +1944,36 @@ def test_checkpoint_training_history_publishes_each_metric_before_fetching_next(
         lambda metric, samples: published.append((metric, samples)),
     )
     assert published[-1] == (second, ())
+
+
+def test_relocated_goal_discovers_historical_scope_without_rewriting_identity(tmp_path):
+    write_goal_catalog(tmp_path)
+    index = tmp_path / 'experiments/goals/_catalog.yaml'
+    index.write_text(index.read_text() + '\nhistorical_goals:\n  Mario/Level1-1:\n    - OldMario\n')
+    authored = load_goal_contract(tmp_path / 'experiments/goals/Mario/Level1-1/_goal.yaml', tmp_path)
+    resolved = goal_for_contract_validation(authored, label='original goal')
+    descriptor = build_goal_variant_descriptor(goal_slug='OldMario', source_sha='b' * 40, authored_goal=authored, effective_goal=resolved)
+    generation, pointer = goal_catalog_documents(descriptor, [{'run_id': RUN_ID}], resolved_goal=resolved)
+
+    class HistoricalBucket:
+        def get_json_optional(self, key):
+            if key == goal_catalog_pointer_key('Mario/Level1-1'):
+                return None
+            if key == goal_catalog_pointer_key('OldMario'):
+                return pointer
+            if key == pointer['generation_key']:
+                return generation
+            raise AssertionError(key)
+
+    catalog = PlayCatalog(repo_root=tmp_path, control_bucket=HistoricalBucket())
+    activity = catalog.goal_activity(environment_id='Mario', goal_id='Level1-1')
+    previous = next(item for item in activity['items'] if item['variant_id'] == descriptor['variant_id'])
+    assert previous['configuration_kind'] == 'previous_default'
+    assert previous['goal_slug'] == 'OldMario'
+    assert previous['run_count'] == 1
+    assert previous['recent_runs'][0]['run_id'] == RUN_ID
+    assert previous['recent_runs'][0]['goal_slug'] == 'OldMario'
+    runs = catalog.runs(environment_id='Mario', goal_id='Level1-1', goal_variant_id=descriptor['variant_id'])
+    assert runs.items[0]['run_id'] == RUN_ID
+    assert runs.items[0]['goal'] == 'OldMario'
+    assert catalog.latest_run_routes()[0]['goal_id'] == 'Level1-1'

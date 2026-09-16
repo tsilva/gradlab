@@ -50,6 +50,7 @@ def _write_training_result(
     model_kind: str = "final",
     step: int = 64,
 ) -> None:
+    policy = json.loads((run_dir / "local-run.json").read_text())["training_execution"]
     (run_dir / TRAINING_RESULT_FILENAME).write_text(
         json.dumps(
             {
@@ -57,14 +58,8 @@ def _write_training_result(
                 "format_version": 2,
                 "status": status,
                 "terminal_reason": terminal_reason,
-                "execution_mode": "local-demo",
-                "execution_policy": {
-                    "mode": "local-demo",
-                    "console_mode": "auto",
-                    "persist_intermediate_checkpoints": False,
-                    "stop_on_first_completion": True,
-                    "handle_sigint": True,
-                },
+                "execution_mode": policy["mode"],
+                "execution_policy": policy,
                 "first_completion_step": None,
                 "final_step": step,
                 "requested_limit": 64,
@@ -211,7 +206,9 @@ def test_local_train_materializes_playable_run_with_explicit_logging_mode(
     ) -> int:
         assert runtime_rom_binding is None
         observed_internal_values.append(os.environ.get(INTERNAL_LEARNER_ENV))
-        assert argv[argv.index("--execution-mode") + 1] == "local-demo"
+        assert argv[argv.index("--execution-mode") + 1] == (
+            "local-training" if wandb_enabled else "local-demo"
+        )
         config_path = Path(argv[argv.index("--train-config-json") + 1])
         config = json.loads(config_path.read_text(encoding="utf-8"))
         run_dir = Path(config["runs_dir"]) / config["run_name"]
@@ -260,7 +257,9 @@ def test_local_train_materializes_playable_run_with_explicit_logging_mode(
     assert recipe["provenance"]["source_distribution"]["name"].lower() == "gradlab"
     assert receipt["status"] == "completed"
     assert receipt["model"] == "final_model.zip"
-    assert receipt["training_execution"]["mode"] == "local-demo"
+    assert receipt["training_execution"]["mode"] == (
+        "local-training" if wandb_enabled else "local-demo"
+    )
     assert receipt["final_step"] == 64
     assert receipt["requested_limit"] == 64
     assert receipt["execution_limit"] == 64
@@ -368,7 +367,7 @@ def test_local_mario_train_binds_registered_rom_cache(
     ) -> int:
         assert runtime_rom_binding is None
         observed_cache.append(os.environ.get(LOCAL_ROM_CACHE_ENV))
-        assert argv[argv.index("--execution-mode") + 1] == "local-demo"
+        assert argv[argv.index("--execution-mode") + 1] == "local-training"
         config_path = Path(argv[argv.index("--train-config-json") + 1])
         config = json.loads(config_path.read_text(encoding="utf-8"))
         assert config["rom_asset_manifest"] == manifest
@@ -430,7 +429,7 @@ def test_local_mario_train_uses_direct_rom_without_registry_or_cache_mutation(
         runtime_rom_binding: RomRuntimeBinding,
     ) -> int:
         observed_bindings.append(runtime_rom_binding)
-        assert argv[argv.index("--execution-mode") + 1] == "local-demo"
+        assert argv[argv.index("--execution-mode") + 1] == "local-training"
         config_path = Path(argv[argv.index("--train-config-json") + 1])
         config = json.loads(config_path.read_text(encoding="utf-8"))
         assert config["rom_asset_manifest"] == manifest

@@ -157,8 +157,11 @@ explicitly authorized. See [COMPUTE.md](COMPUTE.md) and the
 - GradLab requires Python 3.14 and uses `uv` with a committed lockfile and a
   seven-day dependency age gate. Supported binary targets are macOS arm64 and
   Linux x86_64.
-- Local `gradlab train` Runs log metrics to W&B by default using the same project
-  routing as queued Runs. Use `--no-wandb` for credential-free execution, or
+- Local `gradlab train` Runs publish metrics to W&B and checkpoints to R2 by
+  default, using the same project routing and playback catalog as queued Runs.
+  Online runs retain periodic checkpoints and follow the recipe budget and
+  early-stop rules. Use `gradlab sync <run-directory>` to recover publication of a
+  finished local run without retraining. Use `--no-wandb` for credential-free execution, or
   `--set logging.wandb_mode=offline` to retain an offline W&B run. Acceptance
   evaluation remains disabled for local training.
   They can establish Training Success but cannot establish Acceptance or

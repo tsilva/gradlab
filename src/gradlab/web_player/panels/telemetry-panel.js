@@ -64,6 +64,10 @@ export function cursorIndex(history, view) {
 }
 
 export function lineLegendPresentation(descriptors, history, view) {
+  // Reconstructed annotations may arrive after the selected live transition.
+  // Use only an exact cursor match; never substitute a nearby sampled step.
+  const recorded = chartPoints(history, view);
+  if (cursorIndex(recorded, view) !== null) history = recorded;
   return lineLegendPresentationAtIndex(
     descriptors,
     history,
@@ -328,6 +332,22 @@ export function policyDecisionPresentation(snapshot, history, view) {
   };
 }
 
+function bindChartHover(canvas, geometry, context, services) {
+  canvas.addEventListener("pointermove", (event) => {
+    const bounds = canvas.getBoundingClientRect();
+    const plot = geometry()?.plot;
+    const { history, view } = context();
+    const points = chartPoints(history, view);
+    if (!plot || !(bounds.width > 0) || !points.length) return;
+    const x = (event.clientX - bounds.left) * canvas.clientWidth / bounds.width;
+    const fraction = Math.max(0, Math.min(1, (x - plot.left) / (plot.right - plot.left)));
+    services.setChartHoverStep?.(points[0].step + fraction * (points.at(-1).step - points[0].step));
+  });
+  for (const event of ["pointerleave", "pointercancel"]) {
+    canvas.addEventListener(event, () => services.setChartHoverStep?.(null));
+  }
+}
+
 function makeLineBlock(block, services, definition) {
   const section = document.createElement("section");
   section.className = "telemetry-block telemetry-plot";
@@ -350,7 +370,6 @@ function makeLineBlock(block, services, definition) {
   if (rewardLayout) createRewardLegend(legend);
   let currentContext = { snapshot: null, history: [], view: {} };
   let chartGeometry = null;
-  let hoverX = null;
   let referenceStep = null;
   const referenceControls = document.createElement("div");
   referenceControls.className = "reward-reference-controls";
@@ -384,22 +403,20 @@ function makeLineBlock(block, services, definition) {
       series.push({ values: history.map(point => rewardContribution(point, referenceStep, gamma)?.contribution ?? NaN),
         color: themeColor("seriesAmber"), dash: [4, 3] });
     }
-    const chartOptions = discountEnabled ? { cursorStep: selectedStep, referenceStep, dimBeforeStep: referenceStep, showStepTicks: true } : {};
-    const defaultIndex = cursorIndex(history, view);
-    const hoveredIndex = hoverX === null
-      ? null
-      : lineCursorIndex(chartGeometry?.plot, hoverX, chartGeometry?.pointCount);
-    let displayedIndex = hoveredIndex ?? defaultIndex;
-    chartGeometry = drawLines(canvas, series, { cursorIndex: displayedIndex, steps: history.map((point) => point.step), cursorStep: hoverX === null ? currentContext.snapshot?.transition?.step : null, ...chartOptions });
-    const correctedIndex = hoverX === null
-      ? null
-      : lineCursorIndex(chartGeometry?.plot, hoverX, chartGeometry?.pointCount);
-    if (correctedIndex !== null && correctedIndex !== displayedIndex) {
-      displayedIndex = correctedIndex;
-      chartGeometry = drawLines(canvas, series, { cursorIndex: displayedIndex, steps: history.map((point) => point.step), cursorStep: hoverX === null ? currentContext.snapshot?.transition?.step : null, ...chartOptions });
-    }
-    lineLegendPresentationAtIndex(descriptors, hoverX === null ? currentContext.history : history, hoverX === null ? cursorIndex(currentContext.history, view) : displayedIndex)
-      .forEach(({ key, value }) => {
+    const hoverStep = view?.chartHoverStep;
+    const hovering = Number.isFinite(hoverStep);
+    const displayedIndex = hovering
+      ? history.reduce((best, point, index) => best === null || Math.abs(point.step - hoverStep) < Math.abs(history[best].step - hoverStep) ? index : best, null)
+      : cursorIndex(history, view);
+    const chartOptions = discountEnabled ? { referenceStep, dimBeforeStep: referenceStep } : {};
+    chartGeometry = drawLines(canvas, series, {
+      cursorIndex: displayedIndex, steps: history.map((point) => point.step),
+      cursorStep: hovering ? hoverStep : selectedStep, ...chartOptions,
+    });
+    const legendPresentation = hovering
+      ? lineLegendPresentationAtIndex(descriptors, history, displayedIndex)
+      : lineLegendPresentation(descriptors, currentContext.history, view);
+    legendPresentation.forEach(({ key, value }) => {
         const target = legendValues.get(key);
         if (target) target.textContent = value;
       });
@@ -407,16 +424,7 @@ function makeLineBlock(block, services, definition) {
 
   bindChartRange(canvas, () => chartGeometry, () => currentContext, services);
 
-  canvas.addEventListener("pointermove", (event) => {
-    const bounds = canvas.getBoundingClientRect();
-    if (!(bounds.width > 0)) return;
-    hoverX = (event.clientX - bounds.left) * (canvas.clientWidth / bounds.width);
-    renderChart(currentContext);
-  });
-  canvas.addEventListener("pointerleave", () => {
-    hoverX = null;
-    renderChart(currentContext);
-  });
+  bindChartHover(canvas, () => chartGeometry, () => currentContext, services);
   let clickTimer = null;
   canvas.addEventListener("dblclick", () => clearTimeout(clickTimer));
   canvas.addEventListener("click", (event) => {
@@ -1042,6 +1050,8 @@ function makeNamespaceBlock(block, definition, services) {
   let chartGeometry = null;
   bindChartRange(canvas, () => chartGeometry, () => currentContext, services);
 
+  bindChartHover(canvas, () => chartGeometry, () => currentContext, services);
+
   const render = ({ snapshot, history, view }) => {
     currentContext = { snapshot, history, view };
     const chartHistory = chartPoints(history, view);
@@ -1073,7 +1083,7 @@ function makeNamespaceBlock(block, definition, services) {
     chartGeometry = drawLines(canvas, [{
       values: descriptor ? seriesForMetric(descriptor.key, chartHistory) : [],
       color: themeColor(descriptor?.color || "chartHighlight"),
-    }], { cursorIndex: cursorIndex(chartHistory, view), steps: chartHistory.map((point) => point.step), cursorStep: snapshot?.transition?.step });
+    }], { cursorIndex: cursorIndex(chartHistory, view), steps: chartHistory.map((point) => point.step), cursorStep: view?.chartHoverStep ?? snapshot?.transition?.step });
     const point = selectedPoint(history, snapshot, view);
     body.replaceChildren(...descriptors.map((item) => {
       const row = document.createElement("tr");

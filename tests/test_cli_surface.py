@@ -71,6 +71,7 @@ for name in sorted(sys.modules):
     def test_delegated_help_uses_complete_public_command(self) -> None:
         cases = (
             (("train", "--help"), "usage: gradlab train"),
+            (("sync", "--help"), "usage: gradlab sync"),
             (("experiment", "launch", "--help"), "usage: gradlab experiment launch"),
             (("experiment", "follow", "--help"), "usage: gradlab experiment follow"),
             (("eval", "--help"), "usage: gradlab eval"),

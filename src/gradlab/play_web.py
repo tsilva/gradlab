@@ -1267,7 +1267,6 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         transition: _PlaybackTransition,
         *,
         full: dict[str, Any],
-        current: dict[str, Any],
     ) -> None:
         if not self.recording_enabled or self.recording is None:
             return
@@ -1323,7 +1322,8 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 if field.name not in {"terminal_frame", "outcome"}
             }
         decision = transition.decision
-        inspection_snapshot = self._snapshot_payload(transition, current=current)
+        # Recorded inspection must retain evidence independently of connected panels.
+        inspection_snapshot = self._snapshot_payload(transition, current=full)
         inspection_snapshot["sequence"] = transition.sequence
         inspection_snapshot["session"].update(
             episode=transition.episode,
@@ -1527,11 +1527,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             event_names = list(self.session.env.runtime.kernel.event_names)
         except AttributeError:
             event_names = []
-        comparison_reasons = (
-            self._critic_comparison_reasons(transition)
-            if "critic-calibration" in self.processing_features
-            else ["critic calibration panel processing is disabled"]
-        )
+        comparison_reasons = self._critic_comparison_reasons(transition)
         return {
             "type": "snapshot",
             "protocol": PROTOCOL_VERSION,
@@ -2060,7 +2056,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 )
             )
             self.episode_rewards.append(full, self.reward_accounting)
-            self._record_transition(transition, full=full, current=current)
+            self._record_transition(transition, full=full)
         except Exception as exc:
             self._set_state("paused", message=str(exc))
             return None
@@ -2875,7 +2871,6 @@ class PlaybackWebServer:
         *,
         paired_windows: bool = False,
         catalog: Any | None = None,
-        defer_secondary_window: bool = False,
         manual_evaluation_factory: Any | None = None,
         repo_root: Path | None = None,
         publication_factory: Any | None = None,
@@ -2895,7 +2890,6 @@ class PlaybackWebServer:
         self.args = args
         self.paired_windows = paired_windows
         self.catalog = catalog
-        self.defer_secondary_window = bool(defer_secondary_window)
         self.token = secrets.token_urlsafe(32)
         self.origin = ""
         self.clients: dict[str, WebClient] = {}
@@ -2908,7 +2902,6 @@ class PlaybackWebServer:
         self.ever_connected = False
         self.last_client_at = time.monotonic()
         self._observed_session_change = int(getattr(self.runner, "session_change", 0))
-        self._secondary_opened = False
         self._initial_environment_catalog: dict[str, Any] | None = None
         self._manual_evaluation_factory = manual_evaluation_factory
         self._manual_evaluation_queue: Any | None = None
@@ -3899,12 +3892,6 @@ class PlaybackWebServer:
                 }
             )
             client.offer_reliable(history)
-        if self.paired_windows and self.defer_secondary_window and not self._secondary_opened:
-            self._secondary_opened = True
-            stats_url = self.dashboard_urls()[1]
-            print(f"Player stats: {stats_url}", flush=True)
-            if not bool(getattr(self.args, "no_open", False)):
-                webbrowser.open(stats_url, new=1, autoraise=True)
 
     async def websocket(self, request: web.Request) -> web.WebSocketResponse:
         if request.headers.get("Origin") != self.origin:
@@ -4369,15 +4356,13 @@ class PlaybackWebServer:
         urls = self.dashboard_urls()
         dashboard_label = str(getattr(self.args, "dashboard_label", "Player dashboard"))
         print(f"{dashboard_label}: {urls[0]}", flush=True)
-        if self.paired_windows and not self.defer_secondary_window:
+        if self.paired_windows:
             print(f"Player stats: {urls[1]}", flush=True)
         await self._prepare_initial_catalog()
         await asyncio.to_thread(self.runner.start)
         pump = asyncio.create_task(self.pump())
         if not bool(getattr(self.args, "no_open", False)):
-            launch_urls = urls[:1] if self.defer_secondary_window else urls
-            for url in launch_urls:
-                webbrowser.open(url, new=1, autoraise=True)
+            webbrowser.open(urls[0], new=1, autoraise=True)
         try:
             await self.stop_event.wait()
         finally:

@@ -228,6 +228,10 @@ def test_execution_modes_resolve_to_fixed_lifecycle_policies() -> None:
         "stop_on_first_completion": True,
         "handle_sigint": True,
     }
+    online_local = TrainingExecutionPolicy.for_mode(TrainingExecutionMode.LOCAL_TRAINING)
+    assert online_local.persist_intermediate_checkpoints is True
+    assert online_local.stop_on_first_completion is False
+    assert online_local.handle_sigint is True
     assert supervised.to_document() == {
         "mode": "supervised",
         "console_mode": "plain",
@@ -326,19 +330,24 @@ def test_archive_success_and_missing_success_signals_do_not_stop_local_training(
     assert no_signal_session.terminal_reason() == TerminalReason.RESOURCE_EXHAUSTION
 
 
+@pytest.mark.parametrize("mode", [TrainingExecutionMode.SUPERVISED, TrainingExecutionMode.LOCAL_TRAINING])
 def test_supervised_completion_continues_and_signal_reason_is_not_acceptance(
-    tmp_path: Path,
+    tmp_path: Path, mode: TrainingExecutionMode,
 ) -> None:
-    session, stop_flag = _session(tmp_path, mode=TrainingExecutionMode.SUPERVISED)
+    session, stop_flag = _session(tmp_path, mode=mode)
     success = _episode(start="StartA", episode_return=10.0, outcome=Outcome.SUCCESS)
 
     assert session.observe_episode_completions(step=2, records=(success,)) is False
     assert session.first_completion_step == 2
     assert stop_flag.requested is False
     stop_flag.request("SIGUSR1")
-    assert session.terminal_reason() == TerminalReason.EXTERNAL_SIGNAL
-    assert session.terminal_model_kind(TerminalReason.EXTERNAL_SIGNAL) == "final"
-    assert session.should_persist_interrupted_checkpoint(TerminalReason.EXTERNAL_SIGNAL) is True
+    if mode == TrainingExecutionMode.SUPERVISED:
+        assert session.terminal_reason() == TerminalReason.EXTERNAL_SIGNAL
+        assert session.terminal_model_kind(TerminalReason.EXTERNAL_SIGNAL) == "final"
+        assert session.should_persist_interrupted_checkpoint(TerminalReason.EXTERNAL_SIGNAL) is True
+    else:
+        assert session.terminal_reason() == TerminalReason.LOCAL_INTERRUPTION
+        assert session.terminal_model_kind(TerminalReason.LOCAL_INTERRUPTION) == "interrupted"
 
 
 def test_completion_has_priority_over_early_stop_at_the_same_boundary(tmp_path: Path) -> None:

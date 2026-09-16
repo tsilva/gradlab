@@ -985,7 +985,7 @@ def test_source_browser_paths_are_hierarchical_and_url_encoded() -> None:
     )
 
 
-def test_paired_playback_server_opens_play_and_stats_windows() -> None:
+def test_paired_playback_server_opens_only_player_window() -> None:
     async def scenario() -> None:
         runner = HumanRecordingRunner(FakeHumanSession(), human_args())
         server = PlaybackWebServer(
@@ -998,7 +998,7 @@ def test_paired_playback_server_opens_play_and_stats_windows() -> None:
             try:
                 deadline = asyncio.get_running_loop().time() + 3.0
                 while (
-                    not server.origin or open_browser.call_count < 2
+                    not server.origin or open_browser.call_count < 1
                 ) and asyncio.get_running_loop().time() < deadline:
                     await asyncio.sleep(0.01)
                 urls = server.dashboard_urls()
@@ -1006,7 +1006,8 @@ def test_paired_playback_server_opens_play_and_stats_windows() -> None:
                     f"{server.origin}/?workspace=paired#token={server.token}",
                     f"{server.origin}/workspace/stats?workspace=paired#token={server.token}",
                 )
-                assert [call.args[0] for call in open_browser.call_args_list] == list(urls)
+                await server._announce_session_change()
+                assert [call.args[0] for call in open_browser.call_args_list] == [urls[0]]
                 assert all(
                     call.kwargs == {"new": 1, "autoraise": True}
                     for call in open_browser.call_args_list
@@ -1515,7 +1516,8 @@ def test_playback_transition_retains_policy_input_for_observation_processing() -
     assert transition.model_obs is not model_obs
 
 
-def test_playback_transition_bootstraps_truncation_from_exact_final_policy_input() -> None:
+@pytest.mark.parametrize("recording", [False, True])
+def test_playback_transition_bootstraps_truncation_from_exact_final_policy_input(recording) -> None:
     final_observation = np.asarray([9.0, 8.0, 7.0, 6.0], dtype=np.float32)
     reset_observation = np.zeros((1, 4), dtype=np.float32)
     observed: list[np.ndarray] = []
@@ -1553,7 +1555,8 @@ def test_playback_transition_bootstraps_truncation_from_exact_final_policy_input
             return np.asarray([7.5])
 
     session = argparse.Namespace(
-        processing_features=frozenset({"critic-calibration", "policy"}),
+        trajectory_recording=recording,
+        processing_features=frozenset() if recording else frozenset({"critic-calibration", "policy"}),
         model_obs=np.ones((1, 4), dtype=np.float32),
         model=argparse.Namespace(
             observation_space=argparse.Namespace(),
@@ -3068,3 +3071,23 @@ def test_web_client_drops_queued_rgb_after_unsubscribe() -> None:
         assert socket.frames == []
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("recording", [False, True])
+def test_policy_recording_retains_scalar_diagnostics_without_subscribers(recording):
+    decision = PolicyDecision(np.array([1]), np.array([1]), "stochastic", value=2.5)
+    runtime = argparse.Namespace(decide=Mock(return_value=argparse.Namespace(decisions=[decision])))
+    session = argparse.Namespace(
+        policy_runtime=runtime,
+        trajectory_recording=recording,
+        processing_features=frozenset(),
+        model_obs=np.array([0]),
+        env=argparse.Namespace(),
+        _advance=Mock(),
+    )
+
+    _PlaybackSession.step(session)
+
+    runtime.decide.assert_called_once()
+    assert runtime.decide.call_args.kwargs["include_diagnostics"] is recording
+    assert session._advance.call_args.kwargs["decision"] is decision

@@ -1,4 +1,10 @@
 schema_version: 2
+# Historical catalog scopes remain immutable after goal-folder reorganizations.
+historical_goals:
+  FrozenLake-v1/Default:
+    - FrozenLake-v1
+  FrozenLake-v1/Maze:
+    - FrozenLake8x8-v1/Deterministic
 namespaces:
   Acrobot-v1:
     environment_id: Acrobot-v1

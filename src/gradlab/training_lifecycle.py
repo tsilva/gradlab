@@ -109,6 +109,7 @@ class TrainingResult:
 
 class TrainingExecutionMode(StrEnum):
     LOCAL_DEMO = "local-demo"
+    LOCAL_TRAINING = "local-training"
     SUPERVISED = "supervised"
 
 
@@ -132,6 +133,14 @@ class TrainingExecutionPolicy:
                 console_mode="auto",
                 persist_intermediate_checkpoints=False,
                 stop_on_first_completion=True,
+                handle_sigint=True,
+            )
+        if resolved == TrainingExecutionMode.LOCAL_TRAINING:
+            return cls(
+                mode=resolved,
+                console_mode="auto",
+                persist_intermediate_checkpoints=True,
+                stop_on_first_completion=False,
                 handle_sigint=True,
             )
         return cls(

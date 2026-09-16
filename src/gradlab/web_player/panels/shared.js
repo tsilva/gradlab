@@ -200,7 +200,7 @@ export function lineCursorIndex(plot, x, pointCount) {
   return Math.round(fraction * Math.max(0, pointCount - 1));
 }
 
-export function drawLines(canvas, series, { cursorIndex = null, steps = null, cursorStep = null, cursorLabel = null, referenceStep = null, dimBeforeStep = null, showStepTicks = false } = {}) {
+export function drawLines(canvas, series, { cursorIndex = null, steps = null, cursorStep = null, cursorLabel = null, referenceStep = null, dimBeforeStep = null, showStepTicks = Boolean(steps?.length) } = {}) {
   if (steps?.length) canvas.setAttribute("aria-description", `Episode steps ${steps[0]}–${steps.at(-1)}. Drag to zoom; double-click to reset.`);
   const { context, ratio, width, height } = resizeCanvas(canvas);
   const chartSurface = themeColor("chartSurface");

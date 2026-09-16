@@ -1227,3 +1227,16 @@ test("action frequencies use a stable trailing window and separate policy from o
   assert.equal(render(unknownSource).history.policy.status, "unavailable");
   assert.ok(render(unknownSource).rows.every((row) => row.policyFrequency === null));
 });
+
+test("late-opened value legend uses recorded calibration at the exact cursor", () => {
+  const descriptors = [descriptorFor("policy/value"), descriptorFor("policy/realized-return"), descriptorFor("policy/value-error")];
+  const history = [{ sequence: 6, value: 0.9981 }];
+  const view = {
+    selectedSequence: 6,
+    chartHistory: [{ sequence: 6, value: 0.9981, realized_return: 1, value_error: -0.0019 }],
+  };
+  assert.deepEqual(
+    lineLegendPresentation(descriptors, history, view),
+    lineLegendPresentationAtIndex(descriptors, view.chartHistory, 0),
+  );
+});
