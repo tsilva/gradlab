@@ -328,7 +328,7 @@ class TrainImageTests(unittest.TestCase):
 
         self.assertIn("env-vizdoom-turbo==1.3.0.post30", dependencies)
         self.assertIn("env-gradoom-turbo-torch==0.2.1", dependencies)
-        self.assertIn("env-breakoutatari2600-turbo-native==0.5.12", dependencies)
+        self.assertIn("env-breakoutatari2600-turbo-native==0.5.13", dependencies)
         self.assertIn("box2d-py==2.3.5", dependencies)
         self.assertNotIn("wandb-workspaces==", gpu + dependencies)
         self.assertIn("torch==2.13.0", gpu)
@@ -337,7 +337,7 @@ class TrainImageTests(unittest.TestCase):
         self.assertFalse(gpu_lines & dependency_lines)
         self.assertEqual(
             train_plan_sha256(root),
-            "3c867758d1cf7764c59cab6ed31a4705eb7f70a627dde1092b4fcb2177c51a2d",
+            "a2aab4698340a2f2810429ee73d3e958e53e788545262fa5fecef4e92c3ac433",
         )
         for line in gpu.splitlines():
             name = line.split("==", maxsplit=1)[0]
