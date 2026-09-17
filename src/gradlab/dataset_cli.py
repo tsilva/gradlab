@@ -102,6 +102,20 @@ def _export_minari(args: argparse.Namespace) -> int:
     return export_minari_command(args)
 
 
+def _publish_runs(args: argparse.Namespace) -> int:
+    from gradlab.trajectory_publication import enqueue_publication
+
+    result = enqueue_publication(
+        runs=args.run, repo=args.repo, repo_root=Path.cwd(),
+        filters={key: value for key, value in vars(args).items()
+                 if key in {"include_prefixes", "stage_min", "stage_max", "return_min",
+                            "return_max", "score_min", "score_max", "bricks_min", "bricks_max"}
+                 and value is not None},
+    )
+    print(json.dumps(result, indent=2, default=str))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = ExactArgumentParser(
         prog="gradlab dataset",
@@ -111,6 +125,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     subparsers = parser.add_subparsers(dest="command", metavar="<command>", required=True)
+
+    publish = subparsers.add_parser("publish-runs", help="Queue additive HF publication from finalized R2 Runs.")
+    publish.add_argument("--run", action="append", required=True, help="Finalized Run ID; repeat for multiple Runs.")
+    publish.add_argument("--repo", required=True, help="HF dataset owner/repository.")
+    publish.add_argument("--include-prefixes", action="store_true")
+    for field in ("stage", "return", "score", "bricks"):
+        for bound in ("min", "max"):
+            publish.add_argument(f"--{field}-{bound}", type=float)
+    publish.set_defaults(handler=_publish_runs)
 
     record = subparsers.add_parser("record", help="Record gameplay into a local collection.")
     record.add_argument("reference", help="Stable local collection reference.")

@@ -410,6 +410,12 @@ def validate_and_normalize_train_config(
     from gradlab.occupancy import resolve_cell_spaces
 
     resolve_cell_spaces(normalized)
+    if normalized.get("trajectory_collection") is not None:
+        from gradlab.trajectory_config import resolve_collection
+
+        normalized["trajectory_collection"] = resolve_collection(
+            normalized["trajectory_collection"], normalized
+        )
     if "obs_resize" in normalized:
         normalized["obs_resize"] = normalize_obs_resize(
             normalized["obs_resize"],
@@ -567,6 +573,7 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         type_name="int",
         default=DEFAULT_TRAIN_SEED,
     ),
+    _field("trajectory_collection", type_name="json", default=None, mapping_value=True),
     _field("run_name", default="ppo_retro"),
     _field("run_description", default=""),
     _field("runs_dir", default=PORTABLE_DEFAULT_RUNS_DIR),
