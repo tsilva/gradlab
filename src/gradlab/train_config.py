@@ -573,7 +573,7 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         type_name="int",
         default=DEFAULT_TRAIN_SEED,
     ),
-    _field("trajectory_collection", type_name="json", default=None, mapping_value=True),
+    _field("trajectory_collection", type_name="json", default=None, mapping_value=True, source_section="train"),
     _field("run_name", default="ppo_retro"),
     _field("run_description", default=""),
     _field("runs_dir", default=PORTABLE_DEFAULT_RUNS_DIR),

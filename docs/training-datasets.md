@@ -8,7 +8,7 @@ claiming the at-most-2% overhead target. No live training is started by tests.
 Add this runtime setting to a recipe or its launch overrides:
 
 ```yaml
-runtime:
+train:
   trajectory_collection:
     enabled: true
 ```
