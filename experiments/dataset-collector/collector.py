@@ -1821,8 +1821,8 @@ def load_execution(
             raise ValueError("this experiment supports only native Breakout Turbo")
         config = resolve_env_config(config)
         provider_version = version(config.env_provider)
-        if provider_version != "0.5.12":
-            raise ValueError("native Breakout runtime must match the pinned 0.5.12 provider")
+        if provider_version != "0.5.13":
+            raise ValueError("native Breakout runtime must match the pinned 0.5.13 provider")
         runtime = PolicyRuntime(
             load_policy_model(verify_staged_model(staged), device=device, algorithm_id=algorithm),
             algorithm_id=algorithm,
