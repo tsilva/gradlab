@@ -512,6 +512,7 @@ class BatchRuntime:
             for value in self.global_lane_ids
         ):
             raise ValueError("global_lane_ids must be unique non-negative integers")
+        self.recording = None
         self.capture_step_diagnostics = bool(capture_step_diagnostics)
         self.state_archive_config = normalize_state_archive_config(
             state_archive,
@@ -815,6 +816,8 @@ class BatchRuntime:
         if self.archive_curriculum is not None:
             self._set_curriculum_reset_baselines(infos, mask)
         self._assign_occupancy(infos, mask=mask, origin="normal")
+        if self.recording is not None:
+            self.recording.reset(mask)
         return initial_observations
 
     def _reset_options(
@@ -1491,6 +1494,8 @@ class BatchRuntime:
         if self.occupancy is not None and len(self.occupancy.completed) >= 64:
             raise RuntimeError("drain occupancy summaries before collecting more transitions")
         native_actions = self.kernel.map_actions(actions)
+        if self.recording is not None:
+            self.recording.before_step(actions, native_actions)
         started_at = time.perf_counter()
         observations, native_rewards, provider_terminated, provider_truncated, infos = (
             self.provider.step(native_actions)
@@ -1649,6 +1654,12 @@ class BatchRuntime:
                 truncated=bool(truncated[lane]),
                 next_episode_seed=next_episode_seed,
                 terminal_frame=terminal_frame,
+            )
+
+        if self.recording is not None:
+            self.recording.transition(
+                infos, native_rewards, provider_terminated, provider_truncated,
+                rewards, terminated, truncated, task_step, forced_only_mask,
             )
 
         encoded_transition = self.kernel.encode_observations(observations)
@@ -1844,6 +1855,8 @@ class BatchRuntime:
             self._pending_start_ids[dones] = None
             self._pending_reset_reasons[dones] = None
             self._has_pending_resets = bool(np.any(self._pending_reset_mask))
+            if self.recording is not None:
+                self.recording.reset(dones, after_step=True)
 
         self._current_observation_buffer = next_buffer_index
         batch_step = self._batch_steps[next_buffer_index]
@@ -1963,6 +1976,8 @@ class BatchRuntime:
         if self._closed:
             return
         self._closed = True
+        if self.recording is not None:
+            self.recording.close()
         if self.archive_curriculum is not None:
             self.archive_curriculum.persist(self.state_archive)
             self.archive_curriculum.close()
