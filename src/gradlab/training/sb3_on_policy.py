@@ -357,6 +357,7 @@ def run_sb3_on_policy(
         occupancy=common_config.get("occupancy"),
     )
     occupancy_reporter = None
+    trajectory_recorder = None
     try:
         store_path = metric_store_path(context.run_dir)
         set_random_seed(int(common_config["seed"]))
@@ -371,6 +372,9 @@ def run_sb3_on_policy(
             env.action_space,
             runtime_action_contract(env),
         )
+        from gradlab.training_trajectories import attach_training_recorder
+
+        trajectory_recorder = attach_training_recorder(context, env.runtime, model)
         rollout_quantum = n_envs * int(backend_config["n_steps"])
         context.session.configure_budget(
             requested_limit=int(common_config["timesteps"]),
@@ -545,3 +549,5 @@ def run_sb3_on_policy(
                 occupancy_reporter.flush(final=True)
         finally:
             env.close()
+            if trajectory_recorder is not None:
+                trajectory_recorder.wait(float(common_config["trajectory_collection"]["drain_seconds"]))

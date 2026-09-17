@@ -15,3 +15,4 @@ This specification applies to GradLab's current local queue and dstack-backed ex
 - Certification evidence must cover authority, delivery, evaluation-driven stopping, recovery, cancellation, and terminal correctness.
 - A terminal drain must prove the complete Checkpoint inventory, the terminal status of every automatically submitted evaluation, Promotion state, metrics delivery, and quiescence.
 - Checkpoints not admitted for evaluation before Acceptance may remain unevaluated for later explicit action.
+- When training trajectory collection is enabled, successful terminal drain must also prove complete verified R2 dataset delivery under a dedicated finite deadline, preserving recoverable evidence on failure as specified in [training datasets](training-datasets.md).

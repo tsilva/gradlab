@@ -91,6 +91,7 @@ IMAGE_REF = "docker:registry.example/gradlab-certification@sha256:" + "b" * 64
 GOAL_PATH = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml")
 RECIPE_PATH = GOAL_PATH.parent / "recipes" / "ppo.yaml"
 DEFAULT_SCENARIOS = (
+    "training-dataset-delivery",
     "full-lifecycle",
     "parallel-run-isolation",
     "same-run-lease-fencing",
@@ -251,6 +252,8 @@ class ScriptedLearnerProcess:
 
 
 class CertificationRuntime(SupervisorRuntime):
+    dataset_delivery_background = False
+
     """Scriptable stand-in for process, W&B, signals, and host state."""
 
     def __init__(
@@ -2477,7 +2480,79 @@ def _scenario_local_background_jobs(root: Path) -> dict[str, Any]:
     }
 
 
+def _scenario_training_dataset_delivery(root: Path) -> dict[str, Any]:
+    from gradlab.trajectory_config import FORMAT, ATTEMPT_METADATA_BYTES
+    from gradlab.file_utils import atomic_write_json
+    from gradlab.trajectory_delivery import DatasetDelivery
+
+    recorder = ScenarioRecorder("training-dataset-delivery", [])
+    fixture = CertificationFixture(root)
+    prepared = fixture.prepare(run_number=81)
+    supervisor = prepared.supervisor
+    supervisor.train_config["trajectory_collection"] = {
+        "enabled": True, "contribution_bytes": 2 * 1024**2, "drain_seconds": 2,
+    }
+    supervisor._prepare_dataset_delivery()
+    spool = supervisor.dataset_delivery.root
+    data = b"immutable scripted learner trajectory"
+    path = spool / "episode.zip"
+    path.write_bytes(data)
+    atomic_write_json(spool / "producer.json", {"format": FORMAT})
+    atomic_write_json(spool / "episode.manifest.json", {
+        "format": FORMAT, "file": "episode.zip", "bytes": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(), "reserved_bytes": 1024**2,
+        "episode": {"episode_id": "scripted-episode"},
+    })
+    atomic_write_json(spool / "closed.json", {"chunks": 1, "fault": None})
+    with patch.object(supervisor.authority.models, "put_bytes", side_effect=OSError("R2 unavailable")):
+        supervisor.active_iteration()
+        _, converged = supervisor.drain_iteration()
+        recorder.require("dataset-outage-prevents-terminal-convergence", not converged and path.exists())
+        fixture.clock.advance(3)
+        timed_out = False
+        try:
+            supervisor.drain_iteration()
+        except TimeoutError:
+            timed_out = True
+        recorder.require("dataset-drain-has-dedicated-deadline", timed_out and path.exists())
+    supervisor.dataset_drain_started = None
+    supervisor.drain_iteration()
+    receipt = supervisor.dataset_delivery.receipt()
+    recorder.require("dataset-verified-before-local-reclamation", receipt["complete"] and not path.exists())
+    recorder.require("retry-preserves-run-contribution-budget",
+                     DatasetDelivery.reserved_bytes(supervisor.authority.models, supervisor.manifest.run_id) == 1024**2 + ATTEMPT_METADATA_BYTES)
+    inventory = supervisor.authority.models.get_json(receipt["manifest_key"])
+    recorder.require("remote-inventory-binds-exact-bytes",
+                     supervisor.authority.models.get_bytes(inventory["chunks"][0]["key"]) == data)
+    fixture.clock.advance(15)
+    supervisor.drain_iteration()
+    supervisor.drain_iteration()
+    writers = {event["writer_id"] for event in prepared.runtime.wandb_events}
+    recorder.require("dataset-diagnostics-use-supervisor-writer", writers == {prepared.runtime.writer_id})
+    delayed = fixture.prepare(run_number=82).supervisor
+    delayed.train_config["trajectory_collection"] = {
+        "enabled": True, "contribution_bytes": 2 * 1024**2, "drain_seconds": 600,
+    }
+    delayed._prepare_dataset_delivery()
+    started = fixture.clock.monotonic()
+    def finish_encoder():
+        if fixture.clock.monotonic() - started >= 350:
+            delayed_spool = delayed.dataset_delivery.root
+            atomic_write_json(delayed_spool / "producer.json", {"format": FORMAT})
+            atomic_write_json(delayed_spool / "closed.json", {"chunks": 0, "fault": None})
+    fixture.clock.maintenance.append(finish_encoder)
+    try:
+        delayed._drain()
+    finally:
+        fixture.clock.maintenance.remove(finish_encoder)
+    recorder.require("dataset-deadline-independent-of-wandb-timeout",
+                     fixture.clock.monotonic() - started >= 350
+                     and delayed.dataset_delivery.receipt()["complete"])
+    return {"invariants": recorder.invariants, "evidence": {"verified_bytes": receipt["verified_bytes"]}}
+
+
 SCENARIOS: dict[str, Callable[[Path], dict[str, Any]]] = {
+    "training-dataset-delivery": _scenario_training_dataset_delivery,
     "full-lifecycle": _scenario_full_lifecycle,
     "parallel-run-isolation": _scenario_parallel_run_isolation,
     "same-run-lease-fencing": _scenario_same_run_lease_fencing,
