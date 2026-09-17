@@ -25,12 +25,12 @@ def available_scratch(monkeypatch):
     )
 
 
-def training_env(n_envs=2):
+def training_env(n_envs=2, max_episode_steps=3):
     root = Path("experiments/goals/Breakout-Atari2600-v0/FirstWall")
     train = compose_train_document(root / "_goal.yaml", root / "recipes/ppo.yaml")["train_config"]
     config = resolve_env_config(env_config_from_mapping(train))
     config.env_args["noop_reset_max"] = 0
-    config.task["termination"]["max_episode_steps"] = 3
+    config.task["termination"]["max_episode_steps"] = max_episode_steps
     env = make_training_vec_env(config, n_envs=n_envs, seed=12)
     return train, env
 
@@ -231,4 +231,80 @@ def test_handoff_memory_reserves_encoder_delivery_and_expanded_indexes(tmp_path)
     finally:
         recorder.close()
         recorder.wait(10)
+        env.close()
+
+
+def test_saturated_handoff_retains_contiguous_prefix_without_stopping_training(
+    tmp_path, monkeypatch
+):
+    import threading
+    from dataclasses import replace
+    from gradlab.trajectory_config import working_memory_bytes
+
+    train, env = training_env(max_episode_steps=100)
+    limits = CollectionConfig(
+        sample_probability=1, budget_stages=1, contribution_bytes=4 * 1024**2, chunk_bytes=1024**2
+    )
+    limits = replace(limits, memory_bytes=working_memory_bytes(limits) + 1024**2)
+    release = threading.Event()
+    original = TrainingRecorder._write
+
+    def delayed(self, *args):
+        assert release.wait(10)
+        return original(self, *args)
+
+    monkeypatch.setattr(TrainingRecorder, "_write", delayed)
+    recorder = TrainingRecorder(
+        env.runtime,
+        tmp_path,
+        limits,
+        {
+            "run_id": "gradlab-" + "c" * 32,
+            "attempt_id": "attempt-" + "f" * 16,
+            "train_config": train,
+        },
+        position=lambda: (0, 0),
+    )
+    env.runtime.recording = recorder
+    try:
+        env.reset()
+        for _ in range(10):
+            env.step(np.ones(2, dtype=np.int64))
+        assert env.runtime._episode_lengths[0] == 10
+        assert not recorder.active
+    finally:
+        release.set()
+        env.close()
+    recorder.wait(10)
+    manifest = json.loads(next(tmp_path.glob("*.manifest.json")).read_text())
+    assert not manifest["episode"]["complete"]
+    assert manifest["episode"]["interruption_reason"] == "memory_pressure"
+    assert 1 <= manifest["episode"]["captured_steps"] <= 4
+    assert not manifest["episode"]["last_transition"]["truncated"]
+    with zipfile.ZipFile(tmp_path / manifest["file"]) as chunk:
+        rows = [json.loads(row) for row in chunk.read("transitions.jsonl").splitlines()]
+        assert [row["step"] for row in rows] == list(range(len(rows)))
+        assert len([p for p in chunk.namelist() if p.startswith("frames/")]) == len(rows) + 1
+
+
+def test_changed_provider_action_contract_is_rejected_before_recording(tmp_path):
+    from dataclasses import replace
+
+    train, env = training_env()
+    env.runtime.descriptor = replace(env.runtime.descriptor, action_meanings=("unverified",))
+    try:
+        with pytest.raises(ValueError, match="native encoding"):
+            TrainingRecorder(
+                env.runtime,
+                tmp_path,
+                CollectionConfig(),
+                {
+                    "run_id": "gradlab-" + "c" * 32,
+                    "attempt_id": "attempt-" + "f" * 16,
+                    "train_config": train,
+                },
+                position=lambda: (0, 0),
+            )
+        assert not list(tmp_path.glob("*.zip"))
+    finally:
         env.close()

@@ -95,3 +95,32 @@ def test_attempt_metadata_counts_toward_budget_and_exhaustion_creates_no_more_ar
         assert delivery.receipt().get("budget_exhausted", False) == (index >= 2)
     assert DatasetDelivery.reserved_bytes(bucket, "run") == limit
     assert not list(bucket.iter_keys("datasets/runs/run/attempts/attempt-2/"))
+
+
+def test_failed_reclamation_retains_disk_accounting_then_retries_without_duplicate_budget(
+    tmp_path, monkeypatch
+):
+    from pathlib import Path
+    from gradlab.trajectory_delivery import spool_bytes
+
+    root = tmp_path / "spool"
+    artifact(root)
+    bucket = R2Bucket(BucketConfig(uri=(tmp_path / "r2").as_uri()))
+    delivery = DatasetDelivery(root, bucket, "run", "attempt", 2 * 1024**2)
+    original = Path.unlink
+
+    def deny(path, *args, **kwargs):
+        if path == root / "episode.zip":
+            raise OSError("scripted reclamation failure")
+        return original(path, *args, **kwargs)
+
+    with monkeypatch.context() as patcher:
+        patcher.setattr(Path, "unlink", deny)
+        with pytest.raises(OSError, match="reclamation"):
+            delivery.advance(final=True)
+    reserved = DatasetDelivery.reserved_bytes(bucket, "run")
+    assert (root / "episode.zip").exists()
+    assert spool_bytes(root) >= (root / "episode.zip").stat().st_size
+    delivery.advance(final=True)
+    assert delivery.receipt()["complete"]
+    assert DatasetDelivery.reserved_bytes(bucket, "run") == reserved
