@@ -46,3 +46,20 @@ def test_unverified_provider_is_rejected():
     value["env_provider"] = "env-stableretro-turbo"
     with pytest.raises(ValueError, match="native Breakout"):
         validate_and_normalize_train_config(value, validate_backend_config=False)
+
+
+def test_collection_can_be_enabled_through_real_recipe_overrides():
+    from pathlib import Path
+    from gradlab.recipe_documents import compose_resolved_train_documents
+
+    goal = Path("experiments/goals/Breakout-Atari2600-v0/FirstWall")
+    documents = compose_resolved_train_documents(
+        goal / "_goal.yaml",
+        goal / "recipes/ppo.yaml",
+        recipe_overrides=["train.backend.id=sb3.ppo", "train.trajectory_collection.enabled=true"],
+    )
+    resolved = validate_and_normalize_train_config(documents.effective["train_config"])
+    assert resolved["trajectory_collection"]["enabled"] is True
+    assert resolved["trajectory_collection"]["contribution_bytes"] == 10 * 1024**3
+    assert resolved["training_backend"]["id"] == "sb3.ppo"
+    assert documents.base["train_config"].get("trajectory_collection") is None
