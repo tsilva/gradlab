@@ -6,7 +6,7 @@ the clarified native Breakout action-evidence contract.
 
 ## Capture and scientific meaning
 
-- Collection must be explicitly enabled in the resolved Run Configuration and initially support only the verified native Breakout training contract.
+- Collection must be explicitly enabled in the resolved Run Configuration and initially support only the verified native Breakout training contract, with both GradLab PPO and SB3 PPO/A2C.
 - Collection must reuse training transitions without changing Policy sampling, random streams, rewards, action overrides, resets, curricula, episode boundaries, evaluation admission, Acceptance, or Promotion.
 - Select episodes at reset independently of their eventual reward or outcome, spread admission across the planned training duration, and expose availability-driven sampling gaps.
 - Preserve full unmasked lossless provider RGB at the contracted action cadence, including initial and true pre-reset terminal frames, without intermediate native frames or repeated processed Policy stacks.

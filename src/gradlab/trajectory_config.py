@@ -96,11 +96,11 @@ def resolve_collection(value, train_config: Mapping) -> dict | None:
         if (
             train_config.get("game") != "Breakout-Atari2600-v0"
             or train_config.get("env_provider") != PROVIDER
-            or backend.get("id") not in {"sb3.ppo", "sb3.a2c"}
+            or backend.get("id") not in {"gradlab.ppo", "sb3.ppo", "sb3.a2c"}
             or train_config.get("sticky_action_prob", 0) != 0
         ):
             raise ValueError(
-                "collection requires verified native Breakout with SB3 PPO/A2C and no sticky actions"
+                "collection requires verified native Breakout with gradlab.ppo or SB3 PPO/A2C and no sticky actions"
             )
         if not isinstance(train_config.get("timesteps"), int) or train_config["timesteps"] <= 0:
             raise ValueError("collection requires a finite positive planned training budget")
