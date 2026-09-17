@@ -160,7 +160,7 @@ class TrainingRecorder:
             "contract": self.contract,
             "config": asdict(config),
         }
-        if len(canonical_json_bytes(producer)) > MAX_PRODUCER_BYTES:
+        if len(canonical_json_bytes(producer, ensure_ascii=True)) > MAX_PRODUCER_BYTES:
             raise ValueError("recording provenance exceeds bounded metadata allowance")
         atomic_write_json(self.root / "producer.json", producer)
         self._refresh_capacity()
@@ -467,7 +467,7 @@ class TrainingRecorder:
             "contract_sha256": self.contract_hash,
             "episode": summary,
         }
-        if len(canonical_json_bytes(manifest)) > MAX_MANIFEST_BYTES:
+        if len(canonical_json_bytes(manifest, ensure_ascii=True)) > MAX_MANIFEST_BYTES:
             raise ValueError("episode index exceeds bounded metadata allowance")
         atomic_write_json(self.root / f"{episode.identity}.manifest.json", manifest)
         self.encoded_bytes += size

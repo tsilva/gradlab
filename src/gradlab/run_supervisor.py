@@ -2174,6 +2174,13 @@ class RunSupervisor:
             )
             return 1
 
+    def _dataset_heartbeat(self) -> None:
+        # Uploads may renew the CAS token, but only the main supervisor loop may
+        # emit queued lease events or touch learner stop state.
+        self._renew_lease(self.clock.monotonic(), background=True)
+        if self.lease_lost:
+            raise LeaseUnavailable("writer lease was lost during dataset delivery")
+
     def _prepare_dataset_delivery(self) -> None:
         collection = self.train_config.get("trajectory_collection") or {}
         if not collection.get("enabled"):
@@ -2184,7 +2191,7 @@ class RunSupervisor:
         root.mkdir(parents=True, exist_ok=True)
         self.dataset_delivery = DatasetDelivery(
             root, self.authority.models, self.manifest.run_id, self.manifest.attempt_id,
-            int(collection["contribution_bytes"]), heartbeat=self._lease_heartbeat,
+            int(collection["contribution_bytes"]), heartbeat=self._dataset_heartbeat,
         )
         previous = self.dataset_delivery.prepare_budget()
         write_canonical_json(root / "admission.json", {
