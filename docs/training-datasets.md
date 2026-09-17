@@ -1,6 +1,6 @@
 # Collect training trajectories
 
-Training collection is opt-in for SB3 PPO/A2C with the exact native Breakout
+Training collection is opt-in for `gradlab.ppo` and SB3 PPO/A2C with the exact native Breakout
 0.5.13 action contract. Correctness is covered by provider and lifecycle tests.
 The matched training-throughput acceptance benchmark is still required before
 claiming the at-most-2% overhead target. No live training is started by tests.

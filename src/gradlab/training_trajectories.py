@@ -56,6 +56,29 @@ class _Episode:
     byte_count: int = 0
 
 
+def attach_training_recorder(context, runtime, model):
+    """Attach before the first reset, using the supervisor's durable admission."""
+    from gradlab.trajectory_delivery import read_document
+
+    train = context.train_config
+    collection = train.get("trajectory_collection") or {}
+    if not collection.get("enabled"):
+        return None
+    root = context.run_dir / "trajectories" / str(train["attempt_id"])
+    admission = read_document(root / "admission.json")
+    if not admission["budget_available"]:
+        return None
+    recorder = TrainingRecorder(
+        runtime, root, CollectionConfig(**collection),
+        {"run_id": train["wandb_run_id"], "attempt_id": train["attempt_id"],
+         "train_config": train},
+        position=lambda: (int(model.num_timesteps), int(model._n_updates)),
+        previous_reserved_bytes=int(admission["previous_reserved_bytes"]),
+    )
+    runtime.recording = recorder
+    return recorder
+
+
 def verify_recording_provider(runtime) -> dict:
     from env_breakoutatari2600_turbo_native import BreakoutVecEnv
     from gradlab.env_providers import _StartInfoAdapter

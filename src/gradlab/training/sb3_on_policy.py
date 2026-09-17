@@ -372,23 +372,9 @@ def run_sb3_on_policy(
             env.action_space,
             runtime_action_contract(env),
         )
-        collection = common_config.get("trajectory_collection") or {}
-        if collection.get("enabled"):
-            from gradlab.training_trajectories import TrainingRecorder
-            from gradlab.trajectory_config import CollectionConfig
-            from gradlab.trajectory_delivery import read_document
+        from gradlab.training_trajectories import attach_training_recorder
 
-            capture_root = context.run_dir / "trajectories" / str(common_config["attempt_id"])
-            admission = read_document(capture_root / "admission.json")
-            if admission["budget_available"]:
-                trajectory_recorder = TrainingRecorder(
-                    env.runtime, capture_root, CollectionConfig(**collection),
-                    {"run_id": common_config["wandb_run_id"],
-                     "attempt_id": common_config["attempt_id"], "train_config": common_config},
-                    position=lambda: (int(model.num_timesteps), int(model._n_updates)),
-                    previous_reserved_bytes=int(admission["previous_reserved_bytes"]),
-                )
-                env.runtime.recording = trajectory_recorder
+        trajectory_recorder = attach_training_recorder(context, env.runtime, model)
         rollout_quantum = n_envs * int(backend_config["n_steps"])
         context.session.configure_budget(
             requested_limit=int(common_config["timesteps"]),
