@@ -1856,7 +1856,7 @@ class BatchRuntime:
             self._pending_reset_reasons[dones] = None
             self._has_pending_resets = bool(np.any(self._pending_reset_mask))
             if self.recording is not None:
-                self.recording.reset(dones)
+                self.recording.reset(dones, after_step=True)
 
         self._current_observation_buffer = next_buffer_index
         batch_step = self._batch_steps[next_buffer_index]

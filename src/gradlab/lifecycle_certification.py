@@ -91,6 +91,7 @@ IMAGE_REF = "docker:registry.example/gradlab-certification@sha256:" + "b" * 64
 GOAL_PATH = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml")
 RECIPE_PATH = GOAL_PATH.parent / "recipes" / "ppo.yaml"
 DEFAULT_SCENARIOS = (
+    "training-dataset-delivery",
     "full-lifecycle",
     "parallel-run-isolation",
     "same-run-lease-fencing",
@@ -2480,7 +2481,7 @@ def _scenario_local_background_jobs(root: Path) -> dict[str, Any]:
 
 
 def _scenario_training_dataset_delivery(root: Path) -> dict[str, Any]:
-    from gradlab.trajectory_config import FORMAT
+    from gradlab.trajectory_config import FORMAT, ATTEMPT_METADATA_BYTES
     from gradlab.file_utils import atomic_write_json
     from gradlab.trajectory_delivery import DatasetDelivery
 
@@ -2519,7 +2520,7 @@ def _scenario_training_dataset_delivery(root: Path) -> dict[str, Any]:
     receipt = supervisor.dataset_delivery.receipt()
     recorder.require("dataset-verified-before-local-reclamation", receipt["complete"] and not path.exists())
     recorder.require("retry-preserves-run-contribution-budget",
-                     DatasetDelivery.reserved_bytes(supervisor.authority.models, supervisor.manifest.run_id) == 1024**2)
+                     DatasetDelivery.reserved_bytes(supervisor.authority.models, supervisor.manifest.run_id) == 1024**2 + ATTEMPT_METADATA_BYTES)
     inventory = supervisor.authority.models.get_json(receipt["manifest_key"])
     recorder.require("remote-inventory-binds-exact-bytes",
                      supervisor.authority.models.get_bytes(inventory["chunks"][0]["key"]) == data)
@@ -2528,6 +2529,25 @@ def _scenario_training_dataset_delivery(root: Path) -> dict[str, Any]:
     supervisor.drain_iteration()
     writers = {event["writer_id"] for event in prepared.runtime.wandb_events}
     recorder.require("dataset-diagnostics-use-supervisor-writer", writers == {prepared.runtime.writer_id})
+    delayed = fixture.prepare(run_number=82).supervisor
+    delayed.train_config["trajectory_collection"] = {
+        "enabled": True, "contribution_bytes": 2 * 1024**2, "drain_seconds": 600,
+    }
+    delayed._prepare_dataset_delivery()
+    started = fixture.clock.monotonic()
+    def finish_encoder():
+        if fixture.clock.monotonic() - started >= 350:
+            delayed_spool = delayed.dataset_delivery.root
+            atomic_write_json(delayed_spool / "producer.json", {"format": FORMAT})
+            atomic_write_json(delayed_spool / "closed.json", {"chunks": 0, "fault": None})
+    fixture.clock.maintenance.append(finish_encoder)
+    try:
+        delayed._drain()
+    finally:
+        fixture.clock.maintenance.remove(finish_encoder)
+    recorder.require("dataset-deadline-independent-of-wandb-timeout",
+                     fixture.clock.monotonic() - started >= 350
+                     and delayed.dataset_delivery.receipt()["complete"])
     return {"invariants": recorder.invariants, "evidence": {"verified_bytes": receipt["verified_bytes"]}}
 
 

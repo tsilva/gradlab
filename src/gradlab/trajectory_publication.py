@@ -51,8 +51,11 @@ not evidence of unbiased coverage. R2 sources are retained after publication.
 def finalized_inventories(control, models, runs):
     references = []
     for run in sorted(set(runs)):
-        manifests = [control.get_json(key) for key in control.iter_keys(f"runs/{run}/attempts")
-                     if key.endswith("/manifest.json")]
+        manifests = [
+            control.get_json(key)
+            for key in control.iter_keys(f"runs/{run}/attempts")
+            if key.endswith("/manifest.json")
+        ]
         if not manifests:
             manifests = [control.get_json(f"runs/{run}/manifest.json")]
         manifests.sort(key=lambda value: (value["created_at"], value["attempt_id"]))
@@ -65,14 +68,22 @@ def finalized_inventories(control, models, runs):
                 raise ValueError(f"Run has no finalized verified dataset inventory: {run}")
             if not delivery.get("complete"):
                 continue
+            if delivery.get("budget_exhausted"):
+                continue
             expected = f"datasets/runs/{run}/attempts/{attempt}/final.json"
             if delivery.get("manifest_key") != expected:
                 raise ValueError("dataset inventory is outside its Run/Attempt namespace")
             document = models.get_json(expected)
             if canonical_json_sha256(document) != delivery["manifest_sha256"]:
                 raise ValueError("Run dataset inventory checksum mismatch")
-            references.append({"run_id": run, "attempt_id": attempt,
-                               "key": expected, "sha256": delivery["manifest_sha256"]})
+            references.append(
+                {
+                    "run_id": run,
+                    "attempt_id": attempt,
+                    "key": expected,
+                    "sha256": delivery["manifest_sha256"],
+                }
+            )
     return references
 
 
@@ -140,12 +151,13 @@ def append_episode(api, read, repo, contract, manifest, archive: Path, work: Pat
 
     with zipfile.ZipFile(archive) as chunk:
         rows = []
+        members = set(chunk.namelist())
         for index, raw in enumerate(chunk.read("transitions.jsonl").splitlines()):
             row = json.loads(raw)
             if row["step"] != index or "policy_action" not in row or "executed_action" not in row:
                 raise ValueError("unaligned or incomplete transition action evidence")
             for frame in (f"frames/{index}.png", f"frames/{index + 1}.png"):
-                if frame not in chunk.namelist():
+                if frame not in members:
                     raise ValueError("missing referenced episode image")
             rows.append(
                 {
@@ -252,24 +264,34 @@ class DatasetPublicationHandler:
         for key in ("stage", "return", "score", "bricks"):
             if filters.get(f"{key}_min", -math.inf) > filters.get(f"{key}_max", math.inf):
                 raise ValueError("dataset selection bounds are reversed")
+        if not payload["inventories"]:
+            raise ValueError("selected Runs have no recorded dataset inventories")
         for reference in payload["inventories"]:
-            if (reference["run_id"] not in runs
-                    or not re.fullmatch(r"attempt-[0-9a-f]{16}", reference["attempt_id"])
-                    or reference["key"] != f"datasets/runs/{reference['run_id']}/attempts/{reference['attempt_id']}/final.json"
-                    or not re.fullmatch(r"[0-9a-f]{64}", reference["sha256"])):
+            if (
+                reference["run_id"] not in runs
+                or not re.fullmatch(r"attempt-[0-9a-f]{16}", reference["attempt_id"])
+                or reference["key"]
+                != f"datasets/runs/{reference['run_id']}/attempts/{reference['attempt_id']}/final.json"
+                or not re.fullmatch(r"[0-9a-f]{64}", reference["sha256"])
+            ):
                 raise ValueError("invalid immutable dataset inventory reference")
         return {**payload, "runs": sorted(set(runs))}
 
     def advance(self, job):
         try:
             return self._publish(job)
-        except (ValueError, KeyError, TypeError):
+        except ValueError, KeyError, TypeError:
             raise
         except Exception as exc:
             if int(job.get("attempts", 1)) >= 8:
-                return HandlerResult(state="blocked", message=f"Publication needs retry: {type(exc).__name__}")
-            return HandlerResult(state="retry_wait", available_at=time.time() + 30,
-                                 message=f"Publication retry: {type(exc).__name__}")
+                return HandlerResult(
+                    state="blocked", message=f"Publication needs retry: {type(exc).__name__}"
+                )
+            return HandlerResult(
+                state="retry_wait",
+                available_at=time.time() + 30,
+                message=f"Publication retry: {type(exc).__name__}",
+            )
 
     def _publish(self, job):
         from gradlab.operator_environment import load_repository_operator_environment
@@ -353,9 +375,16 @@ class DatasetPublicationHandler:
 
                 shutil.rmtree(work / "cache", ignore_errors=True)
             key = f"contributions/{selection_id}.json"
-            revision = _commit(api, read, repo, {key: canonical_json_bytes(selection),
-                               "training-dataset.json": canonical_json_bytes(contract),
-                               "README.md": DATASET_README})
+            revision = _commit(
+                api,
+                read,
+                repo,
+                {
+                    key: canonical_json_bytes(selection),
+                    "training-dataset.json": canonical_json_bytes(contract),
+                    "README.md": DATASET_README,
+                },
+            )
         return HandlerResult(
             state="succeeded",
             message=f"Published dataset revision {revision}",

@@ -9,13 +9,33 @@ import math
 PROVIDER = "env-breakoutatari2600-turbo-native"
 PROVIDER_VERSION = "0.5.13"
 FORMAT = "gradlab.training-trajectories.v1"
+MAX_MANIFEST_BYTES = 16 * 1024
+MAX_PRODUCER_BYTES = 64 * 1024
+ATTEMPT_METADATA_BYTES = 128 * 1024
+
+
+def working_memory_bytes(config):
+    # Conditional R2 writes retain two chunks. Reserve transport and encoder
+    # space plus expanded Python indexes separately from the raw-frame queue.
+    chunks = config.contribution_bytes // config.chunk_bytes
+    return (
+        3 * config.chunk_bytes
+        + chunks * MAX_MANIFEST_BYTES * 16
+        + (4 * config.max_active_episodes + 2) * 1024**2
+    )
+
+
+def index_disk_bytes(config):
+    return (
+        config.contribution_bytes // config.chunk_bytes
+    ) * MAX_MANIFEST_BYTES + 2 * MAX_PRODUCER_BYTES
 
 
 @dataclass(frozen=True)
 class CollectionConfig:
     enabled: bool = False
     contribution_bytes: int = 10 * 1024**3
-    memory_bytes: int = 64 * 1024**2
+    memory_bytes: int = 256 * 1024**2
     disk_bytes: int = 512 * 1024**2
     chunk_bytes: int = 32 * 1024**2
     scratch_headroom_bytes: int = 1024**3
@@ -59,9 +79,15 @@ def resolve_collection(value, train_config: Mapping) -> dict | None:
     chunk = settings["chunk_bytes"]
     if not 1024**2 <= chunk <= 128 * 1024**2:
         raise ValueError("collection chunks must be between 1 and 128 MiB")
-    if settings["memory_bytes"] < chunk + 2 * 1024**2 * settings["max_active_episodes"]:
-        raise ValueError("collection memory limit must include chunk and handoff working space")
-    if settings["disk_bytes"] < 2 * chunk or settings["contribution_bytes"] < chunk:
+    limits = CollectionConfig(**settings)
+    if settings["memory_bytes"] < working_memory_bytes(limits) + 1024**2:
+        raise ValueError(
+            "collection memory limit must include upload, index, encoding and handoff working space"
+        )
+    if (
+        settings["disk_bytes"] < 2 * chunk + index_disk_bytes(limits)
+        or settings["contribution_bytes"] < chunk
+    ):
         raise ValueError("collection disk and contribution limits must accommodate chunks")
     if settings["budget_stages"] > 1000:
         raise ValueError("collection budget_stages must not exceed 1000")

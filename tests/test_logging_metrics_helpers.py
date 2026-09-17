@@ -260,8 +260,8 @@ class MetricsDocumentationTests(unittest.TestCase):
                     name = name.replace(f"{{{placeholder}}}", replacement, 1)
                 scalar_names.add(name)
 
-        self.assertEqual(len(metric_names.METRIC_DEFINITIONS), 98)
-        self.assertEqual(len(scalar_names), 88)
+        self.assertEqual(len(metric_names.METRIC_DEFINITIONS), 113)
+        self.assertEqual(len(scalar_names), 103)
         self.assertEqual(
             len(
                 {
@@ -300,6 +300,7 @@ class MetricsDocumentationTests(unittest.TestCase):
             "value",
             "visits",
             "transitions/second",
+            "bytes/second",
         }
         for definition in metric_names.METRIC_DEFINITIONS:
             with self.subTest(metric=definition.name):

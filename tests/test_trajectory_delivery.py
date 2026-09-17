@@ -5,7 +5,7 @@ import pytest
 from gradlab.file_utils import atomic_write_json
 from gradlab.r2_store import BucketConfig, R2Bucket
 from gradlab.trajectory_delivery import DatasetDelivery
-from gradlab.trajectory_config import FORMAT
+from gradlab.trajectory_config import FORMAT, ATTEMPT_METADATA_BYTES
 
 
 def artifact(root):
@@ -41,7 +41,7 @@ def test_delivery_verifies_manifest_before_reclaim_and_reconciles_repeat(tmp_pat
     assert bucket.get_bytes(inventory["chunks"][0]["key"]) == b"representative immutable chunk"
     delivery.advance(final=True)
     assert delivery.receipt() == receipt
-    assert DatasetDelivery.reserved_bytes(bucket, "run") == 1024**2
+    assert DatasetDelivery.reserved_bytes(bucket, "run") == 1024**2 + ATTEMPT_METADATA_BYTES
 
 
 def test_lost_ack_recovery_and_conflicting_remote_bytes(tmp_path):
@@ -61,3 +61,37 @@ def test_lost_ack_recovery_and_conflicting_remote_bytes(tmp_path):
     delivery = DatasetDelivery(root, bucket, "run", "attempt", 2 * 1024**2)
     with pytest.raises(ValueError, match="checksum"):
         delivery.advance(final=True)
+
+
+def test_spool_accounting_tolerates_verified_concurrent_deletion(tmp_path, monkeypatch):
+    from pathlib import Path
+    from gradlab.trajectory_delivery import spool_bytes
+
+    (tmp_path / "retained").write_bytes(b"kept")
+    disappearing = tmp_path / "removed.zip"
+    disappearing.write_bytes(b"gone")
+    original = Path.stat
+
+    def racing(path, *args, **kwargs):
+        if path == disappearing:
+            path.unlink(missing_ok=True)
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "stat", racing)
+    assert spool_bytes(tmp_path) == 4
+
+
+def test_attempt_metadata_counts_toward_budget_and_exhaustion_creates_no_more_artifacts(tmp_path):
+    bucket = R2Bucket(BucketConfig(uri=(tmp_path / "r2").as_uri()))
+    limit = 2 * ATTEMPT_METADATA_BYTES
+    for index in range(4):
+        root = tmp_path / str(index)
+        root.mkdir()
+        atomic_write_json(root / "producer.json", {"format": FORMAT})
+        atomic_write_json(root / "closed.json", {"chunks": 0, "fault": None})
+        delivery = DatasetDelivery(root, bucket, "run", f"attempt-{index}", limit)
+        delivery.advance(final=True)
+        assert delivery.receipt()["complete"]
+        assert delivery.receipt().get("budget_exhausted", False) == (index >= 2)
+    assert DatasetDelivery.reserved_bytes(bucket, "run") == limit
+    assert not list(bucket.iter_keys("datasets/runs/run/attempts/attempt-2/"))

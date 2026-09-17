@@ -1702,6 +1702,17 @@ class RunAuthority:
         if not collection.get("enabled"):
             return
         delivery = receipt.drain.get("dataset_delivery") or {}
+        if delivery.get("complete") is True and delivery.get("budget_exhausted") is True:
+            from gradlab.trajectory_config import ATTEMPT_METADATA_BYTES
+            from gradlab.trajectory_delivery import DatasetDelivery
+
+            used = DatasetDelivery.reserved_bytes(self.models, receipt.run_id)
+            if used + ATTEMPT_METADATA_BYTES <= int(collection["contribution_bytes"]):
+                raise ValueError("dataset contribution budget is not exhausted")
+            prefix = f"datasets/runs/{receipt.run_id}/attempts/{receipt.attempt_id}/"
+            if any(self.models.iter_keys(prefix)):
+                raise ValueError("budget-exhausted attempt has unaccounted dataset artifacts")
+            return
         key = f"datasets/runs/{receipt.run_id}/attempts/{receipt.attempt_id}/final.json"
         if delivery.get("complete") is not True or delivery.get("manifest_key") != key:
             raise ValueError("complete terminal drain requires verified dataset delivery")
