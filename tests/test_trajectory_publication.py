@@ -114,9 +114,10 @@ def test_conflicting_identity_and_contract_rejected(tmp_path):
         )
 
 
-def test_explicit_queue_publication_filters_before_assets_and_preserves_actions(tmp_path, monkeypatch):
+def test_explicit_queue_publication_filters_before_assets_and_preserves_actions(
+    tmp_path, monkeypatch
+):
     from pathlib import Path
-    from gradlab.file_utils import atomic_write_json
     from gradlab.job_queue import JobStore, WorkerStart, run_flusher
     from gradlab.r2_store import R2Bucket, BucketConfig, RunStorageConfig
     from gradlab.trajectory_delivery import DatasetDelivery
@@ -127,55 +128,90 @@ def test_explicit_queue_publication_filters_before_assets_and_preserves_actions(
     import pyarrow.parquet as pq
     import io
 
-    run, attempt = 'gradlab-' + 'a'*32, 'attempt-' + 'b'*16
+    run, attempt = "gradlab-" + "a" * 32, "attempt-" + "b" * 16
     storage = RunStorageConfig(
-        BucketConfig(uri=(tmp_path/'control').as_uri()),
-        BucketConfig(uri=(tmp_path/'eval').as_uri()),
-        BucketConfig(uri=(tmp_path/'models').as_uri()),
+        BucketConfig(uri=(tmp_path / "control").as_uri()),
+        BucketConfig(uri=(tmp_path / "eval").as_uri()),
+        BucketConfig(uri=(tmp_path / "models").as_uri()),
     )
     control, models = R2Bucket(storage.control), R2Bucket(storage.models)
-    spool = tmp_path/'spool'
+    spool = tmp_path / "spool"
     spool.mkdir()
-    path = chunk(spool)
-    document = {'format': FORMAT, 'file': path.name,
-                'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
-                'bytes': path.stat().st_size, 'reserved_bytes': 1024**2,
-                'episode': {'episode_id': f'{run}.{attempt}.0', 'run_id': run,
-                            'attempt_id': attempt, 'complete': True, 'stage_start': 0.5,
-                            'prefix_return': 4, 'last_transition': {'facts': {'score': 7}}}}
-    atomic_write_json(spool/'episode.manifest.json', document)
-    atomic_write_json(spool/'producer.json', {'contract': {'format': FORMAT}})
-    atomic_write_json(spool/'closed.json', {'chunks': 1, 'fault': None})
-    delivery = DatasetDelivery(spool, models, run, attempt, 2 * 1024**2)
-    delivery.advance(final=True)
-    control.put_json(f'runs/{run}/manifest.json', {'run_id': run, 'attempt_id': attempt, 'created_at': '2026-09-17'})
-    control.put_json(f'runs/{run}/attempts/{attempt}/terminal.json', {'drain': {'dataset_delivery': delivery.receipt()}})
+    import numpy as np
+    from tests.test_training_trajectories import training_env
+    from gradlab.training_trajectories import TrainingRecorder
+    from gradlab.trajectory_config import CollectionConfig
+
+    monkeypatch.setattr(
+        "gradlab.training_trajectories.shutil.disk_usage",
+        lambda _: SimpleNamespace(total=100 * 1024**3, free=50 * 1024**3),
+    )
+    train, env = training_env()
+    recorder = TrainingRecorder(
+        env.runtime,
+        spool,
+        CollectionConfig(sample_probability=1, budget_stages=1),
+        {"run_id": run, "attempt_id": attempt, "train_config": train},
+        position=lambda: (0, 0),
+    )
+    env.runtime.recording = recorder
+    try:
+        env.reset()
+        for _ in range(3):
+            env.step(np.ones(2, dtype=np.int64))
+    finally:
+        env.close()
+    recorder.wait(10)
+    delivery = DatasetDelivery(spool, models, run, attempt, 10 * 1024**3)
+    for _ in range(10):
+        delivery.advance(final=True)
+        if delivery.receipt()["complete"]:
+            break
+    assert delivery.receipt()["complete"]
+    control.put_json(
+        f"runs/{run}/manifest.json",
+        {"run_id": run, "attempt_id": attempt, "created_at": "2026-09-17"},
+    )
+    control.put_json(
+        f"runs/{run}/attempts/{attempt}/terminal.json",
+        {"drain": {"dataset_delivery": delivery.receipt()}},
+    )
     api = Hub()
     api.create_repo = lambda **kwargs: None
+
     def download(repo, name, **kwargs):
         if name not in api.files:
             raise EntryNotFoundError(name)
-        target = Path(kwargs['cache_dir'])/name
+        target = Path(kwargs["cache_dir"]) / name
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(api.files[name])
         return str(target)
-    monkeypatch.setattr(publication, 'HfApi', lambda: api)
-    monkeypatch.setattr(publication, 'hf_hub_download', download)
-    monkeypatch.setattr(publication, 'ensure_flusher', lambda _: WorkerStart('already_running'))
-    monkeypatch.setattr(environment, 'load_repository_operator_environment', lambda _: None)
-    monkeypatch.setattr(RunStorageConfig, 'from_env', lambda: storage)
-    queue = JobStore(root=tmp_path/'queue')
-    job = enqueue_publication(runs=[run], repo='user/data', filters={'score_min': 5}, repo_root=tmp_path, store=queue)
+
+    monkeypatch.setattr(publication, "HfApi", lambda: api)
+    monkeypatch.setattr(publication, "hf_hub_download", download)
+    monkeypatch.setattr(publication, "ensure_flusher", lambda _: WorkerStart("already_running"))
+    monkeypatch.setattr(environment, "load_repository_operator_environment", lambda _: None)
+    monkeypatch.setattr(RunStorageConfig, "from_env", lambda: storage)
+    queue = JobStore(root=tmp_path / "queue")
+    job = enqueue_publication(
+        runs=[run], repo="user/data", filters={"score_min": 0}, repo_root=tmp_path, store=queue
+    )
     assert api.files == {}  # Admission starts no publication itself.
     run_flusher(queue, idle_seconds=0)
-    row = queue.job(job['job']['job_id'])
-    assert row['state'] == 'succeeded', row
-    table = next(value for key,value in api.files.items() if key.endswith('.parquet'))
+    row = queue.job(job["job"]["job_id"])
+    assert row["state"] == "succeeded", row
+    table = next(value for key, value in api.files.items() if key.endswith(".parquet"))
     actual = pq.read_table(io.BytesIO(table)).to_pylist()[0]
-    assert (actual['policy_action'], actual['executed_action'], actual['native_action']) == (2, 0, 1)
+    assert (actual["policy_action"], actual["executed_action"], actual["native_action"]) == (
+        1,
+        0,
+        1,
+    )
     before = dict(api.files)
-    repeat = enqueue_publication(runs=[run], repo='user/data', filters={'score_min': 5}, repo_root=tmp_path, store=queue)
+    repeat = enqueue_publication(
+        runs=[run], repo="user/data", filters={"score_min": 0}, repo_root=tmp_path, store=queue
+    )
     run_flusher(queue, idle_seconds=0)
-    assert not repeat['created']
+    assert not repeat["created"]
     assert api.files == before
-    assert models.get_json(delivery.receipt()['manifest_key'])['chunks']
+    assert models.get_json(delivery.receipt()["manifest_key"])["chunks"]

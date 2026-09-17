@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import stat
 import threading
 import time
 from typing import Callable
@@ -12,11 +13,34 @@ from typing import Callable
 from gradlab.file_utils import atomic_write_json
 from gradlab.json_utils import canonical_json_sha256
 from gradlab.r2_store import R2Bucket
-from gradlab.trajectory_config import FORMAT
+from gradlab.trajectory_config import (
+    FORMAT,
+    MAX_MANIFEST_BYTES,
+    MAX_PRODUCER_BYTES,
+    ATTEMPT_METADATA_BYTES,
+)
+
+
+def spool_bytes(root):
+    total = 0
+    for path in root.rglob("*"):
+        try:
+            entry = path.stat()
+        except FileNotFoundError:
+            continue  # Encoder rename and verified reclamation are concurrent.
+        if stat.S_ISREG(entry.st_mode):
+            total += entry.st_size
+    return total
 
 
 def read_document(path):
-    value = json.loads(Path(path).read_bytes())
+    path = Path(path)
+    limit = MAX_MANIFEST_BYTES if path.name.endswith(".manifest.json") else MAX_PRODUCER_BYTES
+    with path.open("rb") as stream:
+        data = stream.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError("dataset metadata exceeds its bounded allowance")
+    value = json.loads(data)
     if not isinstance(value, dict):
         raise ValueError("dataset document must be an object")
     return value
@@ -58,6 +82,21 @@ class DatasetDelivery:
         self._final = False
         self._stopped = False
         self._verified = set()
+        self._budget_prepared = False
+        self.budget_available = True
+
+    def prepare_budget(self):
+        key = f"{self.prefix}/metadata.reservation.json"
+        existing = self.bucket.get_json_optional(key)
+        previous = self.reserved_bytes(self.bucket, self.run_id)
+        if existing is None:
+            self.budget_available = previous + ATTEMPT_METADATA_BYTES <= self.limit
+            if self.budget_available:
+                self._fence()
+                self.bucket.put_json(key, {"reserved_bytes": ATTEMPT_METADATA_BYTES})
+                previous += ATTEMPT_METADATA_BYTES
+        self._budget_prepared = True
+        return previous
 
     @staticmethod
     def reserved_bytes(bucket, run_id):
@@ -96,6 +135,18 @@ class DatasetDelivery:
         self.heartbeat()
 
     def advance(self, *, final=False):
+        if not self._budget_prepared:
+            self.prepare_budget()
+        if not self.budget_available:
+            if final:
+                self._receipt = {
+                    "enabled": True,
+                    "complete": True,
+                    "budget_exhausted": True,
+                    "chunk_count": 0,
+                    "verified_bytes": 0,
+                }
+            return
         if not (self.root / "producer.json").exists():
             return
         manifests = sorted(self.root.glob("*.manifest.json"))
@@ -143,8 +194,10 @@ class DatasetDelivery:
                 verify_bytes(payload, manifest)
                 self._fence()
                 self.bucket.put_bytes(key, payload, metadata={"sha256": manifest["sha256"]})
+                del payload
             remote = self.bucket.get_bytes(key)
             verify_bytes(remote, manifest)
+            del remote
             self._fence()
             self.bucket.put_json(manifest_key, {**manifest, "key": key})
             committed = self.bucket.get_json(manifest_key)
@@ -217,15 +270,13 @@ class DatasetDelivery:
             "ops/dataset/upload/rate": rates[2],
             "ops/dataset/pending/bytes": self.pending_bytes,
             "ops/dataset/pending/seconds": self.oldest_pending_seconds,
-            "ops/dataset/spool/bytes": sum(
-                p.stat().st_size for p in self.root.rglob("*") if p.is_file()
-            ),
+            "ops/dataset/spool/bytes": spool_bytes(self.root),
             "ops/dataset/upload/failures": self.failures,
             "ops/dataset/pause/seconds": status.get("pause_seconds", 0),
             "ops/dataset/skipped/count": status.get("skipped", 0),
             "ops/dataset/incomplete/count": status.get("incomplete", 0),
         }
-        reason = status.get("pause_reason", "")
+        reason = status.get("pause_reason", "") if self.budget_available else "budget"
         for name in ("budget", "stage_budget", "memory", "disk", "recording_fault"):
             result[f"ops/dataset/pause/{name}"] = float(reason == name)
         return result

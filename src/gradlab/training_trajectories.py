@@ -23,10 +23,20 @@ from PIL import Image
 
 from gradlab.file_utils import atomic_write_json, file_sha256, fsync_path
 from gradlab.json_utils import canonical_json_bytes, canonical_json_sha256, json_value
-from gradlab.trajectory_config import CollectionConfig, FORMAT, PROVIDER, PROVIDER_VERSION
+from gradlab.trajectory_config import (
+    CollectionConfig,
+    FORMAT,
+    PROVIDER,
+    PROVIDER_VERSION,
+    MAX_MANIFEST_BYTES,
+    MAX_PRODUCER_BYTES,
+    working_memory_bytes,
+    index_disk_bytes,
+)
+from gradlab.trajectory_delivery import spool_bytes
 
 # A full RGB frame plus bounded scalar metadata and queue/Python overhead.
-FRAME_RESERVATION = 128 * 1024
+FRAME_RESERVATION = 256 * 1024
 METADATA_RESERVATION = 64 * 1024
 
 
@@ -108,11 +118,14 @@ class TrainingRecorder:
         self.serial = 0
         self.reserved = previous_reserved_bytes
         self.queue = queue.Queue(
-            maxsize=max(1, (config.memory_bytes - config.chunk_bytes) // FRAME_RESERVATION)
+            maxsize=max(
+                1, (config.memory_bytes - working_memory_bytes(config)) // FRAME_RESERVATION
+            )
         )
         self.closed = False
         self.fault: str | None = None
         self.can_admit = False
+        self.available_slots = 0
         self.skipped = 0
         self.incomplete = 0
         self.captured = 0
@@ -141,15 +154,15 @@ class TrainingRecorder:
             for key in ("gamma", "gamma_final", "gamma_schedule_timesteps")
         }
         self.contract_hash = canonical_json_sha256(self.contract)
-        atomic_write_json(
-            self.root / "producer.json",
-            {
-                "format": FORMAT,
-                "provenance": self.provenance,
-                "contract": self.contract,
-                "config": asdict(config),
-            },
-        )
+        producer = {
+            "format": FORMAT,
+            "provenance": self.provenance,
+            "contract": self.contract,
+            "config": asdict(config),
+        }
+        if len(canonical_json_bytes(producer)) > MAX_PRODUCER_BYTES:
+            raise ValueError("recording provenance exceeds bounded metadata allowance")
+        atomic_write_json(self.root / "producer.json", producer)
         self._refresh_capacity()
         self._thread.start()
 
@@ -160,10 +173,12 @@ class TrainingRecorder:
             episode.finish_reason = reason
         self.active.clear()
 
-    def reset(self, mask):
+    def reset(self, mask, *, after_step=False):
         if self.closed or self.fault:
             return
         step, update = self.position()
+        if after_step:
+            step += self.runtime.num_envs
         for lane in np.flatnonzero(mask):
             lane = int(lane)
             if self.random.random() > self.config.sample_probability:
@@ -192,7 +207,10 @@ class TrainingRecorder:
                 self.skipped += 1
                 continue
             try:
-                if not self.can_admit or len(self.sessions) >= self.config.max_active_episodes:
+                if (
+                    self.available_slots <= 0
+                    or len(self.sessions) >= self.config.max_active_episodes
+                ):
                     self.skipped += 1
                     continue
                 self.serial += 1
@@ -220,6 +238,8 @@ class TrainingRecorder:
                 self.sessions[self.serial] = episode
                 self.active[lane] = episode
                 self.reserved += self.config.chunk_bytes
+                self.available_slots -= 1
+                self.can_admit = self.available_slots > 0
                 self.pause_reason = ""
             except queue.Full:
                 self.serial -= 1
@@ -351,14 +371,21 @@ class TrainingRecorder:
             raise RuntimeError(f"trajectory encoding failed: {self.fault}")
 
     def _refresh_capacity(self):
-        used = sum(p.stat().st_size for p in self.root.rglob("*") if p.is_file())
+        used = spool_bytes(self.root)
         usage = shutil.disk_usage(self.root)
         free = usage.free
-        reserve = (len(self.sessions) + 1) * self.config.chunk_bytes
-        self.can_admit = (
-            used + reserve <= self.config.disk_bytes
-            and free >= reserve + max(self.config.scratch_headroom_bytes, int(usage.total * 0.06))
+        # Conservatively retain a whole reservation for every writing session,
+        # in addition to its existing bytes and all future bounded index growth.
+        reserve = len(self.sessions) * self.config.chunk_bytes + index_disk_bytes(self.config)
+        available = (
+            min(
+                self.config.disk_bytes - used,
+                free - max(self.config.scratch_headroom_bytes, int(usage.total * 0.06)),
+            )
+            - reserve
         )
+        self.available_slots = max(0, available // self.config.chunk_bytes)
+        self.can_admit = self.available_slots > 0
         if not self.can_admit:
             self.pause_reason = "disk"
         elif self.pause_reason in {"disk", "memory"} and not self.queue.full():
@@ -405,7 +432,7 @@ class TrainingRecorder:
             **episode.metadata,
             "complete": episode.complete,
             "interruption_reason": None if episode.complete else episode.finish_reason,
-            "captured_start": 0,
+            "captured_start": episode.metadata["initial_episode_steps"],
             "captured_steps": captured_steps,
             "prefix_return": episode.prefix_return,
             "last_transition": episode.last,
@@ -440,6 +467,8 @@ class TrainingRecorder:
             "contract_sha256": self.contract_hash,
             "episode": summary,
         }
+        if len(canonical_json_bytes(manifest)) > MAX_MANIFEST_BYTES:
+            raise ValueError("episode index exceeds bounded metadata allowance")
         atomic_write_json(self.root / f"{episode.identity}.manifest.json", manifest)
         self.encoded_bytes += size
         self.incomplete += int(not episode.complete)

@@ -380,14 +380,15 @@ def run_sb3_on_policy(
 
             capture_root = context.run_dir / "trajectories" / str(common_config["attempt_id"])
             admission = read_document(capture_root / "admission.json")
-            trajectory_recorder = TrainingRecorder(
-                env.runtime, capture_root, CollectionConfig(**collection),
-                {"run_id": common_config["wandb_run_id"],
-                 "attempt_id": common_config["attempt_id"], "train_config": common_config},
-                position=lambda: (int(model.num_timesteps), int(model._n_updates)),
-                previous_reserved_bytes=int(admission["previous_reserved_bytes"]),
-            )
-            env.runtime.recording = trajectory_recorder
+            if admission["budget_available"]:
+                trajectory_recorder = TrainingRecorder(
+                    env.runtime, capture_root, CollectionConfig(**collection),
+                    {"run_id": common_config["wandb_run_id"],
+                     "attempt_id": common_config["attempt_id"], "train_config": common_config},
+                    position=lambda: (int(model.num_timesteps), int(model._n_updates)),
+                    previous_reserved_bytes=int(admission["previous_reserved_bytes"]),
+                )
+                env.runtime.recording = trajectory_recorder
         rollout_quantum = n_envs * int(backend_config["n_steps"])
         context.session.configure_budget(
             requested_limit=int(common_config["timesteps"]),

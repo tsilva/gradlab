@@ -13,8 +13,8 @@ runtime:
     enabled: true
 ```
 
-Resolved defaults are 10 GiB of total reserved contribution per Run, 64 MiB of
-capture working memory, 512 MiB of local spool, 32 MiB per chunk, one active
+Resolved defaults are 10 GiB of total reserved contribution per Run, 256 MiB of
+capture and delivery working memory, 512 MiB of local spool, 32 MiB per chunk, one active
 recording, 5% reset sampling probability, 20 planned-budget stages, and a
 120-second dataset drain. `scratch_headroom_bytes` defaults to 1 GiB; the encoder
 also retains at least 6% filesystem headroom, ahead of the global scratch guard.
@@ -33,7 +33,9 @@ depends on budget, memory and disk availability. These recordings are not an
 unbiased sample of all training experience. A chunk reserves its entire maximum
 allowance at admission; smaller compressed chunks do not replenish that
 allowance. Local deletion also does not replenish it. Verified remote
-reservations carry across Attempts. Admission allowance grows against the
+reservations carry across Attempts. Each Attempt also reserves 128 KiB for its
+producer and finalization metadata; exhausted Runs skip further capture without
+creating new dataset artifacts. Admission allowance grows against the
 original planned training duration, even if training stops early.
 
 Each episode produces a bounded ZIP of full unmasked PNG frames and a JSONL

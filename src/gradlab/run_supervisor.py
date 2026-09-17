@@ -2182,12 +2182,15 @@ class RunSupervisor:
 
         root = self.run_dir / "trajectories" / self.manifest.attempt_id
         root.mkdir(parents=True, exist_ok=True)
-        previous = DatasetDelivery.reserved_bytes(self.authority.models, self.manifest.run_id)
-        write_canonical_json(root / "admission.json", {"previous_reserved_bytes": previous})
         self.dataset_delivery = DatasetDelivery(
             root, self.authority.models, self.manifest.run_id, self.manifest.attempt_id,
             int(collection["contribution_bytes"]), heartbeat=self._lease_heartbeat,
         )
+        previous = self.dataset_delivery.prepare_budget()
+        write_canonical_json(root / "admission.json", {
+            "previous_reserved_bytes": previous,
+            "budget_available": self.dataset_delivery.budget_available,
+        })
         if getattr(self.runtime, "dataset_delivery_background", True):
             self.dataset_delivery.start()
 
@@ -2288,8 +2291,7 @@ class RunSupervisor:
         pending_frames = self.store.metric_outbox_stats()["frames"]
         converged = (
             dataset_complete
-            and
-            self._all_ready_checkpoints_published()
+            and self._all_ready_checkpoints_published()
             and self.store.all_evals_settled()
             and pending_frames == 0
         )
@@ -2300,7 +2302,11 @@ class RunSupervisor:
         while True:
             now = self.clock.monotonic()
             activity, converged = self.drain_iteration(now=now)
-            if self.store.all_evals_settled():
+            checkpoint_wandb_pending = (
+                not self._all_ready_checkpoints_published()
+                or self.store.metric_outbox_stats()["frames"] != 0
+            )
+            if self.store.all_evals_settled() and checkpoint_wandb_pending:
                 if delivery_deadline is None:
                     delivery_deadline = now + WANDB_DRAIN_TIMEOUT_SECONDS
             else:
