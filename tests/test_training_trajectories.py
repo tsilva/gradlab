@@ -62,7 +62,9 @@ def test_actual_autoserve_actions_rgb_and_reset_boundaries_round_trip(tmp_path):
     finally:
         env.close()
     recorder.wait(10)
-    manifest = json.loads(next(tmp_path.glob("*.manifest.json")).read_text())
+    manifests = [json.loads(path.read_text()) for path in tmp_path.glob("*.manifest.json")]
+    # Autoreset can admit another episode before close; filesystem order is not episode order.
+    manifest = next(item for item in manifests if item["episode"]["episode_index"] == 0)
     assert manifest["episode"]["complete"]
     assert manifest["episode"]["captured_steps"] == 3
     with zipfile.ZipFile(tmp_path / manifest["file"]) as chunk:
