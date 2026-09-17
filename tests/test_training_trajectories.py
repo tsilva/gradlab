@@ -1,0 +1,130 @@
+import io
+import json
+import zipfile
+from pathlib import Path
+
+import numpy as np
+from PIL import Image
+
+from gradlab.env import make_training_vec_env, resolve_env_config
+from gradlab.env_config import env_config_from_mapping
+from gradlab.recipe_documents import compose_train_document
+from gradlab.trajectory_config import CollectionConfig
+from gradlab.training_trajectories import TrainingRecorder
+
+
+def training_env():
+    root = Path("experiments/goals/Breakout-Atari2600-v0/FirstWall")
+    train = compose_train_document(root / "_goal.yaml", root / "recipes/ppo.yaml")["train_config"]
+    config = resolve_env_config(env_config_from_mapping(train))
+    config.env_args["noop_reset_max"] = 0
+    config.task["termination"]["max_episode_steps"] = 3
+    env = make_training_vec_env(config, n_envs=2, seed=12)
+    return train, env
+
+
+def test_actual_autoserve_actions_rgb_and_reset_boundaries_round_trip(tmp_path):
+    train, env = training_env()
+    position = [0, 0]
+    recorder = TrainingRecorder(
+        env.runtime,
+        tmp_path,
+        CollectionConfig(sample_probability=1, budget_stages=1),
+        {
+            "run_id": "gradlab-" + "a" * 32,
+            "attempt_id": "attempt-" + "b" * 16,
+            "train_config": train,
+        },
+        position=lambda: tuple(position),
+    )
+    env.runtime.recording = recorder
+    try:
+        env.reset()
+        initial = env.runtime.provider.render_lane(0).copy()
+        frames = []
+        for step in range(3):
+            position[:] = [step * 2, step // 2]
+            env.step(np.ones(2, dtype=np.int64))
+            if step < 2:
+                frames.append(env.runtime.provider.render_lane(0).copy())
+    finally:
+        env.close()
+    recorder.wait(10)
+    manifest = json.loads(next(tmp_path.glob("*.manifest.json")).read_text())
+    assert manifest["episode"]["complete"]
+    assert manifest["episode"]["captured_steps"] == 3
+    with zipfile.ZipFile(tmp_path / manifest["file"]) as chunk:
+        rows = [json.loads(line) for line in chunk.read("transitions.jsonl").splitlines()]
+        np.testing.assert_array_equal(
+            np.array(Image.open(io.BytesIO(chunk.read("frames/0.png")))), initial
+        )
+        np.testing.assert_array_equal(
+            np.array(Image.open(io.BytesIO(chunk.read("frames/1.png")))), frames[0]
+        )
+        assert rows[0]["policy_action"] == 1
+        assert rows[0]["executed_action"] == 0  # FIRE in this Run's provider table.
+        assert rows[0]["native_action"] == 1
+        assert rows[0]["override_rule"] == "auto_serve"
+        assert rows[1]["executed_action"] == 1
+        assert rows[1]["native_action"] == 2
+        assert rows[1]["override_rule"] is None
+        assert [row["policy_update"] for row in rows] == [0, 0, 1]
+        assert rows[-1]["truncated"]
+        assert not rows[-1]["provider_truncated"]
+        terminal = np.array(Image.open(io.BytesIO(chunk.read("frames/3.png"))))
+        assert not np.array_equal(terminal, initial)
+
+
+def test_capture_leaves_seeded_training_trajectory_and_rng_unchanged(tmp_path):
+    train, recorded = training_env()
+    _, baseline = training_env()
+    position = [0, 0]
+    recorder = TrainingRecorder(
+        recorded.runtime, tmp_path, CollectionConfig(sample_probability=1, budget_stages=1),
+        {'run_id': 'gradlab-' + 'c'*32, 'attempt_id': 'attempt-' + 'd'*16,
+         'train_config': train}, position=lambda: tuple(position),
+    )
+    recorded.runtime.recording = recorder
+    try:
+        recorded.reset()
+        baseline.reset()
+        np.random.seed(983)
+        rng_before = np.random.get_state()
+        for step in range(20):
+            position[:] = [step * 2, step // 4]
+            actions = np.array([step % 3, (step+1) % 3], dtype=np.int64)
+            actual = recorded.step(actions)
+            expected = baseline.step(actions)
+            for key in actual[0]:
+                np.testing.assert_array_equal(actual[0][key], expected[0][key])
+            np.testing.assert_array_equal(actual[1], expected[1])
+            np.testing.assert_array_equal(actual[2], expected[2])
+            np.testing.assert_array_equal(recorded.runtime.provider.render_lane(1), baseline.runtime.provider.render_lane(1))
+        np.testing.assert_array_equal(np.random.get_state()[1], rng_before[1])
+    finally:
+        recorded.close()
+        baseline.close()
+    recorder.wait(10)
+
+
+def test_recording_cutoff_is_prefix_not_environment_terminal(tmp_path):
+    train, env = training_env()
+    recorder = TrainingRecorder(
+        env.runtime, tmp_path, CollectionConfig(sample_probability=1, budget_stages=1),
+        {'run_id': 'gradlab-' + 'c'*32, 'attempt_id': 'attempt-' + 'e'*16,
+         'train_config': train}, position=lambda: (0, 0),
+    )
+    env.runtime.recording = recorder
+    try:
+        env.reset()
+        env.step(np.ones(2, dtype=np.int64))
+    finally:
+        env.close()
+    recorder.wait(10)
+    document = json.loads(next(tmp_path.glob('*.manifest.json')).read_text())
+    episode = document['episode']
+    assert not episode['complete']
+    assert episode['interruption_reason'] == 'training_stopped'
+    assert 'episode_return' not in episode
+    assert not episode['last_transition']['terminated']
+    assert not episode['last_transition']['truncated']
