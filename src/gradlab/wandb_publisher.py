@@ -297,7 +297,7 @@ def _publish_frame(
     if kind == "monitoring":
         import tempfile
         import wandb
-        from gradlab.checkpoint_monitoring import verified_get
+        import shutil
         from gradlab.r2_store import BucketConfig, R2Bucket
 
         config = (BucketConfig(uri=payload["bucket_uri"])
@@ -309,9 +309,17 @@ def _publish_frame(
         if any(not name.startswith("eval/monitor/") for name in metrics):
             raise ValueError("monitoring cannot project Acceptance metrics")
         metrics.update({EVAL_CHECKPOINT_STEP: step, ORCHESTRATION_EVENT_SEQUENCE: event_seq})
-        with tempfile.TemporaryDirectory(prefix="gradlab-monitor-video-") as temporary:
+        media_root = Path(run.dir)
+        size = int(payload["video"]["bytes"])
+        retained = sum(p.stat().st_size for p in media_root.rglob("*.mp4"))
+        if retained + 2 * size > payload["media_spool_bytes"]:
+            raise OSError("monitoring W&B media spool budget exhausted")
+        if shutil.disk_usage(media_root).free < payload["scratch_headroom_bytes"] + 2 * size:
+            raise OSError("monitoring W&B media scratch headroom exhausted")
+        with tempfile.TemporaryDirectory(prefix="monitor-video-", dir=media_root) as temporary:
             path = Path(temporary) / "representative.mp4"
-            path.write_bytes(verified_get(R2Bucket(config), payload["video"]))
+            R2Bucket(config).download_verified(payload["video"]["key"], path, size=size,
+                                               sha256=payload["video"]["sha256"])
             metrics["eval/monitor/video"] = wandb.Video(str(path), format="mp4")
             validate_metric_payload(metrics)
             configure_wandb_metric_axes(run, metrics, metrics_schema_version=metrics_schema_version)

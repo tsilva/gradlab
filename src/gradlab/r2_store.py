@@ -380,6 +380,33 @@ class R2Bucket:
             raise ValueError(f"object must contain a JSON mapping: {self.uri(key)}")
         return value
 
+    def download_verified(self, key: str, path: Path, *, size: int, sha256: str) -> None:
+        """Copy a known immutable object with bounded memory and a strict size ceiling."""
+        from contextlib import closing
+        head = self.head(key)
+        if head["size"] != size or size <= 0:
+            raise ValueError("downloaded object size differs from its immutable reference")
+        if self.scheme == "file":
+            source = self._file_path(key).open("rb")
+        else:
+            bucket, object_key = self._s3_parts(key)
+            source = self._s3_client().get_object(Bucket=bucket, Key=object_key)["Body"]
+        digest, count = hashlib.sha256(), 0
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with closing(source), path.open("wb") as output:
+                while block := source.read(1024 * 1024):
+                    count += len(block)
+                    if count > size:
+                        raise ValueError("download exceeded its immutable size")
+                    digest.update(block)
+                    output.write(block)
+            if count != size or digest.hexdigest() != sha256:
+                raise ValueError("downloaded object hash/size mismatch")
+        except BaseException:
+            path.unlink(missing_ok=True)
+            raise
+
     def get_json_optional(self, key: str) -> dict[str, Any] | None:
         try:
             return self.get_json(key)

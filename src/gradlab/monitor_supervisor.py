@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from datetime import datetime
 
-from gradlab.checkpoint_monitoring import episode_manifest, monitoring_aggregates, verified_get
+from gradlab.checkpoint_monitoring import episode_manifest, verify_monitoring_inventory
 from gradlab.eval_backend import EvalHandle
 from gradlab.json_utils import canonical_json_sha256
 
@@ -23,10 +23,11 @@ class MonitoringQueue:
         )
         self.prefix = f"runs/{supervisor.manifest.run_id}/monitoring/{self.contract_hash}"
         self.manifest = episode_manifest(self.settings["episodes"])
+        original = supervisor.authority.control.get_json(
+            f"runs/{supervisor.manifest.run_id}/manifest.json"
+        )
         self.deadline = (
-            datetime.fromisoformat(
-                supervisor.manifest.created_at.replace("Z", "+00:00")
-            ).timestamp()
+            datetime.fromisoformat(original["created_at"].replace("Z", "+00:00")).timestamp()
             + self.settings["whole_run_seconds"]
         )
         self.receipt = dict(enabled=True, complete=False, inventory=[], workers_quiescent=True)
@@ -34,6 +35,11 @@ class MonitoringQueue:
     def _save(self, key, state):
         self.owner._lease_heartbeat()
         self.owner.authority.control.put_json(key, state, create_only=False)
+
+    def _reclaim(self, state):
+        forget = getattr(self.backend, "forget", None)
+        if forget is not None and state.get("handle"):
+            forget(EvalHandle(**state["handle"]))
 
     def _intent(self, checkpoint):
         owner = self.owner
@@ -68,32 +74,9 @@ class MonitoringQueue:
             or result["contract_sha256"] != self.contract_hash
         ):
             raise ValueError("monitoring result does not bind its immutable checkpoint contract")
-        metrics, selection, _ = monitoring_aggregates(result["episodes"], self.manifest)
-        if metrics != result["metrics"] or selection != result["selection"]:
-            raise ValueError("monitoring aggregate or representative selection mismatch")
-        for episode in result["episodes"]:
-            if episode["evaluation_id"] != intent["evaluation_id"]:
-                raise ValueError("monitoring episode belongs to another evaluation")
-            if (
-                not episode["chunks"]
-                or episode["chunks"][0]["first_step"] != 0
-                or episode["chunks"][-1]["end_step"] != episode["steps"]
-            ):
-                raise ValueError("monitoring episode has incomplete chunks")
-            for chunk in episode["chunks"]:
-                if not chunk["key"].startswith(intent["prefix"] + "/"):
-                    raise ValueError("monitoring chunk outside evaluation namespace")
-                head = self.owner.authority.models.head(chunk["key"])
-                digest = (
-                    head["etag"]
-                    if self.owner.authority.models.scheme == "file"
-                    else head["metadata"].get("sha256")
-                )
-                if head["size"] != chunk["bytes"] or digest != chunk["sha256"]:
-                    raise ValueError("monitoring durable chunk identity mismatch")
-        if result["video"]["key"] != intent["prefix"] + "/representative.mp4":
-            raise ValueError("monitoring video outside evaluation namespace")
-        verified_get(self.owner.authority.models, result["video"])
+        verify_monitoring_inventory(
+            self.owner.authority.models, result, self.manifest, prefix=intent["prefix"]
+        )
 
     def advance(self, *, final=False, canceled=False):
         owner = self.owner
@@ -125,6 +108,7 @@ class MonitoringQueue:
                         error="canceled" if canceled else "whole-run monitoring deadline exhausted",
                     )
                     self._save(key, state)
+                    self._reclaim(state)
                 continue
             if state["status"] == "running":
                 try:
@@ -138,8 +122,13 @@ class MonitoringQueue:
                     reference = owner.authority.models.get_json(intent["prefix"] + "/result.json")
                     if reference != result:
                         raise ValueError("monitoring result is not durably committed")
-                    state.update(status="verified", result_sha256=canonical_json_sha256(result))
+                    state.update(
+                        status="verified",
+                        result_sha256=canonical_json_sha256(result),
+                        delivery_started_at=owner.clock.time(),
+                    )
                     self._save(key, state)
+                    self._reclaim(state)
                 except Exception as exc:
                     self.backend.cancel(EvalHandle(**state["handle"]))
                     state.update(
@@ -147,22 +136,31 @@ class MonitoringQueue:
                         error=str(exc)[:1000],
                     )
                     self._save(key, state)
+                    self._reclaim(state)
             if state["status"] == "verified":
                 result = owner.authority.models.get_json(intent["prefix"] + "/result.json")
                 if canonical_json_sha256(result) != state["result_sha256"]:
                     raise ValueError("monitoring result changed after verification")
-                owner.store.append_monitoring(result, bucket_uri=owner.authority.models.config.uri)
+                owner.store.append_monitoring(
+                    result,
+                    bucket_uri=owner.authority.models.config.uri,
+                    media_spool_bytes=self.settings.get("media_spool_bytes", 512 * 1024**2),
+                    scratch_headroom_bytes=self.settings.get("scratch_headroom_bytes", 1024**3),
+                )
                 if owner.store.monitoring_delivered(intent["evaluation_id"]):
-                    state.update(status="complete")
+                    state.update(
+                        status="complete",
+                        wandb_media_delivery_seconds=owner.clock.time()
+                        - state["delivery_started_at"],
+                    )
                     self._save(key, state)
-                    forget = getattr(self.backend, "forget", None)
-                    if forget is not None:
-                        forget(EvalHandle(**state["handle"]))
         limit = self.settings["task_cpus"] if final else self.settings["active_workers"]
         limit = min(
             limit,
-            self.settings["memory_bytes"] // self.settings["worker_memory_bytes"],
-            self.settings["spool_bytes"] // self.settings["worker_spool_bytes"],
+            (self.settings["memory_bytes"] - self.settings.get("media_memory_bytes", 0))
+            // self.settings["worker_memory_bytes"],
+            (self.settings["spool_bytes"] - self.settings.get("media_spool_bytes", 0))
+            // self.settings["worker_spool_bytes"],
         )
         available = limit - sum(s["status"] == "running" for _, _, s in rows)
         if not canceled and not expired:
@@ -196,6 +194,7 @@ class MonitoringQueue:
                 else None,
                 result_sha256=s.get("result_sha256"),
                 error=s.get("error"),
+                wandb_media_delivery_seconds=s.get("wandb_media_delivery_seconds"),
             )
             for i, _, s in rows
         ]

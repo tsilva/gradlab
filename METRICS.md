@@ -93,8 +93,9 @@ authority for that decision.
   create-only private-R2 `PromotionReceipt` is the authoritative selection.
 - `ops/state` and `ops/reason` are W&B summary-only
   catalog projections, not history metrics; the private-R2 `TerminalReceipt` remains authoritative.
-- Heavy model bytes, videos, replays, episode rows, diagnostics, and recovery payloads never go to
-  W&B.
+- Model bytes, replay archives, episode rows and recovery payloads remain in R2.
+  The sole monitoring media exception is one representative full-episode video
+  per Checkpoint at `eval/monitor/video`, with canonical R2 bytes and provenance.
 - Interactive playback uses local descriptor keys such as `reward/shaped`, `policy/value`, and
   `action/executed` to configure live panels. They are typed projections of one streamed transition
   or its bounded in-browser history, are not emitted metrics, and must not be interpreted as aliases

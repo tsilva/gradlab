@@ -26,7 +26,8 @@ class SameHostEvalBackend:
     def submit(self, intent):
         used = sum(p.stat().st_size for p in self.root.rglob("*") if p.is_file())
         settings = intent["settings"]
-        if used + settings.get("worker_spool_bytes", 0) > settings.get("spool_bytes", 2**63):
+        active = sum(process.poll() is None for process in self.processes.values())
+        if used >= settings.get("spool_bytes", 2**63) or (active + 1) * settings.get("worker_spool_bytes", 0) > settings.get("spool_bytes", 2**63):
             raise OSError("shared monitoring spool budget exhausted")
         identity = canonical_json_sha256(intent)
         directory = self.root / identity
@@ -109,4 +110,4 @@ class SameHostEvalBackend:
         process = self.processes.pop(handle.call_id, None)
         if process is not None and process.poll() is None:
             raise RuntimeError("cannot reclaim a running monitoring worker")
-        shutil.rmtree(self.root / handle.call_id, ignore_errors=False)
+        shutil.rmtree(self.root / handle.call_id, ignore_errors=True)

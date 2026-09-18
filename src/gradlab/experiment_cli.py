@@ -799,7 +799,9 @@ def cmd_launch(args: argparse.Namespace) -> int:
     from gradlab.monitor_config import validate_monitoring_allocation
     validate_monitoring_allocation(config.get("checkpoint_monitoring"), source_sha=source_sha,
         image_digest=release.runtime_image_ref, resources=resources.as_manifest(),
-        duration=selected_compute.bounded_duration_seconds)
+        duration=selected_compute.bounded_duration_seconds,
+        calibration_campaign=getattr(args, "monitor_calibration_id", None),
+        hardware_allocation={"resources": resources.as_manifest(), "selected": selected_compute.as_manifest(), "offer": selected_offer})
     if vizdoom_iwad is not None:
         vizdoom_iwad = _stage_vizdoom_iwad(authority, vizdoom_iwad)
     asset = (
@@ -2048,6 +2050,7 @@ def build_parser() -> argparse.ArgumentParser:
         help=argparse.SUPPRESS,
     )
     launch.add_argument("--seed", type=int, default=DEFAULT_LAUNCH_SEED)
+    launch.add_argument("--monitor-calibration-id", help=argparse.SUPPRESS)
     launch.add_argument(
         "--run-description",
         help="Optional description; defaults to '<goal> <recipe> seed <seed>'.",

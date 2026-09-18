@@ -2202,6 +2202,14 @@ class RunSupervisor:
         self._renew_lease(instant)
         if self.lease_lost:
             return 0
+        monitoring_settings = self.train_config.get("checkpoint_monitoring") or {}
+        if (monitoring_settings.get("calibration") or {}).get("status") == "measuring":
+            sampled = self.store.get_state("calibration_host_load") or {"count": 0, "sum": 0.0, "max": 0.0, "at": -60.0}
+            if instant - sampled["at"] >= 60:
+                load = os.getloadavg()[0]
+                sampled = dict(count=sampled["count"] + 1, sum=sampled["sum"] + load,
+                               max=max(sampled["max"], load), at=instant)
+                self.store.set_state("calibration_host_load", sampled)
         self._observe_cancel_request()
         self._maintain_learner_stop(instant)
         activity += self._seal_metrics(instant)
@@ -2839,6 +2847,7 @@ class RunSupervisor:
             self.projector = None
             print("run stopped after writer lease loss; no further state was mutated", flush=True)
             return 1
+        media_drain_started = self.clock.monotonic()
         try:
             wandb_high_water = self._finish_wandb()
         except Exception as exc:
@@ -2849,6 +2858,7 @@ class RunSupervisor:
                 self._wait_for_remote_delivery(wandb_high_water)
                 if promotion is not None:
                     self._wait_for_remote_promotion(promotion)
+                self.store.set_state("wandb_final_drain_seconds", self.clock.monotonic() - media_drain_started)
             except Exception as exc:
                 failure = exc
         journal_archive: dict[str, Any] | None = None
@@ -2913,6 +2923,8 @@ class RunSupervisor:
                 "learner_teardown": self.learner_teardown_evidence or None,
                 "learner_log": self._learner_log_evidence(),
                 "checkpoint_monitoring": (self.monitoring.receipt if self.monitoring is not None else {"enabled": False}),
+                "calibration_host_load": self.store.get_state("calibration_host_load"),
+                "wandb_final_drain_seconds": self.store.get_state("wandb_final_drain_seconds"),
             },
             completed_at=self.clock.utc_now(),
             early_stop=(early_stop.to_dict() if early_stop is not None else None),

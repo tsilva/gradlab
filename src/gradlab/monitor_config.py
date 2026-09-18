@@ -3,6 +3,7 @@
 from dataclasses import asdict, dataclass
 from collections.abc import Mapping
 import math
+import re
 
 from gradlab.json_utils import canonical_json_sha256
 
@@ -15,8 +16,10 @@ class MonitoringConfig:
     task_cpus: int = 1
     worker_memory_bytes: int = 2 * 1024**3
     worker_spool_bytes: int = 512 * 1024**2
-    memory_bytes: int = 2 * 1024**3
-    spool_bytes: int = 512 * 1024**2
+    memory_bytes: int = 2 * 1024**3 + 64 * 1024**2
+    spool_bytes: int = 1024**3
+    media_memory_bytes: int = 64 * 1024**2
+    media_spool_bytes: int = 512 * 1024**2
     contribution_bytes: int = 10 * 1024**3
     chunk_bytes: int = 32 * 1024**2
     scratch_headroom_bytes: int = 1024**3
@@ -88,8 +91,11 @@ def resolve_monitoring(value, train):
     if settings["active_workers"] > settings["task_cpus"]:
         raise ValueError("active monitoring workers exceed the task CPU allocation")
     if (
-        settings["memory_bytes"] < settings["task_cpus"] * settings["worker_memory_bytes"]
-        or settings["spool_bytes"] < settings["task_cpus"] * settings["worker_spool_bytes"]
+        settings["memory_bytes"]
+        < settings["task_cpus"] * settings["worker_memory_bytes"] + settings["media_memory_bytes"]
+        or settings["spool_bytes"]
+        < settings["task_cpus"] * settings["worker_spool_bytes"] + settings["media_spool_bytes"]
+        or settings["media_memory_bytes"] < 64 * 1024**2
         or settings["worker_memory_bytes"] < 8 * settings["chunk_bytes"]
         or settings["worker_spool_bytes"] < 4 * settings["chunk_bytes"]
     ):
@@ -104,6 +110,14 @@ def resolve_monitoring(value, train):
         ):
             raise ValueError("monitoring requires verified native Breakout PPO/A2C")
         report = settings["calibration"]
+        if isinstance(report, dict) and report.get("status") == "measuring":
+            if set(report) != {"status", "campaign_id"} or not re.fullmatch(
+                r"[0-9a-f]{64}", str(report["campaign_id"])
+            ):
+                raise ValueError(
+                    "monitoring calibration measurement requires an immutable campaign identity"
+                )
+            return settings
         if not isinstance(report, dict) or report.get("status") != "supported":
             raise ValueError("monitoring requires complete supported calibration before launch")
         if report.get("binding") != calibration_binding(train, settings):
@@ -132,14 +146,32 @@ def resolve_monitoring(value, train):
     return settings
 
 
-def validate_monitoring_allocation(settings, *, source_sha, image_digest, resources, duration):
+def validate_monitoring_allocation(
+    settings,
+    *,
+    source_sha,
+    image_digest,
+    resources,
+    duration,
+    calibration_campaign=None,
+    hardware_allocation=None,
+):
     """Check the real selected allocation before any Run is admitted."""
     if not settings or not settings.get("enabled"):
         return
     report = settings["calibration"]
-    if report.get("source_sha") != source_sha or report.get("runtime_image") != image_digest:
+    measuring = report.get("status") == "measuring"
+    if measuring and (
+        not calibration_campaign or report.get("campaign_id") != calibration_campaign
+    ):
+        raise ValueError(
+            "unproven monitoring may run only through its explicit calibration campaign"
+        )
+    if not measuring and (
+        report.get("source_sha") != source_sha or report.get("runtime_image") != image_digest
+    ):
         raise ValueError("monitoring calibration source/runtime differs from the launch")
-    if report.get("hardware_allocation") != resources:
+    if not measuring and report.get("hardware_allocation") != hardware_allocation:
         raise ValueError("monitoring calibration hardware allocation differs from the launch")
     if settings["task_cpus"] != resources["cpu"]:
         raise ValueError("monitoring must declare the full task CPU allocation")

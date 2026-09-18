@@ -1702,13 +1702,17 @@ class RunAuthority:
         if not settings.get("enabled"):
             return
         delivery = receipt.drain.get("checkpoint_monitoring") or {}
-        if delivery.get("complete") is not True or delivery.get("workers_quiescent") is not True:
-            raise ValueError("complete terminal drain requires verified checkpoint monitoring")
         inventory = delivery.get("inventory", [])
         checkpoints = {row["checkpoint_id"] for row in receipt.checkpoint_inventory}
         if len(inventory) != len(checkpoints) or {row["checkpoint_id"] for row in inventory} != checkpoints:
             raise ValueError("monitoring inventory does not cover every unique saved checkpoint")
-        from gradlab.checkpoint_monitoring import episode_manifest, monitoring_aggregates
+        if receipt.state == "canceled":
+            if delivery.get("workers_quiescent") is not True or any(row.get("status") not in {"complete", "failed", "canceled"} for row in delivery.get("inventory", [])):
+                raise ValueError("canceled monitoring requires settled workers and partial inventory")
+            return
+        if delivery.get("complete") is not True or delivery.get("workers_quiescent") is not True:
+            raise ValueError("complete terminal drain requires verified checkpoint monitoring")
+        from gradlab.checkpoint_monitoring import episode_manifest, verify_monitoring_inventory
         for row in inventory:
             expected = f"monitoring/{receipt.run_id}/{row['evaluation_id']}/result.json"
             if row["status"] != "complete" or row["result_key"] != expected:
@@ -1716,12 +1720,10 @@ class RunAuthority:
             result = self.models.get_json(expected)
             if canonical_json_sha256(result) != row["result_sha256"]:
                 raise ValueError("monitoring result checksum mismatch")
-            metrics, selection, _ = monitoring_aggregates(result["episodes"], episode_manifest(settings["episodes"]))
-            if metrics != result["metrics"] or selection != result["selection"]:
-                raise ValueError("monitoring aggregate or video selection mismatch")
-            for reference in [result["video"], *(c for e in result["episodes"] for c in e["chunks"])]:
-                if self.models.head(reference["key"])["size"] != reference["bytes"]:
-                    raise ValueError("monitoring artifact inventory mismatch")
+            if result["checkpoint_id"] != row["checkpoint_id"] or result["evaluation_id"] != row["evaluation_id"]:
+                raise ValueError("monitoring terminal identity mismatch")
+            verify_monitoring_inventory(self.models, result, episode_manifest(settings["episodes"]),
+                                        prefix=expected.removesuffix("/result.json"))
 
     def create_attempt_terminal(
         self,

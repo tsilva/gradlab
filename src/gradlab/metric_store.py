@@ -290,7 +290,8 @@ class MetricStore(SqliteStore):
             )
         return identity
 
-    def append_monitoring(self, result: Mapping[str, Any], *, bucket_uri: str) -> str:
+    def append_monitoring(self, result: Mapping[str, Any], *, bucket_uri: str,
+                          media_spool_bytes: int = 512 * 1024**2, scratch_headroom_bytes: int = 1024**3) -> str:
         metrics = dict(result["metrics"])
         validate_metric_payload(metrics)
         if not metrics or any(not name.startswith("eval/monitor/") for name in metrics):
@@ -301,6 +302,7 @@ class MetricStore(SqliteStore):
             event_id=identity, payload={
                 "evaluation_id": result["evaluation_id"], "metrics": metrics,
                 "video": result["video"], "bucket_uri": bucket_uri,
+                "media_spool_bytes": media_spool_bytes, "scratch_headroom_bytes": scratch_headroom_bytes,
             },
         )
 
