@@ -451,7 +451,12 @@ def test_worker_loads_real_immutable_policy_bundle(backend_id, tmp_path, monkeyp
         contract_hashes=hashes,
         recovery_sidecar={},
     )
-    settings = {**asdict(MonitoringConfig()), "episodes": 1, "watchdog_steps": 20000}
+    settings = {
+        **asdict(MonitoringConfig()),
+        "episodes": 1,
+        "watchdog_steps": 20000,
+        "calibration": {"status": "measuring", "campaign_id": "e" * 64},
+    }
     intent = dict(
         settings=settings,
         checkpoint=checkpoint.to_dict(),
@@ -482,6 +487,7 @@ def test_worker_loads_real_immutable_policy_bundle(backend_id, tmp_path, monkeyp
         assert result.status == "succeeded", result.error
         assert result.provider_result["metrics"]["eval/monitor/episodes/count"] == 1
         assert result.provider_result["episodes"][0]["steps"] > 0
+        assert result.provider_result["measurements"]["phase_seconds"]["inference"] > 0
     finally:
         backend.cancel(handle)
 
@@ -547,7 +553,9 @@ def test_long_episode_crosses_8192_and_reconstructs_true_boundary(tmp_path, monk
     config.task["termination"]["timeout"] = []
     config.task["termination"]["max_episode_steps"] = 8193
     config.task["termination"]["success"] = []
-    config.frame_skip = 1
+    from dataclasses import replace
+
+    config = replace(config, frame_skip=1)
     import gradlab.env as env_module
 
     make_native = env_module.make_eval_vec_env
@@ -585,3 +593,106 @@ def test_long_episode_crosses_8192_and_reconstructs_true_boundary(tmp_path, monk
     assert len(episode["chunks"]) > 1
     assert sum(1 for _ in episode_frames(bucket, episode)) == 8194
     assert not list((tmp_path / "spool").glob("*.zip"))
+
+
+def test_interrupted_episode_prefix_does_not_poison_retry(tmp_path):
+    from gradlab.monitor_worker import ContributionBudget
+
+    goal = Path("experiments/goals/Breakout-Atari2600-v0/FirstWall")
+    train = compose_train_document(goal / "_goal.yaml", goal / "recipes/ppo.yaml")["train_config"]
+    config = resolve_env_config(env_config_from_mapping(train))
+    config.task["termination"]["max_episode_steps"] = 12
+    bucket = R2Bucket(BucketConfig(uri=f"file://{tmp_path}/r2"))
+    budget = ContributionBudget(tmp_path / "budget", bucket, "test", 10 * 1024**2)
+
+    class Interrupted(RequestedRight):
+        calls = 0
+
+        def predict(self, observations, deterministic=False):
+            self.calls += 1
+            if self.calls == 4:
+                raise OSError("transient worker interruption")
+            return super().predict(observations, deterministic)
+
+    args = dict(
+        config=config,
+        episode=episode_manifest(1)[0],
+        bucket=bucket,
+        root=tmp_path / "spool",
+        prefix="retry/episode",
+        provenance={"checkpoint_id": "retry", "checkpoint_step": 123},
+        chunk_bytes=1024**2,
+        watchdog_steps=20,
+        reserve=budget.reserve,
+    )
+    with pytest.raises(OSError, match="transient"):
+        monitor_episode(model=Interrupted(), **args)
+    assert bucket.get_json_optional("retry/episode/episode.json") is None
+    before = list(bucket.iter_keys("retry/episode/chunks"))
+    assert before
+    result = monitor_episode(model=RequestedRight(), **args)
+    assert result["complete"] and result["steps"] == 12
+    assert set(before) <= set(bucket.iter_keys("retry/episode/chunks"))
+
+
+def test_campaign_plan_counterbalances_pairs_and_requires_explicit_measurement_admission():
+    from gradlab.monitor_campaign import campaign_plan
+    from gradlab.monitor_config import resolve_monitoring, validate_monitoring_allocation
+
+    campaign = dict(
+        launch_args=["--recipe-file", "recipe.yaml", "--max-duration", "1h"],
+        seeds=[123, 234, 345],
+        settings={},
+        warmup_updates=2,
+        representatives={
+            role: {"seed": 123, "checkpoint_step": step}
+            for role, step in [
+                ("early", 100),
+                ("intermediate", 200),
+                ("stronger", 300),
+                ("long-episode", 300),
+            ]
+        },
+    )
+    identity, settings, commands = campaign_plan(campaign)
+    assert [(c["seed"], c["enabled"]) for c in commands] == [
+        (123, False),
+        (123, True),
+        (234, True),
+        (234, False),
+        (345, False),
+        (345, True),
+    ]
+    settings.update(enabled=True, calibration={"status": "measuring", "campaign_id": identity})
+    train = dict(
+        game="Breakout-Atari2600-v0",
+        env_provider="env-breakoutatari2600-turbo-native",
+        training_backend={"id": "gradlab.ppo"},
+    )
+    frozen = resolve_monitoring(settings, train)
+    allocation = dict(
+        source_sha="a" * 40, image_digest="image", resources={"cpu": 1}, duration=3600
+    )
+    with pytest.raises(ValueError, match="explicit calibration campaign"):
+        validate_monitoring_allocation(frozen, **allocation)
+    validate_monitoring_allocation(frozen, **allocation, calibration_campaign=identity)
+
+
+def test_monitoring_deadline_does_not_extend_on_new_attempt(tmp_path):
+    from dataclasses import replace, asdict
+    from datetime import datetime, timedelta
+    from gradlab.lifecycle_certification import CertificationFixture
+    from gradlab.monitor_config import MonitoringConfig
+    from gradlab.monitor_supervisor import MonitoringQueue
+
+    fixture = CertificationFixture(tmp_path)
+    supervisor = fixture.prepare(run_number=89).supervisor
+    supervisor.train_config["checkpoint_monitoring"] = asdict(MonitoringConfig())
+    original = MonitoringQueue(supervisor, object()).deadline
+    later = datetime.fromisoformat(
+        supervisor.manifest.created_at.replace("Z", "+00:00")
+    ) + timedelta(hours=1)
+    supervisor.manifest = replace(
+        supervisor.manifest, created_at=later.isoformat(), attempt_id="attempt-" + "b" * 16
+    )
+    assert MonitoringQueue(supervisor, object()).deadline == original

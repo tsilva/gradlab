@@ -11,6 +11,7 @@ import io
 import json
 import math
 import statistics
+import time
 import zipfile
 from pathlib import Path
 
@@ -82,8 +83,10 @@ class EpisodeRecording:
         self.started = False
         self.last = None
         self.initial = None
+        self.phase_seconds = {"capture": 0.0, "encoding": 0.0}
 
     def _frame(self):
+        started = time.perf_counter()
         value = self.runtime.provider.render_lane(0)
         if (
             not isinstance(value, np.ndarray)
@@ -91,7 +94,12 @@ class EpisodeRecording:
             or value.shape != (210, 160, 3)
         ):
             raise ValueError("missing full unmasked native RGB")
-        return _png(value.copy())
+        copied = value.copy()
+        encoded_at = time.perf_counter()
+        data = _png(copied)
+        self.phase_seconds["capture"] += encoded_at - started
+        self.phase_seconds["encoding"] += time.perf_counter() - encoded_at
+        return data
 
     def reset(self, mask, after_step=False):
         if self.started or after_step:
@@ -179,6 +187,7 @@ class EpisodeRecording:
         if not self.rows:
             return
         local = self.root / "chunk.zip"
+        started = time.perf_counter()
         with zipfile.ZipFile(local, "w", compression=zipfile.ZIP_STORED) as archive:
             for name, value in self.entries.items():
                 archive.writestr(zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0)), value)
@@ -186,9 +195,13 @@ class EpisodeRecording:
                 zipfile.ZipInfo("transitions.jsonl", (1980, 1, 1, 0, 0, 0)), b"".join(self.rows)
             )
         payload = local.read_bytes()
+        self.phase_seconds["encoding"] += time.perf_counter() - started
         if len(payload) > self.limit:
             raise ValueError("monitoring chunk exceeded byte limit")
-        key = f"{self.prefix}/chunks/{len(self.chunks):08d}.zip"
+        # An interrupted partial chunk must never poison the resumed episode's
+        # immutable chunk ordinal. Identical complete chunks still deduplicate.
+        digest = hashlib.sha256(payload).hexdigest()
+        key = f"{self.prefix}/chunks/{self.start:08d}-{self.step:08d}-{digest}.zip"
         if self.reserve:
             self.reserve(key, len(payload))
         reference = verified_put(self.bucket, key, payload)
@@ -227,6 +240,7 @@ def monitor_episode(
     reserve=None,
     policy_runtime=None,
     guard=None,
+    measure=False,
 ):
     import torch
     from gradlab.env import make_eval_vec_env
@@ -241,6 +255,25 @@ def monitor_episode(
         raise ValueError("monitoring episode identity/seeds differ from the frozen manifest")
     env = make_eval_vec_env(config, n_envs=1, seed=episode["environment_seed"])
     recorder = None
+    inference_seconds = 0.0
+
+    class TimedPolicy:
+        def __init__(self, policy):
+            self.policy = policy
+
+        def __getattr__(self, name):
+            return getattr(self.policy, name)
+
+        def decide(self, *args, **kwargs):
+            nonlocal inference_seconds
+            started = time.perf_counter()
+            try:
+                return self.policy.decide(*args, **kwargs)
+            finally:
+                inference_seconds += time.perf_counter() - started
+
+    if measure and policy_runtime is not None:
+        policy_runtime = TimedPolicy(policy_runtime)
     try:
         recorder = EpisodeRecording(
             env.runtime,
@@ -308,6 +341,8 @@ def monitor_episode(
             recording_contract=recorder.contract,
             chunks=recorder.chunks,
         )
+        if measure:
+            document["phase_seconds"] = {**recorder.phase_seconds, "inference": inference_seconds}
         data = canonical_json_bytes(document)
         if reserve:
             reserve(f"{prefix}/episode.json", len(data))
@@ -351,6 +386,45 @@ def episode_frames(bucket, episode, *, guard=None):
             previous = reference["last_frame_sha256"]
     if step != episode["steps"]:
         raise ValueError("monitoring episode length differs from chunks")
+
+
+def verify_monitoring_inventory(bucket, result, manifest, *, prefix):
+    """Shared worker/supervisor/terminal validation of every complete episode."""
+    metrics, selection, _ = monitoring_aggregates(result["episodes"], manifest)
+    if metrics != result["metrics"] or selection != result["selection"]:
+        raise ValueError("monitoring aggregate or representative selection mismatch")
+    for episode in result["episodes"]:
+        if any(
+            episode.get(key) != result.get(key)
+            for key in ("evaluation_id", "contract_sha256", "checkpoint_id", "checkpoint_step")
+        ):
+            raise ValueError("monitoring episode belongs to another evaluation")
+        step, previous = 0, None
+        for chunk in episode["chunks"]:
+            if (
+                chunk["first_step"] != step
+                or chunk["end_step"] <= step
+                or not 0 < chunk["bytes"] <= 128 * 1024**2
+                or previous is not None
+                and chunk["first_frame_sha256"] != previous
+            ):
+                raise ValueError("monitoring episode has noncontiguous chunks or frame joins")
+            if not chunk["key"].startswith(prefix + "/"):
+                raise ValueError("monitoring chunk outside evaluation namespace")
+            head = bucket.head(chunk["key"])
+            digest = head["etag"] if bucket.scheme == "file" else head["metadata"].get("sha256")
+            if head["size"] != chunk["bytes"] or digest != chunk["sha256"]:
+                raise ValueError("monitoring durable chunk identity mismatch")
+            step, previous = chunk["end_step"], chunk["last_frame_sha256"]
+        if not episode["chunks"] or step != episode["steps"]:
+            raise ValueError("monitoring episode has incomplete chunks")
+    video = result["video"]
+    if video["key"] != prefix + "/representative.mp4":
+        raise ValueError("monitoring video outside evaluation namespace")
+    head = bucket.head(video["key"])
+    digest = head["etag"] if bucket.scheme == "file" else head["metadata"].get("sha256")
+    if head["size"] != video["bytes"] or digest != video["sha256"]:
+        raise ValueError("monitoring durable video identity mismatch")
 
 
 def monitoring_aggregates(episodes, manifest):
@@ -412,7 +486,19 @@ def monitoring_aggregates(episodes, manifest):
     return {f"eval/monitor/{k}": v for k, v in metrics.items()}, selection, selected
 
 
-def finalize_monitoring(episodes, manifest, *, bucket, root, prefix, fps, reserve=None, guard=None):
+def finalize_monitoring(
+    episodes,
+    manifest,
+    *,
+    bucket,
+    root,
+    prefix,
+    fps,
+    reserve=None,
+    guard=None,
+    measurements=None,
+    max_video_bytes=128 * 1024**2,
+):
     from gradlab.video import write_video
 
     metrics, selection, selected = monitoring_aggregates(episodes, manifest)
@@ -421,17 +507,24 @@ def finalize_monitoring(episodes, manifest, *, bucket, root, prefix, fps, reserv
     output = root / "representative.mp4"
     key = f"{prefix}/representative.mp4"
     saved = bucket.get_json_optional(key + ".json")
+    video_started = time.perf_counter()
     if saved is not None:
         if saved["selection"] != selection:
             raise ValueError("committed monitoring video selection changed")
         video = saved["video"]
         verified_get(bucket, video)
     else:
+
+        def video_guard():
+            if guard is not None:
+                guard()
+            if output.exists() and output.stat().st_size > max_video_bytes:
+                raise OSError("complete monitoring video exceeds the declared working allocation")
+
         write_video(
-            episode_frames(bucket, selected, guard=guard), output, fps=fps, scale=1, threads=1
+            episode_frames(bucket, selected, guard=video_guard), output, fps=fps, scale=1, threads=1
         )
-        if guard is not None:
-            guard()
+        video_guard()
         data = output.read_bytes()
         if reserve:
             reserve(key, len(data))
@@ -441,6 +534,7 @@ def finalize_monitoring(episodes, manifest, *, bucket, root, prefix, fps, reserv
             reserve(key + ".json", len(pointer))
         verified_put(bucket, key + ".json", pointer)
         output.unlink()
+    video_seconds = time.perf_counter() - video_started
     result = dict(
         format=FORMAT,
         **{key: selected[key] for key in ("evaluation_id", "contract_sha256") if key in selected},
@@ -451,6 +545,9 @@ def finalize_monitoring(episodes, manifest, *, bucket, root, prefix, fps, reserv
         video=video,
         episodes=episodes,
     )
+    if measurements is not None:
+        result["measurements"] = measurements()
+        result["measurements"]["phase_seconds"]["video_generation"] = video_seconds
     data = canonical_json_bytes(result)
     if reserve:
         reserve(f"{prefix}/result.json", len(data))

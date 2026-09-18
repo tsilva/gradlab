@@ -16,7 +16,7 @@ import time
 from gradlab.checkpoint_monitoring import (
     finalize_monitoring,
     monitor_episode,
-    monitoring_aggregates,
+    verify_monitoring_inventory,
     verified_get,
     verified_put,
 )
@@ -37,15 +37,32 @@ class ContributionBudget:
         self.root, self.bucket, self.limit = Path(root), bucket, limit
         self.root.mkdir(parents=True, exist_ok=True)
         self.prefix = f"monitoring/{run_id}/budget"
+        self.cache = self.root / f"{run_id}-reservations.json"
 
     def reserve(self, key, size):
+        # Small metadata reservations permit retry diagnostics/timings to vary
+        # without spending the same identity twice; slack remains charged forever.
+        if key.endswith(".json"):
+            size = max(4096, 1 << max(0, size - 1).bit_length())
         name = f"{self.prefix}/{hashlib.sha256(key.encode()).hexdigest()}.json"
         with (self.root / "contribution.lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX)
-            old = self.bucket.get_json_optional(name)
+            if self.cache.exists():
+                cached = json.loads(self.cache.read_text())
+            else:
+                entries = {
+                    item: self.bucket.get_json(item) for item in self.bucket.iter_keys(self.prefix)
+                }
+                cached = dict(
+                    entries=entries, total=sum(row["charged_bytes"] for row in entries.values())
+                )
+            old = cached["entries"].get(name)
             if old is not None:
-                if old["key"] != key or old["object_bytes"] != size:
+                if old["key"] != key or old["object_bytes"] < size:
                     raise ValueError("monitoring contribution identity conflict")
+                # The cache is persisted before upload; a lost upload still has to
+                # be reconciled remotely before its reservation is considered safe.
+                verified_put(self.bucket, name, canonical_json_bytes(old))
                 return
             document = dict(key=key, object_bytes=size, charged_bytes=size)
             while True:
@@ -54,12 +71,11 @@ class ContributionBudget:
                 if charged == document["charged_bytes"]:
                     break
                 document["charged_bytes"] = charged
-            total = sum(
-                self.bucket.get_json(item)["charged_bytes"]
-                for item in self.bucket.iter_keys(self.prefix)
-            )
-            if total + charged > self.limit:
+            if cached["total"] + charged > self.limit:
                 raise ValueError("cumulative monitoring contribution budget exhausted")
+            cached["entries"][name] = document
+            cached["total"] += charged
+            atomic_write_json(self.cache, cached)
             verified_put(self.bucket, name, encoded)
 
 
@@ -75,6 +91,28 @@ def run_monitoring(intent, root, bucket):
     torch.set_num_interop_threads(1)
     root = Path(root)
     settings = intent["settings"]
+    started = time.perf_counter()
+    measured = (settings.get("calibration") or {}).get("status") == "measuring"
+    phases = {"r2_delivery": 0.0}
+
+    class MeasuredBucket:
+        def __getattr__(self, name):
+            target = getattr(original_bucket, name)
+            if not callable(target):
+                return target
+
+            def call(*args, **kwargs):
+                before = time.perf_counter()
+                try:
+                    return target(*args, **kwargs)
+                finally:
+                    phases["r2_delivery"] += time.perf_counter() - before
+
+            return call
+
+    original_bucket = bucket
+    if measured:
+        bucket = MeasuredBucket()
     from gradlab.policy_runtime import PolicyRuntime
 
     checkpoint = CheckpointManifest.from_dict(
@@ -85,8 +123,7 @@ def run_monitoring(intent, root, bucket):
     bucket_prefix = intent["prefix"]
     completed = bucket.get_json_optional(bucket_prefix + "/result.json")
     if completed is not None:
-        monitoring_aggregates(completed["episodes"], intent["manifest"])
-        verified_get(bucket, completed["video"])
+        verify_monitoring_inventory(bucket, completed, intent["manifest"], prefix=bucket_prefix)
         return completed
     model_ref = checkpoint.public_url.rsplit("/", 1)[0] + "/manifest.json"
     source = download_remote_model_source(model_ref, root=root / "policy", require_pinned=True)
@@ -140,6 +177,7 @@ def run_monitoring(intent, root, bucket):
         planned_training_steps=train["timesteps"],
     )
     episodes = []
+    peaks = {"peak_memory_bytes": 0, "peak_spool_bytes": 0}
 
     def guard():
         if time.time() >= intent["deadline"]:
@@ -150,6 +188,8 @@ def run_monitoring(intent, root, bucket):
         if rss > settings["worker_memory_bytes"]:
             raise MemoryError("monitoring worker memory budget exhausted")
         used = sum(p.stat().st_size for p in root.rglob("*") if p.is_file())
+        peaks["peak_memory_bytes"] = max(peaks["peak_memory_bytes"], rss)
+        peaks["peak_spool_bytes"] = max(peaks["peak_spool_bytes"], used)
         if (
             used > settings["worker_spool_bytes"]
             or shutil.disk_usage(root).free < settings["scratch_headroom_bytes"]
@@ -181,12 +221,30 @@ def run_monitoring(intent, root, bucket):
                 watchdog_steps=settings["watchdog_steps"],
                 reserve=budget.reserve,
                 guard=guard,
+                measure=measured,
                 policy_runtime=PolicyRuntime(
                     model, algorithm_id=resolve_policy_algorithm(source.bundle.model["policy"])
                 ),
             )
         episodes.append(result)
         guard()
+
+    def measurements():
+        return dict(
+            **peaks,
+            seconds=time.perf_counter() - started,
+            retained_bytes=sum(bucket.head(key)["size"] for key in bucket.iter_keys(bucket_prefix)),
+            longest_episode_steps=max(e["steps"] for e in episodes),
+            uninterrupted=intent.get("execution_attempt") == 1,
+            phase_seconds={
+                **phases,
+                **{
+                    name: sum(e.get("phase_seconds", {}).get(name, 0) for e in episodes)
+                    for name in ("inference", "capture", "encoding")
+                },
+            },
+        )
+
     result = finalize_monitoring(
         episodes,
         intent["manifest"],
@@ -196,6 +254,10 @@ def run_monitoring(intent, root, bucket):
         fps=60 / config.frame_skip,
         reserve=budget.reserve,
         guard=guard,
+        measurements=measurements if measured else None,
+        max_video_bytes=min(
+            settings["worker_spool_bytes"] // 4, settings["worker_memory_bytes"] // 8
+        ),
     )
     shutil.rmtree(root / "policy")
     return result

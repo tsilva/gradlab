@@ -2495,7 +2495,7 @@ def _scenario_checkpoint_monitoring(root: Path) -> dict[str, Any]:
     supervisor.eval_admission_closed = True
     supervisor.train_config["checkpoint_monitoring"] = {
         **asdict(MonitoringConfig()), "enabled": True, "episodes": 2,
-        "task_cpus": 3, "memory_bytes": 6 * 1024**3, "spool_bytes": 3 * 512 * 1024**2,
+        "task_cpus": 3, "memory_bytes": 6 * 1024**3 + 64 * 1024**2, "spool_bytes": 4 * 512 * 1024**2,
     }
 
     class ScriptedCPU:

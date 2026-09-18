@@ -111,7 +111,7 @@ def assess_calibration(measurements):
     checkpoints = math.ceil(train["timesteps"] / train["checkpoint_freq"]) + 1
     training_seconds = train["timesteps"] / min(p["on_rate"] for p in pairs)
     final_tail = math.ceil(checkpoints / settings["task_cpus"]) * duration
-    total_seconds = training_seconds + final_tail
+    total_seconds = max(training_seconds + final_tail, measurements.get("observed_total_seconds", 0) * 1.25)
     recommended_spacing = math.ceil(
         duration * max(p["on_rate"] for p in pairs) / settings["active_workers"]
     )
@@ -156,10 +156,26 @@ def main(argv=None):
     calibrate = commands.add_parser(
         "calibrate", help="assess complete representative and matched-throughput measurements"
     )
-    calibrate.add_argument("--measurements", type=Path, required=True)
+    source = calibrate.add_mutually_exclusive_group(required=True)
+    source.add_argument(
+        "--measurements", type=Path, help="Assess existing measurements without launching work"
+    )
+    source.add_argument(
+        "--campaign",
+        type=Path,
+        help="Execute/resume an explicit matched supervised training campaign",
+    )
+    calibrate.add_argument(
+        "--campaign-root", type=Path, default=Path.home() / ".config/gradlab/runs/calibration"
+    )
     calibrate.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
-    report = assess_calibration(json.loads(args.measurements.read_text()))
+    if args.campaign:
+        from gradlab.monitor_campaign import run_campaign
+
+        report = run_campaign(json.loads(args.campaign.read_text()), root=args.campaign_root)
+    else:
+        report = assess_calibration(json.loads(args.measurements.read_text()))
     encoded = json.dumps(report, indent=2, allow_nan=False) + "\n"
     if args.output:
         args.output.write_text(encoded)

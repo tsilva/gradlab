@@ -14,8 +14,26 @@ Goals remain training-only, and these results do not stop learning or promote
 policies. Goal-owned Modal Acceptance remains separate.
 
 Enablement requires a supported calibration report bound to the resolved
-configuration. No checked-in recipe is enabled by this change. The calibration
-assessment command reports incomplete, infeasible, or unproven evidence explicitly:
+configuration. No checked-in recipe is enabled by this change. The calibration operation reports incomplete, infeasible, or unproven evidence explicitly.
+To execute a separately authorized campaign, use `gradlab monitor calibrate --campaign
+campaign.json --output calibration.json`. This launches counterbalanced off/on pairs
+through the ordinary dstack supervisor, resumes from a durable local campaign journal,
+and waits for private R2 terminal receipts. It never grants support from process
+separation or an untrained short rollout.
+
+The campaign document declares `launch_args` (an argument list containing the
+recipe, operator-selected compute target and explicit `--max-duration`), 3–20 distinct
+training `seeds`, full monitoring `settings`, `warmup_updates`, and `representatives`.
+Each early/intermediate/stronger/long-episode selector contains a campaign `seed` and
+`checkpoint_step`. Set worker/shared/media budgets and `task_cpus` to the actual
+allocation; there is no automatic hardware choice or resource downgrade. The operation
+measures native inference, RGB capture/encoding, R2 transfer, full-video encoding,
+W&B delivery, memory/spool peaks, retained bytes and matched learner throughput.
+It checks host-load observations, equivalent resolved work and actual completion
+time, and retains all campaign Run identities. Missing, interrupted, weak or short
+representative evidence leaves calibration incomplete.
+
+To assess an already-collected measurement document without launching work:
 
 ```bash
 gradlab monitor calibrate --measurements campaign.json --output calibration.json
@@ -29,12 +47,12 @@ separate operator authorization; ordinary tests do not establish the 2% target.
 
 The `train.checkpoint_monitoring` contract freezes episode count, checkpoint
 cadence through `checkpoint_freq`, active workers, full task CPU allocation,
-per-worker and shared memory/spool limits, cumulative retained bytes, chunk size,
+per-worker and shared memory/spool limits, cumulative retained bytes, dedicated W&B media memory/spool, chunk size,
 scratch headroom, watchdog, and a finite whole-Run deadline. Unavailable resources
 or incomplete evaluation cause an operational failure, never a scientific failure
 or a reduced episode count. Post-training finalization expands to the declared
 CPU allocation within the same budgets. Complete episodes are reused on the
-single execution retry; video and W&B delivery do not rerun completed episodes.
+single execution retry; diagnostic tails use content-addressed chunk names; video and W&B delivery do not rerun completed episodes.
 
 Each trajectory stores full lossless 210×160 RGB initial and true terminal frames,
 requested/effective/executed/native actions, conditional overrides, provider and
