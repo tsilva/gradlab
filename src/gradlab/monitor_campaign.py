@@ -8,10 +8,11 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from datetime import datetime
+import fcntl
 import hashlib
 import json
 from pathlib import Path
-import statistics
+import math
 import subprocess
 import sys
 import time
@@ -127,6 +128,51 @@ def _events(authority, run_id):
     return sorted(events.values(), key=lambda e: e["event_seq"])
 
 
+def _training_measurement(events, warmup):
+    updates = [
+        e for e in events if e["kind"] == "history" and "train/throughput/rate" in e["payload"]
+    ]
+    intervals = []
+    previous_step = 0
+    for index, event in enumerate(updates):
+        step = event["step"]
+        rate = event["payload"]["train/throughput/rate"]
+        if step is None or step <= previous_step or not math.isfinite(rate) or rate <= 0:
+            raise ValueError(
+                "calibration needs finite rates and strictly increasing training steps"
+            )
+        delta = step - previous_step
+        previous_step = step
+        if index >= warmup:
+            duration = delta / rate
+            end = event["created_at"]
+            intervals.append(dict(steps=delta, seconds=duration, start=end - duration, end=end))
+    if len(intervals) < 3:
+        return None
+    return dict(
+        rate=sum(i["steps"] for i in intervals) / sum(i["seconds"] for i in intervals),
+        intervals=intervals,
+    )
+
+
+def _concurrent_capture(authority, inventory, intervals):
+    for reference in inventory:
+        if reference["status"] != "complete":
+            continue
+        result = authority.models.get_json(reference["result_key"])
+        if canonical_json_sha256(result) != reference["result_sha256"]:
+            raise ValueError("calibration result checksum mismatch")
+        if not (result.get("measurements") or {}).get("uninterrupted"):
+            continue
+        for episode in result["episodes"]:
+            timestamp = episode.get("first_inference_at")
+            if timestamp is not None and any(
+                i["start"] <= timestamp <= i["end"] for i in intervals
+            ):
+                return True
+    return False
+
+
 def collect_campaign(campaign, runs, authority):
     identity, settings, commands = campaign_plan(campaign)
     measurements = dict(samples=[], pairs=[])
@@ -182,20 +228,15 @@ def collect_campaign(campaign, runs, authority):
                 reason="paired Runs have different workload, source, runtime or selected allocation",
             )
         binding = actual
-        rates = [
-            e["payload"]["train/throughput/rate"]
-            for e in _events(authority, run_id)
-            if e["kind"] == "history" and "train/throughput/rate" in e["payload"]
-        ]
-        measured_rates = rates[campaign["warmup_updates"] :]
-        if len(measured_rates) < 3:
+        measured = _training_measurement(_events(authority, run_id), campaign["warmup_updates"])
+        if measured is None:
             return dict(
                 status="incomplete", reason="insufficient throughput observations after warm-up"
             )
         resolved[(command["seed"], command["enabled"])] = dict(
             manifest=manifest,
             terminal=terminal_doc,
-            rate=statistics.median(measured_rates),
+            **measured,
             train=train,
         )
     for seed in campaign["seeds"]:
@@ -219,7 +260,7 @@ def collect_campaign(campaign, runs, authority):
                 comparable_host_load=comparable,
                 checkpoint_freq=on["train"]["checkpoint_freq"],
                 equivalent_workload=off["terminal"]["final_step"] == on["terminal"]["final_step"],
-                nonzero_capture=bool(inventory),
+                nonzero_capture=_concurrent_capture(authority, inventory, on["intervals"]),
                 off_run=off["manifest"]["run_id"],
                 on_run=on["manifest"]["run_id"],
             )
@@ -287,11 +328,20 @@ def collect_campaign(campaign, runs, authority):
 
 
 def run_campaign(campaign, *, root):
-    from gradlab.operator_environment import load_repository_operator_environment
-
     identity, _settings, commands = campaign_plan(campaign)
     root = Path(root).expanduser().resolve() / identity
     root.mkdir(parents=True, exist_ok=True)
+    with (root / "campaign.lock").open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError("calibration campaign is already running") from None
+        return _execute_campaign(campaign, root, commands)
+
+
+def _execute_campaign(campaign, root, commands):
+    from gradlab.operator_environment import load_repository_operator_environment
+
     load_repository_operator_environment(Path.cwd())
     authority = RunAuthority(RunStorageConfig.from_env())
     ledger = root / "campaign.json"

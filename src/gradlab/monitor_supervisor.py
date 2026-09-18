@@ -100,7 +100,7 @@ class MonitoringQueue:
         expired = owner.clock.time() >= self.deadline
         for intent, key, state in rows:
             if canceled or expired:
-                if state["status"] == "running":
+                if state["status"] in {"running", "submitting"} and state.get("handle"):
                     self.backend.cancel(EvalHandle(**state["handle"]))
                 if state["status"] not in {"complete", "failed", "canceled"}:
                     state.update(
@@ -167,10 +167,19 @@ class MonitoringQueue:
             for intent, key, state in rows:
                 if available <= 0:
                     break
-                if state["status"] != "pending":
+                if state["status"] not in {"pending", "submitting"}:
                     continue
-                state["attempts"] += 1
-                self._save(key, state)
+                if state["status"] == "pending":
+                    state["attempts"] += 1
+                    state.update(status="submitting")
+                    state.pop("handle", None)
+                    handle_for = getattr(self.backend, "handle_for", None)
+                    if handle_for is not None:
+                        state["handle"] = asdict(
+                            handle_for({**intent, "execution_attempt": state["attempts"]})
+                        )
+                    self._save(key, state)
+                self.receipt["workers_quiescent"] = False
                 try:
                     handle = self.backend.submit({**intent, "execution_attempt": state["attempts"]})
                     state.update(status="running", handle=asdict(handle))
@@ -202,7 +211,8 @@ class MonitoringQueue:
             enabled=True,
             complete=complete,
             inventory=inventory,
-            workers_quiescent=not any(s["status"] == "running" for _, _, s in rows),
+            workers_quiescent=not any(s["status"] in {"running", "submitting"} for _, _, s in rows)
+            and getattr(self.backend, "quiescent", lambda: True)(),
         )
         if final and not canceled and any(s["status"] == "failed" for _, _, s in rows):
             raise RuntimeError(
@@ -211,6 +221,10 @@ class MonitoringQueue:
         return complete or canceled
 
     def close(self):
+        close = getattr(self.backend, "close", None)
+        if close is not None:
+            close()
+            return
         for checkpoint in self.owner.store.checkpoint_publications():
             identity = self._intent(checkpoint)["evaluation_id"]
             key = f"{self.prefix}/{identity}/state.json"

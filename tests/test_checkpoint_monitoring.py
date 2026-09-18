@@ -67,7 +67,7 @@ def test_complete_manifest_metrics_and_video_reuse_committed_frames(tmp_path):
     train = compose_train_document(goal / "_goal.yaml", goal / "recipes/ppo.yaml")["train_config"]
     config = resolve_env_config(env_config_from_mapping(train))
     config.env_args["noop_reset_max"] = 0
-    config.task["termination"]["max_episode_steps"] = 3
+    config.task["termination"]["max_episode_steps"] = 12
     bucket = R2Bucket(BucketConfig(uri=f"file://{tmp_path}/r2"))
     planned = episode_manifest(2)
     episodes = [
@@ -79,8 +79,8 @@ def test_complete_manifest_metrics_and_video_reuse_committed_frames(tmp_path):
             root=tmp_path / "spool",
             prefix=f"monitor/test/{episode['episode_id']}",
             provenance={"checkpoint_id": "checkpoint-test", "checkpoint_step": 123},
-            chunk_bytes=1024**2,
-            watchdog_steps=10,
+            chunk_bytes=16 * 1024,
+            watchdog_steps=20,
         )
         for episode in reversed(planned)
     ]
@@ -104,6 +104,19 @@ def test_complete_manifest_metrics_and_video_reuse_committed_frames(tmp_path):
     assert result["video"]["bytes"] > 0
     assert bucket.get_bytes(result["video"]["key"])
     assert not list((tmp_path / "video").glob("*.mp4"))
+
+    from copy import deepcopy
+    from gradlab.checkpoint_monitoring import verify_monitoring_inventory
+
+    verify_monitoring_inventory(bucket, result, planned, prefix="monitor/test")
+    broken = deepcopy(result)
+    nonselected = next(
+        e for e in broken["episodes"] if e["episode_id"] != result["selection"]["episode_id"]
+    )
+    assert len(nonselected["chunks"]) >= 3
+    nonselected["chunks"].pop(1)
+    with pytest.raises(ValueError, match="noncontiguous"):
+        verify_monitoring_inventory(bucket, broken, planned, prefix="monitor/test")
 
 
 def test_supervisor_retains_all_checkpoints_and_expands_monitoring_after_learner_exit(tmp_path):

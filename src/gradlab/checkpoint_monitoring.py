@@ -256,6 +256,7 @@ def monitor_episode(
     env = make_eval_vec_env(config, n_envs=1, seed=episode["environment_seed"])
     recorder = None
     inference_seconds = 0.0
+    first_inference_at = None
 
     class TimedPolicy:
         def __init__(self, policy):
@@ -265,12 +266,14 @@ def monitor_episode(
             return getattr(self.policy, name)
 
         def decide(self, *args, **kwargs):
-            nonlocal inference_seconds
+            nonlocal inference_seconds, first_inference_at
             started = time.perf_counter()
             try:
                 return self.policy.decide(*args, **kwargs)
             finally:
                 inference_seconds += time.perf_counter() - started
+                if first_inference_at is None:
+                    first_inference_at = time.time()
 
     if measure and policy_runtime is not None:
         policy_runtime = TimedPolicy(policy_runtime)
@@ -342,6 +345,7 @@ def monitor_episode(
             chunks=recorder.chunks,
         )
         if measure:
+            document["first_inference_at"] = first_inference_at
             document["phase_seconds"] = {**recorder.phase_seconds, "inference": inference_seconds}
         data = canonical_json_bytes(document)
         if reserve:
