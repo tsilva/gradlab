@@ -7,7 +7,7 @@ from numbers import Real
 from pathlib import Path
 from typing import Any, Mapping
 
-METRICS_SCHEMA_VERSION = 22
+METRICS_SCHEMA_VERSION = 23
 EPISODE_METRIC_WINDOW_SIZE = 100
 METRICS_EPISODE_WINDOW_SIZE_CONFIG = "metrics_episode_window_size"
 
@@ -231,6 +231,7 @@ def _load_metric_definitions() -> tuple[MetricDefinition, ...]:
             "evaluation",
             "acceptance",
             "evaluation_table",
+            "monitoring",
             "selection",
             "operational",
         }:

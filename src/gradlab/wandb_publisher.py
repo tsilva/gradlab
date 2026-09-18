@@ -294,6 +294,30 @@ def _publish_frame(
     step = int(row["step"] or 0)
     source = str(row.get("source") or "")
 
+    if kind == "monitoring":
+        import tempfile
+        import wandb
+        from gradlab.checkpoint_monitoring import verified_get
+        from gradlab.r2_store import BucketConfig, R2Bucket
+
+        config = (BucketConfig(uri=payload["bucket_uri"])
+                  if str(payload["bucket_uri"]).startswith("file://")
+                  else BucketConfig.from_env("GRADLAB_MODELS_R2", public=True))
+        if config.uri != payload["bucket_uri"]:
+            raise ValueError("monitoring media bucket differs from configured canonical storage")
+        metrics = dict(payload["metrics"])
+        if any(not name.startswith("eval/monitor/") for name in metrics):
+            raise ValueError("monitoring cannot project Acceptance metrics")
+        metrics.update({EVAL_CHECKPOINT_STEP: step, ORCHESTRATION_EVENT_SEQUENCE: event_seq})
+        with tempfile.TemporaryDirectory(prefix="gradlab-monitor-video-") as temporary:
+            path = Path(temporary) / "representative.mp4"
+            path.write_bytes(verified_get(R2Bucket(config), payload["video"]))
+            metrics["eval/monitor/video"] = wandb.Video(str(path), format="mp4")
+            validate_metric_payload(metrics)
+            configure_wandb_metric_axes(run, metrics, metrics_schema_version=metrics_schema_version)
+            run.log(metrics, step=event_seq)
+        return
+
     if kind == "history":
         if source.startswith("eval"):
             validate_evaluation_metric_payload(

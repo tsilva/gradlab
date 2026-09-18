@@ -98,11 +98,21 @@ class _RecipeValueDocument(BoundaryModel):
     policy_environment_hash: Any = None
     evaluation_environment_hash: Any = None
     value_contract: Any = None
+    monitoring: dict[str, Any] | None = None
     eval: _EvaluationDocument | None = None
     playback: _PlaybackDocument | None = None
 
     @model_validator(mode="after")
     def validate_portable_contract(self) -> "_RecipeValueDocument":
+        settings = self.train_config.get("checkpoint_monitoring") or {}
+        if settings.get("enabled"):
+            from gradlab.checkpoint_monitoring import episode_manifest
+            expected_monitoring = {"protocol": "checkpoint-monitoring-v1", "settings": settings,
+                                   "manifest": episode_manifest(settings["episodes"])}
+            if self.monitoring != expected_monitoring:
+                raise ValueError("monitoring differs from its immutable neutral episode contract")
+        elif self.monitoring is not None:
+            raise ValueError("monitoring contract requires enabled checkpoint monitoring")
         if self.eval is None and self.playback is None:
             raise ValueError("must define eval or playback")
         if self.eval is not None and self.playback is not None:
@@ -1151,6 +1161,11 @@ def _build_recipe_contract(
     train_config.pop("rom_asset_manifest", None)
     train_config["seed"] = int(seed)
     recipe["train_config"] = train_config
+    monitoring = train_config.get("checkpoint_monitoring") or {}
+    if monitoring.get("enabled"):
+        from gradlab.checkpoint_monitoring import episode_manifest
+        recipe["monitoring"] = {"protocol": "checkpoint-monitoring-v1", "settings": monitoring,
+                                "manifest": episode_manifest(monitoring["episodes"])}
     if run_description:
         recipe["description"] = str(run_description)
     recipe = dict(

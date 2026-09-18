@@ -329,8 +329,8 @@ class RunSupervisor:
         self.accepted_observed_at: float | None = None
         self.eval_admission_closed = False
         self.recovered_early_stop: EarlyStopReceipt | None = None
-        self.dataset_delivery = None
-        self.dataset_drain_started = None
+        self.monitor_backend = None
+        self.monitoring = None
         self.state_archive_publication: dict[str, Any] | None = None
         self.state_archive_closure_sha256 = ""
         self.recovery_mode = str(self.manifest.compute.get("recovery_mode") or "resume-training")
@@ -2071,8 +2071,6 @@ class RunSupervisor:
             ),
             ORCHESTRATION_SCRATCH_USED_FRACTION: (usage.used / max(usage.total, 1)),
         }
-        if self.dataset_delivery is not None:
-            metrics.update(self.dataset_delivery.metrics(now))
         step = int(self.store.outbox_health().get("local_latest_step") or 0)
         self.store.append_metrics(
             metrics,
@@ -2174,54 +2172,27 @@ class RunSupervisor:
             )
             return 1
 
-    def _dataset_heartbeat(self) -> None:
-        # Uploads may renew the CAS token, but only the main supervisor loop may
-        # emit queued lease events or touch learner stop state.
-        self._renew_lease(self.clock.monotonic(), background=True)
-        if self.lease_lost:
-            raise LeaseUnavailable("writer lease was lost during dataset delivery")
-
-    def _prepare_dataset_delivery(self) -> None:
-        collection = self.train_config.get("trajectory_collection") or {}
-        if not collection.get("enabled"):
-            return
-        from gradlab.trajectory_delivery import DatasetDelivery
-
-        root = self.run_dir / "trajectories" / self.manifest.attempt_id
-        root.mkdir(parents=True, exist_ok=True)
-        self.dataset_delivery = DatasetDelivery(
-            root, self.authority.models, self.manifest.run_id, self.manifest.attempt_id,
-            int(collection["contribution_bytes"]), heartbeat=self._dataset_heartbeat,
-        )
-        previous = self.dataset_delivery.prepare_budget()
-        write_canonical_json(root / "admission.json", {
-            "previous_reserved_bytes": previous,
-            "budget_available": self.dataset_delivery.budget_available,
-        })
-        if getattr(self.runtime, "dataset_delivery_background", True):
-            self.dataset_delivery.start()
-
-    def _advance_dataset_delivery(self, *, final=False) -> bool:
-        delivery = self.dataset_delivery
-        if delivery is None:
+    def _advance_monitoring(self, *, final: bool = False) -> bool:
+        settings = self.train_config.get("checkpoint_monitoring") or {}
+        if not settings.get("enabled"):
             return True
-        if final:
-            delivery.finalize()
-            if self.dataset_drain_started is None:
-                self.dataset_drain_started = self.clock.monotonic()
-        if not getattr(self.runtime, "dataset_delivery_background", True):
-            try:
-                delivery.advance(final=final)
-                delivery.error = None
-            except Exception as exc:
-                delivery.failures += 1
-                delivery.error = type(exc).__name__
-        complete = delivery.receipt()["complete"]
-        if final and not complete:
-            timeout = float(self.train_config["trajectory_collection"]["drain_seconds"])
-            if self.clock.monotonic() - self.dataset_drain_started >= timeout:
-                raise TimeoutError("dataset delivery drain deadline exceeded; evidence retained")
-        return complete
+        if self.monitoring is None:
+            from gradlab.monitor_supervisor import MonitoringQueue
+            if self.monitor_backend is None:
+                from gradlab.monitor_backend import SameHostEvalBackend
+                self.monitor_backend = SameHostEvalBackend(
+                    self.output_root / "monitoring", self.authority.models.config,
+                )
+            self.monitoring = MonitoringQueue(self, self.monitor_backend)
+        try:
+            return self.monitoring.advance(final=final, canceled=self.cancel_requested)
+        except LeaseUnavailable:
+            raise
+        except Exception as exc:
+            self.store.set_state("monitoring_operational_failure", {"error": repr(exc)[:1000]})
+            if final:
+                raise
+            return False
 
     def active_iteration(self, *, now: float | None = None) -> int:
         """Advance active supervision once without sleeping."""
@@ -2238,7 +2209,7 @@ class RunSupervisor:
         activity += self._publish_checkpoints()
         self._lease_heartbeat()
         activity += self._publish_state_archive()
-        self._advance_dataset_delivery()
+        self._advance_monitoring()
         self._lease_heartbeat()
         if self.cancel_requested:
             self._cancel_outstanding_evals()
@@ -2282,7 +2253,6 @@ class RunSupervisor:
         activity += self._publish_checkpoints()
         self._lease_heartbeat()
         activity += self._publish_state_archive()
-        self._advance_dataset_delivery()
         self._lease_heartbeat()
         if self.cancel_requested:
             self._cancel_outstanding_evals()
@@ -2293,11 +2263,11 @@ class RunSupervisor:
         self._lease_heartbeat()
         activity += self._publish_wandb()
         self._lease_heartbeat()
-        dataset_complete = self._advance_dataset_delivery(final=True)
+        monitoring_complete = self._advance_monitoring(final=True)
         self._emit_health(instant)
         pending_frames = self.store.metric_outbox_stats()["frames"]
         converged = (
-            dataset_complete
+            monitoring_complete
             and self._all_ready_checkpoints_published()
             and self.store.all_evals_settled()
             and pending_frames == 0
@@ -2699,8 +2669,8 @@ class RunSupervisor:
                 print("run stopped after writer lease loss; publication is fenced", flush=True)
                 return 1
             finally:
-                if self.dataset_delivery is not None:
-                    self.dataset_delivery.stop()
+                if self.monitoring is not None:
+                    self.monitoring.close()
 
     def _run(self) -> int:
         try:
@@ -2720,7 +2690,6 @@ class RunSupervisor:
             self.store.init()
             self.store.reset_interrupted_metric_frames()
             self._recover_durable_state()
-            self._prepare_dataset_delivery()
             self._lease_heartbeat()
             self.recovered_early_stop = (
                 self._authoritative_early_stop_receipt(attempt_id=self.manifest.attempt_id)
@@ -2943,8 +2912,7 @@ class RunSupervisor:
                 "learner_terminal": self.learner_terminal_document,
                 "learner_teardown": self.learner_teardown_evidence or None,
                 "learner_log": self._learner_log_evidence(),
-                "dataset_delivery": (self.dataset_delivery.receipt()
-                                     if self.dataset_delivery is not None else {"enabled": False}),
+                "checkpoint_monitoring": (self.monitoring.receipt if self.monitoring is not None else {"enabled": False}),
             },
             completed_at=self.clock.utc_now(),
             early_stop=(early_stop.to_dict() if early_stop is not None else None),
