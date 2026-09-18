@@ -164,7 +164,14 @@ exit, use the task's full allocated CPU capacity for multiple Checkpoints within
 shared finite RAM, local-spool, cumulative R2 contribution and whole-task time
 limits. Local reclamation never replenishes the retained-data allowance.
 
-Each checkpoint worker keeps Policy inference sequential and overlaps at most
+After learning, spare process slots also evaluate independent episodes from the
+same Checkpoint. Atomic Attempt-local claims assign immutable manifest ordinals;
+each process loads the saved Policy and owns its episode RNG. Main and helper
+processes share the task CPU count and each reserves one worker memory/spool
+allowance. Recovery reuses verified R2 episodes, and cancellation joins every
+owned process before reporting quiescence.
+
+Each episode process keeps Policy inference sequential and overlaps at most
 two R2 operations, with at most three pending delivery jobs. Pending chunk bytes
 remain within the worker's existing memory and spool limits. An episode manifest
 is published only after every chunk and reconstruction reference is remotely

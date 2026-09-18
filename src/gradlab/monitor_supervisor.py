@@ -163,6 +163,9 @@ class MonitoringQueue:
             // self.settings["worker_spool_bytes"],
         )
         available = limit - sum(s["status"] == "running" for _, _, s in rows)
+        slots = getattr(self.backend, "available_slots", None)
+        if slots is not None:
+            available = min(available, slots(limit))
         if not canceled and not expired:
             for intent, key, state in rows:
                 if available <= 0:
@@ -190,6 +193,13 @@ class MonitoringQueue:
                         error=str(exc)[:1000],
                     )
                 self._save(key, state)
+        if final and not canceled and not expired:
+            expand = getattr(self.backend, "expand", None)
+            if expand is not None:
+                expand(
+                    [EvalHandle(**s["handle"]) for _, _, s in rows if s["status"] == "running"],
+                    limit,
+                )
         complete = bool(rows) and all(state["status"] == "complete" for _, _, state in rows)
         inventory = [
             dict(
