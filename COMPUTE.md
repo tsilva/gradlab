@@ -164,6 +164,13 @@ exit, use the task's full allocated CPU capacity for multiple Checkpoints within
 shared finite RAM, local-spool, cumulative R2 contribution and whole-task time
 limits. Local reclamation never replenishes the retained-data allowance.
 
+Each checkpoint worker keeps Policy inference sequential and overlaps at most
+two R2 operations, with at most three pending delivery jobs. Pending chunk bytes
+remain within the worker's existing memory and spool limits. An episode manifest
+is published only after every chunk and reconstruction reference is remotely
+verified. Integrity checks also use two bounded I/O slots; size accounting uses
+paginated object listings. These bounds are part of the source-bound calibration.
+
 An explicit calibration must measure representative early, intermediate and
 stronger compatible Policies, including long episodes, capture, encoding, upload,
 video delivery and concurrent learner throughput. Bind reuse to recipe/Policy

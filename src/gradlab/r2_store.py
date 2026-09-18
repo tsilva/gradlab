@@ -439,11 +439,16 @@ class R2Bucket:
         }
 
     def iter_keys(self, prefix: str) -> Iterator[str]:
+        for row in self.iter_objects(prefix):
+            yield row["key"]
+
+    def iter_objects(self, prefix: str) -> Iterator[dict[str, Any]]:
+        """List object keys and sizes without an additional HEAD per object."""
         normalized = prefix.strip("/")
         if self.scheme == "file":
             base = self._file_path(normalized)
             if base.is_file():
-                yield normalized
+                yield {"key": normalized, "size": base.stat().st_size}
                 return
             root = self._file_path("")
             if not base.exists():
@@ -451,7 +456,7 @@ class R2Bucket:
             for path in sorted(item for item in base.rglob("*") if item.is_file()):
                 if path.name.startswith(".") and path.name.endswith(".lock"):
                     continue
-                yield path.relative_to(root).as_posix()
+                yield {"key": path.relative_to(root).as_posix(), "size": path.stat().st_size}
             return
         bucket, object_prefix = self._s3_parts(normalized)
         paginator = self._s3_client().get_paginator("list_objects_v2")
@@ -461,7 +466,7 @@ class R2Bucket:
                 base_prefix = urlparse(self.base_uri).path.lstrip("/").rstrip("/")
                 if base_prefix and full_key.startswith(base_prefix + "/"):
                     full_key = full_key[len(base_prefix) + 1 :]
-                yield full_key
+                yield {"key": full_key, "size": int(row["Size"])}
 
     def delete(self, key: str, *, if_match: str | None = None) -> None:
         if self.scheme == "file":
