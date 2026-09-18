@@ -2204,7 +2204,7 @@ class RunSupervisor:
             return 0
         monitoring_settings = self.train_config.get("checkpoint_monitoring") or {}
         if (monitoring_settings.get("calibration") or {}).get("status") == "measuring":
-            sampled = self.store.get_state("calibration_host_load") or {"count": 0, "sum": 0.0, "max": 0.0, "at": -60.0}
+            sampled = self.store.state("calibration_host_load") or {"count": 0, "sum": 0.0, "max": 0.0, "at": -60.0}
             if instant - sampled["at"] >= 60:
                 load = os.getloadavg()[0]
                 sampled = dict(count=sampled["count"] + 1, sum=sampled["sum"] + load,
@@ -2923,8 +2923,8 @@ class RunSupervisor:
                 "learner_teardown": self.learner_teardown_evidence or None,
                 "learner_log": self._learner_log_evidence(),
                 "checkpoint_monitoring": (self.monitoring.receipt if self.monitoring is not None else {"enabled": False}),
-                "calibration_host_load": self.store.get_state("calibration_host_load"),
-                "wandb_final_drain_seconds": self.store.get_state("wandb_final_drain_seconds"),
+                "calibration_host_load": self.store.state("calibration_host_load"),
+                "wandb_final_drain_seconds": self.store.state("wandb_final_drain_seconds"),
             },
             completed_at=self.clock.utc_now(),
             early_stop=(early_stop.to_dict() if early_stop is not None else None),
