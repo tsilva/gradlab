@@ -12,6 +12,7 @@ import shutil
 import signal
 import sys
 import time
+from threading import Lock
 
 from gradlab.checkpoint_monitoring import (
     finalize_monitoring,
@@ -20,6 +21,7 @@ from gradlab.checkpoint_monitoring import (
     verified_get,
     verified_put,
 )
+from gradlab.monitor_delivery import MonitoringDelivery
 from gradlab.file_utils import atomic_write_json
 from gradlab.json_utils import canonical_json_bytes
 from gradlab.r2_store import BucketConfig, R2Bucket
@@ -27,7 +29,7 @@ from gradlab.run_contracts import CheckpointManifest
 
 
 class ContributionBudget:
-    """A shared local lock serializes durable, idempotent per-object reservations.
+    """A shared local lock serializes charging, never remote I/O.
 
     Canonical reservations survive Attempts. Actual object bytes are charged along
     with reservation bytes; local deletion never refunds durable contributions.
@@ -56,27 +58,30 @@ class ContributionBudget:
                 cached = dict(
                     entries=entries, total=sum(row["charged_bytes"] for row in entries.values())
                 )
+                atomic_write_json(self.cache, cached)
             old = cached["entries"].get(name)
             if old is not None:
                 if old["key"] != key or old["object_bytes"] < size:
                     raise ValueError("monitoring contribution identity conflict")
                 # The cache is persisted before upload; a lost upload still has to
                 # be reconciled remotely before its reservation is considered safe.
-                verified_put(self.bucket, name, canonical_json_bytes(old))
-                return
-            document = dict(key=key, object_bytes=size, charged_bytes=size)
-            while True:
-                encoded = canonical_json_bytes(document)
-                charged = size + len(encoded)
-                if charged == document["charged_bytes"]:
-                    break
-                document["charged_bytes"] = charged
-            if cached["total"] + charged > self.limit:
-                raise ValueError("cumulative monitoring contribution budget exhausted")
-            cached["entries"][name] = document
-            cached["total"] += charged
-            atomic_write_json(self.cache, cached)
-            verified_put(self.bucket, name, encoded)
+                encoded = canonical_json_bytes(old)
+            else:
+                document = dict(key=key, object_bytes=size, charged_bytes=size)
+                while True:
+                    encoded = canonical_json_bytes(document)
+                    charged = size + len(encoded)
+                    if charged == document["charged_bytes"]:
+                        break
+                    document["charged_bytes"] = charged
+                if cached["total"] + charged > self.limit:
+                    raise ValueError("cumulative monitoring contribution budget exhausted")
+                cached["entries"][name] = document
+                cached["total"] += charged
+                atomic_write_json(self.cache, cached)
+        # Pending charges are conservative. No caller may upload its artifact
+        # until this reservation is durable, including after a lost response.
+        verified_put(self.bucket, name, encoded)
 
 
 def run_monitoring(intent, root, bucket):
@@ -94,6 +99,12 @@ def run_monitoring(intent, root, bucket):
     started = time.perf_counter()
     measured = (settings.get("calibration") or {}).get("status") == "measuring"
     phases = {"r2_delivery": 0.0}
+    phase_lock = Lock()
+
+    def account_delivery(started):
+        elapsed = time.perf_counter() - started
+        with phase_lock:
+            phases["r2_delivery"] += elapsed
 
     class MeasuredBucket:
         def __getattr__(self, name):
@@ -101,12 +112,27 @@ def run_monitoring(intent, root, bucket):
             if not callable(target):
                 return target
 
+            def iterate(*args, **kwargs):
+                iterator = iter(target(*args, **kwargs))
+                while True:
+                    before = time.perf_counter()
+                    try:
+                        item = next(iterator)
+                    except StopIteration:
+                        return
+                    finally:
+                        account_delivery(before)
+                    yield item
+
+            if name in {"iter_keys", "iter_objects"}:
+                return iterate
+
             def call(*args, **kwargs):
                 before = time.perf_counter()
                 try:
                     return target(*args, **kwargs)
                 finally:
-                    phases["r2_delivery"] += time.perf_counter() - before
+                    account_delivery(before)
 
             return call
 
@@ -187,7 +213,13 @@ def run_monitoring(intent, root, bucket):
         )
         if rss > settings["worker_memory_bytes"]:
             raise MemoryError("monitoring worker memory budget exhausted")
-        used = sum(p.stat().st_size for p in root.rglob("*") if p.is_file())
+        used = 0
+        for path in root.rglob("*"):
+            try:
+                if path.is_file():
+                    used += path.stat().st_size
+            except FileNotFoundError:
+                pass  # A verified background delivery reclaimed this chunk.
         peaks["peak_memory_bytes"] = max(peaks["peak_memory_bytes"], rss)
         peaks["peak_spool_bytes"] = max(peaks["peak_spool_bytes"], used)
         if (
@@ -197,43 +229,46 @@ def run_monitoring(intent, root, bucket):
             raise OSError("monitoring worker spool/headroom budget exhausted")
 
     guard()
-    for episode in intent["manifest"]:
-        prefix = f"{bucket_prefix}/{episode['episode_id']}"
-        result = bucket.get_json_optional(prefix + "/episode.json")
-        if result is not None:
-            if (
-                any(result.get(k) != v for k, v in {**episode, **provenance}.items())
-                or not result["complete"]
-            ):
-                raise ValueError("recovered monitoring episode identity mismatch")
-            for reference in result["chunks"]:
-                verified_get(bucket, reference)
-        else:
-            result = monitor_episode(
-                model=model,
-                config=config,
-                episode=episode,
-                bucket=bucket,
-                root=root / "spool",
-                prefix=prefix,
-                provenance=provenance,
-                chunk_bytes=settings["chunk_bytes"],
-                watchdog_steps=settings["watchdog_steps"],
-                reserve=budget.reserve,
-                guard=guard,
-                measure=measured,
-                policy_runtime=PolicyRuntime(
-                    model, algorithm_id=resolve_policy_algorithm(source.bundle.model["policy"])
-                ),
-            )
-        episodes.append(result)
-        guard()
+    with MonitoringDelivery() as delivery:
+        for episode in intent["manifest"]:
+            prefix = f"{bucket_prefix}/{episode['episode_id']}"
+            result = bucket.get_json_optional(prefix + "/episode.json")
+            if result is not None:
+                if (
+                    any(result.get(k) != v for k, v in {**episode, **provenance}.items())
+                    or not result["complete"]
+                ):
+                    raise ValueError("recovered monitoring episode identity mismatch")
+                for reference in result["chunks"]:
+                    verified_get(bucket, reference)
+            else:
+                result = monitor_episode(
+                    model=model,
+                    config=config,
+                    episode=episode,
+                    bucket=bucket,
+                    root=root / "spool",
+                    prefix=prefix,
+                    provenance=provenance,
+                    chunk_bytes=settings["chunk_bytes"],
+                    watchdog_steps=settings["watchdog_steps"],
+                    reserve=budget.reserve,
+                    guard=guard,
+                    measure=measured,
+                    delivery=delivery,
+                    policy_runtime=PolicyRuntime(
+                        model, algorithm_id=resolve_policy_algorithm(source.bundle.model["policy"])
+                    ),
+                )
+            episodes.append(result)
+            guard()
+    guard()
 
     def measurements():
         return dict(
             **peaks,
             seconds=time.perf_counter() - started,
-            retained_bytes=sum(bucket.head(key)["size"] for key in bucket.iter_keys(bucket_prefix)),
+            retained_bytes=sum(row["size"] for row in bucket.iter_objects(bucket_prefix)),
             longest_episode_steps=max(e["steps"] for e in episodes),
             uninterrupted=intent.get("execution_attempt") == 1,
             phase_seconds={

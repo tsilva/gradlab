@@ -13,6 +13,7 @@ import math
 import statistics
 import time
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -65,7 +66,8 @@ def _png(frame):
 class EpisodeRecording:
     """The existing runtime recording boundary, with complete multi-chunk episodes."""
 
-    def __init__(self, runtime, *, bucket, root, prefix, chunk_bytes, reserve=None, guard=None):
+    def __init__(self, runtime, *, bucket, root, prefix, chunk_bytes, reserve=None, guard=None,
+                 delivery=None):
         from gradlab.recording_contract import verify_recording_provider
 
         self.contract = verify_recording_provider(runtime)
@@ -73,6 +75,7 @@ class EpisodeRecording:
         self.root, self.prefix = Path(root), prefix
         self.root.mkdir(parents=True, exist_ok=True)
         self.limit, self.reserve = chunk_bytes, reserve
+        self.delivery, self.deliveries = delivery, []
         self.guard = guard
         self.chunks, self.rows = [], []
         self.entries = {}
@@ -186,7 +189,8 @@ class EpisodeRecording:
     def seal(self):
         if not self.rows:
             return
-        local = self.root / "chunk.zip"
+        identity = hashlib.sha256(self.prefix.encode()).hexdigest()
+        local = self.root / f"{identity}-{self.start:08d}-{self.step:08d}.zip"
         started = time.perf_counter()
         with zipfile.ZipFile(local, "w", compression=zipfile.ZIP_STORED) as archive:
             for name, value in self.entries.items():
@@ -202,9 +206,7 @@ class EpisodeRecording:
         # immutable chunk ordinal. Identical complete chunks still deduplicate.
         digest = hashlib.sha256(payload).hexdigest()
         key = f"{self.prefix}/chunks/{self.start:08d}-{self.step:08d}-{digest}.zip"
-        if self.reserve:
-            self.reserve(key, len(payload))
-        reference = verified_put(self.bucket, key, payload)
+        reference = dict(key=key, bytes=len(payload), sha256=digest)
         reference.update(
             first_step=self.start,
             end_step=self.step,
@@ -212,11 +214,21 @@ class EpisodeRecording:
             last_frame_sha256=hashlib.sha256(self.entries[f"frames/{self.step}.png"]).hexdigest(),
         )
         manifest_data = canonical_json_bytes(reference)
-        if self.reserve:
-            self.reserve(key + ".json", len(manifest_data))
-        verified_put(self.bucket, key + ".json", manifest_data)
-        # Both the chunk and its reconstruction reference are recoverable remotely.
-        local.unlink()
+
+        def deliver():
+            if self.reserve:
+                self.reserve(key, len(payload))
+            verified_put(self.bucket, key, payload)
+            if self.reserve:
+                self.reserve(key + ".json", len(manifest_data))
+            verified_put(self.bucket, key + ".json", manifest_data)
+            # Reclaim only after canonical remote bytes and metadata are verified.
+            local.unlink()
+
+        if self.delivery is None:
+            deliver()
+        else:
+            self.deliveries.append(self.delivery.submit(deliver))
         self.chunks.append(reference)
         self.entries, self.rows, self.size = {}, [], 0
         self.start = self.step
@@ -241,6 +253,7 @@ def monitor_episode(
     policy_runtime=None,
     guard=None,
     measure=False,
+    delivery=None,
 ):
     import torch
     from gradlab.env import make_eval_vec_env
@@ -286,6 +299,7 @@ def monitor_episode(
             chunk_bytes=chunk_bytes,
             reserve=reserve,
             guard=guard,
+            delivery=delivery,
         )
         env.runtime.recording = recorder
         expected_actions = provenance.get("action_contract")
@@ -348,9 +362,15 @@ def monitor_episode(
             document["first_inference_at"] = first_inference_at
             document["phase_seconds"] = {**recorder.phase_seconds, "inference": inference_seconds}
         data = canonical_json_bytes(document)
-        if reserve:
-            reserve(f"{prefix}/episode.json", len(data))
-        verified_put(bucket, f"{prefix}/episode.json", data)
+        def commit():
+            if reserve:
+                reserve(f"{prefix}/episode.json", len(data))
+            verified_put(bucket, f"{prefix}/episode.json", data)
+
+        if delivery is None:
+            commit()
+        else:
+            delivery.submit(commit, after=recorder.deliveries)
         return document
     finally:
         env.close()
@@ -397,6 +417,7 @@ def verify_monitoring_inventory(bucket, result, manifest, *, prefix):
     metrics, selection, _ = monitoring_aggregates(result["episodes"], manifest)
     if metrics != result["metrics"] or selection != result["selection"]:
         raise ValueError("monitoring aggregate or representative selection mismatch")
+    references = []
     for episode in result["episodes"]:
         if any(
             episode.get(key) != result.get(key)
@@ -415,20 +436,25 @@ def verify_monitoring_inventory(bucket, result, manifest, *, prefix):
                 raise ValueError("monitoring episode has noncontiguous chunks or frame joins")
             if not chunk["key"].startswith(prefix + "/"):
                 raise ValueError("monitoring chunk outside evaluation namespace")
-            head = bucket.head(chunk["key"])
-            digest = head["etag"] if bucket.scheme == "file" else head["metadata"].get("sha256")
-            if head["size"] != chunk["bytes"] or digest != chunk["sha256"]:
-                raise ValueError("monitoring durable chunk identity mismatch")
+            references.append(chunk)
             step, previous = chunk["end_step"], chunk["last_frame_sha256"]
         if not episode["chunks"] or step != episode["steps"]:
             raise ValueError("monitoring episode has incomplete chunks")
     video = result["video"]
     if video["key"] != prefix + "/representative.mp4":
         raise ValueError("monitoring video outside evaluation namespace")
-    head = bucket.head(video["key"])
-    digest = head["etag"] if bucket.scheme == "file" else head["metadata"].get("sha256")
-    if head["size"] != video["bytes"] or digest != video["sha256"]:
-        raise ValueError("monitoring durable video identity mismatch")
+    references.append(video)
+
+    def verify(reference):
+        head = bucket.head(reference["key"])
+        digest = head["etag"] if bucket.scheme == "file" else head["metadata"].get("sha256")
+        if head["size"] != reference["bytes"] or digest != reference["sha256"]:
+            kind = "video" if reference is video else "chunk"
+            raise ValueError(f"monitoring durable {kind} identity mismatch")
+
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="monitor-verify") as pool:
+        for _ in pool.map(verify, references, buffersize=2):
+            pass
 
 
 def monitoring_aggregates(episodes, manifest):
