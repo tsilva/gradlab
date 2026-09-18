@@ -90,6 +90,10 @@ _Avoid_: Policy, release
 The provisional classification that a run meets goal-defined criteria calculated during training. Training success is a cheap proxy used to classify and compare runs; it is not acceptance and does not confirm that the research goal is solved.
 _Avoid_: Acceptance, solved goal
 
+**Checkpoint Monitoring**:
+Observational evaluation of an immutable checkpoint on a fixed episode manifest, producing complete trajectories, metrics and a representative video without Acceptance, Promotion or score-driven training stops.
+_Avoid_: Acceptance evaluation, training-transition capture
+
 **Acceptance**:
 The determination, from a separate evaluation on seeds different from the training seeds, that a policy meets an evaluated goal's stricter criteria.
 _Avoid_: Completion, publication

@@ -27,8 +27,8 @@ GradLab is a public, reproducible, general-purpose reinforcement-learning resear
 - Training measures, recordings, playback, integrity checks, reexecution, and human-controlled results must not cause Acceptance or Promotion.
 - Evaluation and Faithful Playback must preserve the recorded action-selection rules.
 - Counterfactual Playback must remain visible and ineligible as Acceptance or Promotion evidence.
-- Acceptance must stop training at the next safe update boundary and close admission of new automatic evaluations.
-- Evaluations submitted before Acceptance must be allowed to finish, and unevaluated Checkpoints must be preserved.
+- Acceptance must stop training at the next safe update boundary and close admission of new automatic Acceptance evaluations.
+- Acceptance evaluations submitted before Acceptance must be allowed to finish, and Checkpoints without Acceptance evaluation must be preserved for future explicit evaluation.
 
 ### Provenance, Security, and Compatibility
 

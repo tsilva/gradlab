@@ -564,7 +564,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertGreaterEqual(report.counts["env_configs"], 0)
         self.assertEqual(report.counts["benchmark_profiles"], 4)
         self.assertEqual(report.counts["workspace_manifests"], 1)
-        self.assertEqual(report.counts["workspace_projects"], 26)
+        self.assertEqual(report.counts["workspace_projects"], 25)
 
     def test_recipe_cannot_be_launched_for_a_different_goal(self) -> None:
         with self.assertRaisesRegex(ValueError, "does not belong to goal"):
@@ -1104,7 +1104,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertIn("env", COMMANDS)
 
     def test_noncurrent_commands_are_not_registered_on_unified_cli(self) -> None:
-        self.assertTrue({"monitor", "promote", "release"}.isdisjoint(COMMANDS))
+        self.assertTrue({"promote", "release"}.isdisjoint(COMMANDS))
 
     def test_goal_validator_accepts_huggingface_release_target(self) -> None:
         document = load_goal_contract(

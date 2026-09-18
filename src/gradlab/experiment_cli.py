@@ -796,6 +796,10 @@ def cmd_launch(args: argparse.Namespace) -> int:
     )
     if release.source_sha != source_sha:
         raise RuntimeError("runtime release source does not match committed HEAD")
+    from gradlab.monitor_config import validate_monitoring_allocation
+    validate_monitoring_allocation(config.get("checkpoint_monitoring"), source_sha=source_sha,
+        image_digest=release.runtime_image_ref, resources=resources.as_manifest(),
+        duration=selected_compute.bounded_duration_seconds)
     if vizdoom_iwad is not None:
         vizdoom_iwad = _stage_vizdoom_iwad(authority, vizdoom_iwad)
     asset = (
