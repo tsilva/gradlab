@@ -44,6 +44,9 @@ def assess_calibration(measurements):
     settings = measurements["settings"]
     count = settings["episodes"]
     for sample in samples:
+        workers = sample.get("execution_workers", 1)
+        if type(workers) is not int or not 1 <= workers <= settings["task_cpus"]:
+            return {**base, "reason": "invalid episode process count"}
         if (
             sample.get("episodes_completed") != count
             or not sample.get("verified_terminal_receipt")
@@ -106,12 +109,17 @@ def assess_calibration(measurements):
     )
     lower = statistics.mean(logs) - critical * statistics.stdev(logs) / math.sqrt(len(logs))
     loss_upper = 1 - math.exp(lower)
-    duration = max(s["seconds"] for s in samples) * 1.25
+    # Parallel wall time cannot establish single-worker active cadence. Multiplying
+    # by the process count is a conservative serialized-work upper bound, including
+    # loading, waiting and finalization; never divide this speedup a second time.
+    duration = max(s["seconds"] * s.get("execution_workers", 1) for s in samples) * 1.25
     retained = max(s["retained_bytes"] for s in samples) * 1.25
     checkpoints = math.ceil(train["timesteps"] / train["checkpoint_freq"]) + 1
     training_seconds = train["timesteps"] / min(p["on_rate"] for p in pairs)
     final_tail = math.ceil(checkpoints / settings["task_cpus"]) * duration
-    total_seconds = max(training_seconds + final_tail, measurements.get("observed_total_seconds", 0) * 1.25)
+    total_seconds = max(
+        training_seconds + final_tail, measurements.get("observed_total_seconds", 0) * 1.25
+    )
     recommended_spacing = math.ceil(
         duration * max(p["on_rate"] for p in pairs) / settings["active_workers"]
     )

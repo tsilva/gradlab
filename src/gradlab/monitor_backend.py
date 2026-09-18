@@ -13,6 +13,7 @@ import sys
 import time
 
 from gradlab.monitor_bootstrap import process_start
+from gradlab.monitor_work import EpisodeWork
 
 from gradlab.eval_backend import EvalHandle, EvalPoll
 from gradlab.file_utils import atomic_write_json
@@ -42,7 +43,19 @@ class SameHostEvalBackend:
         return False
 
     def quiescent(self):
-        return not any(self._locked(p.name) for p in self.root.iterdir() if p.is_dir())
+        return not any(
+            self._locked(p.parent.relative_to(self.root)) for p in self.root.rglob("ownership.lock")
+        )
+
+    def available_slots(self, limit):
+        return max(
+            0,
+            limit
+            - sum(
+                self._locked(p.parent.relative_to(self.root))
+                for p in self.root.rglob("ownership.lock")
+            ),
+        )
 
     def submit(self, intent):
         handle = self.handle_for(intent)
@@ -56,11 +69,20 @@ class SameHostEvalBackend:
             return handle
         used = sum(p.stat().st_size for p in self.root.rglob("*") if p.is_file())
         settings = intent["settings"]
-        active = sum(self._locked(p.name) for p in self.root.iterdir() if p.is_dir())
+        active = settings.get("task_cpus", 1) - self.available_slots(settings.get("task_cpus", 1))
+        if active >= settings.get("task_cpus", 1):
+            raise OSError("shared monitoring process budget exhausted")
         if used >= settings.get("spool_bytes", 2**63) or (active + 1) * settings.get(
             "worker_spool_bytes", 0
         ) > settings.get("spool_bytes", 2**63):
             raise OSError("shared monitoring spool budget exhausted")
+        self._spawn(directory, intent)
+        return handle
+
+    def _spawn(self, directory, intent, *, episode_root=None):
+        identity = str(directory.relative_to(self.root))
+        directory.mkdir(parents=True, exist_ok=True)
+        request = directory / "request.json"
         atomic_write_json(request, intent)
         environment = {
             k: os.environ[k] for k in ("PATH", "HOME", "TMPDIR", "SSL_CERT_FILE") if k in os.environ
@@ -76,6 +98,8 @@ class SameHostEvalBackend:
             GRADLAB_MONITOR_BUDGET_ROOT=str(self.root),
             GRADLAB_MONITOR_PARENT_PID=str(os.getpid()),
         )
+        if episode_root is not None:
+            environment["GRADLAB_MONITOR_EPISODE_ROOT"] = str(episode_root)
         for name in (
             "uri",
             "endpoint_url",
@@ -90,7 +114,7 @@ class SameHostEvalBackend:
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
-                return handle
+                return
             environment["GRADLAB_MONITOR_LOCK_FD"] = str(lock.fileno())
             with (directory / "worker.log").open("ab") as log:
                 self.processes[identity] = subprocess.Popen(
@@ -101,7 +125,45 @@ class SameHostEvalBackend:
                     start_new_session=True,
                     pass_fds=(lock.fileno(),),
                 )
-        return handle
+
+    def expand(self, handles, limit):
+        """Fill final-drain slots fairly; each process owns one memory/spool share."""
+        while True:
+            if not self.available_slots(limit):
+                return
+            candidates = []
+            for handle in handles:
+                directory = self.root / handle.call_id
+                if not self._locked(handle.call_id) or (directory / "result.json").exists():
+                    continue
+                intent = json.loads((directory / "request.json").read_text())
+                work = EpisodeWork(directory, len(intent["manifest"]))
+                if work.remaining() > 0:
+                    children = list((directory / "helpers").glob("*/request.json"))
+                    candidates.append((len(children), directory, intent, work))
+            if not candidates:
+                return
+            _, directory, intent, work = min(candidates, key=lambda row: (row[0], str(row[1])))
+            with work.locked():
+                if work.remaining() <= 0:
+                    continue
+                helper = directory / "helpers" / str(len(list((directory / "helpers").glob("*"))))
+                try:
+                    self._spawn(helper, intent, episode_root=directory)
+                except Exception as exc:
+                    # Preserve the failed helper so poll routes it through the
+                    # checkpoint's one execution retry, rather than failing drain.
+                    atomic_write_json(
+                        helper / "result.json",
+                        dict(status="failed", error=f"{type(exc).__name__}: {exc}"[:1000]),
+                    )
+                    return
+
+    def _helpers(self, handle):
+        return [
+            EvalHandle("cpu", str(p.parent.relative_to(self.root)))
+            for p in (self.root / handle.call_id / "helpers").glob("*/request.json")
+        ]
 
     def poll(self, handle):
         if (
@@ -111,24 +173,39 @@ class SameHostEvalBackend:
         ):
             raise ValueError("invalid CPU evaluation handle")
         directory = self.root / handle.call_id
+        for helper in self._helpers(handle):
+            process = self.processes.get(helper.call_id)
+            if process is not None:
+                process.poll()
+            if not self._locked(helper.call_id):
+                result = self.root / helper.call_id / "result.json"
+                document = json.loads(result.read_text()) if result.exists() else {}
+                if document.get("status") != "succeeded":
+                    return EvalPoll(
+                        "failed", error=document.get("error", "episode worker interrupted")
+                    )
         process = self.processes.get(handle.call_id)
         request = json.loads((directory / "request.json").read_text())
         if process is not None:
             process.poll()  # Reap local exits before inspecting the ownership lock.
+        if time.time() >= request["deadline"]:
+            self.cancel(handle)
+            return EvalPoll("failed", error="whole-run monitoring deadline exhausted")
         if self._locked(handle.call_id):
-            if time.time() >= request["deadline"]:
-                self.cancel(handle)
-                return EvalPoll("failed", error="whole-run monitoring deadline exhausted")
             return EvalPoll("running")
         result = directory / "result.json"
         if result.exists():
             document = json.loads(result.read_text())
             if document["status"] == "succeeded":
+                if any(self._locked(h.call_id) for h in self._helpers(handle)):
+                    return EvalPoll("running")
                 return EvalPoll("succeeded", provider_result=document["result"])
             return EvalPoll("failed", error=document["error"])
         return EvalPoll("failed", error="CPU worker interrupted before durable completion")
 
     def cancel(self, handle):
+        for helper in self._helpers(handle):
+            self.cancel(helper)
         process = self.processes.get(handle.call_id)
         if process is not None:
             process.poll()
@@ -178,8 +255,11 @@ class SameHostEvalBackend:
             raise RuntimeError("monitoring workers did not all quiesce") from failures[0]
 
     def forget(self, handle):
-        if self._locked(handle.call_id):
+        helpers = self._helpers(handle)
+        if self._locked(handle.call_id) or any(self._locked(h.call_id) for h in helpers):
             raise RuntimeError("cannot reclaim a running monitoring worker")
+        for helper in helpers:
+            self.forget(helper)
         process = self.processes.pop(handle.call_id, None)
         if process is not None:
             process.wait(timeout=5)

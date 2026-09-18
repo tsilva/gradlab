@@ -58,6 +58,10 @@ class MonitoringDelivery:
                 dependency_future.add_done_callback(dependency)
         return result
 
+    def after_pending(self, operation):
+        """Publish a local completion only after all preceding remote commits."""
+        return self.submit(operation, after=tuple(self.pending))
+
     def __enter__(self):
         return self
 

@@ -366,7 +366,8 @@ def test_calibration_cli_reports_missing_representative_evidence_without_enablin
 
 
 @pytest.mark.parametrize("backend_id", ["gradlab.ppo", "sb3.ppo", "sb3.a2c"])
-def test_worker_loads_real_immutable_policy_bundle(backend_id, tmp_path, monkeypatch):
+@pytest.mark.parametrize("workers", [1, 3])
+def test_worker_loads_real_immutable_policy_bundle(backend_id, workers, tmp_path, monkeypatch):
     import time
     import torch
     import gymnasium as gym
@@ -389,6 +390,7 @@ def test_worker_loads_real_immutable_policy_bundle(backend_id, tmp_path, monkeyp
         from gradlab.training_backend import normalize_training_backend
 
         common = value["train_config"]
+        common["task"]["termination"]["max_episode_steps"] = 20
         common["training_backend"] = normalize_training_backend(
             {"id": backend_id, "config": {}}, common_config=common, label="backend"
         )
@@ -466,7 +468,8 @@ def test_worker_loads_real_immutable_policy_bundle(backend_id, tmp_path, monkeyp
     )
     settings = {
         **asdict(MonitoringConfig()),
-        "episodes": 1,
+        "episodes": 6,
+        "task_cpus": workers,
         "watchdog_steps": 20000,
         "calibration": {"status": "measuring", "campaign_id": "e" * 64},
     }
@@ -477,7 +480,7 @@ def test_worker_loads_real_immutable_policy_bundle(backend_id, tmp_path, monkeyp
         recipe_sha256="a" * 64,
         evaluation_id="b" * 64,
         prefix=f"monitoring/{run_id}/" + "b" * 64,
-        manifest=episode_manifest(1),
+        manifest=episode_manifest(6),
         deadline=time.time() + 90,
         attempt_id="attempt-" + "a" * 16,
         contract_sha256="c" * 64,
@@ -491,6 +494,9 @@ def test_worker_loads_real_immutable_policy_bundle(backend_id, tmp_path, monkeyp
     )
     backend = SameHostEvalBackend(tmp_path / "workers", fixture.storage.models)
     handle = backend.submit(intent)
+    if workers > 1:
+        backend.expand([handle], workers)
+        assert len(backend._helpers(handle)) == workers - 1
     try:
         for _ in range(900):
             result = backend.poll(handle)
@@ -498,9 +504,29 @@ def test_worker_loads_real_immutable_policy_bundle(backend_id, tmp_path, monkeyp
                 break
             time.sleep(0.1)
         assert result.status == "succeeded", result.error
-        assert result.provider_result["metrics"]["eval/monitor/episodes/count"] == 1
+        assert result.provider_result["metrics"]["eval/monitor/episodes/count"] == 6
         assert result.provider_result["episodes"][0]["steps"] > 0
         assert result.provider_result["measurements"]["phase_seconds"]["inference"] > 0
+        assert backend.quiescent()
+        if workers > 1:
+            parallel = result.provider_result
+            serial = backend.submit({**intent, "prefix": intent["prefix"] + "-serial"})
+            try:
+                for _ in range(900):
+                    comparison = backend.poll(serial)
+                    if comparison.status != "running":
+                        break
+                    time.sleep(0.1)
+                assert comparison.status == "succeeded", comparison.error
+                # Exact original RGB, stochastic actions, facts, rewards and
+                # boundaries survive different process counts and dispatch order.
+                assert [[c["sha256"] for c in e["chunks"]] for e in parallel["episodes"]] == [
+                    [c["sha256"] for c in e["chunks"]] for e in comparison.provider_result["episodes"]
+                ]
+                assert parallel["metrics"] == comparison.provider_result["metrics"]
+                assert parallel["selection"] == comparison.provider_result["selection"]
+            finally:
+                backend.cancel(serial)
     finally:
         backend.cancel(handle)
 

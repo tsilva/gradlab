@@ -22,6 +22,7 @@ from gradlab.checkpoint_monitoring import (
     verified_put,
 )
 from gradlab.monitor_delivery import MonitoringDelivery
+from gradlab.monitor_work import EpisodeWork
 from gradlab.file_utils import atomic_write_json
 from gradlab.json_utils import canonical_json_bytes
 from gradlab.r2_store import BucketConfig, R2Bucket
@@ -96,6 +97,9 @@ def run_monitoring(intent, root, bucket):
     torch.set_num_interop_threads(1)
     root = Path(root)
     settings = intent["settings"]
+    episode_root = Path(os.environ.get("GRADLAB_MONITOR_EPISODE_ROOT", str(root)))
+    helper = episode_root != root
+    work = EpisodeWork(episode_root, len(intent["manifest"]))
     started = time.perf_counter()
     measured = (settings.get("calibration") or {}).get("status") == "measuring"
     phases = {"r2_delivery": 0.0}
@@ -214,12 +218,15 @@ def run_monitoring(intent, root, bucket):
         if rss > settings["worker_memory_bytes"]:
             raise MemoryError("monitoring worker memory budget exhausted")
         used = 0
-        for path in root.rglob("*"):
-            try:
-                if path.is_file():
+        for directory, subdirs, files in os.walk(root):
+            if Path(directory) == root:
+                subdirs[:] = [name for name in subdirs if name != "helpers"]
+            for name in files:
+                path = Path(directory) / name
+                try:
                     used += path.stat().st_size
-            except FileNotFoundError:
-                pass  # A verified background delivery reclaimed this chunk.
+                except FileNotFoundError:
+                    pass  # A verified background delivery reclaimed this chunk.
         peaks["peak_memory_bytes"] = max(peaks["peak_memory_bytes"], rss)
         peaks["peak_spool_bytes"] = max(peaks["peak_spool_bytes"], used)
         if (
@@ -230,7 +237,8 @@ def run_monitoring(intent, root, bucket):
 
     guard()
     with MonitoringDelivery() as delivery:
-        for episode in intent["manifest"]:
+        while (ordinal := work.claim()) is not None:
+            episode = intent["manifest"][ordinal]
             prefix = f"{bucket_prefix}/{episode['episode_id']}"
             result = bucket.get_json_optional(prefix + "/episode.json")
             if result is not None:
@@ -261,18 +269,45 @@ def run_monitoring(intent, root, bucket):
                     ),
                 )
             episodes.append(result)
+            delivery.after_pending(
+                lambda ordinal=ordinal, result=result: work.complete(ordinal, result)
+            )
             guard()
     guard()
 
+    if helper:
+        shutil.rmtree(root / "policy")
+        return dict(**peaks, r2_delivery_seconds=phases["r2_delivery"])
+
+    # Claims are Attempt-local scheduling, not scientific completion. Every result
+    # appears here only after its R2 episode manifest and all chunks are verified.
+    while (completed_episodes := work.results()) is None:
+        guard()
+        time.sleep(0.2)
+    episodes = completed_episodes
+    helper_measurements = []
+    for request in (root / "helpers").glob("*/request.json"):
+        result_path = request.parent / "result.json"
+        while not result_path.exists():
+            guard()
+            time.sleep(0.2)
+        document = json.loads(result_path.read_text())
+        if document["status"] != "succeeded":
+            raise RuntimeError(document["error"])
+        helper_measurements.append(document["result"])
+
     def measurements():
         return dict(
-            **peaks,
+            **{name: max([peaks[name], *(m[name] for m in helper_measurements)]) for name in peaks},
             seconds=time.perf_counter() - started,
+            execution_workers=1 + len(helper_measurements),
             retained_bytes=sum(row["size"] for row in bucket.iter_objects(bucket_prefix)),
             longest_episode_steps=max(e["steps"] for e in episodes),
             uninterrupted=intent.get("execution_attempt") == 1,
             phase_seconds={
                 **phases,
+                "r2_delivery": phases["r2_delivery"]
+                + sum(m["r2_delivery_seconds"] for m in helper_measurements),
                 **{
                     name: sum(e.get("phase_seconds", {}).get(name, 0) for e in episodes)
                     for name in ("inference", "capture", "encoding")
