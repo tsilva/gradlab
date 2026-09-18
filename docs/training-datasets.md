@@ -30,7 +30,10 @@ allocation; there is no automatic hardware choice or resource downgrade. The ope
 measures native inference, RGB capture/encoding, R2 transfer, full-video encoding,
 W&B delivery, memory/spool peaks, retained bytes and matched learner throughput.
 It checks host-load observations, equivalent resolved work and actual completion
-time, and retains all campaign Run identities. Missing, interrupted, weak or short
+time, and retains all campaign Run identities. Throughput uses total post-warm-up
+transitions divided by their total measured time, including intermittent slowdowns.
+Timestamped inference must overlap those learner intervals; monitoring performed
+only during final drain cannot establish active-training overhead. Missing, interrupted, weak or short
 representative evidence leaves calibration incomplete.
 
 To assess an already-collected measurement document without launching work:

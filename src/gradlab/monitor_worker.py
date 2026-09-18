@@ -264,13 +264,6 @@ def run_monitoring(intent, root, bucket):
 
 
 def main():
-    if sys.platform == "linux":
-        import ctypes
-
-        parent = os.getppid()
-        ctypes.CDLL(None).prctl(1, signal.SIGTERM)
-        if os.getppid() != parent:
-            return 1
     request = Path(sys.argv[1])
     intent = json.loads(request.read_text())
 
