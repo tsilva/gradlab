@@ -115,6 +115,7 @@ class SupervisorRuntime:
         limit: int,
         event_seq_offset: int = 0,
         heartbeat: Callable[[], None] | None = None,
+        should_continue: Callable[[], bool] | None = None,
     ) -> int:
         return publish_pending_frames(
             store,
@@ -123,6 +124,7 @@ class SupervisorRuntime:
             event_seq_offset=event_seq_offset,
             metrics_schema_version=projector.metrics_schema_version,
             heartbeat=heartbeat,
+            should_continue=should_continue,
         )
 
     def publish_promotion(

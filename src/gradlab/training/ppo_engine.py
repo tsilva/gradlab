@@ -44,7 +44,7 @@ from gradlab.training.sb3_on_policy import (
 )
 from gradlab.training_backend import BackendContext
 from gradlab.training_lifecycle import ProgressField, TrainingExecutionMode, TrainingResult
-from gradlab.training_metrics import throughput_delta_metrics
+from gradlab.training_metrics import ThroughputWindow
 
 ObservationTree = torch.Tensor | dict[str, "ObservationTree"]
 
@@ -390,6 +390,8 @@ class _ThroughputTracker:
         self.started_at = 0.0
         self.started_step = 0
         self.native_start: Mapping[str, float | int] | None = None
+        self.window = ThroughputWindow()
+        self.last_completed_step = 0
 
     def begin(self, step: int) -> None:
         _synchronize(self.device)
@@ -421,25 +423,30 @@ class _ThroughputTracker:
         )
 
     def flush(self) -> None:
-        if self.completed is None:
-            return
-        _synchronize(self.device)
-        self._publish(self.completed, next_start=time.perf_counter())
-        self.completed = None
+        if self.completed is not None:
+            _synchronize(self.device)
+            self._publish(self.completed, next_start=time.perf_counter())
+            self.completed = None
+        payload = self.window.flush(final=True)
+        if payload:
+            self.context.session.metric_sink.publish(payload, step=self.last_completed_step)
 
     def _publish(self, rollout: _CompletedRollout, *, next_start: float) -> None:
         loop_seconds = next_start - rollout.started_at
         between_seconds = next_start - rollout.ended_at
         if rollout.steps <= 0 or loop_seconds <= 0.0 or between_seconds < 0.0:
             return
-        payload = throughput_delta_metrics(
+        self.window.add(
             steps=rollout.steps,
             loop_seconds=loop_seconds,
             provider_step_seconds=rollout.env_step_seconds,
             rollout_seconds=rollout.rollout_seconds,
             between_rollouts_seconds=between_seconds,
         )
-        self.context.session.metric_sink.publish(payload, step=rollout.step)
+        self.last_completed_step = rollout.step
+        payload = self.window.flush()
+        if payload:
+            self.context.session.metric_sink.publish(payload, step=rollout.step)
 
 
 class _CurriculumFeedback:

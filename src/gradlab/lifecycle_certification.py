@@ -112,6 +112,8 @@ DEFAULT_SCENARIOS = (
     "completed-result-hung-process",
     "local-background-jobs",
     "checkpoint-monitoring",
+    "delivery-scheduling",
+    "delivery-drain-progress",
 )
 
 
@@ -304,10 +306,13 @@ class CertificationRuntime(SupervisorRuntime):
         limit: int,
         event_seq_offset: int = 0,
         heartbeat: Callable[[], None] | None = None,
+        should_continue: Callable[[], bool] | None = None,
     ) -> int:
         del projector
         published = 0
         for row in store.pending_metric_frames(limit=limit):
+            if should_continue is not None and not should_continue():
+                break
             if heartbeat is not None:
                 heartbeat()
             frame_id = int(row["id"])
@@ -1208,6 +1213,7 @@ def _scenario_wandb_retry_deduplication(root: Path) -> dict[str, Any]:
         len(pending) == 1 and int(pending[0]["attempts"]) == 1,
         evidence={"pending": len(pending)},
     )
+    fixture.clock.advance(2)
     supervisor.active_iteration()
     with supervisor.store.connection() as connection:
         attempts = int(
@@ -2554,6 +2560,165 @@ def _scenario_checkpoint_monitoring(root: Path) -> dict[str, Any]:
     return {"invariants": recorder.invariants, "evidence": {"submissions": len(backend.calls)}}
 
 
+def _scenario_delivery_scheduling(root: Path) -> dict[str, Any]:
+    """384 real checkpoint publications, slow storage and continuous 7 Hz ingress."""
+    from dataclasses import asdict
+    from gradlab.eval_backend import EvalPoll
+    from gradlab.monitor_config import MonitoringConfig
+
+    recorder = ScenarioRecorder("delivery-scheduling", [])
+    fixture = CertificationFixture(root)
+    prepared = fixture.prepare(run_number=92)
+    owner = prepared.supervisor
+    owner.evaluation_required = False
+    owner.eval_admission_closed = True
+    # Persist evidence once at the end; avoid quadratic fixture transcript I/O.
+    prepared.runtime.evidence_path = prepared.observer.evidence_path = None
+    for index in range(384):
+        fixture.record_checkpoint(prepared, step=(index + 1) * 8192, kind="periodic")
+    owner._publish_checkpoints()
+    owner.train_config["checkpoint_monitoring"] = asdict(MonitoringConfig(enabled=True))
+
+    class CPU:
+        def submit(self, intent):
+            return EvalHandle("cpu", intent["evaluation_id"])
+
+        def poll(self, handle):
+            return EvalPoll("running")
+
+        def cancel(self, handle):
+            pass
+
+    owner.monitor_backend = CPU()
+    reads = produced = peak = 0
+    oldest = 0.0
+    origin = fixture.clock.monotonic()
+    get = owner.authority.control.get_json_optional
+    acknowledge = owner.store.mark_metric_frame_published
+
+    def ingress(seconds):
+        nonlocal produced, peak, oldest
+        fixture.clock.advance(seconds)
+        target = int((fixture.clock.monotonic() - origin) * 7)
+        while produced < target:
+            produced += 1
+            owner.store.append_metrics({"train/return/mean": float(produced)},
+                                       step=produced, source="learner")
+        peak = max(peak, owner.store.metric_outbox_stats()["frames"])
+        oldest = max(oldest, owner._oldest_unpublished_age())
+
+    def slow_read(key):
+        nonlocal reads
+        if "/monitoring/" in key:
+            reads += 1
+            ingress(0.125)
+        return get(key)
+
+    def delivered(*args, **kwargs):
+        acknowledge(*args, **kwargs)
+        ingress(0.02)
+
+    with (
+        patch.object(owner.authority.control, "get_json_optional", side_effect=slow_read),
+        patch.object(owner.store, "mark_metric_frame_published", side_effect=delivered),
+    ):
+        owner.active_iteration()
+        recovery_reads = reads
+        for _ in range(36):
+            ingress(5)
+            owner.active_iteration()
+        recorder.require("settled-queue-metadata-is-not-refetched", reads == recovery_reads == 768,
+                         evidence={"reads": reads, "checkpoints": 384})
+        recorder.require("slow-storage-does-not-starve-sole-writer",
+                         peak <= 50 and oldest < 8 and fixture.clock.monotonic() - origin > 300,
+                         evidence={"peak_pending": peak, "oldest_seconds": oldest})
+    while owner.store.metric_outbox_stats()["frames"]:
+        owner._service_delivery(force=True)
+    owner._seal_metrics(fixture.clock.monotonic(), force=True)
+    events = prepared.runtime.wandb_events
+    sequences = [e["event_seq"] for e in events]
+    recorder.require("continuous-ingress-drains-without-loss-or-reordering",
+                     len([e for e in events if e["source"] == "learner"]) == produced
+                     and sequences == sorted(set(sequences))
+                     and len({e["writer_id"] for e in events}) == 1
+                     and owner.store.metric_segment_high_water() == owner._wandb_high_water(),
+                     evidence={"produced": produced, "published": len(events)})
+    _write_evidence(root, prepared)
+    return {"invariants": recorder.invariants,
+            "evidence": {"seconds": fixture.clock.monotonic() - origin,
+                         "phase_timings": owner.phase_timings}}
+
+
+def _scenario_delivery_drain_progress(root: Path) -> dict[str, Any]:
+    """Exercise the real drain with progressing, stalled and recording-bound work."""
+    recorder = ScenarioRecorder("delivery-drain-progress", [])
+    for mode in ("progress", "stalled", "monitoring", "verified", "deadline"):
+        fixture = CertificationFixture(root / mode)
+        prepared = fixture.prepare(run_number=93)
+        owner = prepared.supervisor
+        owner.evaluation_required = False
+        # A bounded CPU boundary remains running for 350 simulated seconds.
+        started = fixture.clock.monotonic()
+        if mode in {"monitoring", "verified"}:
+            class Monitoring:
+                receipt = {"inventory": [{"status": "running" if mode == "monitoring" else "verified"}]}
+
+                def advance(self, **kwargs):
+                    if mode == "verified":
+                        return False
+                    complete = fixture.clock.monotonic() - started >= 350
+                    self.receipt = {"inventory": [{"status": "complete" if complete else "running"}]}
+                    return complete
+
+            owner.train_config["checkpoint_monitoring"] = {"enabled": True}
+            owner.monitoring = Monitoring()
+        for step in range(4):
+            owner.store.append_metrics({"train/return/mean": float(step)},
+                                       step=step, source="learner")
+        publish = prepared.runtime.publish_frames
+
+        def slow_publish(store, projector, **kwargs):
+            elapsed = fixture.clock.monotonic() - started
+            if mode in {"progress", "deadline"}:
+                if not store.metric_outbox_stats()["frames"]:
+                    return 0
+                fixture.clock.advance(100)
+                kwargs["limit"] = 1
+                # A single blocking call may exceed the one-second batch budget.
+                kwargs["should_continue"] = None
+                return publish(store, projector, **kwargs)
+            if mode in {"stalled", "verified"} or elapsed < 350:
+                fixture.clock.advance(10)
+                return 0
+            return publish(store, projector, **kwargs)
+
+        if mode == "deadline":
+            # The declared cap is authoritative even with continuous ACKs.
+            owner.manifest.compute["selected"]["max_duration_seconds"] = 250
+        error = None
+        with (
+            patch.object(prepared.runtime, "publish_frames", side_effect=slow_publish),
+            prepared.runtime.maintain_lease(
+                lambda: owner._renew_lease(fixture.clock.monotonic(), background=True)
+            ),
+        ):
+            try:
+                owner._drain()
+            except TimeoutError as exc:
+                error = str(exc)
+        elapsed = fixture.clock.monotonic() - started
+        if mode in {"progress", "monitoring"}:
+            recorder.require(f"{mode}-can-outlast-five-minutes", error is None and elapsed >= 350
+                             and owner.store.metric_outbox_stats()["frames"] == 0,
+                             evidence={"seconds": elapsed, "error": error})
+        else:
+            expected = "whole-task" if mode == "deadline" else "no checkpoint or local W&B progress"
+            recorder.require(f"{mode}-remains-bounded", error is not None and expected in error,
+                             evidence={"seconds": elapsed, "error": error})
+        _write_evidence(root / mode, prepared)
+    return {"invariants": recorder.invariants, "evidence": {}}
+
+
 SCENARIOS: dict[str, Callable[[Path], dict[str, Any]]] = {
     "full-lifecycle": _scenario_full_lifecycle,
     "parallel-run-isolation": _scenario_parallel_run_isolation,
@@ -2576,6 +2741,8 @@ SCENARIOS: dict[str, Callable[[Path], dict[str, Any]]] = {
     "completed-result-hung-process": _scenario_completed_result_hung_process,
     "local-background-jobs": _scenario_local_background_jobs,
     "checkpoint-monitoring": _scenario_checkpoint_monitoring,
+    "delivery-scheduling": _scenario_delivery_scheduling,
+    "delivery-drain-progress": _scenario_delivery_drain_progress,
 }
 
 

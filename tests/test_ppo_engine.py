@@ -710,3 +710,27 @@ def test_tensor_native_update_matches_one_sb3_ppo_update(monkeypatch) -> None:
         assert metrics["train/learning_rate"] == pytest.approx(1e-3)
     finally:
         env.close()
+
+
+def test_throughput_tracker_emits_windows_at_completed_step_and_final_tail(monkeypatch):
+    ticks = iter([0, 1, 2, 3, 5, 6, 7])
+    monkeypatch.setattr(ppo_engine.time, "perf_counter", lambda: next(ticks))
+    frames = []
+    sink = SimpleNamespace(publish=lambda payload, *, step: frames.append((step, payload)))
+    context = SimpleNamespace(session=SimpleNamespace(metric_sink=sink))
+    runtime = SimpleNamespace(native_step_stats=lambda: None)
+    tracker = ppo_engine._ThroughputTracker(context, runtime, torch.device("cpu"))
+    tracker.begin(0)
+    tracker.end(100)
+    tracker.begin(100)
+    assert frames == []
+    tracker.end(200)
+    tracker.begin(200)
+    assert frames == [(200, {"train/throughput/rate": 40,
+                             "train/between_rollouts/seconds": 3})]
+    tracker.end(300)
+    tracker.flush()
+    tracker.flush()
+    assert frames[-1] == (300, {"train/throughput/rate": 50,
+                                "train/between_rollouts/seconds": 1})
+    assert len(frames) == 2

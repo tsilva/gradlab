@@ -412,7 +412,7 @@ def episode_frames(bucket, episode, *, guard=None):
         raise ValueError("monitoring episode length differs from chunks")
 
 
-def verify_monitoring_inventory(bucket, result, manifest, *, prefix):
+def verify_monitoring_inventory(bucket, result, manifest, *, prefix, heartbeat=None):
     """Shared worker/supervisor/terminal validation of every complete episode."""
     metrics, selection, _ = monitoring_aggregates(result["episodes"], manifest)
     if metrics != result["metrics"] or selection != result["selection"]:
@@ -454,7 +454,8 @@ def verify_monitoring_inventory(bucket, result, manifest, *, prefix):
 
     with ThreadPoolExecutor(max_workers=2, thread_name_prefix="monitor-verify") as pool:
         for _ in pool.map(verify, references, buffersize=2):
-            pass
+            if heartbeat is not None:
+                heartbeat()
 
 
 def monitoring_aggregates(episodes, manifest):

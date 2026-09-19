@@ -422,9 +422,12 @@ def publish_pending_frames(
     event_seq_offset: int = 0,
     metrics_schema_version: int = METRICS_SCHEMA_VERSION,
     heartbeat: Callable[[], None] | None = None,
+    should_continue: Callable[[], bool] | None = None,
 ) -> int:
     published = 0
     for row in store.pending_metric_frames(limit=limit):
+        if should_continue is not None and not should_continue():
+            break
         if heartbeat is not None:
             heartbeat()
         frame_id = int(row["id"])

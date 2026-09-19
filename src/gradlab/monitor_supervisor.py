@@ -8,6 +8,7 @@ from datetime import datetime
 from gradlab.checkpoint_monitoring import episode_manifest, verify_monitoring_inventory
 from gradlab.eval_backend import EvalHandle
 from gradlab.json_utils import canonical_json_sha256
+from gradlab.run_authority import LeaseUnavailable
 
 
 class MonitoringQueue:
@@ -31,6 +32,10 @@ class MonitoringQueue:
             + self.settings["whole_run_seconds"]
         )
         self.receipt = dict(enabled=True, complete=False, inventory=[], workers_quiescent=True)
+        # Only the fenced supervisor writes intent/state. Workers write results.
+        # Recover once per owner, then keep settled and pending rows off R2.
+        self._rows = {}
+        self._results = {}
 
     def _save(self, key, state):
         self.owner._lease_heartbeat()
@@ -75,13 +80,29 @@ class MonitoringQueue:
         ):
             raise ValueError("monitoring result does not bind its immutable checkpoint contract")
         verify_monitoring_inventory(
-            self.owner.authority.models, result, self.manifest, prefix=intent["prefix"]
+            self.owner.authority.models, result, self.manifest, prefix=intent["prefix"],
+            heartbeat=self.owner._service_delivery,
         )
 
     def advance(self, *, final=False, canceled=False):
+        try:
+            return self._advance(final=final, canceled=canceled)
+        except BaseException:
+            # A failed write can have committed remotely. Recover durable state
+            # before another admission/retry decision, including lost ACKs.
+            self._rows.clear()
+            self._results.clear()
+            raise
+
+    def _advance(self, *, final=False, canceled=False):
         owner = self.owner
         rows = []
         for checkpoint in owner.store.checkpoint_publications():
+            owner._service_delivery()
+            checkpoint_id = checkpoint["checkpoint_id"]
+            if checkpoint_id in self._rows:
+                rows.append(self._rows[checkpoint_id])
+                continue
             intent = self._intent(checkpoint)
             base = f"{self.prefix}/{intent['evaluation_id']}"
             owner._lease_heartbeat()
@@ -96,9 +117,13 @@ class MonitoringQueue:
                 "status": "pending",
                 "attempts": 0,
             }
-            rows.append((intent, key, state))
+            row = (intent, key, state)
+            self._rows[checkpoint_id] = row
+            rows.append(row)
         expired = owner.clock.time() >= self.deadline
         for intent, key, state in rows:
+            owner._service_delivery()
+            expired = owner.clock.time() >= self.deadline
             if canceled or expired:
                 if state["status"] in {"running", "submitting"} and state.get("handle"):
                     self.backend.cancel(EvalHandle(**state["handle"]))
@@ -129,6 +154,8 @@ class MonitoringQueue:
                     )
                     self._save(key, state)
                     self._reclaim(state)
+                except LeaseUnavailable:
+                    raise
                 except Exception as exc:
                     self.backend.cancel(EvalHandle(**state["handle"]))
                     state.update(
@@ -138,9 +165,12 @@ class MonitoringQueue:
                     self._save(key, state)
                     self._reclaim(state)
             if state["status"] == "verified":
-                result = owner.authority.models.get_json(intent["prefix"] + "/result.json")
-                if canonical_json_sha256(result) != state["result_sha256"]:
-                    raise ValueError("monitoring result changed after verification")
+                result = self._results.get(intent["evaluation_id"])
+                if result is None:
+                    result = owner.authority.models.get_json(intent["prefix"] + "/result.json")
+                    if canonical_json_sha256(result) != state["result_sha256"]:
+                        raise ValueError("monitoring result changed after verification")
+                    self._results[intent["evaluation_id"]] = result
                 owner.store.append_monitoring(
                     result,
                     bucket_uri=owner.authority.models.config.uri,
@@ -154,6 +184,7 @@ class MonitoringQueue:
                         - state["delivery_started_at"],
                     )
                     self._save(key, state)
+                    self._results.pop(intent["evaluation_id"], None)
         limit = self.settings["task_cpus"] if final else self.settings["active_workers"]
         limit = min(
             limit,
@@ -168,6 +199,9 @@ class MonitoringQueue:
             available = min(available, slots(limit))
         if not canceled and not expired:
             for intent, key, state in rows:
+                owner._service_delivery()
+                if owner.clock.time() >= self.deadline:
+                    break
                 if available <= 0:
                     break
                 if state["status"] not in {"pending", "submitting"}:

@@ -74,6 +74,44 @@ def throughput_delta_metrics(
     return payload
 
 
+class ThroughputWindow:
+    """Aggregate diagnostic deltas without averaging rates or losing elapsed time."""
+
+    def __init__(self, seconds: float = 5.0) -> None:
+        self.seconds = seconds
+        self.steps = 0
+        self.loop_seconds = 0.0
+        self.rollout_seconds = 0.0
+        self.between_seconds = 0.0
+        self.provider_seconds: float | None = 0.0
+
+    def add(self, *, steps: int, loop_seconds: float, rollout_seconds: float,
+            between_rollouts_seconds: float, provider_step_seconds: float | None) -> None:
+        self.steps += steps
+        self.loop_seconds += loop_seconds
+        self.rollout_seconds += rollout_seconds
+        self.between_seconds += between_rollouts_seconds
+        if provider_step_seconds is None:
+            self.provider_seconds = None
+        elif self.provider_seconds is not None:
+            self.provider_seconds += provider_step_seconds
+
+    def flush(self, *, final: bool = False) -> dict[str, float]:
+        if not self.steps or (not final and self.loop_seconds < self.seconds):
+            return {}
+        payload = throughput_delta_metrics(
+            steps=self.steps,
+            loop_seconds=self.loop_seconds,
+            provider_step_seconds=self.provider_seconds,
+            rollout_seconds=self.rollout_seconds,
+            between_rollouts_seconds=self.between_seconds,
+        )
+        self.steps = 0
+        self.loop_seconds = self.rollout_seconds = self.between_seconds = 0.0
+        self.provider_seconds = 0.0
+        return payload
+
+
 def _native_step_stats(source: Any) -> Mapping[str, float | int] | None:
     seen: set[int] = set()
     current = source

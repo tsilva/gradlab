@@ -94,3 +94,53 @@ def test_bootstrap_rejects_parent_lost_before_runtime_imports(tmp_path):
         assert process.wait(timeout=10) != 0
     assert not (tmp_path / "process.json").exists()
     assert not (tmp_path / "result.json").exists()
+
+
+def test_same_owner_recovers_committed_state_after_lost_ack(tmp_path, monkeypatch):
+    from gradlab.eval_backend import EvalHandle, EvalPoll
+
+    fixture = CertificationFixture(tmp_path)
+    prepared = fixture.prepare(run_number=94)
+    owner = prepared.supervisor
+    owner.evaluation_required = False
+    owner.eval_admission_closed = True
+    fixture.record_checkpoint(prepared, step=100, kind="periodic")
+    owner._publish_checkpoints()
+    owner.train_config["checkpoint_monitoring"] = asdict(MonitoringConfig(enabled=True))
+
+    class Backend:
+        submissions = 0
+
+        def submit(self, intent):
+            self.submissions += 1
+            return EvalHandle("cpu", "stable-handle")
+
+        def poll(self, handle):
+            assert handle.call_id == "stable-handle"
+            return EvalPoll("running")
+
+    backend = Backend()
+    queue = MonitoringQueue(owner, backend)
+    put = owner.authority.control.put_json
+    lost = False
+
+    def lost_ack(key, value, **kwargs):
+        nonlocal lost
+        result = put(key, value, **kwargs)
+        if key.endswith("state.json") and value.get("status") == "running" and not lost:
+            lost = True
+            raise OSError("committed state but lost ACK")
+        return result
+
+    monkeypatch.setattr(owner.authority.control, "put_json", lost_ack)
+    with pytest.raises(OSError, match="lost ACK"):
+        queue.advance()
+    assert queue.advance() is False
+    assert backend.submissions == 1
+    assert queue.receipt["inventory"][0]["attempts"] == 1
+
+    # Immutable intent and owner-written state need no further remote reads.
+    monkeypatch.setattr(owner.authority.control, "get_json_optional",
+                        lambda key: (_ for _ in ()).throw(AssertionError(key)))
+    queue.advance()
+    assert backend.submissions == 1
