@@ -444,7 +444,7 @@ class ConfigValidationTests(unittest.TestCase):
                     },
                 )
 
-        self.assertEqual(actor_critic_recipes, 52)
+        self.assertEqual(actor_critic_recipes, 53)
 
     def test_every_mario_recipe_disables_eval_and_stops_at_perfect_clear_window(self) -> None:
         mario_root = Path("experiments/goals/SuperMarioBros-Nes-v0")
@@ -560,11 +560,11 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(report.counts["json_files"], 0)
         self.assertGreaterEqual(report.counts["yaml_files"], 15)
         self.assertGreaterEqual(report.counts["goals"], 1)
-        self.assertEqual(report.counts["train_recipes"], 55)
+        self.assertEqual(report.counts["train_recipes"], 56)
         self.assertGreaterEqual(report.counts["env_configs"], 0)
         self.assertEqual(report.counts["benchmark_profiles"], 4)
         self.assertEqual(report.counts["workspace_manifests"], 1)
-        self.assertEqual(report.counts["workspace_projects"], 26)
+        self.assertEqual(report.counts["workspace_projects"], 25)
 
     def test_recipe_cannot_be_launched_for_a_different_goal(self) -> None:
         with self.assertRaisesRegex(ValueError, "does not belong to goal"):
@@ -583,11 +583,20 @@ class ConfigValidationTests(unittest.TestCase):
                 str(recipe),
             )
 
-    def test_breakout_recipes_exclude_a2c(self) -> None:
+    def test_breakout_a2c_is_limited_to_monitoring_validation(self) -> None:
         recipes = sorted((self.BREAKOUT_GOAL.parent / "recipes").glob("*.yaml"))
         self.assertTrue(recipes)
+        reference = compose_train_document(self.BREAKOUT_GOAL, self.BREAKOUT_RECIPE)
         for recipe in recipes:
             document = compose_train_document(self.BREAKOUT_GOAL, recipe)
+            if recipe.name == "a2c-monitoring-validation.yaml":
+                config = document["train_config"]
+                self.assertEqual(config["training_backend"]["id"], "sb3.a2c")
+                self.assertEqual(config["timesteps"], 1310720)
+                self.assertFalse(config.get("checkpoint_monitoring"))
+                self.assertEqual(document["environment_hash"], reference["environment_hash"])
+                self.assertEqual(config["policy_model"], reference["train_config"]["policy_model"])
+                continue
             self.assertNotEqual(
                 document["train_config"]["training_backend"]["id"],
                 "sb3.a2c",
@@ -1104,7 +1113,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertIn("env", COMMANDS)
 
     def test_noncurrent_commands_are_not_registered_on_unified_cli(self) -> None:
-        self.assertTrue({"monitor", "promote", "release"}.isdisjoint(COMMANDS))
+        self.assertTrue({"promote", "release"}.isdisjoint(COMMANDS))
 
     def test_goal_validator_accepts_huggingface_release_target(self) -> None:
         document = load_goal_contract(

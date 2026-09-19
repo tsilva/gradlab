@@ -199,6 +199,37 @@ sections:
       y:
       - train/reward/event/serve_wait/fraction
 
+  checkpoint_monitoring:
+    title: Checkpoint monitoring
+    pinned: false
+    open: true
+    columns: 2
+    panels:
+    - id: monitor_success
+      kind: line
+      x: eval/step
+      y: [eval/monitor/success/rate, eval/monitor/success/ci95/lower, eval/monitor/success/ci95/upper]
+    - id: monitor_progress
+      kind: line
+      x: eval/step
+      y: [eval/monitor/progress/mean, eval/monitor/progress/median]
+    - id: monitor_score
+      kind: line
+      x: eval/step
+      y: [eval/monitor/score/mean]
+    - id: monitor_return
+      kind: line
+      x: eval/step
+      y: [eval/monitor/return/mean]
+    - id: monitor_length
+      kind: line
+      x: eval/step
+      y: [eval/monitor/episode_steps/mean]
+    - id: monitor_count
+      kind: line
+      x: eval/step
+      y: [eval/monitor/episodes/count]
+
 profiles:
   training:
     display_name: GradLab Training
@@ -217,6 +248,7 @@ profiles:
     sections:
     - breakout_primary
     - breakout_secondary
+    - checkpoint_monitoring
     - training_essentials
     - occupancy_totals
     - occupancy

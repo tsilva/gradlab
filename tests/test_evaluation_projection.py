@@ -42,7 +42,7 @@ def test_recipe_owned_evaluation_schema_accepts_current_version() -> None:
     )
 
 
-@pytest.mark.parametrize("version", [16, 17, 18, 19, 20, 21, 23])
+@pytest.mark.parametrize("version", [16, 17, 18, 19, 20, 21, 22, 24])
 def test_recipe_owned_evaluation_schema_rejects_unknown_versions(version: int) -> None:
     with pytest.raises(ValueError, match="unsupported metrics schema"):
         metrics_schema_version_from_recipe_document(recipe_document(version))

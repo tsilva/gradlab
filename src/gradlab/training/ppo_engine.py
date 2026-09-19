@@ -1080,7 +1080,6 @@ def run_gradlab_ppo(
         )
     runtime = env.runtime
     occupancy_reporter = None
-    trajectory_recorder = None
     try:
         set_random_seed(int(common_config["seed"]))
         validate_action_space(env.action_space, algorithm_id="ppo")
@@ -1117,9 +1116,6 @@ def run_gradlab_ppo(
             env.action_space,
             runtime_action_contract(env),
         )
-        from gradlab.training_trajectories import attach_training_recorder
-
-        trajectory_recorder = attach_training_recorder(context, runtime, model)
         rollout_quantum = n_envs * int(backend_config["n_steps"])
         budget = context.session.configure_budget(
             requested_limit=int(common_config["timesteps"]),
@@ -1422,5 +1418,3 @@ def run_gradlab_ppo(
                 occupancy_reporter.flush(final=True)
         finally:
             env.close()
-            if trajectory_recorder is not None:
-                trajectory_recorder.wait(float(common_config["trajectory_collection"]["drain_seconds"]))

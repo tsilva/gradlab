@@ -42,7 +42,7 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
             [spec.to_json() for spec in first],
             [spec.to_json() for spec in second],
         )
-        self.assertEqual(len(first), 26)
+        self.assertEqual(len(first), 25)
         self.assertEqual(
             {spec.profile_id for spec in first},
             {"training", "breakout_training"},
@@ -115,7 +115,7 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
         )
         breakout_workspace = build_wandb_workspace(breakout, entity="entity")
         self.assertEqual(
-            breakout_workspace.runset_settings.filters, "Config('metrics_schema_version') = 22"
+            breakout_workspace.runset_settings.filters, "Config('metrics_schema_version') = 23"
         )
         mario = next(spec for spec in first if spec.project == "SuperMarioBros-Nes-v0")
         mario_metrics = {
@@ -167,6 +167,7 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
         document = yaml.safe_load(MANIFEST.read_text(encoding="utf-8"))
         document["profiles"].pop("breakout_training")
         document["sections"].pop("breakout_secondary")
+        document["sections"].pop("checkpoint_monitoring")
         document["sections"].pop("breakout_primary")
         document["sections"].pop("occupancy_totals")
         document["profiles"]["compact"] = {
@@ -254,7 +255,7 @@ class WandbWorkspaceRenderingTests(unittest.TestCase):
         self.assertEqual(workspace.settings.max_runs, 25)
         self.assertEqual(
             workspace.runset_settings.filters,
-            "Config('metrics_schema_version') = 22",
+            "Config('metrics_schema_version') = 23",
         )
         self.assertEqual(len(workspace.sections), 2)
         self.assertEqual(self.spec.sections[0].panels[0].y, ("eval/return/mean",))

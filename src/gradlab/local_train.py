@@ -283,6 +283,8 @@ def main(argv: list[str] | None = None) -> int:
         source_sha=source_commit or "",
     )
     document = resolved_documents.effective
+    if (document["train_config"].get("checkpoint_monitoring") or {}).get("enabled"):
+        raise ValueError("checkpoint monitoring requires the lease-holding experiment supervisor")
     goal_id, recipe_id = recipe_identity(document)
     description = _render_run_description(
         document,

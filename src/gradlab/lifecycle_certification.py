@@ -91,7 +91,6 @@ IMAGE_REF = "docker:registry.example/gradlab-certification@sha256:" + "b" * 64
 GOAL_PATH = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml")
 RECIPE_PATH = GOAL_PATH.parent / "recipes" / "ppo.yaml"
 DEFAULT_SCENARIOS = (
-    "training-dataset-delivery",
     "full-lifecycle",
     "parallel-run-isolation",
     "same-run-lease-fencing",
@@ -112,6 +111,7 @@ DEFAULT_SCENARIOS = (
     "completed-result-exits-during-iteration",
     "completed-result-hung-process",
     "local-background-jobs",
+    "checkpoint-monitoring",
 )
 
 
@@ -252,7 +252,6 @@ class ScriptedLearnerProcess:
 
 
 class CertificationRuntime(SupervisorRuntime):
-    dataset_delivery_background = False
 
     """Scriptable stand-in for process, W&B, signals, and host state."""
 
@@ -2480,79 +2479,82 @@ def _scenario_local_background_jobs(root: Path) -> dict[str, Any]:
     }
 
 
-def _scenario_training_dataset_delivery(root: Path) -> dict[str, Any]:
-    from gradlab.trajectory_config import FORMAT, ATTEMPT_METADATA_BYTES
-    from gradlab.file_utils import atomic_write_json
-    from gradlab.trajectory_delivery import DatasetDelivery
 
-    recorder = ScenarioRecorder("training-dataset-delivery", [])
+
+def _scenario_checkpoint_monitoring(root: Path) -> dict[str, Any]:
+    """Script only the CPU boundary; admission, R2 and retry state are real."""
+    from gradlab.eval_backend import EvalHandle, EvalPoll
+    from gradlab.monitor_config import MonitoringConfig
+    from dataclasses import asdict
+
+    recorder = ScenarioRecorder("checkpoint-monitoring", [])
     fixture = CertificationFixture(root)
-    prepared = fixture.prepare(run_number=81)
+    prepared = fixture.prepare(run_number=91)
     supervisor = prepared.supervisor
-    supervisor.train_config["trajectory_collection"] = {
-        "enabled": True, "contribution_bytes": 2 * 1024**2, "drain_seconds": 2,
+    supervisor.evaluation_required = False
+    supervisor.eval_admission_closed = True
+    supervisor.train_config["checkpoint_monitoring"] = {
+        **asdict(MonitoringConfig()), "enabled": True, "episodes": 2,
+        "task_cpus": 3, "memory_bytes": 6 * 1024**3 + 64 * 1024**2, "spool_bytes": 4 * 512 * 1024**2,
     }
-    supervisor._prepare_dataset_delivery()
-    spool = supervisor.dataset_delivery.root
-    data = b"immutable scripted learner trajectory"
-    path = spool / "episode.zip"
-    path.write_bytes(data)
-    atomic_write_json(spool / "producer.json", {"format": FORMAT})
-    atomic_write_json(spool / "episode.manifest.json", {
-        "format": FORMAT, "file": "episode.zip", "bytes": len(data),
-        "sha256": hashlib.sha256(data).hexdigest(), "reserved_bytes": 1024**2,
-        "episode": {"episode_id": "scripted-episode"},
-    })
-    atomic_write_json(spool / "closed.json", {"chunks": 1, "fault": None})
-    with patch.object(supervisor.authority.models, "put_bytes", side_effect=OSError("R2 unavailable")):
-        supervisor.active_iteration()
-        _, converged = supervisor.drain_iteration()
-        recorder.require("dataset-outage-prevents-terminal-convergence", not converged and path.exists())
-        fixture.clock.advance(3)
-        timed_out = False
-        try:
-            supervisor.drain_iteration()
-        except TimeoutError:
-            timed_out = True
-        recorder.require("dataset-drain-has-dedicated-deadline", timed_out and path.exists())
-    supervisor.dataset_drain_started = None
+
+    class ScriptedCPU:
+        def __init__(self):
+            self.calls = []
+            self.canceled = set()
+            self.failed = False
+
+        def submit(self, intent):
+            self.calls.append(intent)
+            return EvalHandle("cpu", str(len(self.calls)))
+
+        def poll(self, handle):
+            if self.failed:
+                return EvalPoll("failed", error="scripted CPU failure")
+            return EvalPoll("running")
+
+        def cancel(self, handle):
+            self.canceled.add(handle.call_id)
+
+    backend = ScriptedCPU()
+    supervisor.monitor_backend = backend
+    for step, kind in ((100, "periodic"), (200, "periodic"), (300, "final")):
+        fixture.record_checkpoint(prepared, step=step, kind=kind)
+    supervisor.active_iteration()
+    recorder.require("monitoring-independent-of-acceptance", len(backend.calls) == 1
+                     and not supervisor.store.evals() and not supervisor.stop_reason,
+                     evidence={"submissions": len(backend.calls)})
     supervisor.drain_iteration()
-    receipt = supervisor.dataset_delivery.receipt()
-    recorder.require("dataset-verified-before-local-reclamation", receipt["complete"] and not path.exists())
-    recorder.require("retry-preserves-run-contribution-budget",
-                     DatasetDelivery.reserved_bytes(supervisor.authority.models, supervisor.manifest.run_id) == 1024**2 + ATTEMPT_METADATA_BYTES)
-    inventory = supervisor.authority.models.get_json(receipt["manifest_key"])
-    recorder.require("remote-inventory-binds-exact-bytes",
-                     supervisor.authority.models.get_bytes(inventory["chunks"][0]["key"]) == data)
-    fixture.clock.advance(15)
-    supervisor.drain_iteration()
-    supervisor.drain_iteration()
-    writers = {event["writer_id"] for event in prepared.runtime.wandb_events}
-    recorder.require("dataset-diagnostics-use-supervisor-writer", writers == {prepared.runtime.writer_id})
-    delayed = fixture.prepare(run_number=82).supervisor
-    delayed.train_config["trajectory_collection"] = {
-        "enabled": True, "contribution_bytes": 2 * 1024**2, "drain_seconds": 600,
-    }
-    delayed._prepare_dataset_delivery()
-    started = fixture.clock.monotonic()
-    def finish_encoder():
-        if fixture.clock.monotonic() - started >= 350:
-            delayed_spool = delayed.dataset_delivery.root
-            atomic_write_json(delayed_spool / "producer.json", {"format": FORMAT})
-            atomic_write_json(delayed_spool / "closed.json", {"chunks": 0, "fault": None})
-    fixture.clock.maintenance.append(finish_encoder)
+    recorder.require("finalization-expands-without-dropping-checkpoints", len(backend.calls) == 3,
+                     evidence={"steps": [i["checkpoint"]["step"] for i in backend.calls]})
+    backend.failed = True
+    supervisor.monitoring.advance()
+    recorder.require("monitoring-retries-only-once", len(backend.calls) == 4
+                     and backend.calls[-1]["execution_attempt"] == 2,
+                     evidence={"submissions": len(backend.calls)})
     try:
-        delayed._drain()
-    finally:
-        fixture.clock.maintenance.remove(finish_encoder)
-    recorder.require("dataset-deadline-independent-of-wandb-timeout",
-                     fixture.clock.monotonic() - started >= 350
-                     and delayed.dataset_delivery.receipt()["complete"])
-    return {"invariants": recorder.invariants, "evidence": {"verified_bytes": receipt["verified_bytes"]}}
+        supervisor.monitoring.advance(final=True)
+    except RuntimeError as exc:
+        recorder.require("incomplete-monitoring-fails-finalization", "incomplete" in str(exc),
+                         evidence={"error": str(exc)})
+    else:
+        raise AssertionError("exhausted monitoring retry was treated as complete")
+    fixture.clock.maintenance.append(supervisor._lease_heartbeat)
+    fixture.clock.advance(3601)
+    fixture.clock.maintenance.remove(supervisor._lease_heartbeat)
+    try:
+        supervisor.monitoring.advance(final=True)
+    except RuntimeError:
+        pass
+    receipt = supervisor.monitoring.receipt
+    recorder.require("deadline-quiesces-all-workers", receipt["workers_quiescent"]
+                     and not receipt["complete"]
+                     and all(i["status"] == "failed" for i in receipt["inventory"]),
+                     evidence={"inventory": receipt["inventory"]})
+    return {"invariants": recorder.invariants, "evidence": {"submissions": len(backend.calls)}}
 
 
 SCENARIOS: dict[str, Callable[[Path], dict[str, Any]]] = {
-    "training-dataset-delivery": _scenario_training_dataset_delivery,
     "full-lifecycle": _scenario_full_lifecycle,
     "parallel-run-isolation": _scenario_parallel_run_isolation,
     "same-run-lease-fencing": _scenario_same_run_lease_fencing,
@@ -2573,6 +2575,7 @@ SCENARIOS: dict[str, Callable[[Path], dict[str, Any]]] = {
     "completed-result-exits-during-iteration": (_scenario_completed_result_exits_during_iteration),
     "completed-result-hung-process": _scenario_completed_result_hung_process,
     "local-background-jobs": _scenario_local_background_jobs,
+    "checkpoint-monitoring": _scenario_checkpoint_monitoring,
 }
 
 

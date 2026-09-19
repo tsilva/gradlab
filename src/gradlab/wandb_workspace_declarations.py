@@ -195,8 +195,8 @@ def _panel_spec(panel_id: str, value: Any, *, label: str) -> WorkspacePanelSpec:
         _text(document.get("x"), label=f"{label}.x"),
         label=f"{label}.x",
     )
-    if x != TRAIN_GLOBAL_STEP:
-        raise ValueError(f"{label}.x must equal {TRAIN_GLOBAL_STEP}")
+    if x not in {TRAIN_GLOBAL_STEP, "eval/step"}:
+        raise ValueError(f"{label}.x must equal train/step or eval/step")
     raw_y = document.get("y", ())
     if not isinstance(raw_y, Sequence) or isinstance(raw_y, str | bytes):
         raise ValueError(f"{label}.y must be a list")
@@ -218,6 +218,8 @@ def _panel_spec(panel_id: str, value: Any, *, label: str) -> WorkspacePanelSpec:
     )
     if not y and not metric_templates:
         raise ValueError(f"{label} must declare y or metric_templates")
+    if x == "eval/step" and any(metric_definition(name).axis != x for name in (*y, *metric_templates)):
+        raise ValueError(f"{label} evaluation panels require checkpoint-axis metrics")
     if len(set((*y, *metric_templates))) != len((*y, *metric_templates)):
         raise ValueError(f"{label} metric declarations must be unique")
     if kind == "curriculum" and (y != ("train/curriculum/distribution",) or metric_templates):

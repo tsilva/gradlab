@@ -18,7 +18,7 @@ def test_breakout_catalog_has_two_separate_goals():
         environment_id="Breakout-Atari2600-v0", include_evidence=False,
     )
     assert [(item["goal_id"], item["title"], item["recipe_count"]) for item in page.items] == [
-        ("FirstWall", "Clear the first Breakout wall", 2),
+        ("FirstWall", "Clear the first Breakout wall", 3),
         ("TwoWalls", "Clear both Breakout walls", 1),
     ]
 

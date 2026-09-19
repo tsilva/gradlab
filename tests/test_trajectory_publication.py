@@ -1,12 +1,4 @@
 from types import SimpleNamespace
-import hashlib
-import json
-import zipfile
-
-import pytest
-
-from gradlab.trajectory_publication import append_episode
-from gradlab.trajectory_config import FORMAT
 
 
 class Hub:
@@ -48,170 +40,123 @@ class Hub:
         return SimpleNamespace(oid=self.head)
 
 
-def chunk(tmp_path):
-    path = tmp_path / "source.zip"
-    with zipfile.ZipFile(path, "w") as z:
-        z.writestr("frames/0.png", b"initial")
-        z.writestr("frames/1.png", b"terminal")
-        z.writestr(
-            "transitions.jsonl",
-            json.dumps(
-                {
-                    "step": 0,
-                    "policy_action": 2,
-                    "executed_action": 0,
-                    "native_action": 1,
-                    "override_rule": "auto_serve",
-                }
-            )
-            + "\n",
-        )
-    return path
-
-
-def test_atomic_append_idempotent_after_lost_reply_and_concurrent_head(tmp_path):
-    api = Hub()
-    api.conflict_once = True
-    path = chunk(tmp_path)
-    manifest = {
-        "format": FORMAT,
-        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-        "bytes": path.stat().st_size,
-        "episode": {"episode_id": "run.attempt.1"},
-    }
-    contract = {"format": FORMAT, "execution": "verified"}
-    append_episode(api, api.read, "user/data", contract, manifest, path, tmp_path)
-    first = dict(api.files)
-    append_episode(api, api.read, "user/data", contract, manifest, path, tmp_path)
-    assert api.files == first
-    api.lose_reply = True
-    manifest = {**manifest, "episode": {"episode_id": "run.attempt.2"}}
-    append_episode(api, api.read, "user/data", contract, manifest, path, tmp_path)
-    assert set(first) <= set(api.files)
-    indexes = [
-        json.loads(v)
-        for k, v in api.files.items()
-        if k.startswith("episodes/") and k.endswith(".json")
-    ]
-    assert {m["episode"]["episode_id"] for m in indexes} == {"run.attempt.1", "run.attempt.2"}
-
-
-def test_conflicting_identity_and_contract_rejected(tmp_path):
-    api = Hub()
-    path = chunk(tmp_path)
-    manifest = {
-        "format": FORMAT,
-        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-        "bytes": path.stat().st_size,
-        "episode": {"episode_id": "same"},
-    }
-    append_episode(api, api.read, "user/data", {"version": 1}, manifest, path, tmp_path)
-    with pytest.raises(ValueError, match="contract"):
-        append_episode(api, api.read, "user/data", {"version": 2}, manifest, path, tmp_path)
-    with pytest.raises(ValueError, match="identity"):
-        append_episode(
-            api, api.read, "user/data", {"version": 1}, {**manifest, "bytes": 5}, path, tmp_path
-        )
-
-
-def test_explicit_queue_publication_filters_before_assets_and_preserves_actions(
-    tmp_path, monkeypatch
-):
+def test_durable_queue_filters_before_transfer_and_reconciles_hub_commit(tmp_path, monkeypatch):
+    import json
     from pathlib import Path
+    from gradlab.checkpoint_monitoring import monitor_episode, episode_manifest, finalize_monitoring
+    from gradlab.env import resolve_env_config
+    from gradlab.env_config import env_config_from_mapping
+    from gradlab.recipe_documents import compose_train_document
+    from gradlab.lifecycle_certification import CertificationFixture
     from gradlab.job_queue import JobStore, WorkerStart, run_flusher
-    from gradlab.r2_store import R2Bucket, BucketConfig, RunStorageConfig
-    from gradlab.trajectory_delivery import DatasetDelivery
     from gradlab.trajectory_publication import enqueue_publication
+    from gradlab.json_utils import canonical_json_sha256
+    from tests.test_checkpoint_monitoring import RequestedRight
     from huggingface_hub.errors import EntryNotFoundError
-    import gradlab.trajectory_publication as publication
-    import gradlab.operator_environment as environment
-    import pyarrow.parquet as pq
-    import io
 
-    run, attempt = "gradlab-" + "a" * 32, "attempt-" + "b" * 16
-    storage = RunStorageConfig(
-        BucketConfig(uri=(tmp_path / "control").as_uri()),
-        BucketConfig(uri=(tmp_path / "eval").as_uri()),
-        BucketConfig(uri=(tmp_path / "models").as_uri()),
+    fixture = CertificationFixture(tmp_path / "storage")
+    bucket = fixture.authority.models
+    prepared = fixture.prepare(run_number=90)
+    manifest = prepared.supervisor.manifest
+    goal = Path("experiments/goals/Breakout-Atari2600-v0/FirstWall")
+    train = compose_train_document(goal / "_goal.yaml", goal / "recipes/ppo.yaml")["train_config"]
+    config = resolve_env_config(env_config_from_mapping(train))
+    config.task["termination"]["max_episode_steps"] = 3
+    identity = "d" * 64
+    prefix = f"monitoring/{manifest.run_id}/{identity}"
+    episode = monitor_episode(
+        model=RequestedRight(),
+        config=config,
+        episode=episode_manifest(1)[0],
+        bucket=bucket,
+        root=tmp_path / "spool",
+        prefix=prefix + "/monitor-000000",
+        provenance=dict(
+            evaluation_id=identity,
+            checkpoint_id="checkpoint-test",
+            checkpoint_step=100,
+            planned_training_steps=200,
+            run_id=manifest.run_id,
+            training_seed=123,
+        ),
+        chunk_bytes=1024**2,
+        watchdog_steps=10,
     )
-    control, models = R2Bucket(storage.control), R2Bucket(storage.models)
-    spool = tmp_path / "spool"
-    spool.mkdir()
-    import numpy as np
-    from tests.test_training_trajectories import training_env
-    from gradlab.training_trajectories import TrainingRecorder
-    from gradlab.trajectory_config import CollectionConfig
-
-    monkeypatch.setattr(
-        "gradlab.training_trajectories.shutil.disk_usage",
-        lambda _: SimpleNamespace(total=100 * 1024**3, free=50 * 1024**3),
+    result = finalize_monitoring(
+        [episode],
+        episode_manifest(1),
+        bucket=bucket,
+        root=tmp_path / "video",
+        prefix=prefix,
+        fps=15,
     )
-    train, env = training_env()
-    recorder = TrainingRecorder(
-        env.runtime,
-        spool,
-        CollectionConfig(sample_probability=1, budget_stages=1),
-        {"run_id": run, "attempt_id": attempt, "train_config": train},
-        position=lambda: (0, 0),
-    )
-    env.runtime.recording = recorder
-    try:
-        env.reset()
-        for _ in range(3):
-            env.step(np.ones(2, dtype=np.int64))
-    finally:
-        env.close()
-    recorder.wait(10)
-    delivery = DatasetDelivery(spool, models, run, attempt, 10 * 1024**3)
-    for _ in range(10):
-        delivery.advance(final=True)
-        if delivery.receipt()["complete"]:
-            break
-    assert delivery.receipt()["complete"]
-    control.put_json(
-        f"runs/{run}/manifest.json",
-        {"run_id": run, "attempt_id": attempt, "created_at": "2026-09-17"},
-    )
-    control.put_json(
-        f"runs/{run}/attempts/{attempt}/terminal.json",
-        {"drain": {"dataset_delivery": delivery.receipt()}},
+    fixture.authority.control.put_json(
+        f"runs/{manifest.run_id}/attempts/{manifest.attempt_id}/terminal.json",
+        {
+            "drain": {
+                "checkpoint_monitoring": {
+                    "complete": True,
+                    "workers_quiescent": True,
+                    "inventory": [
+                        dict(
+                            evaluation_id=identity,
+                            status="complete",
+                            result_key=prefix + "/result.json",
+                            result_sha256=canonical_json_sha256(result),
+                        )
+                    ],
+                }
+            }
+        },
     )
     api = Hub()
     api.create_repo = lambda **kwargs: None
+    api.conflict_once = True
+    api.lose_reply = True
 
-    def download(repo, name, **kwargs):
-        if name not in api.files:
-            raise EntryNotFoundError(name)
-        target = Path(kwargs["cache_dir"]) / name
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(api.files[name])
-        return str(target)
+    def download(repo, name, *, revision, cache_dir, **kwargs):
+        data = api.read(name, revision)
+        if data is None:
+            raise EntryNotFoundError("missing")
+        path = Path(cache_dir) / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        return str(path)
 
-    monkeypatch.setattr(publication, "HfApi", lambda: api)
-    monkeypatch.setattr(publication, "hf_hub_download", download)
-    monkeypatch.setattr(publication, "ensure_flusher", lambda _: WorkerStart("already_running"))
-    monkeypatch.setattr(environment, "load_repository_operator_environment", lambda _: None)
-    monkeypatch.setattr(RunStorageConfig, "from_env", lambda: storage)
+    monkeypatch.setattr(
+        "gradlab.operator_environment.load_repository_operator_environment", lambda root: None
+    )
+    monkeypatch.setattr("gradlab.r2_store.RunStorageConfig.from_env", lambda: fixture.storage)
+    monkeypatch.setattr(
+        "gradlab.trajectory_publication.ensure_flusher",
+        lambda store: WorkerStart("already_running"),
+    )
+    monkeypatch.setattr("gradlab.trajectory_publication.HfApi", lambda: api)
+    monkeypatch.setattr("gradlab.trajectory_publication.hf_hub_download", download)
     queue = JobStore(root=tmp_path / "queue")
-    job = enqueue_publication(
-        runs=[run], repo="user/data", filters={"score_min": 0}, repo_root=tmp_path, store=queue
+    excluded = enqueue_publication(
+        runs=[manifest.run_id],
+        repo="test/data",
+        filters={"stage_min": 0.75},
+        repo_root=Path.cwd(),
+        store=queue,
     )
-    assert api.files == {}  # Admission starts no publication itself.
-    run_flusher(queue, idle_seconds=0)
-    row = queue.job(job["job"]["job_id"])
-    assert row["state"] == "succeeded", row
-    table = next(value for key, value in api.files.items() if key.endswith(".parquet"))
-    actual = pq.read_table(io.BytesIO(table)).to_pylist()[0]
-    assert (actual["policy_action"], actual["executed_action"], actual["native_action"]) == (
-        1,
-        0,
-        1,
+    assert run_flusher(queue, idle_seconds=0) == 0
+    assert queue.job(excluded["job"]["job_id"])["state"] == "succeeded"
+    assert not any(key.startswith(("chunks/", "episodes/", "transitions/")) for key in api.files)
+    selected = enqueue_publication(
+        runs=[manifest.run_id],
+        repo="test/data",
+        filters={"stage_min": 0.25},
+        repo_root=Path.cwd(),
+        store=queue,
     )
-    before = dict(api.files)
-    repeat = enqueue_publication(
-        runs=[run], repo="user/data", filters={"score_min": 0}, repo_root=tmp_path, store=queue
-    )
-    run_flusher(queue, idle_seconds=0)
-    assert not repeat["created"]
-    assert api.files == before
-    assert models.get_json(delivery.receipt()["manifest_key"])["chunks"]
+    assert run_flusher(queue, idle_seconds=0) == 0
+    assert queue.job(selected["job"]["job_id"])["state"] == "succeeded"
+    indexes = [
+        json.loads(data)
+        for key, data in api.files.items()
+        if key.startswith("episodes/") and key.endswith(".json")
+    ]
+    assert len(indexes) == 1 and indexes[0]["run_id"] == manifest.run_id
+    assert bucket.get_bytes(episode["chunks"][0]["key"])

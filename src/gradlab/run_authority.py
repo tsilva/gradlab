@@ -1697,34 +1697,33 @@ class RunAuthority:
         if manifest is None or receipt.drain.get("complete") is not True:
             return
         recipe = self.recipe_document_optional(manifest.recipe_sha256)
-        collection = ((recipe or {}).get("recipe", {}).get("train_config", {})
-                      .get("trajectory_collection") or {})
-        if not collection.get("enabled"):
+        settings = ((recipe or {}).get("recipe", {}).get("train_config", {})
+                    .get("checkpoint_monitoring") or {})
+        if not settings.get("enabled"):
             return
-        delivery = receipt.drain.get("dataset_delivery") or {}
-        if delivery.get("complete") is True and delivery.get("budget_exhausted") is True:
-            from gradlab.trajectory_config import ATTEMPT_METADATA_BYTES
-            from gradlab.trajectory_delivery import DatasetDelivery
-
-            used = DatasetDelivery.reserved_bytes(self.models, receipt.run_id)
-            if used + ATTEMPT_METADATA_BYTES <= int(collection["contribution_bytes"]):
-                raise ValueError("dataset contribution budget is not exhausted")
-            prefix = f"datasets/runs/{receipt.run_id}/attempts/{receipt.attempt_id}/"
-            if any(self.models.iter_keys(prefix)):
-                raise ValueError("budget-exhausted attempt has unaccounted dataset artifacts")
+        delivery = receipt.drain.get("checkpoint_monitoring") or {}
+        inventory = delivery.get("inventory", [])
+        checkpoints = {row["checkpoint_id"] for row in receipt.checkpoint_inventory}
+        if len(inventory) != len(checkpoints) or {row["checkpoint_id"] for row in inventory} != checkpoints:
+            raise ValueError("monitoring inventory does not cover every unique saved checkpoint")
+        if receipt.state == "canceled":
+            if delivery.get("workers_quiescent") is not True or any(row.get("status") not in {"complete", "failed", "canceled"} for row in delivery.get("inventory", [])):
+                raise ValueError("canceled monitoring requires settled workers and partial inventory")
             return
-        key = f"datasets/runs/{receipt.run_id}/attempts/{receipt.attempt_id}/final.json"
-        if delivery.get("complete") is not True or delivery.get("manifest_key") != key:
-            raise ValueError("complete terminal drain requires verified dataset delivery")
-        inventory = self.models.get_json(key)
-        if canonical_json_sha256(inventory) != delivery.get("manifest_sha256"):
-            raise ValueError("terminal dataset inventory hash mismatch")
-        if len(inventory["chunks"]) != delivery.get("chunk_count"):
-            raise ValueError("terminal dataset inventory count mismatch")
-        for chunk in inventory["chunks"]:
-            head = self.models.head(chunk["key"])
-            if int(head["size"]) != chunk["bytes"]:
-                raise ValueError("terminal dataset chunk size mismatch")
+        if delivery.get("complete") is not True or delivery.get("workers_quiescent") is not True:
+            raise ValueError("complete terminal drain requires verified checkpoint monitoring")
+        from gradlab.checkpoint_monitoring import episode_manifest, verify_monitoring_inventory
+        for row in inventory:
+            expected = f"monitoring/{receipt.run_id}/{row['evaluation_id']}/result.json"
+            if row["status"] != "complete" or row["result_key"] != expected:
+                raise ValueError("monitoring inventory has incomplete delivery")
+            result = self.models.get_json(expected)
+            if canonical_json_sha256(result) != row["result_sha256"]:
+                raise ValueError("monitoring result checksum mismatch")
+            if result["checkpoint_id"] != row["checkpoint_id"] or result["evaluation_id"] != row["evaluation_id"]:
+                raise ValueError("monitoring terminal identity mismatch")
+            verify_monitoring_inventory(self.models, result, episode_manifest(settings["episodes"]),
+                                        prefix=expected.removesuffix("/result.json"))
 
     def create_attempt_terminal(
         self,
