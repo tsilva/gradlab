@@ -477,6 +477,13 @@ resuming as its cause without a matched uninterrupted continuation.
   raw GAE for completed archive-origin trajectories.
 - Occupancy and curriculum tables have `train/step` as their scientific axis and require their
   respective configuration. They confer no Training Success, Acceptance, or Promotion authority.
+- GradLab PPO aggregates throughput diagnostics over consecutive complete rollouts covering at
+  least five seconds, and flushes the final shorter window. Rates divide total transitions by
+  total measured time, never an unweighted mean of per-rollout rates. Phase durations are sums
+  over the same window, attributed to its last completed training step. Provider rate and rollout
+  overhead are omitted if any constituent rollout lacks native timing. Other backends retain
+  their rollout/report cadence; compare phase timings over matching windows. PPO training
+  outcomes, optimizer metrics, checkpoints and evaluation events retain their existing cadence.
 - Derived throughput phase timing satisfies `loop wall time = provider step time +
   train/rollout_overhead/seconds + train/between_rollouts/seconds`. Compare
   those phases on matching workloads to identify a training-loop bottleneck. Rollout overhead includes
@@ -634,11 +641,27 @@ post-learner idle-GPU time. Ingress, publication capacity, durable high-water ma
 accepted-result-to-stop timing remain transport invariants or receipt evidence rather than
 duplicated public metrics.
 
-Unpublished W&B age warns at 45 seconds and is unhealthy at 60 seconds. Evaluation drain is governed
-by the declared per-attempt expiry windows. The 300-second terminal delivery deadline begins only
-after evaluations settle and covers checkpoint and local W&B delivery. If neither W&B nor private
-R2 can preserve pending metrics, or task scratch usage reaches 80%, the supervisor requests a safe
-learner stop and emits a resumable failure rather than discarding evidence.
+Unpublished W&B age warns at 45 seconds and is unhealthy at 60 seconds. Acceptance evaluation drain
+is governed by its declared per-attempt expiry windows; Checkpoint Monitoring execution uses its
+whole-run deadline. Once Acceptance and monitoring execution have settled, delivery fails after
+300 seconds without an increase in acknowledged W&B sequence or published checkpoint count.
+Verified monitoring results awaiting W&B acknowledgement count as delivery, not ongoing execution.
+The watchdog resets on actual delivery progress; the declared whole-task deadline still bounds
+terminal drain, including when progress continues.
+
+The sole supervisor writer services delivery at two-second opportunities between checkpoint,
+monitoring and verification operations, as well as at iteration boundaries. Each batch starts at
+most 250 frames and yields between frames after one second. Individual blocking transport calls
+can exceed this scheduling interval. Monitoring intents and supervisor-owned states are recovered
+once per owner and cached; uncertain writes invalidate the cache for durable recovery. Local
+`supervisor_phase_timings` diagnostic state records count, total and maximum duration of publishing
+and monitoring calls (monitoring time includes cooperative publishing). These are operational
+measurements, not public scientific metrics or service-capacity guarantees.
+
+A growing outbox can reflect insufficient publication throughput without an upload error. If
+neither W&B nor private R2 can preserve pending metrics, or task scratch usage reaches 95%, the
+supervisor requests a safe learner stop and emits a resumable failure rather than discarding
+evidence.
 
 A logical run succeeds only when its private-R2 `TerminalReceipt` proves the complete checkpoint
 inventory, the terminal inventory of automatically submitted evaluations, a promotion, the W&B
@@ -712,10 +735,10 @@ and target-progress fields are not registry metrics and cannot enter the publish
 | `train/value/std` | Value prediction std | Standard deviation of rollout value predictions. | scalar | rollout | history | last | train/step | training | - | - |
 | `train/advantage/mean` | Advantage mean | Mean rollout advantage. | scalar | rollout | history | last | train/step | training | - | - |
 | `train/advantage/std` | Advantage std | Standard deviation of rollout advantages. | scalar | rollout | history | last | train/step | training | - | - |
-| `train/throughput/rate` | Training loop throughput | Policy transitions divided by rollout-start-to-next-rollout-start wall time. | transitions/second | rollout | history | last | train/step | training | - | - |
-| `train/provider/rate` | Provider step throughput | Policy transitions divided by native-provider step wall time, when native timing is available. | transitions/second | rollout | history | last | train/step | training | - | - |
-| `train/rollout_overhead/seconds` | Rollout overhead | Rollout wall time outside native-provider step calls. | seconds | rollout | history | last | train/step | training | - | - |
-| `train/between_rollouts/seconds` | Between-rollout time | Wall time after rollout collection and before the next rollout, including updates, callbacks, and logging. | seconds | rollout | history | last | train/step | training | - | - |
+| `train/throughput/rate` | Training loop throughput | Policy transitions divided by rollout-start-to-next-rollout-start wall time. | transitions/second | rollout/window | history | last | train/step | training | - | - |
+| `train/provider/rate` | Provider step throughput | Policy transitions divided by native-provider step wall time, when native timing is available. | transitions/second | rollout/window | history | last | train/step | training | - | - |
+| `train/rollout_overhead/seconds` | Rollout overhead | Rollout wall time outside native-provider step calls. | seconds | rollout/window | history | last | train/step | training | - | - |
+| `train/between_rollouts/seconds` | Between-rollout time | Wall time after rollout collection and before the next rollout, including updates, callbacks, and logging. | seconds | rollout/window | history | last | train/step | training | - | - |
 | `train/save/seconds` | Model save time | Local model save duration. | seconds | artifact | history | last | train/step | training | - | - |
 | `eval/return/mean` | Full-eval return mean | Mean shaped return across completed full-evaluation episodes. | return | evaluation | history | last | eval/step | evaluation | leader/return/mean | train/return/mean |
 | `eval/return/max` | Full-eval return max | Maximum shaped return across completed full-evaluation episodes. | return | evaluation | history | last | eval/step | evaluation | leader/return/max | train/return/max |

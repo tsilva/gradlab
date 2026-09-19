@@ -125,6 +125,8 @@ AUTOMATIC_EVAL_PROTOCOL = "modal-acceptance-v3"
 WANDB_WARNING_SECONDS = 45.0
 WANDB_UNHEALTHY_SECONDS = 60.0
 WANDB_DRAIN_TIMEOUT_SECONDS = 300.0
+WANDB_SERVICE_SECONDS = 2.0
+WANDB_BATCH_SECONDS = 1.0
 SCRATCH_STOP_FRACTION = 0.95
 METRIC_JOURNAL_RETENTION_DAYS = 7
 HEALTH_SAMPLE_SECONDS = 15.0
@@ -311,6 +313,11 @@ class RunSupervisor:
         self._lease_lock = RLock()
         self._lease_events: list[tuple[str, dict[str, Any]]] = []
         self.last_segment = 0.0
+        self.last_delivery_service = float("-inf")
+        self.wandb_retry_after = 0.0
+        self._drain_deadline: float | None = None
+        self._servicing_delivery = False
+        self.phase_timings: dict[str, dict[str, float | int]] = {}
         self.last_eval_poll = 0.0
         self.last_health_sample = 0.0
         self.last_remote_probe = 0.0
@@ -1542,12 +1549,49 @@ class RunSupervisor:
         self._lease_heartbeat()
         if self.projector is None:
             return 0
-        return self.runtime.publish_frames(
+        started = self.clock.monotonic()
+        published = self.runtime.publish_frames(
             self.store,
             self.projector,
             limit=250,
             heartbeat=self._lease_heartbeat,
+            should_continue=lambda: self.clock.monotonic() - started < WANDB_BATCH_SECONDS,
         )
+        if not published and self.store.metric_outbox_stats()["frames"]:
+            self.wandb_retry_after = self.clock.monotonic() + WANDB_SERVICE_SECONDS
+        self._record_phase("wandb", started)
+        self._emit("wandb_batch_published", frames=published,
+                   seconds=self.clock.monotonic() - started)
+        return published
+
+    def _record_phase(self, name: str, started: float) -> None:
+        seconds = self.clock.monotonic() - started
+        row = self.phase_timings.setdefault(name, {"count": 0, "seconds": 0.0, "max_seconds": 0.0})
+        row["count"] += 1
+        row["seconds"] += seconds
+        row["max_seconds"] = max(row["max_seconds"], seconds)
+
+    def _service_delivery(self, *, force: bool = False) -> int:
+        """Cooperatively service the sole writer between bounded units of work.
+
+        Never run on the background lease thread or recurse from publication.
+        A blocking SDK call remains bounded by its transport timeout.
+        """
+        if self._drain_deadline is not None and self.clock.time() >= self._drain_deadline:
+            raise TimeoutError("whole-task deadline exhausted during delivery drain")
+        self._lease_heartbeat()
+        now = self.clock.monotonic()
+        if self._servicing_delivery or now < self.wandb_retry_after or (
+            not force and now - self.last_delivery_service < WANDB_SERVICE_SECONDS
+        ):
+            return 0
+        self._servicing_delivery = True
+        self.last_delivery_service = now
+        try:
+            activity = self._seal_metrics(now)
+            return activity + self._publish_wandb()
+        finally:
+            self._servicing_delivery = False
 
     def _publish_checkpoints(self) -> int:
         published = 0
@@ -1557,11 +1601,9 @@ class RunSupervisor:
             "environment_sha256": self.manifest.environment_sha256,
             "evaluation_contract_sha256": checkpoint_manifest_contract_sha256(self.recipe_document),
         }
-        for checkpoint in self.store.checkpoints():
-            self._lease_heartbeat()
+        for checkpoint in self.store.unpublished_checkpoints():
+            self._service_delivery()
             ledger_id = int(checkpoint["id"])
-            if self.store.checkpoint_publication(ledger_id) is not None:
-                continue
             path = Path(str(checkpoint["path"]))
             if not path.is_file():
                 continue
@@ -1583,7 +1625,7 @@ class RunSupervisor:
                         "local_path": str(path),
                     },
                     created_at=utc_timestamp(float(checkpoint["created_at"])),
-                    heartbeat=self._lease_heartbeat,
+                    heartbeat=self._service_delivery,
                 )
             except LeaseUnavailable:
                 raise
@@ -2088,6 +2130,7 @@ class RunSupervisor:
                 "sampled_at": self.clock.utc_now(),
             },
         )
+        self.store.set_state("supervisor_phase_timings", self.phase_timings)
         self.last_health_sample = now
 
     def _oldest_unpublished_age(self) -> float:
@@ -2096,10 +2139,7 @@ class RunSupervisor:
         return 0.0 if oldest is None else max(0.0, self.clock.time() - float(oldest))
 
     def _all_ready_checkpoints_published(self) -> bool:
-        for checkpoint in self.store.checkpoints():
-            ledger_id = int(checkpoint["id"])
-            if self.store.checkpoint_publication(ledger_id) is not None:
-                continue
+        for checkpoint in self.store.unpublished_checkpoints():
             digest = str(checkpoint.get("sha256") or "")
             if not digest:
                 path = Path(str(checkpoint["path"]))
@@ -2127,7 +2167,7 @@ class RunSupervisor:
             raise RuntimeError("state archive publication requires the Run writer lease")
 
         def heartbeat() -> None:
-            self._lease_heartbeat()
+            self._service_delivery()
             # The active loop tolerates transient renewal failures to stop the
             # learner gracefully. Publication must not continue on that grace.
             if self.lease_misses:
@@ -2184,6 +2224,7 @@ class RunSupervisor:
                     self.output_root / "monitoring", self.authority.models.config,
                 )
             self.monitoring = MonitoringQueue(self, self.monitor_backend)
+        started = self.clock.monotonic()
         try:
             return self.monitoring.advance(final=final, canceled=self.cancel_requested)
         except LeaseUnavailable:
@@ -2193,6 +2234,8 @@ class RunSupervisor:
             if final:
                 raise
             return False
+        finally:
+            self._record_phase("monitoring", started)
 
     def active_iteration(self, *, now: float | None = None) -> int:
         """Advance active supervision once without sleeping."""
@@ -2213,21 +2256,19 @@ class RunSupervisor:
         self._observe_cancel_request()
         self._maintain_learner_stop(instant)
         activity += self._seal_metrics(instant)
-        self._lease_heartbeat()
+        self._service_delivery()
         activity += self._publish_checkpoints()
-        self._lease_heartbeat()
+        self._service_delivery()
         activity += self._publish_state_archive()
         self._advance_monitoring()
-        self._lease_heartbeat()
+        self._service_delivery()
         if self.cancel_requested:
             self._cancel_outstanding_evals()
         else:
             activity += self._reconcile_evals_before_submission()
             activity += self._submit_pending_evals()
         activity += self._poll_evals(instant)
-        self._lease_heartbeat()
-        activity += self._publish_wandb()
-        self._lease_heartbeat()
+        activity += self._service_delivery(force=True)
         self._emit_health(instant)
         self._lease_heartbeat()
         self._scratch_guard()
@@ -2257,22 +2298,21 @@ class RunSupervisor:
             raise LeaseUnavailable("writer lease was lost while draining")
         self._observe_cancel_request()
         activity += self._seal_metrics(instant, force=True)
-        self._lease_heartbeat()
+        self._service_delivery()
         activity += self._publish_checkpoints()
-        self._lease_heartbeat()
+        self._service_delivery()
         activity += self._publish_state_archive()
-        self._lease_heartbeat()
+        self._service_delivery()
         if self.cancel_requested:
             self._cancel_outstanding_evals()
         else:
             activity += self._reconcile_evals_before_submission()
             activity += self._submit_pending_evals()
         activity += self._poll_evals(instant, force=True)
-        self._lease_heartbeat()
-        activity += self._publish_wandb()
-        self._lease_heartbeat()
+        activity += self._service_delivery()
         monitoring_complete = self._advance_monitoring(final=True)
         self._emit_health(instant)
+        activity += self._service_delivery(force=True)
         pending_frames = self.store.metric_outbox_stats()["frames"]
         converged = (
             monitoring_complete
@@ -2283,26 +2323,51 @@ class RunSupervisor:
         return activity, converged
 
     def _drain(self) -> None:
-        delivery_deadline: float | None = None
+        task_deadline = (
+            parse_utc_datetime(self.manifest.created_at).timestamp()
+            + int(self.manifest.compute["selected"]["max_duration_seconds"])
+        )
+        self._drain_deadline = task_deadline
+        try:
+            self._drain_until(task_deadline)
+        finally:
+            self._drain_deadline = None
+
+    def _drain_until(self, task_deadline: float) -> None:
+        stalled_since: float | None = None
+        progress: tuple[int, int] | None = None
         while True:
+            if self.clock.time() >= task_deadline:
+                raise TimeoutError("whole-task deadline exhausted during delivery drain")
+            activity, converged = self.drain_iteration()
             now = self.clock.monotonic()
-            activity, converged = self.drain_iteration(now=now)
-            checkpoint_wandb_pending = (
+            if self.clock.time() >= task_deadline:
+                raise TimeoutError("whole-task deadline exhausted during delivery drain")
+            if converged:
+                return
+            current_progress = (
+                self._wandb_high_water(), len(self.store.checkpoint_publications())
+            )
+            # Verified monitoring results can still await W&B. Do not wait for
+            # complete=True here: that would disable the delivery watchdog.
+            monitoring_work = self.monitoring is not None and any(
+                row["status"] in {"pending", "submitting", "running"}
+                for row in self.monitoring.receipt["inventory"]
+            )
+            delivery_pending = (
                 not self._all_ready_checkpoints_published()
                 or self.store.metric_outbox_stats()["frames"] != 0
             )
-            if self.store.all_evals_settled() and checkpoint_wandb_pending:
-                if delivery_deadline is None:
-                    delivery_deadline = now + WANDB_DRAIN_TIMEOUT_SECONDS
+            if self.store.all_evals_settled() and not monitoring_work and delivery_pending:
+                if stalled_since is None or current_progress != progress:
+                    stalled_since = now
+                elif now - stalled_since >= WANDB_DRAIN_TIMEOUT_SECONDS:
+                    raise TimeoutError(
+                        "delivery drain made no checkpoint or local W&B progress for 300 seconds"
+                    )
             else:
-                delivery_deadline = None
-            if converged:
-                return
-            if delivery_deadline is not None and now >= delivery_deadline:
-                raise TimeoutError(
-                    "post-evaluation delivery drain exceeded 300 seconds before "
-                    "checkpoints and local W&B delivery converged"
-                )
+                stalled_since = None
+            progress = current_progress
             if activity == 0:
                 self.clock.sleep(0.5)
 

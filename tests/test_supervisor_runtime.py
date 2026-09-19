@@ -186,3 +186,24 @@ def test_stopped_terminal_projection_closes_wandb_with_zero_exit() -> None:
         )
 
     projector.close.assert_called_once_with(timeout_seconds=12, exit_code=0)
+
+
+def test_publisher_yields_between_frames_and_preserves_unclaimed_tail(tmp_path):
+    from gradlab.metric_store import MetricStore
+    from gradlab.wandb_publisher import WandbProjector
+
+    store = MetricStore(tmp_path / "outbox.sqlite")
+    store.init()
+    for step in range(3):
+        store.append_metrics({"train/return/mean": float(step)}, step=step, source="train")
+    run = MagicMock()
+    projector = WandbProjector(run)
+    runtime = SupervisorRuntime()
+    assert runtime.publish_frames(
+        store, projector, limit=250, should_continue=lambda: run.log.call_count < 1,
+    ) == 1
+    pending = store.pending_metric_frames()
+    assert len(pending) == 2
+    assert all(row["attempts"] == 0 for row in pending)
+    assert runtime.publish_frames(store, projector, limit=250) == 2
+    assert [call.kwargs["step"] for call in run.log.call_args_list] == [1, 2, 3]
