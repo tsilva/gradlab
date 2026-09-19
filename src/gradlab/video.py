@@ -195,7 +195,7 @@ def write_preview_video(
     }
 
 
-def write_video(frames: Iterable[np.ndarray], output: Path, fps: float, scale: int) -> None:
+def write_video(frames: Iterable[np.ndarray], output: Path, fps: float, scale: int, *, threads: int | None = None) -> None:
     frame_iterator = iter(frames)
     try:
         first_frame = np.asarray(next(frame_iterator))
@@ -236,6 +236,8 @@ def write_video(frames: Iterable[np.ndarray], output: Path, fps: float, scale: i
         "+faststart",
         str(output),
     ]
+    if threads is not None:
+        command[-1:-1] = ["-threads", str(threads)]
     process = subprocess.Popen(
         command,
         stdin=subprocess.PIPE,

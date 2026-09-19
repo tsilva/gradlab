@@ -142,7 +142,7 @@ def episode_result_from_record(
         value = metrics.get(field.result_key, info.get(field.info_key))
         if value is None and field.result_key == "max_level_x_pos":
             value = metrics.get("max_x_pos", 0)
-        result[field.result_key] = int(value or 0)
+        result[field.result_key] = float(value or 0)
 
     if semantics.death_flag_key:
         death_x_pos = metrics.get("death_x_pos", info.get(semantics.death_position_key or ""))

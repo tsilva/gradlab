@@ -1,4 +1,4 @@
-# Metrics schema v22
+# Metrics schema v23
 
 This file is the source of truth for gradlab telemetry. The Python registry loads the table below
 and requires every emitted metric to match an exact registry entry or a bounded template.
@@ -60,7 +60,7 @@ authority for that decision.
   `checkpoint_eval_contract`; the catalog must validate that expected absence against the immutable
   recipe and W&B run dimensions without suppressing otherwise compatible training-proxy history.
   Full-evaluation columns remain unavailable until verified checkpoint-evaluation evidence exists.
-- W&B config contains run-defining dimensions: `metrics_schema_version: 22`,
+- W&B config contains run-defining dimensions: `metrics_schema_version: 23`,
   `metrics_episode_window_size: 100`, `training_backend_id`,
   `training_backend_config_hash`, `algorithm_id`, goal,
   environment, starts, seed, frame skip, environment count, hyperparameters, eval protocol, and
@@ -93,8 +93,9 @@ authority for that decision.
   create-only private-R2 `PromotionReceipt` is the authoritative selection.
 - `ops/state` and `ops/reason` are W&B summary-only
   catalog projections, not history metrics; the private-R2 `TerminalReceipt` remains authoritative.
-- Heavy model bytes, videos, replays, episode rows, diagnostics, and recovery payloads never go to
-  W&B.
+- Model bytes, replay archives, episode rows and recovery payloads remain in R2.
+  The sole monitoring media exception is one representative full-episode video
+  per Checkpoint at `eval/monitor/video`, with canonical R2 bytes and provenance.
 - Interactive playback uses local descriptor keys such as `reward/shaped`, `policy/value`, and
   `action/executed` to configure live panels. They are typed projections of one streamed transition
   or its bounded in-browser history, are not emitted metrics, and must not be interpreted as aliases
@@ -147,7 +148,7 @@ Asynchronous evaluations may arrive after later training rows without changing t
 X-axis. Each producer writes only its applicable scientific axis; durable delivery order uses
 `ops/sequence`.
 
-Current runs declare schema v22, and the supervisor validates and emits only v22 names. GradLab
+Current runs declare schema v23, and the supervisor validates and emits only v22 names. GradLab
 does not read, project, or preserve noncurrent W&B or R2 schemas.
 
 Recent training return, progress, episode-length, and success statistics (including compact
@@ -744,21 +745,6 @@ and target-progress fields are not registry metrics and cannot enter the publish
 | `ops/evals/count` | Pending evaluations | Persisted evaluation intents pending submission or a verified result; intents deferred after acceptance are excluded. | evaluations | supervisor sample | history | last | ops/sequence | operational | - | - |
 | `ops/drain/seconds` | GPU idle drain time | Elapsed wall time since learner exit, sampled after the first terminal drain. This is not measured GPU utilization and excludes subsequent publication and terminal work. | seconds | terminal drain | history | last | ops/sequence | operational | - | - |
 | `ops/scratch/fraction` | Scratch used | Fraction of the task scratch filesystem currently used. | fraction | supervisor sample | history | last | ops/sequence | operational | - | - |
-| `ops/dataset/capture/rate` | Captured transitions | Admitted transitions per second since the preceding supervisor sample; first sample is zero. | transitions/second | supervisor sample, including terminal drain | history | last | ops/sequence | operational | - | - |
-| `ops/dataset/encode/rate` | Encoded bytes | Newly sealed encoded bytes per second since the preceding supervisor sample; first sample is zero. | bytes/second | supervisor sample, including terminal drain | history | last | ops/sequence | operational | - | - |
-| `ops/dataset/upload/rate` | Verified upload bytes | Newly verified R2 chunk bytes per second since the preceding supervisor sample; first sample is zero. | bytes/second | supervisor sample, including terminal drain | history | last | ops/sequence | operational | - | - |
-| `ops/dataset/pending/bytes` | Pending dataset bytes | Sealed local chunk bytes awaiting verified R2 delivery and local reclamation; excludes encoder buffers. | bytes | supervisor sample, including terminal drain | history | last | ops/sequence | operational | - | - |
-| `ops/dataset/pending/seconds` | Oldest pending chunk | Age of the oldest sealed local chunk awaiting delivery or reclamation. | seconds | supervisor sample, including terminal drain | history | last | ops/sequence | operational | - | - |
-| `ops/dataset/spool/bytes` | Dataset spool bytes | Actual local dataset file bytes including open files, sidecars, manifests, and producer metadata. | bytes | supervisor sample, including terminal drain | history | last | ops/sequence | operational | - | - |
-| `ops/dataset/upload/failures` | Dataset delivery failures | Delivery worker failures since this supervisor instance started; retries and verification failures count. | events | supervisor sample, including terminal drain | history | last | ops/sequence | operational | - | - |
-| `ops/dataset/pause/seconds` | Capture pause time | Accumulated time with a capture pause reason, sampled by the encoder; resets per Attempt. | seconds | supervisor sample, including terminal drain | history | last | ops/sequence | operational | - | - |
-| `ops/dataset/skipped/count` | Skipped capture episodes | Reset opportunities not admitted, including random sampling and pressure; resets per Attempt. | episodes | supervisor sample, including terminal drain | history | last | ops/sequence | operational | - | - |
-| `ops/dataset/incomplete/count` | Incomplete recordings | Sealed contiguous prefixes rather than complete episodes; resets per Attempt. | episodes | supervisor sample, including terminal drain | history | last | ops/sequence | operational | - | - |
-| `ops/dataset/pause/budget` | Capture pause budget | One when the latest capture pause reason is budget, zero otherwise. | boolean | supervisor sample, including terminal drain | history | last | ops/sequence | operational | - | - |
-| `ops/dataset/pause/stage_budget` | Capture pause stage_budget | One when the latest capture pause reason is stage_budget, zero otherwise. | boolean | supervisor sample, including terminal drain | history | last | ops/sequence | operational | - | - |
-| `ops/dataset/pause/memory` | Capture pause memory | One when the latest capture pause reason is memory, zero otherwise. | boolean | supervisor sample, including terminal drain | history | last | ops/sequence | operational | - | - |
-| `ops/dataset/pause/disk` | Capture pause disk | One when the latest capture pause reason is disk, zero otherwise. | boolean | supervisor sample, including terminal drain | history | last | ops/sequence | operational | - | - |
-| `ops/dataset/pause/recording_fault` | Capture pause recording_fault | One when the latest capture pause reason is recording_fault, zero otherwise. | boolean | supervisor sample, including terminal drain | history | last | ops/sequence | operational | - | - |
 | `ops/state` | Terminal run state | Receipt-backed terminal run state. | text | terminal receipt | summary | none | ops/sequence | operational | - | - |
 | `ops/reason` | Terminal run reason | Receipt-backed terminal reason when the run did not succeed. | text | terminal receipt | summary | none | ops/sequence | operational | - | - |
 | `train/curriculum/cells/count` | Curriculum archive cells | Current archive-curriculum cell count. | cells | rollout | history | last | train/step | training | - | - |
@@ -777,6 +763,16 @@ and target-progress fields are not registry metrics and cannot enter the publish
 | `train/curriculum/restore/seconds` | Curriculum restore time | Provider restore wall time for reset calls containing archive lanes. | seconds | rollout | history | last | train/step | training | - | - |
 | `train/occupancy/table` | Collected cell occupancy | Exact pre-action cell counts, entries and origin denominators in a bounded page of up to eight collection windows; each row retains its own bounds, sequence and denominator. Includes declared zero cells and unavailable fractions for empty origins. Use exact indexed history or latest-page queries, never sampled table history. | table | transition window | history | last | train/step | training | - | - |
 | `train/curriculum/distribution` | Curriculum start distribution | Compatible retained representatives, cold-cell status and intended per-cell start probabilities at rollout admission; recent combined counts are coverage feedback, distinct from value-error feedback. | table | rollout start | history | last | train/step | training | - | - |
+| `eval/monitor/success/rate` | Monitoring success rate | Success fraction over the complete frozen episode manifest. | fraction | complete monitoring evaluation | history | last | eval/step | monitoring | - | - |
+| `eval/monitor/success/ci95/lower` | Monitoring success lower 95% | Lower endpoint of the two-sided 95% Wilson interval. | fraction | complete monitoring evaluation | history | last | eval/step | monitoring | - | - |
+| `eval/monitor/success/ci95/upper` | Monitoring success upper 95% | Upper endpoint of the two-sided 95% Wilson interval. | fraction | complete monitoring evaluation | history | last | eval/step | monitoring | - | - |
+| `eval/monitor/progress/mean` | Monitoring normalized brick mean | Mean native brick progress with denominator 216; FirstWall success is 0.5. | fraction | complete monitoring evaluation | history | last | eval/step | monitoring | - | - |
+| `eval/monitor/progress/median` | Monitoring normalized brick median | Median native brick progress with denominator 216. | fraction | complete monitoring evaluation | history | last | eval/step | monitoring | - | - |
+| `eval/monitor/score/mean` | Monitoring native score | Mean native score, distinct from shaped return. | scalar | complete monitoring evaluation | history | last | eval/step | monitoring | - | - |
+| `eval/monitor/return/mean` | Monitoring shaped return | Mean shaped return under the recorded Goal reward contract. | return | complete monitoring evaluation | history | last | eval/step | monitoring | - | - |
+| `eval/monitor/episode_steps/mean` | Monitoring episode length | Mean complete episode length at the contracted action cadence. | steps | complete monitoring evaluation | history | last | eval/step | monitoring | - | - |
+| `eval/monitor/episodes/count` | Monitoring episode count | Verified complete episode count equal to the planned manifest count. | episodes | complete monitoring evaluation | history | last | eval/step | monitoring | - | - |
+| `eval/monitor/video` | Monitoring representative episode | Full original-frame video nearest median normalized brick progress; ties use manifest ordinal. | video | complete monitoring evaluation | history | last | eval/step | monitoring | - | - |
 <!-- METRIC_REGISTRY_END -->
 
 ## Registry relationships and dashboard applicability
@@ -834,3 +830,13 @@ are shown as unavailable, not zero; tiny nonzero values use scientific notation.
 The overlay uses the chart's recorded sample
 points and does not compute an episode return. These contributions describe discount
 accounting, not causal action credit. Episode return remains undiscounted reward accumulated through each step.
+
+## Checkpoint Monitoring
+
+Monitoring is observational and has no Acceptance, Promotion or leader authority.
+Final aggregates require every planned episode; operational failures and prefixes
+never become failed scientific episodes. The eval/monitor namespace is separate
+from Acceptance, with eval/step pinned to the immutable Checkpoint even when its
+result arrives after newer training events. ops/sequence remains delivery order.
+The supervisor sends actual representative video media through its durable outbox;
+R2 retains canonical video and complete trajectories. Transport is at least once.

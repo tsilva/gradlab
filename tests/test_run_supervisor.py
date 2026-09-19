@@ -807,6 +807,51 @@ class RunSupervisorTests(unittest.TestCase):
         ):
             supervisor.validate_runtime()
 
+    def test_measuring_active_iteration_persists_throttled_host_load(self) -> None:
+        supervisor = self.supervisor()
+        supervisor.store.init()
+        supervisor.train_config["checkpoint_monitoring"] = {
+            "calibration": {"status": "measuring"},
+        }
+        # Stop immediately after sampling, before unrelated service boundaries.
+        with (
+            patch.object(supervisor, "_renew_lease"),
+            patch.object(supervisor, "_observe_cancel_request", side_effect=InterruptedError),
+            patch("gradlab.run_supervisor.os.getloadavg", side_effect=[(2.0, 0, 0), (4.0, 0, 0)]) as load,
+        ):
+            for instant in (0.0, 30.0, 60.0):
+                with self.assertRaises(InterruptedError):
+                    supervisor.active_iteration(now=instant)
+        self.assertEqual(load.call_count, 2)
+        self.assertEqual(supervisor.store.state("calibration_host_load"), {
+            "count": 2, "sum": 6.0, "max": 4.0, "at": 60.0,
+        })
+
+    def test_post_startup_failure_creates_terminal_with_optional_calibration_state(self) -> None:
+        supervisor = self.supervisor()
+        with (
+            patch.object(supervisor, "validate_runtime"),
+            patch.object(supervisor, "materialize"),
+            patch.object(supervisor, "_recover_durable_state"),
+            patch.object(supervisor, "_start_wandb"),
+            patch.object(supervisor, "_start_learner"),
+            patch.object(supervisor, "_publish_state_archive", side_effect=RuntimeError("archive failed")),
+            patch.object(supervisor, "_failure_drain"),
+            patch.object(supervisor, "_finish_wandb", return_value=0),
+            patch.object(supervisor.runtime, "publish_terminal"),
+        ):
+            self.assertEqual(supervisor.run(), 1)
+
+        receipt = self.authority.control.get_json(
+            f"runs/{self.run_id}/attempts/{self.manifest.attempt_id}/terminal.json"
+        )
+        self.assertEqual(receipt["state"], "resumable_failure")
+        self.assertEqual(receipt["stop_reason"], "supervisor_failure")
+        self.assertFalse(receipt["drain"]["complete"])
+        self.assertEqual(receipt["drain"]["failure"]["message"], "archive failed")
+        self.assertIsNone(receipt["drain"]["calibration_host_load"])
+        self.assertIsNone(receipt["drain"]["wandb_final_drain_seconds"])
+
     def test_recovery_failure_after_lease_creates_terminal_receipt(self) -> None:
         supervisor = self.supervisor()
         with (

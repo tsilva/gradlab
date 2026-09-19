@@ -9,6 +9,8 @@ EVAL_SEED_START = 10_000
 TRAIN_SEED_MAX = EVAL_SEED_START - 1
 DEFAULT_TRAIN_SEED = 123
 DEFAULT_EVAL_SEED = EVAL_SEED_START
+MONITOR_SEED_START = 2**31
+MONITOR_POLICY_SEED_START = 3 * 2**30
 MAX_PLAYBACK_SEED = 2**32 - 1
 
 
@@ -47,9 +49,9 @@ def validate_training_seed(value: Any, *, label: str = "seed", seed_span: Any = 
 
 def validate_eval_seed(value: Any, *, label: str = "seed") -> int:
     seed = _require_seed_int(value, label=label)
-    if seed < EVAL_SEED_START:
+    if seed < EVAL_SEED_START or seed >= MONITOR_SEED_START:
         raise ValueError(
-            f"{label} must be in the eval/test seed range >= {EVAL_SEED_START}; "
+            f"{label} must be in the eval/test seed range {EVAL_SEED_START}..{MONITOR_SEED_START - 1}; "
             f"seeds {TRAIN_SEED_MIN}..{TRAIN_SEED_MAX} are reserved for training"
         )
     return seed

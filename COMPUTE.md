@@ -153,3 +153,41 @@ Before launch:
 After terminal state, verify the private R2 terminal receipt, dstack resource
 release, public checkpoint/index access, and credential-free playback. A
 successful dstack task without the terminal receipt is an operational failure.
+
+## Checkpoint Monitoring
+
+Opt-in monitoring uses a separate CPU process on the training host. Freeze the
+scientific episode contract, episode count and checkpoint cadence before launch.
+Bound inference, provider, encoding and delivery concurrency together while the
+learner is active; preserve training memory and scratch headroom. After learner
+exit, use the task's full allocated CPU capacity for multiple Checkpoints within
+shared finite RAM, local-spool, cumulative R2 contribution and whole-task time
+limits. Local reclamation never replenishes the retained-data allowance.
+
+After learning, spare process slots also evaluate independent episodes from the
+same Checkpoint. Atomic Attempt-local claims assign immutable manifest ordinals;
+each process loads the saved Policy and owns its episode RNG. Main and helper
+processes share the task CPU count and each reserves one worker memory/spool
+allowance. Recovery reuses verified R2 episodes, and cancellation joins every
+owned process before reporting quiescence.
+
+Each episode process keeps Policy inference sequential and overlaps at most
+two R2 operations, with at most three pending delivery jobs. Pending chunk bytes
+remain within the worker's existing memory and spool limits. An episode manifest
+is published only after every chunk and reconstruction reference is remotely
+verified. Integrity checks also use two bounded I/O slots; size accounting uses
+paginated object listings. These bounds are part of the source-bound calibration.
+
+An explicit calibration must measure representative early, intermediate and
+stronger compatible Policies, including long episodes, capture, encoding, upload,
+video delivery and concurrent learner throughput. Bind reuse to recipe/Policy
+architecture, provider, source/runtime, episode contract, schema/encoder, hardware
+allocation and worker settings. Reject infeasible 400-episode budgets; never
+silently lower the count, change scientific conditions, raise limits or allocate
+remote compute. Missing representative inputs mean incomplete calibration.
+
+Enable the FirstWall PPO recipe only after repeated matched monitoring-off/on
+measurements at the same cadence support at most 2% training-throughput loss.
+Report uncertainty, resources, retained bytes, upload backlog, total completion
+time and GPU idle finalization separately. Uncertain evidence leaves support
+unproven. Calibration and live campaigns need separate compute authorization.

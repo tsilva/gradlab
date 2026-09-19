@@ -290,6 +290,30 @@ class MetricStore(SqliteStore):
             )
         return identity
 
+    def append_monitoring(self, result: Mapping[str, Any], *, bucket_uri: str,
+                          media_spool_bytes: int = 512 * 1024**2, scratch_headroom_bytes: int = 1024**3) -> str:
+        metrics = dict(result["metrics"])
+        validate_metric_payload(metrics)
+        if not metrics or any(not name.startswith("eval/monitor/") for name in metrics):
+            raise ValueError("monitoring metrics must be isolated from Acceptance")
+        identity = "monitoring:" + str(result["evaluation_id"])
+        return self.enqueue_event(
+            kind="monitoring", source="eval:monitor", step=int(result["checkpoint_step"]),
+            event_id=identity, payload={
+                "evaluation_id": result["evaluation_id"], "metrics": metrics,
+                "video": result["video"], "bucket_uri": bucket_uri,
+                "media_spool_bytes": media_spool_bytes, "scratch_headroom_bytes": scratch_headroom_bytes,
+            },
+        )
+
+    def monitoring_delivered(self, evaluation_id: str) -> bool:
+        with self.connection() as connection:
+            row = connection.execute(
+                "SELECT status FROM metric_frames WHERE event_id=? AND kind='monitoring'",
+                ("monitoring:" + evaluation_id,),
+            ).fetchone()
+        return row is not None and row[0] == "published"
+
     def enqueue_event(
         self,
         *,

@@ -13,6 +13,11 @@ This specification applies to GradLab's current local queue and dstack-backed ex
 - Embedded file-backed state such as SQLite is allowed.
 - The lifecycle certification gate must be deterministic, require no credentials, and preserve replayable evidence.
 - Certification evidence must cover authority, delivery, evaluation-driven stopping, recovery, cancellation, and terminal correctness.
-- A terminal drain must prove the complete Checkpoint inventory, the terminal status of every automatically submitted evaluation, Promotion state, metrics delivery, and quiescence.
-- Checkpoints not admitted for evaluation before Acceptance may remain unevaluated for later explicit action.
-- When training trajectory collection is enabled, successful terminal drain must also prove complete verified R2 dataset delivery under a dedicated finite deadline, preserving recoverable evidence on failure as specified in [training datasets](training-datasets.md).
+- A terminal drain must prove the complete Checkpoint inventory, the terminal status of every automatically submitted Acceptance evaluation, Promotion state, metrics delivery, and quiescence.
+- Checkpoints not admitted for Acceptance evaluation before Acceptance may remain unevaluated for later explicit action.
+- Opt-in Checkpoint Monitoring must evaluate every unique saved Checkpoint, including final and distinct interrupted artifacts, on the same frozen episode manifest without closing monitoring admission on Acceptance or replacing older queued work.
+- Monitoring must use a bounded same-host CPU process during training and the task's full allocated CPU capacity after learner exit, including concurrent Checkpoint evaluation under shared memory, disk and retained-data limits.
+- Monitoring failures must not stop the learner; retry unfinished operational work once, reuse verified complete episodes and delivered artifacts, and preserve logical identities across recovery.
+- Monitoring, dataset verification, video generation, R2 delivery and W&B delivery must be recoverable phases; success requires all required inventories, acknowledgements and worker quiescence within the finite whole-task deadline.
+- Cancellation and exhausted budgets must stop monitoring and release resources with truthful partial evidence; training and monitoring outcomes remain separate.
+- The lease-holding supervisor remains the sole W&B writer; workers must not receive W&B credentials. Actual representative video media is permitted, with durable references, acknowledgements and at-least-once transport semantics.

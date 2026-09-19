@@ -251,7 +251,7 @@ class MetricsDocumentationTests(unittest.TestCase):
         }
         scalar_names: set[str] = set()
         for definition in metric_names.METRIC_DEFINITIONS:
-            if definition.unit == "table" or definition.placement == "summary":
+            if definition.unit in {"table", "video"} or definition.placement == "summary":
                 continue
             placeholders = re.findall(r"\{([^}]+)\}", definition.name)
             for replacements in itertools.product(*(values[name] for name in placeholders)):
@@ -260,8 +260,8 @@ class MetricsDocumentationTests(unittest.TestCase):
                     name = name.replace(f"{{{placeholder}}}", replacement, 1)
                 scalar_names.add(name)
 
-        self.assertEqual(len(metric_names.METRIC_DEFINITIONS), 113)
-        self.assertEqual(len(scalar_names), 103)
+        self.assertEqual(len(metric_names.METRIC_DEFINITIONS), 108)
+        self.assertEqual(len(scalar_names), 97)
         self.assertEqual(
             len(
                 {
@@ -293,6 +293,7 @@ class MetricsDocumentationTests(unittest.TestCase):
             "sequences",
             "steps",
             "table",
+            "video",
             "text",
             "timestamp",
             "trajectories",

@@ -23,28 +23,26 @@ from gradlab.job_queue import (
     register_handler,
 )
 from gradlab.json_utils import canonical_json_bytes, canonical_json_sha256
-from gradlab.trajectory_config import FORMAT
-from gradlab.trajectory_delivery import verify_bytes
+from gradlab.checkpoint_monitoring import FORMAT
 
 JOB_TYPE = "training-dataset-publication"
 DATASET_README = b"""---
 configs:
-- config_name: transitions
-  data_files: data/*.parquet
+- config_name: episodes
+  data_files: episodes/*.parquet
 ---
-# Training trajectories
+# Checkpoint monitoring trajectories
 
-Each Parquet row identifies an episode, an action-cadence transition, and two
-lossless PNG members of its ZIP archive. `transition_json` preserves rewards,
-boundaries, Policy-update attribution, requested/executed actions and override
-facts. `episodes/` contains queryable episode summaries; `contributions/` records
-source provenance and selection predicates. A prefix is not a complete episode.
+Each complete episode row links to immutable transition tables and lossless PNG
+chunks. The episode index retains Run, training seed, Checkpoint, evaluation,
+episode conditions, actions, rewards, boundaries and source/runtime provenance.
+Frames are full unmasked native RGB at the contracted action cadence. Chunk joins
+preserve the initial and true terminal image without duplicated transitions.
+Staged chunks without a complete episode index are not dataset episodes.
 
-Use whole-Run or seed-group holdouts as a starting point. No scientific train or
-validation split is assigned. Training trajectories are not Acceptance evidence.
-Stages refer to the original planned training budget, including after early stop.
-Sampling is reward-independent but availability- and budget-limited; gaps are
-not evidence of unbiased coverage. R2 sources are retained after publication.
+Monitoring is observational and never Acceptance evidence. Use whole-Run or
+training-seed-group holdouts to avoid leakage across correlated Checkpoints;
+split assignment is left to consumers. R2 sources remain canonical.
 """
 
 
@@ -58,38 +56,23 @@ def finalized_inventories(control, models, runs):
         ]
         if not manifests:
             manifests = [control.get_json(f"runs/{run}/manifest.json")]
-        manifests.sort(key=lambda value: (value["created_at"], value["attempt_id"]))
-        latest = manifests[-1]["attempt_id"]
-        for manifest in manifests:
-            attempt = manifest["attempt_id"]
-            terminal = control.get_json_optional(f"runs/{run}/attempts/{attempt}/terminal.json")
-            delivery = (terminal or {}).get("drain", {}).get("dataset_delivery") or {}
-            if attempt == latest and not delivery.get("complete"):
-                raise ValueError(f"Run has no finalized verified dataset inventory: {run}")
-            if not delivery.get("complete"):
-                continue
-            if delivery.get("budget_exhausted"):
-                continue
-            expected = f"datasets/runs/{run}/attempts/{attempt}/final.json"
-            if delivery.get("manifest_key") != expected:
-                raise ValueError("dataset inventory is outside its Run/Attempt namespace")
-            document = models.get_json(expected)
-            if canonical_json_sha256(document) != delivery["manifest_sha256"]:
-                raise ValueError("Run dataset inventory checksum mismatch")
-            references.append(
-                {
-                    "run_id": run,
-                    "attempt_id": attempt,
-                    "key": expected,
-                    "sha256": delivery["manifest_sha256"],
-                }
-            )
+        latest = max(manifests, key=lambda m: (m["created_at"], m["attempt_id"]))
+        attempt = latest["attempt_id"]
+        terminal = control.get_json_optional(f"runs/{run}/attempts/{attempt}/terminal.json")
+        delivery = (terminal or {}).get("drain", {}).get("checkpoint_monitoring") or {}
+        if not delivery.get("complete") or not delivery.get("workers_quiescent"):
+            raise ValueError(f"Run has no finalized verified monitoring inventory: {run}")
+        for evaluation in delivery["inventory"]:
+            identity = evaluation["evaluation_id"]
+            key = f"monitoring/{run}/{identity}/result.json"
+            if evaluation["status"] != "complete" or evaluation["result_key"] != key:
+                raise ValueError("monitoring inventory is incomplete or outside its Run namespace")
+            document = models.get_json(key)
+            digest = canonical_json_sha256(document)
+            if digest != evaluation["result_sha256"]:
+                raise ValueError("monitoring inventory checksum mismatch")
+            references.append(dict(run_id=run, attempt_id=attempt, key=key, sha256=digest))
     return references
-
-
-def _episode_paths(identity):
-    digest = hashlib.sha256(identity.encode()).hexdigest()
-    return f"episodes/{digest}.json", f"assets/{digest}.zip", f"data/{digest}.parquet"
 
 
 def _commit(api, read, repo, files, *, compatible=None):
@@ -122,99 +105,14 @@ def _commit(api, read, repo, files, *, compatible=None):
     raise RuntimeError("HF append did not converge after five head reconciliations") from last_error
 
 
-def append_episode(api, read, repo, contract, manifest, archive: Path, work: Path):
-    index_path, asset_path, table_path = _episode_paths(manifest["episode"]["episode_id"])
-    metadata = canonical_json_bytes(manifest)
-    contract_data = canonical_json_bytes(contract)
-
-    def compatible(head):
-        current = read("training-dataset.json", head)
-        if current is None and any(
-            entry.path != ".gitattributes"
-            for entry in api.list_repo_tree(repo, repo_type="dataset", revision=head)
-        ):
-            raise ValueError("HF target is not an empty or compatible training dataset")
-        if current is not None and current != contract_data:
-            raise ValueError("incompatible training dataset execution contract")
-        existing = read(index_path, head)
-        if existing is not None and existing != metadata:
-            raise ValueError("conflicting episode identity")
-
-    head = api.repo_info(repo_id=repo, repo_type="dataset").sha
-    compatible(head)
-    if read(index_path, head) == metadata:
-        # Immutable index is only committed atomically with its complete asset set.
-        return head
-    verify_bytes(archive.read_bytes(), manifest)
-    import pyarrow as pa
-    import pyarrow.parquet as pq
-
-    with zipfile.ZipFile(archive) as chunk:
-        rows = []
-        members = set(chunk.namelist())
-        for index, raw in enumerate(chunk.read("transitions.jsonl").splitlines()):
-            row = json.loads(raw)
-            if row["step"] != index or "policy_action" not in row or "executed_action" not in row:
-                raise ValueError("unaligned or incomplete transition action evidence")
-            for frame in (f"frames/{index}.png", f"frames/{index + 1}.png"):
-                if frame not in members:
-                    raise ValueError("missing referenced episode image")
-            rows.append(
-                {
-                    "episode_id": manifest["episode"]["episode_id"],
-                    "step": index,
-                    "archive": asset_path,
-                    "frame": f"frames/{index}.png",
-                    "next_frame": f"frames/{index + 1}.png",
-                    "policy_action": int(row["policy_action"]),
-                    "executed_action": int(row["executed_action"]),
-                    "native_action": int(row["native_action"]),
-                    "transition_json": canonical_json_bytes(row).decode(),
-                }
-            )
-        schema = pa.schema(
-            [
-                (name, dtype)
-                for name, dtype in (
-                    ("episode_id", pa.string()),
-                    ("step", pa.int64()),
-                    ("archive", pa.string()),
-                    ("frame", pa.string()),
-                    ("next_frame", pa.string()),
-                    ("policy_action", pa.int64()),
-                    ("executed_action", pa.int64()),
-                    ("native_action", pa.int64()),
-                    ("transition_json", pa.string()),
-                )
-            ]
-        )
-        table = work / "transitions.parquet"
-        pq.write_table(pa.Table.from_pylist(rows, schema=schema), table, compression="zstd")
-    # Assets are only considered published once the episode index is visible in this commit.
-    return _commit(
-        api,
-        read,
-        repo,
-        {
-            "training-dataset.json": contract_data,
-            index_path: metadata,
-            asset_path: archive,
-            table_path: table,
-        },
-        compatible=compatible,
-    )
-
-
 def selected_episode(episode, filters):
     if not episode["complete"] and not filters.get("include_prefixes", False):
         return False
-    last = episode.get("last_transition") or {}
-    facts = last.get("facts") or {}
     values = {
-        "stage": episode["stage_start"],
-        "return": episode["prefix_return"],
-        "score": facts.get("score"),
-        "bricks": facts.get("bricks_destroyed"),
+        "stage": episode["checkpoint_step"] / episode["planned_training_steps"],
+        "return": episode["shaped_return"],
+        "score": episode.get("native_score"),
+        "bricks": episode.get("bricks_destroyed"),
     }
     for name, value in values.items():
         for bound in ("min", "max"):
@@ -228,7 +126,7 @@ def selected_episode(episode, filters):
 
 class DatasetPublicationHandler:
     job_type = JOB_TYPE
-    version = 1
+    version = 2
 
     @classmethod
     def validate_payload(cls, payload):
@@ -270,8 +168,10 @@ class DatasetPublicationHandler:
             if (
                 reference["run_id"] not in runs
                 or not re.fullmatch(r"attempt-[0-9a-f]{16}", reference["attempt_id"])
-                or reference["key"]
-                != f"datasets/runs/{reference['run_id']}/attempts/{reference['attempt_id']}/final.json"
+                or not re.fullmatch(
+                    r"monitoring/" + re.escape(reference["run_id"]) + r"/[0-9a-f]{64}/result\.json",
+                    reference["key"],
+                )
                 or not re.fullmatch(r"[0-9a-f]{64}", reference["sha256"])
             ):
                 raise ValueError("invalid immutable dataset inventory reference")
@@ -313,24 +213,31 @@ class DatasetPublicationHandler:
             document = models.get_json(reference["key"])
             if canonical_json_sha256(document) != reference["sha256"]:
                 raise ValueError("Run dataset inventory checksum mismatch")
-            current = {"format": FORMAT, "execution": document["producer"]["contract"]}
+            if document.get("format") != FORMAT or not document.get("episodes"):
+                raise ValueError("incompatible historical or empty dataset schema")
+            current = {"format": FORMAT, "execution": document["episodes"][0]["recording_contract"]}
             if contract is not None and current != contract:
                 raise ValueError("selected Runs have incompatible dataset execution contracts")
             contract = current
-            sources[f"{run}/{reference['attempt_id']}"] = {
+            sources[f"{run}/{reference['attempt_id']}/{document['evaluation_id']}"] = {
                 "manifest_sha256": reference["sha256"],
-                "producer": document["producer"],
+                "evaluation_id": document["evaluation_id"],
             }
-            for chunk in document["chunks"]:
-                if selected_episode(chunk["episode"], payload["filters"]):
-                    inventory.append(chunk)
+            for episode in document["episodes"]:
+                if selected_episode(episode, payload["filters"]):
+                    inventory.append(episode)
         selection = {
             "format": FORMAT,
             "runs": payload["runs"],
             "sources": sources,
             "filters": payload["filters"],
             "episodes": [
-                {"episode_id": c["episode"]["episode_id"], "sha256": c["sha256"]} for c in inventory
+                {
+                    "episode_id": c["episode_id"],
+                    "evaluation_id": c["evaluation_id"],
+                    "sha256": canonical_json_sha256(c),
+                }
+                for c in inventory
             ],
         }
         selection_id = canonical_json_sha256(selection)
@@ -353,24 +260,16 @@ class DatasetPublicationHandler:
                     return None
 
             head = api.repo_info(repo_id=repo, repo_type="dataset").sha
-            if read("training-dataset.json", head) is None:
+            if read("checkpoint-dataset.json", head) is None:
                 if any(
                     entry.path != ".gitattributes"
                     for entry in api.list_repo_tree(repo, repo_type="dataset", revision=head)
                 ):
                     raise ValueError("HF target is not an empty or compatible training dataset")
-            for chunk in inventory:
+            for episode in inventory:
                 if store.job(str(job["job_id"]))["cancel_requested"]:
                     return HandlerResult(state="canceled", message="Dataset publication canceled")
-                if chunk["bytes"] > 128 * 1024**2:
-                    raise ValueError("dataset source exceeds bounded export chunk size")
-                archive = work / "episode.zip"
-                data = models.get_bytes(chunk["key"])
-                verify_bytes(data, chunk)
-                archive.write_bytes(data)
-                del data
-                append_episode(api, read, repo, contract, chunk, archive, work)
-                archive.unlink()
+                append_monitoring_episode(api, read, repo, contract, episode, models, work)
                 import shutil
 
                 shutil.rmtree(work / "cache", ignore_errors=True)
@@ -381,7 +280,7 @@ class DatasetPublicationHandler:
                 repo,
                 {
                     key: canonical_json_bytes(selection),
-                    "training-dataset.json": canonical_json_bytes(contract),
+                    "checkpoint-dataset.json": canonical_json_bytes(contract),
                     "README.md": DATASET_README,
                 },
             )
@@ -405,7 +304,7 @@ class DatasetPublicationHandler:
 
 
 def register_job_handler():
-    register_handler(JOB_TYPE, 1, DatasetPublicationHandler, replace=True)
+    register_handler(JOB_TYPE, 2, DatasetPublicationHandler, replace=True)
 
 
 def enqueue_publication(*, runs, repo, filters, repo_root, store=None):
@@ -429,10 +328,137 @@ def enqueue_publication(*, runs, repo, filters, repo_root, store=None):
     )
     result = queue.enqueue(
         job_type=JOB_TYPE,
-        handler_version=1,
+        handler_version=2,
         payload=payload,
         idempotency_key=canonical_json_sha256(payload),
         subjects=[JobSubject("dataset", repo)],
     )
     worker = ensure_flusher(queue)
     return {"job": result.job, "created": result.created, "worker": worker.to_dict()}
+
+
+def append_monitoring_episode(api, read, repo, contract, episode, models, work):
+    """Stage bounded immutable chunks, then atomically expose a complete episode.
+
+    The dataset's query surface is the episode table. Staged chunks are never
+    listed there until all assets and transition tables have committed.
+    """
+    from gradlab.checkpoint_monitoring import FORMAT as MONITOR_FORMAT, verified_get
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    if not episode.get("complete") or episode.get("format") != MONITOR_FORMAT:
+        raise ValueError("Publication requires a current complete monitoring episode")
+    identity = f"{episode['evaluation_id']}/{episode['episode_id']}"
+    digest = hashlib.sha256(identity.encode()).hexdigest()
+    index = f"episodes/{digest}.json"
+    encoded = canonical_json_bytes(episode)
+    contract_data = canonical_json_bytes(contract)
+
+    def compatible(head):
+        existing = read("checkpoint-dataset.json", head)
+        if existing is None and any(
+            e.path != ".gitattributes"
+            for e in api.list_repo_tree(repo, repo_type="dataset", revision=head)
+        ):
+            raise ValueError("HF target is not an empty checkpoint-monitoring dataset")
+        if existing is not None and existing != contract_data:
+            raise ValueError("incompatible checkpoint dataset execution contract")
+        previous = read(index, head)
+        if previous is not None and previous != encoded:
+            raise ValueError("conflicting monitoring episode identity")
+
+    head = api.repo_info(repo_id=repo, repo_type="dataset").sha
+    compatible(head)
+    if read(index, head) == encoded:
+        return head
+    _commit(api, read, repo, {"checkpoint-dataset.json": contract_data}, compatible=compatible)
+    step, previous = 0, None
+    references = []
+    for chunk in episode["chunks"]:
+        if (
+            not 0 < chunk["bytes"] <= 128 * 1024**2
+            or chunk["first_step"] != step
+            or chunk["end_step"] <= step
+            or previous is not None
+            and previous != chunk["first_frame_sha256"]
+        ):
+            raise ValueError("invalid monitoring chunk size or episode join")
+        payload = verified_get(models, chunk)
+        archive_path = Path(work) / "chunk.zip"
+        archive_path.write_bytes(payload)
+        asset = f"chunks/{chunk['sha256']}.zip"
+        table_name = f"transitions/{digest}/{chunk['sha256']}.parquet"
+        with zipfile.ZipFile(archive_path) as archive:
+            rows = []
+            for raw in archive.read("transitions.jsonl").splitlines():
+                row = json.loads(raw)
+                if row["step"] != step:
+                    raise ValueError("monitoring transition gap or duplicate")
+                for frame in (f"frames/{step}.png", f"frames/{step + 1}.png"):
+                    if frame not in archive.namelist():
+                        raise ValueError("missing monitoring frame")
+                rows.append(
+                    dict(
+                        trajectory_id=identity,
+                        episode_id=episode["episode_id"],
+                        evaluation_id=episode["evaluation_id"],
+                        run_id=episode.get("run_id"),
+                        training_seed=episode.get("training_seed"),
+                        checkpoint_id=episode["checkpoint_id"],
+                        checkpoint_step=episode["checkpoint_step"],
+                        step=step,
+                        archive=asset,
+                        frame=f"frames/{step}.png",
+                        next_frame=f"frames/{step + 1}.png",
+                        transition_json=canonical_json_bytes(row).decode(),
+                    )
+                )
+                step += 1
+        if step != chunk["end_step"]:
+            raise ValueError("monitoring chunk transition count mismatch")
+        table = Path(work) / "chunk.parquet"
+        pq.write_table(pa.Table.from_pylist(rows), table, compression="zstd")
+        _commit(api, read, repo, {asset: archive_path, table_name: table}, compatible=compatible)
+        references.append(table_name)
+        previous = chunk["last_frame_sha256"]
+        archive_path.unlink()
+        table.unlink()
+        import shutil
+
+        shutil.rmtree(Path(work) / "cache", ignore_errors=True)
+    if step != episode["steps"] or not references:
+        raise ValueError("Publication cannot expose an incomplete monitoring episode")
+    summary = Path(work) / "episode.parquet"
+    pq.write_table(
+        pa.Table.from_pylist(
+            [
+                dict(
+                    trajectory_id=identity,
+                    episode_id=episode["episode_id"],
+                    evaluation_id=episode["evaluation_id"],
+                    run_id=episode.get("run_id"),
+                    training_seed=episode.get("training_seed"),
+                    checkpoint_id=episode["checkpoint_id"],
+                    checkpoint_step=episode["checkpoint_step"],
+                    steps=episode["steps"],
+                    native_score=episode["native_score"],
+                    shaped_return=episode["shaped_return"],
+                    normalized_brick_progress=episode["normalized_brick_progress"],
+                    success=episode["success"],
+                    transition_tables=references,
+                )
+            ]
+        ),
+        summary,
+        compression="zstd",
+    )
+    head = _commit(
+        api,
+        read,
+        repo,
+        {index: encoded, f"episodes/{digest}.parquet": summary},
+        compatible=compatible,
+    )
+    summary.unlink()
+    return head
