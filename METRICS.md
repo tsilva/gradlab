@@ -790,7 +790,7 @@ and target-progress fields are not registry metrics and cannot enter the publish
 | `eval/monitor/success/ci95/upper` | Monitoring success upper 95% | Upper endpoint of the two-sided 95% Wilson interval. | fraction | complete monitoring evaluation | history | last | eval/step | monitoring | - | - |
 | `eval/monitor/progress/median` | Monitoring normalized brick median | Median native brick progress with denominator 216. | fraction | complete monitoring evaluation | history | last | eval/step | monitoring | - | - |
 | `eval/episode_steps/mean` | Monitoring episode length | Mean complete episode length at the contracted action cadence. | steps | complete monitoring evaluation | history | last | eval/step | monitoring | - | train/episode_steps/mean |
-| `eval/monitor/video` | Monitoring representative episode | Full original-frame video nearest median normalized brick progress; ties use manifest ordinal. | video | complete monitoring evaluation | history | last | eval/step | monitoring | - | - |
+| `eval/monitor/video` | Monitoring representative episode | Full original-frame video from the recorded subset nearest the full evaluation-set median normalized brick progress; ties use manifest ordinal. Omitted when zero episodes are recorded. | video | complete monitoring evaluation | history | last | eval/step | monitoring | - | - |
 <!-- METRIC_REGISTRY_END -->
 
 ## Registry relationships and dashboard applicability
@@ -852,12 +852,18 @@ accounting, not causal action credit. Episode return remains undiscounted reward
 ## Checkpoint Monitoring
 
 Monitoring is observational and has no Acceptance, Promotion or leader authority.
-Final aggregates require every planned episode; operational failures and prefixes
+Final aggregates require every planned evaluation episode, including unrecorded
+episodes; `eval/episodes/count` counts evaluated episodes, not recordings.
+`checkpoint_monitoring.record_episodes` selects the first N manifest ordinals
+for lossless recording without changing the full-set metric denominator.
+Operational failures and prefixes
 never become failed scientific episodes. Monitoring events remain distinct from
 Acceptance events even where metric names are shared, with eval/step pinned to the immutable Checkpoint even when its
 result arrives after newer training events. ops/sequence remains delivery order.
 The supervisor sends actual representative video media through its durable outbox;
-R2 retains canonical video and complete trajectories. Transport is at least once.
+R2 retains canonical video and the configured subset of complete trajectories,
+plus lightweight results for all evaluations. With zero recorded episodes there
+is no video; scalar delivery still completes. Transport is at least once.
 The Breakout saved workspace includes monitoring charts on `eval/step` and a
 media panel for `eval/monitor/video`, including when monitoring is enabled only
 through launch-time overrides. Panels do not imply that an evaluation has completed.

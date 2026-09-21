@@ -6,6 +6,11 @@ description: Default Breakout PPO with scheduled learning-rate reductions, gamma
 # Training settings from gradlab-7d0a6b7fd44d3720c1a82daad90f639d; checkpoint cadence remains goal-owned.
 train:
   timesteps: 191561728
+  checkpoint_monitoring:
+    enabled: false
+    episodes: 100
+    record_episodes: 50
+    contribution_bytes: 30000000000  # 30 GB retained monitoring uploads per Run.
   occupancy:
     cell:
       dimensions:

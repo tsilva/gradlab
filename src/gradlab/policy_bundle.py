@@ -108,7 +108,7 @@ class _RecipeValueDocument(BoundaryModel):
         if settings.get("enabled"):
             from gradlab.checkpoint_monitoring import episode_manifest
             expected_monitoring = {"protocol": "checkpoint-monitoring-v1", "settings": settings,
-                                   "manifest": episode_manifest(settings["episodes"])}
+                                   "manifest": episode_manifest(settings["episodes"], settings.get("record_episodes"))}
             if self.monitoring != expected_monitoring:
                 raise ValueError("monitoring differs from its immutable neutral episode contract")
         elif self.monitoring is not None:
@@ -1165,7 +1165,7 @@ def _build_recipe_contract(
     if monitoring.get("enabled"):
         from gradlab.checkpoint_monitoring import episode_manifest
         recipe["monitoring"] = {"protocol": "checkpoint-monitoring-v1", "settings": monitoring,
-                                "manifest": episode_manifest(monitoring["episodes"])}
+                                "manifest": episode_manifest(monitoring["episodes"], monitoring.get("record_episodes"))}
     if run_description:
         recipe["description"] = str(run_description)
     recipe = dict(

@@ -310,6 +310,11 @@ def _publish_frame(
         if not set(metrics).issubset(MONITORING_SCALAR_METRICS):
             raise ValueError("monitoring cannot project Acceptance metrics")
         metrics.update({EVAL_CHECKPOINT_STEP: step, ORCHESTRATION_EVENT_SEQUENCE: event_seq})
+        if payload["video"] is None:
+            validate_metric_payload(metrics)
+            configure_wandb_metric_axes(run, metrics, metrics_schema_version=metrics_schema_version)
+            run.log(metrics, step=event_seq)
+            return
         media_root = Path(run.dir)
         size = int(payload["video"]["bytes"])
         retained = sum(p.stat().st_size for p in media_root.rglob("*.mp4"))

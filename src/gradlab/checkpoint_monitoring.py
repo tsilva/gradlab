@@ -25,11 +25,16 @@ from gradlab.seeds import MONITOR_SEED_START, MONITOR_POLICY_SEED_START
 FORMAT = "gradlab.checkpoint-monitoring.v1"
 
 
-def episode_manifest(count=400):
+def episode_manifest(count=400, record_episodes=None):
     if type(count) is not int or not 1 <= count <= 100_000:
         raise ValueError("monitoring episode count must be between 1 and 100000")
+    if record_episodes is not None and (
+        type(record_episodes) is not int or not 0 <= record_episodes <= count
+    ):
+        raise ValueError("record_episodes must be between 0 and the monitoring episode count")
     return [
         dict(
+            **({"record": i < record_episodes} if record_episodes is not None else {}),
             episode_id=f"monitor-{i:06d}",
             ordinal=i,
             environment_seed=MONITOR_SEED_START + i,
@@ -67,9 +72,10 @@ class EpisodeRecording:
     """The existing runtime recording boundary, with complete multi-chunk episodes."""
 
     def __init__(self, runtime, *, bucket, root, prefix, chunk_bytes, reserve=None, guard=None,
-                 delivery=None):
+                 delivery=None, record=True):
         from gradlab.recording_contract import verify_recording_provider
 
+        self.record = record
         self.contract = verify_recording_provider(runtime)
         self.runtime, self.bucket = runtime, bucket
         self.root, self.prefix = Path(root), prefix
@@ -109,7 +115,8 @@ class EpisodeRecording:
             return
         self.started = True
         self.initial = json_value(self.runtime.reset_infos[0])
-        self._add("frames/0.png", self._frame())
+        if self.record:
+            self._add("frames/0.png", self._frame())
 
     def _add(self, name, data):
         self.entries[name] = data
@@ -169,6 +176,11 @@ class EpisodeRecording:
             facts=facts,
             task_metrics={k: json_value(np.asarray(v)[0]) for k, v in task_step.metrics.items()},
         )
+        if not self.record:
+            self.step += 1
+            self.last = row
+            self.complete = bool(terminated[0] or truncated[0])
+            return
         data = canonical_json_bytes(row) + b"\n"
         frame = self._frame()  # before the runtime resets a terminal lane
         if self.size + len(frame) + len(data) + 1024 > self.limit:
@@ -264,6 +276,10 @@ def monitor_episode(
     from gradlab.policy_execution import verify_policy_execution_contract
 
     expected = episode_manifest(episode["ordinal"] + 1)[-1]
+    if "record" in episode:
+        if type(episode["record"]) is not bool:
+            raise ValueError("monitoring recording selection must be boolean")
+        expected["record"] = episode["record"]
     if episode != expected:
         raise ValueError("monitoring episode identity/seeds differ from the frozen manifest")
     env = make_eval_vec_env(config, n_envs=1, seed=episode["environment_seed"])
@@ -300,6 +316,7 @@ def monitor_episode(
             reserve=reserve,
             guard=guard,
             delivery=delivery,
+            record=episode.get("record", True),
         )
         env.runtime.recording = recorder
         expected_actions = provenance.get("action_contract")
@@ -438,12 +455,19 @@ def verify_monitoring_inventory(bucket, result, manifest, *, prefix, heartbeat=N
                 raise ValueError("monitoring chunk outside evaluation namespace")
             references.append(chunk)
             step, previous = chunk["end_step"], chunk["last_frame_sha256"]
-        if not episode["chunks"] or step != episode["steps"]:
-            raise ValueError("monitoring episode has incomplete chunks")
+        if episode.get("record", True):
+            if not episode["chunks"] or step != episode["steps"]:
+                raise ValueError("monitoring episode has incomplete chunks")
+        elif episode["chunks"]:
+            raise ValueError("unrecorded monitoring episode has unexpected chunks")
     video = result["video"]
-    if video["key"] != prefix + "/representative.mp4":
-        raise ValueError("monitoring video outside evaluation namespace")
-    references.append(video)
+    if selection is None:
+        if video is not None:
+            raise ValueError("unrecorded monitoring evaluation has unexpected video")
+    else:
+        if video is None or video["key"] != prefix + "/representative.mp4":
+            raise ValueError("monitoring video outside evaluation namespace")
+        references.append(video)
 
     def verify(reference):
         head = bucket.head(reference["key"])
@@ -467,6 +491,9 @@ def monitoring_aggregates(episodes, manifest):
         row = by_id[entry["episode_id"]]
         if not row.get("complete") or any(row.get(k) != v for k, v in entry.items()):
             raise ValueError("monitoring result differs from the complete manifest")
+        if (type(row.get("record", True)) is not bool
+                or row.get("record", True) != entry.get("record", True)):
+            raise ValueError("monitoring recording selection differs from the frozen manifest")
         if type(row["success"]) is not bool or row["brick_denominator"] != 216:
             raise ValueError("monitoring result has invalid outcome/progress evidence")
         for name in ("normalized_brick_progress", "native_score", "shaped_return", "steps"):
@@ -492,8 +519,10 @@ def monitoring_aggregates(episodes, manifest):
     radius = z * math.sqrt(rate * (1 - rate) / n + z * z / (4 * n * n)) / divisor
     progress = [r["normalized_brick_progress"] for r in ordered]
     median = statistics.median(progress)
+    recorded = [r for r in ordered if r.get("record", True)]
     selected = min(
-        ordered, key=lambda r: (abs(r["normalized_brick_progress"] - median), r["ordinal"])
+        recorded, key=lambda r: (abs(r["normalized_brick_progress"] - median), r["ordinal"]),
+        default=None,
     )
     metrics = {
         "eval/success/mean": rate,
@@ -507,13 +536,14 @@ def monitoring_aggregates(episodes, manifest):
         "eval/episodes/count": n,
     }
     selection = dict(
-        rule="nearest-median-normalized-bricks-then-ordinal-v1",
+        rule=("nearest-recorded-to-full-median-normalized-bricks-then-ordinal-v1"
+              if len(recorded) != n else "nearest-median-normalized-bricks-then-ordinal-v1"),
         metric="normalized_brick_progress",
         median=median,
         selected_value=selected["normalized_brick_progress"],
         episode_id=selected["episode_id"],
         ordinal=selected["ordinal"],
-    )
+    ) if selected is not None else None
     return metrics, selection, selected
 
 
@@ -539,7 +569,9 @@ def finalize_monitoring(
     key = f"{prefix}/representative.mp4"
     saved = bucket.get_json_optional(key + ".json")
     video_started = time.perf_counter()
-    if saved is not None:
+    if selected is None:
+        video = None
+    elif saved is not None:
         if saved["selection"] != selection:
             raise ValueError("committed monitoring video selection changed")
         video = saved["video"]
@@ -566,11 +598,12 @@ def finalize_monitoring(
         verified_put(bucket, key + ".json", pointer)
         output.unlink()
     video_seconds = time.perf_counter() - video_started
+    identity = episodes[0]
     result = dict(
         format=FORMAT,
-        **{key: selected[key] for key in ("evaluation_id", "contract_sha256") if key in selected},
-        checkpoint_id=selected["checkpoint_id"],
-        checkpoint_step=selected["checkpoint_step"],
+        **{key: identity[key] for key in ("evaluation_id", "contract_sha256") if key in identity},
+        checkpoint_id=identity["checkpoint_id"],
+        checkpoint_step=identity["checkpoint_step"],
         metrics=metrics,
         selection=selection,
         video=video,
