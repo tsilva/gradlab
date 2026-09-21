@@ -11,6 +11,7 @@ from gradlab.json_utils import canonical_json_sha256
 @dataclass(frozen=True)
 class MonitoringConfig:
     enabled: bool = False
+    allow_uncalibrated: bool = False
     episodes: int = 400
     record_episodes: int | None = None  # None records the entire evaluation manifest.
     active_workers: int = 1
@@ -80,8 +81,10 @@ def resolve_monitoring(value, train):
     settings = asdict(MonitoringConfig(**value))
     if type(settings["enabled"]) is not bool:
         raise ValueError("checkpoint_monitoring.enabled must be boolean")
+    if type(settings["allow_uncalibrated"]) is not bool:
+        raise ValueError("checkpoint_monitoring.allow_uncalibrated must be boolean")
     for key, number in settings.items():
-        if key in {"enabled", "calibration", "record_episodes"}:
+        if key in {"enabled", "allow_uncalibrated", "calibration", "record_episodes"}:
             continue
         if type(number) is not int or number <= 0:
             raise ValueError(f"checkpoint_monitoring.{key} must be a positive finite integer")
@@ -113,6 +116,8 @@ def resolve_monitoring(value, train):
             or train.get("sticky_action_prob", 0) != 0
         ):
             raise ValueError("monitoring requires verified native Breakout PPO/A2C")
+        if settings["allow_uncalibrated"]:
+            return settings
         report = settings["calibration"]
         if isinstance(report, dict) and report.get("status") == "measuring":
             if set(report) != {"status", "campaign_id"} or not re.fullmatch(
@@ -163,6 +168,12 @@ def validate_monitoring_allocation(
     """Check the real selected allocation before any Run is admitted."""
     if not settings or not settings.get("enabled"):
         return
+    if settings["task_cpus"] != resources["cpu"]:
+        raise ValueError("monitoring must declare the full task CPU allocation")
+    if settings["whole_run_seconds"] > duration:
+        raise ValueError("monitoring whole-run deadline exceeds the task duration")
+    if settings.get("allow_uncalibrated", False):
+        return
     report = settings["calibration"]
     measuring = report.get("status") == "measuring"
     if measuring and (
@@ -177,7 +188,3 @@ def validate_monitoring_allocation(
         raise ValueError("monitoring calibration source/runtime differs from the launch")
     if not measuring and report.get("hardware_allocation") != hardware_allocation:
         raise ValueError("monitoring calibration hardware allocation differs from the launch")
-    if settings["task_cpus"] != resources["cpu"]:
-        raise ValueError("monitoring must declare the full task CPU allocation")
-    if settings["whole_run_seconds"] > duration:
-        raise ValueError("monitoring whole-run deadline exceeds the task duration")

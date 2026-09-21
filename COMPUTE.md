@@ -186,8 +186,11 @@ allocation and worker settings. Reject infeasible 400-episode budgets; never
 silently lower the count, change scientific conditions, raise limits or allocate
 remote compute. Missing representative inputs mean incomplete calibration.
 
-Enable the FirstWall PPO recipe only after repeated matched monitoring-off/on
-measurements at the same cadence support at most 2% training-throughput loss.
+Calibrated enablement of the FirstWall PPO recipe requires repeated matched
+monitoring-off/on measurements at the same cadence supporting at most 2%
+training-throughput loss. An explicit Run override may admit uncalibrated
+monitoring while preserving compatibility, resource and deadline checks; it
+does not establish throughput support.
 Report uncertainty, resources, retained bytes, upload backlog, total completion
 time and GPU idle finalization separately. Uncertain evidence leaves support
 unproven. Calibration and live campaigns need separate compute authorization.

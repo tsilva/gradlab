@@ -25,8 +25,13 @@ and representative media across checkpoints and retries; it excludes policy
 checkpoint bytes and is not replenished by deleting local files. Changing either
 count or the byte allowance invalidates prior calibration.
 
-Enablement requires a supported calibration report bound to the resolved
-configuration. No checked-in recipe is enabled by this change. The calibration operation reports incomplete, infeasible, or unproven evidence explicitly.
+Enablement normally requires a supported calibration report bound to the resolved
+configuration. For an explicitly uncalibrated run, pass
+`--set train.checkpoint_monitoring.allow_uncalibrated=true` together with
+`--set train.checkpoint_monitoring.enabled=true`. This hash-bound exception bypasses
+calibration admission only; provider compatibility, resource limits, full task CPU
+allocation and deadline checks remain enforced. It makes no throughput-support
+claim and does not change Acceptance or promotion. No checked-in recipe is enabled by this change. The calibration operation reports incomplete, infeasible, or unproven evidence explicitly.
 To execute a separately authorized campaign, use `gradlab monitor calibrate --campaign
 campaign.json --output calibration.json`. This launches counterbalanced off/on pairs
 through the ordinary dstack supervisor, resumes from a durable local campaign journal,
