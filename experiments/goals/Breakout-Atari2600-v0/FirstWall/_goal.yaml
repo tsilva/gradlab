@@ -4,6 +4,7 @@ defaults:
 goal_id: FirstWall
 title: Clear the first Breakout wall
 train:
+  checkpoint_freq: 10000000
   environment:
     task:
       events:
