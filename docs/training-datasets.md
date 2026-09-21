@@ -111,19 +111,31 @@ publication. Selection reads episode metadata before frame
 transfer. The command admits an explicit durable local publication job; use
 `gradlab jobs` to inspect it. Training never starts HF publication.
 
-HF receives immutable frame ZIP shards targeting 512 MiB of source chunks and
-consolidated Parquet transition/episode tables. Original PNG bytes, initial and
-terminal frames, episode identities, and provenance are preserved. An episode
-may cross shards; its index is published only after every referenced asset is
-uploaded. Existing per-episode contributions remain intact; compact contributions
-use `indexes/*.jsonl.gz` and `episodes/snapshot-*.parquet` alongside them.
+HF receives the existing Breakout trajectories table format: deduplicated lossless
+WebP images embedded in `frames` Parquet, typed `transitions`, `episodes`, and
+`sessions` tables, tagged `record_json`, and `breakout-bricks-v1` annotations.
+RGB remains full and unmasked. Transitions and episodes use one `all` container;
+the episode `split` column is null. There is no train/heldout assignment. The
+provider-submitted action index remains `native_action_json`; the original
+internal emulator encoding is retained in `record_json.monitoring_record`.
+Unavailable separately recorded task rewards/boundaries, temperature and native
+frame timing remain null. Session records retain complete original episode
+provenance, including Run, training seed, Checkpoint and evaluation identity.
 
-The publisher preuploads binary content with two upload threads, then commits at
-most 50 file operations. Episode indexes and the contribution receipt become
-visible together. Small snapshots normally need one commit, not two per episode.
-Large snapshots stage asset-only commits before the final indexes. A persistent
-selection journal and pinned-revision metadata cache support retries; immutable
-R2 chunks remain the recovery source, and HF deduplicates reuploaded bytes.
+Conversion resumes at completed episode boundaries, with a SQLite frame-deduplication
+index, an 8 GiB temporary spool cap and 1 GiB free-space reserve. Images are checked
+for exact decoded RGB equality after WebP encoding. The dataset keeps original
+R2 recordings and previous HF files/revisions. Later contributions merge earlier
+complete episodes into a new immutable snapshot; the current dataset view switches
+atomically only after all snapshot files are staged. IDs join tables within a
+pinned snapshot and must not be interpreted as row offsets or compared across
+snapshot revisions.
+
+The publisher preuploads binary content with two upload threads and publishes
+one expected-parent commit, bounded to 100 files. Larger snapshots fail before
+publication rather than expose incomplete data. A lost commit acknowledgement
+is reconciled using the immutable receipt. Previously queued PNG-shard jobs
+retain their original export format; new publications default to trajectory tables.
 
 Dataset publication jobs share a persistent budget of 10 commit attempts per
 rolling hour and 60 SDK operations per five minutes, with one writer per repository.

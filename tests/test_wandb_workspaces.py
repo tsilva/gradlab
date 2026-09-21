@@ -34,6 +34,24 @@ def _fake_api():
 
 
 class WandbWorkspaceDeclarationTests(unittest.TestCase):
+    def test_comparison_preserves_sparse_queries_through_sdk_round_trip(self) -> None:
+        from gradlab.comparison_charts import query_preserving_chart_class
+
+        spec = compile_workspace_specs(ROOT, project="Breakout-Atari2600-v0")[0]
+        panel = build_wandb_workspace(spec, entity="entity").sections[0].panels[0]
+        wire = panel._to_model()
+        histories = [field for field in wire.config.user_query.query_fields[0].fields if field.name == "history"]
+        self.assertEqual([field.args[0].value for field in histories], [
+            ["train/step", "train/progress/bricks_destroyed_normalized/mean"],
+            ["eval/step", "eval/progress/bricks_destroyed_normalized/mean"],
+        ])
+        restored = query_preserving_chart_class()._from_model(wire)
+        self.assertEqual(workspace_structure_sha256(panel), workspace_structure_sha256(restored))
+        # Losing either query must remain detectable as saved-view drift.
+        wire.config.user_query.query_fields[0].fields.pop()
+        broken = query_preserving_chart_class()._from_model(wire)
+        self.assertNotEqual(workspace_structure_sha256(panel), workspace_structure_sha256(broken))
+
     def test_launch_time_monitoring_has_charts_and_video(self) -> None:
         import wandb_workspaces.reports.v2 as wr
 

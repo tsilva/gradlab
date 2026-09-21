@@ -133,11 +133,12 @@ sections:
     columns: 2
     panels:
     - id: primary_0
-      kind: line
-      y_title: fraction (last 100 episodes)
+      kind: train_eval
+      y_title: mean normalized bricks destroyed
       x: train/step
       y:
       - train/progress/bricks_destroyed_normalized/mean
+      - eval/progress/bricks_destroyed_normalized/mean
     - id: primary_1
       kind: line
       y_title: fraction (last 100 episodes)
@@ -212,7 +213,7 @@ sections:
     - id: monitor_progress
       kind: line
       x: eval/step
-      y: [eval/progress/bricks_destroyed_normalized/mean, eval/monitor/progress/median]
+      y: [eval/monitor/progress/median]
     - id: monitor_score
       kind: line
       x: eval/step
