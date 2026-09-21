@@ -34,6 +34,18 @@ def _fake_api():
 
 
 class WandbWorkspaceDeclarationTests(unittest.TestCase):
+    def test_launch_time_monitoring_has_charts_and_video(self) -> None:
+        import wandb_workspaces.reports.v2 as wr
+
+        spec = compile_workspace_specs(ROOT, project="Breakout-Atari2600-v0")[0]
+        workspace = build_wandb_workspace(spec, entity="entity")
+        section = next(item for item in workspace.sections if item.name == "Checkpoint monitoring")
+        charts = [panel for panel in section.panels if isinstance(panel, wr.LinePlot)]
+        self.assertEqual(len(charts), 6)
+        self.assertTrue(all(panel.x == "eval/step" for panel in charts))
+        video = next(panel for panel in section.panels if isinstance(panel, wr.MediaBrowser))
+        self.assertEqual(video.media_keys, ["eval/monitor/video"])
+
     def test_default_profile_compiles_for_every_resolved_project(self) -> None:
         first = compile_workspace_specs(ROOT)
         second = compile_workspace_specs(ROOT)
@@ -67,6 +79,13 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
                 "target_score_mean",
                 "target_score_max",
                 "serve_stall_count",
+                "monitor_success",
+                "monitor_progress",
+                "monitor_score",
+                "monitor_return",
+                "monitor_length",
+                "monitor_count",
+                "monitor_video",
                 "target_return_max",
                 "completed_episodes",
                 "explained_variance",
@@ -115,7 +134,7 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
         )
         breakout_workspace = build_wandb_workspace(breakout, entity="entity")
         self.assertEqual(
-            breakout_workspace.runset_settings.filters, "Config('metrics_schema_version') = 23"
+            breakout_workspace.runset_settings.filters, "Config('metrics_schema_version') = 24"
         )
         mario = next(spec for spec in first if spec.project == "SuperMarioBros-Nes-v0")
         mario_metrics = {
@@ -255,7 +274,7 @@ class WandbWorkspaceRenderingTests(unittest.TestCase):
         self.assertEqual(workspace.settings.max_runs, 25)
         self.assertEqual(
             workspace.runset_settings.filters,
-            "Config('metrics_schema_version') = 23",
+            "Config('metrics_schema_version') = 24",
         )
         self.assertEqual(len(workspace.sections), 2)
         self.assertEqual(self.spec.sections[0].panels[0].y, ("eval/return/mean",))

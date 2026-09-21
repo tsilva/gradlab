@@ -98,7 +98,7 @@ def test_campaign_uses_elapsed_training_time_and_requires_concurrent_capture(
                         dict(checkpoint_sha256=str(step), first_inference_at=inference_at)
                         for _ in range(400)
                     ],
-                    metrics={"eval/monitor/progress/mean": step / 400},
+                    metrics={"eval/progress/bricks_destroyed_normalized/mean": step / 400},
                     measurements=dict(
                         uninterrupted=True,
                         seconds=0.1,

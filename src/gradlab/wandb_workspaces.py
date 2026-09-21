@@ -80,6 +80,14 @@ def _section_panels(wr, section, *, entity=None):
                         y=row_y,
                     )
                 )
+            elif panel.kind == "media":
+                panels.append(
+                    wr.MediaBrowser(
+                        title=panel.title,
+                        media_keys=list(panel.y),
+                        layout=wr.Layout(x=column * slot_width, y=row_y, w=panel.width, h=panel.height),
+                    )
+                )
             elif panel.kind in {
                 "occupancy",
                 "occupancy_recent",

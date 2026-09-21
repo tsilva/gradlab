@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import re
-import tempfile
 import time
 import zipfile
 from pathlib import Path
 
 from huggingface_hub import CommitOperationAdd, HfApi, hf_hub_download
-from huggingface_hub.errors import EntryNotFoundError
+from huggingface_hub.errors import EntryNotFoundError, HfHubHTTPError
 
 from gradlab.job_queue import (
     HandlerResult,
@@ -75,6 +75,45 @@ def finalized_inventories(control, models, runs):
     return references
 
 
+
+def completed_snapshot_inventories(control, models, runs):
+    """Freeze completed, supervisor-verified evaluations without waiting for run drain."""
+    references = []
+    for run in sorted(set(runs)):
+        for state_key in sorted(control.iter_keys(f"runs/{run}/monitoring/")):
+            if not state_key.endswith("/state.json"):
+                continue
+            state = control.get_json(state_key)
+            if state.get("status") != "complete":
+                continue
+            intent = control.get_json(state_key.removesuffix("state.json") + "intent.json")
+            identity = intent["evaluation_id"]
+            prefix = f"monitoring/{run}/{identity}"
+            if intent["run_id"] != run or intent["prefix"] != prefix:
+                raise ValueError("snapshot inventory is outside its Run namespace")
+            key = prefix + "/result.json"
+            document = models.get_json(key)
+            digest = canonical_json_sha256(document)
+            if digest != state["result_sha256"]:
+                raise ValueError("snapshot inventory checksum mismatch")
+            if (
+                document["evaluation_id"] != identity
+                or document["checkpoint_id"] != intent["checkpoint"]["checkpoint_id"]
+                or document["checkpoint_step"] != intent["checkpoint"]["step"]
+                or document["contract_sha256"] != intent["contract_sha256"]
+                or len(document["episodes"]) != len(intent["manifest"])
+                or {e["episode_id"] for e in document["episodes"]}
+                != {e["episode_id"] for e in intent["manifest"]}
+                or not all(e.get("complete") for e in document["episodes"])
+            ):
+                raise ValueError("snapshot requires a complete bound evaluation manifest")
+            references.append(dict(run_id=run, attempt_id=intent["attempt_id"],
+                                   key=key, sha256=digest))
+    if not references:
+        raise ValueError("selected Runs have no completed monitoring evaluations")
+    return references
+
+
 def _commit(api, read, repo, files, *, compatible=None):
     """Re-read at each immutable head, including after an ambiguous commit response."""
     last_error = None
@@ -101,6 +140,8 @@ def _commit(api, read, repo, files, *, compatible=None):
             )
             return commit.oid
         except Exception as exc:
+            if isinstance(exc, HfHubHTTPError) and exc.response.status_code == 429:
+                raise
             last_error = exc
     raise RuntimeError("HF append did not converge after five head reconciliations") from last_error
 
@@ -178,11 +219,22 @@ class DatasetPublicationHandler:
         return {**payload, "runs": sorted(set(runs))}
 
     def advance(self, job):
+        from gradlab.dataset_shards import PublicationDeferred
         try:
             return self._publish(job)
+        except PublicationDeferred as exc:
+            return HandlerResult(state="retry_wait", available_at=exc.until, message=str(exc))
         except ValueError, KeyError, TypeError:
             raise
         except Exception as exc:
+            logging.getLogger(__name__).exception("Dataset publication failed")
+            if isinstance(exc, HfHubHTTPError) and exc.response.status_code == 429:
+                # Commit quota is hourly and distinct from the generic API window.
+                delay = 3600 if "repository commits" in str(exc) else 300
+                return HandlerResult(
+                    state="retry_wait", available_at=time.time() + delay,
+                    message=f"HF rate limit; retry in {delay} seconds",
+                )
             if int(job.get("attempts", 1)) >= 8:
                 return HandlerResult(
                     state="blocked", message=f"Publication needs retry: {type(exc).__name__}"
@@ -241,49 +293,26 @@ class DatasetPublicationHandler:
             ],
         }
         selection_id = canonical_json_sha256(selection)
-        api.create_repo(repo_id=repo, repo_type="dataset", exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix="dataset-export-", dir=store.root) as temporary:
-            work = Path(temporary)
+        from gradlab.dataset_shards import PublicationBudget, publish_sharded
+        budget = PublicationBudget(store.root)
+        work = store.root / "work" / str(job["job_id"]) / "dataset"
+        work.mkdir(parents=True, exist_ok=True)
 
-            def read(name, revision):
-                try:
-                    return Path(
-                        hf_hub_download(
-                            repo,
-                            name,
-                            repo_type="dataset",
-                            revision=revision,
-                            cache_dir=work / "cache",
-                        )
-                    ).read_bytes()
-                except EntryNotFoundError:
-                    return None
+        def read(name, revision):
+            try:
+                return Path(hf_hub_download(
+                    repo, name, repo_type="dataset", revision=revision,
+                    cache_dir=work / "cache",
+                )).read_bytes()
+            except EntryNotFoundError:
+                return None
 
-            head = api.repo_info(repo_id=repo, repo_type="dataset").sha
-            if read("checkpoint-dataset.json", head) is None:
-                if any(
-                    entry.path != ".gitattributes"
-                    for entry in api.list_repo_tree(repo, repo_type="dataset", revision=head)
-                ):
-                    raise ValueError("HF target is not an empty or compatible training dataset")
-            for episode in inventory:
-                if store.job(str(job["job_id"]))["cancel_requested"]:
-                    return HandlerResult(state="canceled", message="Dataset publication canceled")
-                append_monitoring_episode(api, read, repo, contract, episode, models, work)
-                import shutil
-
-                shutil.rmtree(work / "cache", ignore_errors=True)
-            key = f"contributions/{selection_id}.json"
-            revision = _commit(
-                api,
-                read,
-                repo,
-                {
-                    key: canonical_json_bytes(selection),
-                    "checkpoint-dataset.json": canonical_json_bytes(contract),
-                    "README.md": DATASET_README,
-                },
-            )
+        revision = publish_sharded(
+            api, read, repo, contract, inventory, selection, models, work, budget,
+            lambda: store.job(str(job["job_id"]))["cancel_requested"],
+        )
+        import shutil
+        shutil.rmtree(work / "cache", ignore_errors=True)
         return HandlerResult(
             state="succeeded",
             message=f"Published dataset revision {revision}",
@@ -307,7 +336,7 @@ def register_job_handler():
     register_handler(JOB_TYPE, 2, DatasetPublicationHandler, replace=True)
 
 
-def enqueue_publication(*, runs, repo, filters, repo_root, store=None):
+def enqueue_publication(*, runs, repo, filters, repo_root, store=None, completed_snapshot=False):
     queue = store or JobStore()
     queue.init()
     from gradlab.operator_environment import load_repository_operator_environment
@@ -315,7 +344,8 @@ def enqueue_publication(*, runs, repo, filters, repo_root, store=None):
 
     load_repository_operator_environment(Path(repo_root))
     storage = RunStorageConfig.from_env()
-    inventories = finalized_inventories(R2Bucket(storage.control), R2Bucket(storage.models), runs)
+    select = completed_snapshot_inventories if completed_snapshot else finalized_inventories
+    inventories = select(R2Bucket(storage.control), R2Bucket(storage.models), runs)
     payload = DatasetPublicationHandler.validate_payload(
         {
             "runs": list(runs),

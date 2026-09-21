@@ -12,6 +12,7 @@ from typing import Any
 from gradlab.clock import Clock, SystemClock
 from gradlab.json_utils import canonical_json_sha256, canonical_json_text
 from gradlab.metric_names import (
+    MONITORING_SCALAR_METRICS,
     METRICS_SCHEMA_VERSION,
     require_current_metrics_schema,
     validate_metric_payload,
@@ -294,7 +295,7 @@ class MetricStore(SqliteStore):
                           media_spool_bytes: int = 512 * 1024**2, scratch_headroom_bytes: int = 1024**3) -> str:
         metrics = dict(result["metrics"])
         validate_metric_payload(metrics)
-        if not metrics or any(not name.startswith("eval/monitor/") for name in metrics):
+        if not metrics or not set(metrics).issubset(MONITORING_SCALAR_METRICS):
             raise ValueError("monitoring metrics must be isolated from Acceptance")
         identity = "monitoring:" + str(result["evaluation_id"])
         return self.enqueue_event(

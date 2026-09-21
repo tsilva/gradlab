@@ -298,7 +298,7 @@ def collect_campaign(campaign, runs, authority):
             episodes_completed=len(result["episodes"]),
             verified_terminal_receipt=True,
             checkpoint_sha256=result["episodes"][0]["checkpoint_sha256"],
-            normalized_progress=result["metrics"]["eval/monitor/progress/mean"],
+            normalized_progress=result["metrics"]["eval/progress/bricks_destroyed_normalized/mean"],
         )
         measurements["samples"].append(sample)
     by_role = {s["role"]: s for s in measurements["samples"]}

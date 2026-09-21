@@ -8,6 +8,7 @@ from typing import Any
 
 from gradlab.config_loader import load_mapping_document
 from gradlab.metric_names import (
+    MONITORING_SCALAR_METRICS,
     METRIC_DEFINITIONS,
     TRAIN_GLOBAL_STEP,
     metric_definition,
@@ -24,7 +25,7 @@ DEFAULT_WORKSPACE_MANIFEST = Path("experiments/goals/_workspaces.yaml")
 _SAFE_ID = re.compile(r"^[a-z][a-z0-9_-]*$")
 _RUN_SCOPES = frozenset({"all", "current_metrics_schema"})
 _PANEL_KINDS = frozenset(
-    {"line", "occupancy", "occupancy_recent", "occupancy_cumulative", "curriculum"}
+    {"line", "media", "occupancy", "occupancy_recent", "occupancy_cumulative", "curriculum"}
 )
 _WORKSPACE_GRID_WIDTH = 24
 
@@ -218,6 +219,8 @@ def _panel_spec(panel_id: str, value: Any, *, label: str) -> WorkspacePanelSpec:
     )
     if not y and not metric_templates:
         raise ValueError(f"{label} must declare y or metric_templates")
+    if kind == "media" and (metric_templates or any(metric_definition(name).unit != "video" for name in y)):
+        raise ValueError(f"{label} media panels require explicit video metrics")
     if x == "eval/step" and any(metric_definition(name).axis != x for name in (*y, *metric_templates)):
         raise ValueError(f"{label} evaluation panels require checkpoint-axis metrics")
     if len(set((*y, *metric_templates))) != len((*y, *metric_templates)):
@@ -568,6 +571,13 @@ def _resolve_project_metrics(
         for recipe in sorted((path.parent / "recipes").glob("*.yaml")):
             config = compose_train_document(path, recipe)["train_config"]
             available.update(resolve_metric_inventory(config).names)
+            # Monitoring can be enabled at launch even when recipes default it off.
+            if (
+                config.get("game") == "Breakout-Atari2600-v0"
+                and config.get("env_provider") == "env-breakoutatari2600-turbo-native"
+                and config["training_backend"]["id"] in {"gradlab.ppo", "sb3.ppo", "sb3.a2c"}
+            ):
+                available.update(MONITORING_SCALAR_METRICS | {"eval/monitor/video"})
             # Keep the entry points available for runs enabled through launch-time overrides.
             from gradlab.occupancy import TRACKING_COMBINATIONS
 

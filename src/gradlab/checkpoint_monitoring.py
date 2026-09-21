@@ -496,15 +496,15 @@ def monitoring_aggregates(episodes, manifest):
         ordered, key=lambda r: (abs(r["normalized_brick_progress"] - median), r["ordinal"])
     )
     metrics = {
-        "success/rate": rate,
-        "success/ci95/lower": max(0.0, center - radius),
-        "success/ci95/upper": min(1.0, center + radius),
-        "progress/mean": statistics.mean(progress),
-        "progress/median": median,
-        "score/mean": statistics.mean(r["native_score"] for r in ordered),
-        "return/mean": statistics.mean(r["shaped_return"] for r in ordered),
-        "episode_steps/mean": statistics.mean(r["steps"] for r in ordered),
-        "episodes/count": n,
+        "eval/success/mean": rate,
+        "eval/monitor/success/ci95/lower": max(0.0, center - radius),
+        "eval/monitor/success/ci95/upper": min(1.0, center + radius),
+        "eval/progress/bricks_destroyed_normalized/mean": statistics.mean(progress),
+        "eval/monitor/progress/median": median,
+        "eval/progress/score/mean": statistics.mean(r["native_score"] for r in ordered),
+        "eval/return/mean": statistics.mean(r["shaped_return"] for r in ordered),
+        "eval/episode_steps/mean": statistics.mean(r["steps"] for r in ordered),
+        "eval/episodes/count": n,
     }
     selection = dict(
         rule="nearest-median-normalized-bricks-then-ordinal-v1",
@@ -514,7 +514,7 @@ def monitoring_aggregates(episodes, manifest):
         episode_id=selected["episode_id"],
         ordinal=selected["ordinal"],
     )
-    return {f"eval/monitor/{k}": v for k, v in metrics.items()}, selection, selected
+    return metrics, selection, selected
 
 
 def finalize_monitoring(

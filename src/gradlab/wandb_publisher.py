@@ -11,6 +11,7 @@ from typing import Any
 from gradlab.env_metadata import env_config_metadata, training_metadata
 from gradlab.evaluation_projection import validate_evaluation_metric_payload
 from gradlab.metric_names import (
+    MONITORING_SCALAR_METRICS,
     EVAL_CHECKPOINT_STEP,
     EVAL_FULL_START_TABLE,
     EVAL_START_TABLE_COLUMNS,
@@ -306,7 +307,7 @@ def _publish_frame(
         if config.uri != payload["bucket_uri"]:
             raise ValueError("monitoring media bucket differs from configured canonical storage")
         metrics = dict(payload["metrics"])
-        if any(not name.startswith("eval/monitor/") for name in metrics):
+        if not set(metrics).issubset(MONITORING_SCALAR_METRICS):
             raise ValueError("monitoring cannot project Acceptance metrics")
         metrics.update({EVAL_CHECKPOINT_STEP: step, ORCHESTRATION_EVENT_SEQUENCE: event_seq})
         media_root = Path(run.dir)

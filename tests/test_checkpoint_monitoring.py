@@ -96,8 +96,11 @@ def test_complete_manifest_metrics_and_video_reuse_committed_frames(tmp_path):
     result = finalize_monitoring(
         episodes, planned, bucket=bucket, root=tmp_path / "video", prefix="monitor/test", fps=15
     )
-    assert result["metrics"]["eval/monitor/episodes/count"] == 2
-    assert result["metrics"]["eval/monitor/success/rate"] == 0
+    from gradlab.metric_names import MONITORING_SCALAR_METRICS
+
+    assert set(result["metrics"]) == MONITORING_SCALAR_METRICS
+    assert result["metrics"]["eval/episodes/count"] == 2
+    assert result["metrics"]["eval/success/mean"] == 0
     assert result["metrics"]["eval/monitor/success/ci95/upper"] == pytest.approx(0.65761977)
     assert result["selection"]["episode_id"] == planned[0]["episode_id"]
     assert result["metrics"]["eval/monitor/progress/median"] == 0
@@ -253,7 +256,7 @@ def test_supervisor_drains_monitoring_only_after_metrics_and_media_delivery(tmp_
     events = [e for e in prepared.runtime.wandb_events if e["kind"] == "monitoring"]
     assert len(events) == 1 and events[0]["step"] == 100
     assert events[0]["payload"]["video"]["bytes"] > 0
-    assert events[0]["payload"]["metrics"]["eval/monitor/episodes/count"] == 2
+    assert events[0]["payload"]["metrics"]["eval/episodes/count"] == 2
     assert "eval/pass" not in events[0]["payload"]["metrics"]
     assert supervisor.monitoring.receipt["workers_quiescent"]
     assert supervisor.monitoring.receipt["complete"]
@@ -504,7 +507,7 @@ def test_worker_loads_real_immutable_policy_bundle(backend_id, workers, tmp_path
                 break
             time.sleep(0.1)
         assert result.status == "succeeded", result.error
-        assert result.provider_result["metrics"]["eval/monitor/episodes/count"] == 6
+        assert result.provider_result["metrics"]["eval/episodes/count"] == 6
         assert result.provider_result["episodes"][0]["steps"] > 0
         assert result.provider_result["measurements"]["phase_seconds"]["inference"] > 0
         assert backend.quiescent()
@@ -543,6 +546,8 @@ def test_real_wandb_outbox_stages_video_with_checkpoint_axis(tmp_path):
     bucket = R2Bucket(BucketConfig(uri=f"file://{tmp_path}/r2"))
     movie = tmp_path / "video.mp4"
     write_video([np.zeros((210, 160, 3), dtype=np.uint8)] * 3, movie, fps=15, scale=1, threads=1)
+    from gradlab.metric_names import MONITORING_SCALAR_METRICS
+
     reference = verified_put(bucket, "monitoring/test/video.mp4", movie.read_bytes())
     store = MetricStore(tmp_path / "metrics.sqlite")
     store.init()
@@ -550,7 +555,8 @@ def test_real_wandb_outbox_stages_video_with_checkpoint_axis(tmp_path):
     result = dict(
         evaluation_id="eval-video",
         checkpoint_step=100,
-        metrics={"eval/monitor/episodes/count": 400},
+        metrics={name: (400 if name == "eval/episodes/count" else 0.5)
+                 for name in MONITORING_SCALAR_METRICS},
         video=reference,
     )
     store.append_monitoring(result, bucket_uri=bucket.config.uri)
@@ -576,6 +582,7 @@ def test_real_wandb_outbox_stages_video_with_checkpoint_axis(tmp_path):
     rows = [r for r in history if "eval/monitor/video/_type" in r]
     assert len(rows) == 1, history
     assert json.loads(rows[0]["eval/monitor/video/_type"]) == "video-file"
+    assert MONITORING_SCALAR_METRICS.issubset(rows[0])
     assert rows[0]["eval/step"] == "100"
     assert "eval/pass" not in rows[0]
     assert list(tmp_path.glob("wandb/*/files/media/videos/eval/monitor/*.mp4"))
@@ -735,3 +742,16 @@ def test_monitoring_deadline_does_not_extend_on_new_attempt(tmp_path):
         supervisor.manifest, created_at=later.isoformat(), attempt_id="attempt-" + "b" * 16
     )
     assert MonitoringQueue(supervisor, object()).deadline == original
+
+@pytest.mark.parametrize("metric", ["eval/pass", "eval/return/max", "leader/return/mean"])
+def test_monitoring_rejects_metrics_outside_observational_allowlist(tmp_path, metric):
+    from gradlab.metric_store import MetricStore
+
+    store = MetricStore(tmp_path / "metrics.sqlite")
+    store.init()
+    with pytest.raises(ValueError):
+        store.append_monitoring(
+            {"metrics": {metric: 1}, "evaluation_id": "invalid",
+             "checkpoint_step": 100, "video": {}},
+            bucket_uri=f"file://{tmp_path}/r2",
+        )

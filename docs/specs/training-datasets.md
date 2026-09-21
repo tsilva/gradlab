@@ -23,7 +23,7 @@ unchanged. No silent legacy execution fallback is permitted.
 - Use checkpoint/evaluation provenance rather than invented live-trainer counters. Complete episodes may span immutable byte-bounded chunks with ordered hashes, contiguous global transition indices and verifiable frame joins; old 8,192-transition and one-chunk lifetime limits do not apply.
 - Diagnostic interrupted prefixes remain incomplete and cannot count toward the fixed manifest or final metrics.
 - Emit final metrics only after every planned episode is complete and verified: success rate and two-sided 95% Wilson interval, mean/median normalized brick progress, mean native score, mean shaped return, mean episode length and completed count.
-- Register monitoring metrics/media under eval/monitor, attribute them to the Checkpoint's eval/step, and keep supervisor delivery order on ops/sequence. Monitoring must not emit eval/pass or influence leader authority.
+- Name monitoring metrics with training counterparts identically except for replacing train/ with eval/; retain eval/monitor names for metrics/media without training counterparts, attribute them to the Checkpoint's eval/step, and keep supervisor delivery order on ops/sequence. Monitoring must not emit eval/pass or influence leader authority.
 - Select the complete episode nearest the full-set median normalized brick progress, breaking ties by manifest ordinal; record the rule, median, selected value and identity.
 - Generate one full-episode video from the selected episode's original committed RGB frames at contracted cadence, without environment replay; store canonical bytes/hashes in R2 and deliver actual playable video plus full-set metrics through the sole W&B supervisor.
 
@@ -48,7 +48,8 @@ unchanged. No silent legacy execution fallback is permitted.
 
 ## Explicit Publication and verification
 
-- Use finalized verified Run inventories with optional stage/performance predicates, filtering lightweight indexes before images and preserving complete multi-chunk episodes and grouping identities. Leave split assignment to consumers.
+- Use finalized verified Run inventories by default; explicit completed-snapshot publication may freeze only completed supervisor-verified evaluations from an active Run, excluding unfinished evaluations and without changing training. Use optional stage/performance predicates, filtering lightweight indexes before images and preserving complete multi-chunk episodes and grouping identities. Leave split assignment to consumers.
+- Publish snapshots in a few bounded commits using compact immutable shards, keeping complete-episode visibility atomic; coordinate publication budgets and cooldowns across jobs to avoid HF throttling, and preserve already published contributions.
 - Use the existing durable local Publication queue and Hub adapter with bounded temporary space, immutable additive contributions, expected-parent protection, idempotent retries/overlaps/lost acknowledgements and conflict/schema rejection. Keep R2 sources; training requires no HF target/credentials and never publishes automatically.
 - Test through the real supervisor certification harness, real Policy/episode executor and durable Publication entry point with Hub adapter, using real temporary persistence and observable artifacts/metrics/receipts.
 - Cover schedule-independent randomness, all supported trainers, action/RGB fidelity, episodes longer than 8,192 transitions, missing evidence, resource pressure, one retry, acknowledgement loss, median ties/even counts, reconstructed video after local reclamation, late checkpoint-step delivery, cancellation and finite drain.
