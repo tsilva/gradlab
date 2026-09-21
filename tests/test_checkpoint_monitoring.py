@@ -882,3 +882,38 @@ def test_breakout_recipe_freezes_disabled_100_50_and_30gb():
     assert calibration_binding(train, settings) != calibration_binding(train, {**settings, "record_episodes": 49})
     assert resolve_monitoring(dict(episodes=100), {})["record_episodes"] is None
     assert all(e.get("record", True) for e in episode_manifest(100))
+
+
+def test_uncalibrated_override_preserves_contract_and_resource_gates():
+    from gradlab.recipe_documents import compose_resolved_train_documents
+    from gradlab.monitor_config import resolve_monitoring, validate_monitoring_allocation
+
+    goal = Path("experiments/goals/Breakout-Atari2600-v0/FirstWall")
+    overrides = [
+        "train.environment.preprocessing.frame_skip=1",
+        "train.checkpoint_monitoring.enabled=true",
+        "train.checkpoint_monitoring.allow_uncalibrated=true",
+    ]
+    documents = compose_resolved_train_documents(
+        goal / "_goal.yaml", goal / "recipes/ppo.yaml", recipe_overrides=overrides
+    )
+    train = documents.effective["train_config"]
+    settings = resolve_monitoring(train["checkpoint_monitoring"], train)
+    assert settings["allow_uncalibrated"] is True
+    assert settings["calibration"] is None
+    assert train["frame_skip"] == 1
+    assert train["checkpoint_eval_backend"] == "none"
+    allocation = dict(source_sha="a" * 40, image_digest="image", resources={"cpu": 1}, duration=3600)
+    validate_monitoring_allocation(settings, **allocation)
+    with pytest.raises(ValueError, match="full task CPU"):
+        validate_monitoring_allocation(settings, **(allocation | {"resources": {"cpu": 12}}))
+    with pytest.raises(ValueError, match="deadline"):
+        validate_monitoring_allocation(settings, **(allocation | {"duration": 1}))
+    with pytest.raises(ValueError, match="budgets"):
+        resolve_monitoring(settings | {"memory_bytes": 1}, train)
+    with pytest.raises(ValueError, match="verified native"):
+        resolve_monitoring(settings, train | {"env_provider": "unsupported"})
+    with pytest.raises(ValueError, match="must be boolean"):
+        resolve_monitoring(settings | {"allow_uncalibrated": "true"}, train)
+    with pytest.raises(ValueError, match="calibration"):
+        resolve_monitoring(settings | {"allow_uncalibrated": False}, train)
