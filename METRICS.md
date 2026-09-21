@@ -1,4 +1,4 @@
-# Metrics schema v23
+# Metrics schema v24
 
 This file is the source of truth for gradlab telemetry. The Python registry loads the table below
 and requires every emitted metric to match an exact registry entry or a bounded template.
@@ -60,7 +60,7 @@ authority for that decision.
   `checkpoint_eval_contract`; the catalog must validate that expected absence against the immutable
   recipe and W&B run dimensions without suppressing otherwise compatible training-proxy history.
   Full-evaluation columns remain unavailable until verified checkpoint-evaluation evidence exists.
-- W&B config contains run-defining dimensions: `metrics_schema_version: 23`,
+- W&B config contains run-defining dimensions: `metrics_schema_version: 24`,
   `metrics_episode_window_size: 100`, `training_backend_id`,
   `training_backend_config_hash`, `algorithm_id`, goal,
   environment, starts, seed, frame skip, environment count, hyperparameters, eval protocol, and
@@ -148,7 +148,7 @@ Asynchronous evaluations may arrive after later training rows without changing t
 X-axis. Each producer writes only its applicable scientific axis; durable delivery order uses
 `ops/sequence`.
 
-Current runs declare schema v23, and the supervisor validates and emits only v22 names. GradLab
+Current runs declare schema v24, and the supervisor validates and emits only v24 names. GradLab
 does not read, project, or preserve noncurrent W&B or R2 schemas.
 
 Recent training return, progress, episode-length, and success statistics (including compact
@@ -740,14 +740,14 @@ and target-progress fields are not registry metrics and cannot enter the publish
 | `train/rollout_overhead/seconds` | Rollout overhead | Rollout wall time outside native-provider step calls. | seconds | rollout/window | history | last | train/step | training | - | - |
 | `train/between_rollouts/seconds` | Between-rollout time | Wall time after rollout collection and before the next rollout, including updates, callbacks, and logging. | seconds | rollout/window | history | last | train/step | training | - | - |
 | `train/save/seconds` | Model save time | Local model save duration. | seconds | artifact | history | last | train/step | training | - | - |
-| `eval/return/mean` | Full-eval return mean | Mean shaped return across completed full-evaluation episodes. | return | evaluation | history | last | eval/step | evaluation | leader/return/mean | train/return/mean |
+| `eval/return/mean` | Full-eval return mean | Mean shaped return across completed evaluation episodes; monitoring requires its complete manifest. | return | evaluation | history | last | eval/step | evaluation | leader/return/mean | train/return/mean |
 | `eval/return/max` | Full-eval return max | Maximum shaped return across completed full-evaluation episodes. | return | evaluation | history | last | eval/step | evaluation | leader/return/max | train/return/max |
 | `eval/success/min` | Full-eval start success rate min | Minimum success rate across represented evaluation starts. | fraction | evaluation | history | last | eval/step | evaluation | leader/success/min | train/success/min |
-| `eval/success/mean` | Full-eval start success rate mean | Mean success rate across represented evaluation starts. | fraction | evaluation | history | last | eval/step | evaluation | - | train/success/mean |
-| `eval/progress/{progress}/mean` | Full-eval {progress} mean | Mean goal-declared progress value across completed full-evaluation episodes. | value | evaluation | history | last | eval/step | evaluation | leader/progress/{progress}/mean | train/progress/{progress}/mean |
+| `eval/success/mean` | Full-eval start success rate mean | Mean success rate across represented evaluation starts; monitoring reports the success fraction of its complete episode manifest. | fraction | evaluation | history | last | eval/step | evaluation | - | train/success/mean |
+| `eval/progress/{progress}/mean` | Full-eval {progress} mean | Mean goal-declared progress across completed evaluation episodes, including complete monitoring manifests. | value | evaluation | history | last | eval/step | evaluation | leader/progress/{progress}/mean | train/progress/{progress}/mean |
 | `eval/progress/{progress}/max` | Full-eval {progress} max | Maximum goal-declared progress value across completed full-evaluation episodes. | value | evaluation | history | last | eval/step | evaluation | leader/progress/{progress}/max | - |
 | `eval/pass` | Acceptance pass | Per-checkpoint acceptance result; its W&B history summary uses max and is not the terminal run verdict. | boolean | acceptance evaluation | history | max | eval/step | acceptance | - | - |
-| `eval/episodes/count` | Acceptance episodes completed | Valid planned episode rows completed before acceptance or fail-fast rejection. | episodes | acceptance evaluation | history | last | eval/step | acceptance | - | - |
+| `eval/episodes/count` | Evaluation episodes completed | Valid planned episodes completed; Acceptance may stop on fail-fast rejection, while monitoring requires the full manifest. | episodes | evaluation | history | last | eval/step | evaluation | - | train/episodes/count |
 | `eval/starts/table` | Full-eval evidence by start | Structured full-evaluation evidence by start, including success, return, and failure-reason aggregates. | table | evaluation | history | none | eval/step | evaluation_table | - | - |
 | `leader/success/min` | Leader start success rate min | Selected-checkpoint projection of minimum success rate across starts. | fraction | selection | summary | none | - | selection | - | - |
 | `leader/return/mean` | Leader return mean | Selected-checkpoint mean shaped episode return. | return | selection | summary | none | - | selection | - | - |
@@ -786,15 +786,10 @@ and target-progress fields are not registry metrics and cannot enter the publish
 | `train/curriculum/restore/seconds` | Curriculum restore time | Provider restore wall time for reset calls containing archive lanes. | seconds | rollout | history | last | train/step | training | - | - |
 | `train/occupancy/table` | Collected cell occupancy | Exact pre-action cell counts, entries and origin denominators in a bounded page of up to eight collection windows; each row retains its own bounds, sequence and denominator. Includes declared zero cells and unavailable fractions for empty origins. Use exact indexed history or latest-page queries, never sampled table history. | table | transition window | history | last | train/step | training | - | - |
 | `train/curriculum/distribution` | Curriculum start distribution | Compatible retained representatives, cold-cell status and intended per-cell start probabilities at rollout admission; recent combined counts are coverage feedback, distinct from value-error feedback. | table | rollout start | history | last | train/step | training | - | - |
-| `eval/monitor/success/rate` | Monitoring success rate | Success fraction over the complete frozen episode manifest. | fraction | complete monitoring evaluation | history | last | eval/step | monitoring | - | - |
 | `eval/monitor/success/ci95/lower` | Monitoring success lower 95% | Lower endpoint of the two-sided 95% Wilson interval. | fraction | complete monitoring evaluation | history | last | eval/step | monitoring | - | - |
 | `eval/monitor/success/ci95/upper` | Monitoring success upper 95% | Upper endpoint of the two-sided 95% Wilson interval. | fraction | complete monitoring evaluation | history | last | eval/step | monitoring | - | - |
-| `eval/monitor/progress/mean` | Monitoring normalized brick mean | Mean native brick progress with denominator 216; FirstWall success is 0.5. | fraction | complete monitoring evaluation | history | last | eval/step | monitoring | - | - |
 | `eval/monitor/progress/median` | Monitoring normalized brick median | Median native brick progress with denominator 216. | fraction | complete monitoring evaluation | history | last | eval/step | monitoring | - | - |
-| `eval/monitor/score/mean` | Monitoring native score | Mean native score, distinct from shaped return. | scalar | complete monitoring evaluation | history | last | eval/step | monitoring | - | - |
-| `eval/monitor/return/mean` | Monitoring shaped return | Mean shaped return under the recorded Goal reward contract. | return | complete monitoring evaluation | history | last | eval/step | monitoring | - | - |
-| `eval/monitor/episode_steps/mean` | Monitoring episode length | Mean complete episode length at the contracted action cadence. | steps | complete monitoring evaluation | history | last | eval/step | monitoring | - | - |
-| `eval/monitor/episodes/count` | Monitoring episode count | Verified complete episode count equal to the planned manifest count. | episodes | complete monitoring evaluation | history | last | eval/step | monitoring | - | - |
+| `eval/episode_steps/mean` | Monitoring episode length | Mean complete episode length at the contracted action cadence. | steps | complete monitoring evaluation | history | last | eval/step | monitoring | - | train/episode_steps/mean |
 | `eval/monitor/video` | Monitoring representative episode | Full original-frame video nearest median normalized brick progress; ties use manifest ordinal. | video | complete monitoring evaluation | history | last | eval/step | monitoring | - | - |
 <!-- METRIC_REGISTRY_END -->
 
@@ -858,8 +853,29 @@ accounting, not causal action credit. Episode return remains undiscounted reward
 
 Monitoring is observational and has no Acceptance, Promotion or leader authority.
 Final aggregates require every planned episode; operational failures and prefixes
-never become failed scientific episodes. The eval/monitor namespace is separate
-from Acceptance, with eval/step pinned to the immutable Checkpoint even when its
+never become failed scientific episodes. Monitoring events remain distinct from
+Acceptance events even where metric names are shared, with eval/step pinned to the immutable Checkpoint even when its
 result arrives after newer training events. ops/sequence remains delivery order.
 The supervisor sends actual representative video media through its durable outbox;
 R2 retains canonical video and complete trajectories. Transport is at least once.
+The Breakout saved workspace includes monitoring charts on `eval/step` and a
+media panel for `eval/monitor/video`, including when monitoring is enabled only
+through launch-time overrides. Panels do not imply that an evaluation has completed.
+W&B's media browser defaults its video selector to `Step`, which uses
+the history `_step` (GradLab's `ops/sequence` delivery event), not `eval/step`,
+training timesteps, or frames within the video. Match a video's history row to
+its `eval/step` to identify the evaluated Checkpoint; scalar monitoring charts
+use `eval/step` directly. In the media panel settings, Display → slider key can
+be set to `eval/step` to select videos by the same Checkpoint steps as the charts.
+The supervisor already logs this key in the same row as the video; changing the
+panel selector does not require changing delivery order or rerunning evaluation.
+See [W&B media panel configuration](https://docs.wandb.ai/models/app/features/panels/media).
+
+Monitoring uses the matching training metric suffix under `eval/`: `return/mean`,
+`episode_steps/mean`, `episodes/count`, `success/mean`,
+`progress/bricks_destroyed_normalized/mean`, and `progress/score/mean`.
+Normalized brick progress divides by 216 (FirstWall success is 0.5); score is
+native game score, distinct from shaped return. The median, Wilson bounds and
+video retain their `eval/monitor/` names because they have no training counterpart.
+Shared names do not grant Acceptance or leader authority: monitoring is delivered
+only as a dedicated monitoring event with an explicit scalar allowlist.

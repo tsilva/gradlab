@@ -9,6 +9,7 @@ class Hub:
         self.head = "0"
         self.lose_reply = False
         self.conflict_once = False
+        self.uploaded = {}
 
     def list_repo_tree(self, *args, **kwargs):
         return [SimpleNamespace(path=key) for key in self.files]
@@ -20,6 +21,12 @@ class Hub:
         assert revision == self.head
         return self.files.get(path)
 
+    def preupload_lfs_files(self, *args, **kwargs):
+        for op in kwargs['additions']:
+            if op.path_in_repo.endswith(('.zip', '.parquet', '.gz')):
+                self.uploaded[op.path_in_repo] = op.path_or_fileobj
+                op.path_or_fileobj = b''
+
     def create_commit(self, **kwargs):
         if self.conflict_once:
             self.conflict_once = False
@@ -29,7 +36,7 @@ class Hub:
         for op in kwargs["operations"]:
             from pathlib import Path
 
-            value = op.path_or_fileobj
+            value = self.uploaded.get(op.path_in_repo, op.path_or_fileobj)
             self.files[op.path_in_repo] = (
                 value if isinstance(value, bytes) else Path(value).read_bytes()
             )
@@ -42,6 +49,7 @@ class Hub:
 
 def test_durable_queue_filters_before_transfer_and_reconciles_hub_commit(tmp_path, monkeypatch):
     import json
+    import gzip
     from pathlib import Path
     from gradlab.checkpoint_monitoring import monitor_episode, episode_manifest, finalize_monitoring
     from gradlab.env import resolve_env_config
@@ -111,7 +119,6 @@ def test_durable_queue_filters_before_transfer_and_reconciles_hub_commit(tmp_pat
     )
     api = Hub()
     api.create_repo = lambda **kwargs: None
-    api.conflict_once = True
     api.lose_reply = True
 
     def download(repo, name, *, revision, cache_dir, **kwargs):
@@ -154,9 +161,70 @@ def test_durable_queue_filters_before_transfer_and_reconciles_hub_commit(tmp_pat
     assert run_flusher(queue, idle_seconds=0) == 0
     assert queue.job(selected["job"]["job_id"])["state"] == "succeeded"
     indexes = [
-        json.loads(data)
+        json.loads(gzip.decompress(data))
         for key, data in api.files.items()
-        if key.startswith("episodes/") and key.endswith(".json")
+        if key.startswith("indexes/") and key.endswith(".jsonl.gz")
     ]
     assert len(indexes) == 1 and indexes[0]["run_id"] == manifest.run_id
     assert bucket.get_bytes(episode["chunks"][0]["key"])
+
+
+def test_active_snapshot_freezes_only_complete_verified_evaluations():
+    from copy import deepcopy
+    import pytest
+    from gradlab.trajectory_publication import completed_snapshot_inventories
+    from gradlab.json_utils import canonical_json_sha256
+
+    run = "gradlab-" + "a" * 32
+    identity = "b" * 64
+    prefix = f"monitoring/{run}/{identity}"
+    base = f"runs/{run}/monitoring/{identity}/"
+    result = dict(evaluation_id=identity, checkpoint_id="checkpoint", checkpoint_step=10,
+                  contract_sha256="c" * 64,
+                  episodes=[dict(episode_id="episode", complete=True)])
+    intent = dict(run_id=run, attempt_id="attempt-" + "d" * 16,
+                  evaluation_id=identity, prefix=prefix,
+                  checkpoint=dict(checkpoint_id="checkpoint", step=10),
+                  contract_sha256="c" * 64, manifest=[dict(episode_id="episode")])
+
+    class Bucket:
+        def __init__(self, rows):
+            self.rows = rows
+        def iter_keys(self, prefix):
+            return [key for key in self.rows if key.startswith(prefix)]
+        def get_json(self, key):
+            return deepcopy(self.rows[key])
+
+    state = dict(status="complete", result_sha256=canonical_json_sha256(result))
+    control = Bucket({base + "state.json": state, base + "intent.json": intent,
+                      f"runs/{run}/monitoring/pending/state.json": dict(status="running")})
+    models = Bucket({prefix + "/result.json": result})
+    selected = completed_snapshot_inventories(control, models, [run])
+    assert len(selected) == 1
+    assert selected[0]["sha256"] == state["result_sha256"]
+    result["checkpoint_step"] = 20
+    with pytest.raises(ValueError, match="checksum"):
+        completed_snapshot_inventories(control, models, [run])
+    assert selected[0]["sha256"] == state["result_sha256"]
+    state["status"] = "running"
+    with pytest.raises(ValueError, match="no completed"):
+        completed_snapshot_inventories(control, models, [run])
+
+
+def test_publication_defers_hourly_commit_rate_limit(monkeypatch):
+    import httpx
+    from huggingface_hub.errors import HfHubHTTPError
+    from gradlab.trajectory_publication import DatasetPublicationHandler
+
+    error = HfHubHTTPError(
+        "rate limit for repository commits (128 per hour)",
+        response=httpx.Response(429, request=httpx.Request("POST", "https://huggingface.co")),
+    )
+    handler = DatasetPublicationHandler()
+    def fail(job):
+        raise error
+    monkeypatch.setattr(handler, "_publish", fail)
+    monkeypatch.setattr("gradlab.trajectory_publication.time.time", lambda: 100)
+    result = handler.advance({"attempts": 8})
+    assert result.state == "retry_wait"
+    assert result.available_at == 3700

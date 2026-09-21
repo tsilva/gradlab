@@ -7,7 +7,20 @@ from numbers import Real
 from pathlib import Path
 from typing import Any, Mapping
 
-METRICS_SCHEMA_VERSION = 23
+METRICS_SCHEMA_VERSION = 24
+# Monitoring events share scientific names with evaluation but never carry Acceptance authority.
+MONITORING_SCALAR_METRICS = frozenset({
+    "eval/progress/bricks_destroyed_normalized/mean",
+    "eval/progress/score/mean",
+    "eval/return/mean",
+    "eval/episode_steps/mean",
+    "eval/episodes/count",
+    "eval/success/mean",
+    "eval/monitor/success/ci95/lower",
+    "eval/monitor/success/ci95/upper",
+    "eval/monitor/progress/median",
+})
+
 EPISODE_METRIC_WINDOW_SIZE = 100
 METRICS_EPISODE_WINDOW_SIZE_CONFIG = "metrics_episode_window_size"
 

@@ -208,27 +208,31 @@ sections:
     - id: monitor_success
       kind: line
       x: eval/step
-      y: [eval/monitor/success/rate, eval/monitor/success/ci95/lower, eval/monitor/success/ci95/upper]
+      y: [eval/success/mean, eval/monitor/success/ci95/lower, eval/monitor/success/ci95/upper]
     - id: monitor_progress
       kind: line
       x: eval/step
-      y: [eval/monitor/progress/mean, eval/monitor/progress/median]
+      y: [eval/progress/bricks_destroyed_normalized/mean, eval/monitor/progress/median]
     - id: monitor_score
       kind: line
       x: eval/step
-      y: [eval/monitor/score/mean]
+      y: [eval/progress/score/mean]
     - id: monitor_return
       kind: line
       x: eval/step
-      y: [eval/monitor/return/mean]
+      y: [eval/return/mean]
     - id: monitor_length
       kind: line
       x: eval/step
-      y: [eval/monitor/episode_steps/mean]
+      y: [eval/episode_steps/mean]
     - id: monitor_count
       kind: line
       x: eval/step
-      y: [eval/monitor/episodes/count]
+      y: [eval/episodes/count]
+    - id: monitor_video
+      kind: media
+      x: eval/step
+      y: [eval/monitor/video]
 
 profiles:
   training:

@@ -68,7 +68,9 @@ by local deletion.
 
 Complete-set results include success rate and a two-sided 95% Wilson interval,
 mean/median normalized brick progress (denominator 216), native score, shaped
-return, episode length and count. `eval/monitor/*` uses `eval/step`, the immutable
+return, episode length and count. Metrics with training counterparts use the same
+suffix under `eval/`; median, Wilson bounds and video retain `eval/monitor/`.
+All monitoring metrics use `eval/step`, the immutable
 Checkpoint step, while W&B delivery uses monotone `ops/sequence`. The full episode
 nearest median normalized progress, with manifest-order tie breaking, supplies
 one original-frame video. The supervisor alone publishes its canonical R2 video
@@ -84,18 +86,39 @@ gradlab dataset publish-runs \
   --stage-min 0.25 --score-min 20
 ```
 
+Add `--completed-snapshot` to publish a fixed snapshot of completed, verified
+evaluations before a Run finishes. Unfinished evaluations and later completions
+are excluded; training continues unchanged. Repeat the command to append a later
+snapshot to a compatible repository.
+
 Repeat `--run` to select multiple finalized Runs. Optional lower and upper bounds
 cover `stage`, `return`, `score`, and `bricks`. Stage is immutable Checkpoint step
 divided by planned training steps. Selection reads episode metadata before frame
 transfer. The command admits an explicit durable local publication job; use
 `gradlab jobs` to inspect it. Training never starts HF publication.
 
-HF receives bounded immutable PNG ZIP assets and Parquet transition tables. Each
-complete episode index commits only after all its chunks. Run, training seed,
-Checkpoint, evaluation and episode identities remain queryable. Repeated and
-overlapping selections reuse identities, and expected-parent commits reconcile
-concurrent appenders. An incompatible or historic dataset is rejected. R2 sources
-remain canonical and are retained after publication.
+HF receives immutable frame ZIP shards targeting 512 MiB of source chunks and
+consolidated Parquet transition/episode tables. Original PNG bytes, initial and
+terminal frames, episode identities, and provenance are preserved. An episode
+may cross shards; its index is published only after every referenced asset is
+uploaded. Existing per-episode contributions remain intact; compact contributions
+use `indexes/*.jsonl.gz` and `episodes/snapshot-*.parquet` alongside them.
+
+The publisher preuploads binary content with two upload threads, then commits at
+most 50 file operations. Episode indexes and the contribution receipt become
+visible together. Small snapshots normally need one commit, not two per episode.
+Large snapshots stage asset-only commits before the final indexes. A persistent
+selection journal and pinned-revision metadata cache support retries; immutable
+R2 chunks remain the recovery source, and HF deduplicates reuploaded bytes.
+
+Dataset publication jobs share a persistent budget of 10 commit attempts per
+rolling hour and 60 SDK operations per five minutes, with one writer per repository.
+SDK operations can contain multiple underlying HTTP requests; this conservative
+budget leaves headroom but is not a guarantee against remote throttling. A 429
+pauses the shared publisher until the longest applicable reset plus a margin;
+repository-commit throttling waits at least an hour. No immediate commit retry
+is issued after throttling. Ambiguous responses are reconciled before another
+attempt. Jobs defer durably rather than exhaust retries while quota is unavailable.
 
 Use whole-Run or training-seed-group holdouts to avoid leakage across correlated
 Checkpoints; GradLab assigns no downstream split. The isolated trajectory

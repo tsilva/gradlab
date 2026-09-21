@@ -107,6 +107,7 @@ def _publish_runs(args: argparse.Namespace) -> int:
 
     result = enqueue_publication(
         runs=args.run, repo=args.repo, repo_root=Path.cwd(),
+        completed_snapshot=args.completed_snapshot,
         filters={key: value for key, value in vars(args).items()
                  if key in {"include_prefixes", "stage_min", "stage_max", "return_min",
                             "return_max", "score_min", "score_max", "bricks_min", "bricks_max"}
@@ -129,6 +130,8 @@ def build_parser() -> argparse.ArgumentParser:
     publish = subparsers.add_parser("publish-runs", help="Queue additive HF publication from finalized R2 Runs.")
     publish.add_argument("--run", action="append", required=True, help="Finalized Run ID; repeat for multiple Runs.")
     publish.add_argument("--repo", required=True, help="HF dataset owner/repository.")
+    publish.add_argument("--completed-snapshot", action="store_true",
+                         help="Freeze only completed verified evaluations, including from active Runs.")
     publish.add_argument("--include-prefixes", action="store_true")
     for field in ("stage", "return", "score", "bricks"):
         for bound in ("min", "max"):
