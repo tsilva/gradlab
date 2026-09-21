@@ -12,6 +12,7 @@ from gradlab.json_utils import canonical_json_sha256
 class MonitoringConfig:
     enabled: bool = False
     episodes: int = 400
+    record_episodes: int | None = None  # None records the entire evaluation manifest.
     active_workers: int = 1
     task_cpus: int = 1
     worker_memory_bytes: int = 2 * 1024**3
@@ -80,10 +81,13 @@ def resolve_monitoring(value, train):
     if type(settings["enabled"]) is not bool:
         raise ValueError("checkpoint_monitoring.enabled must be boolean")
     for key, number in settings.items():
-        if key in {"enabled", "calibration"}:
+        if key in {"enabled", "calibration", "record_episodes"}:
             continue
         if type(number) is not int or number <= 0:
             raise ValueError(f"checkpoint_monitoring.{key} must be a positive finite integer")
+    recorded = settings["record_episodes"]
+    if recorded is not None and (type(recorded) is not int or not 0 <= recorded <= settings["episodes"]):
+        raise ValueError("checkpoint_monitoring.record_episodes must be between 0 and episodes")
     if not 1024**2 <= settings["chunk_bytes"] <= 128 * 1024**2:
         raise ValueError("monitoring chunks must be between 1 and 128 MiB")
     if settings["episodes"] > 100_000 or settings["task_cpus"] > 1024:

@@ -6,12 +6,24 @@ Checkpoint on same-host CPU workers. It does not attach recorders to the learner
 `trajectory_collection` is no longer accepted. Historical training recordings
 retain their original meaning and are not current monitoring evidence.
 
-Monitoring defaults to 400 stochastic episodes per Checkpoint. The frozen
+Monitoring defaults to 400 stochastic episodes per Checkpoint, all recorded.
+`train.checkpoint_monitoring.episodes` sets the evaluation count;
+`record_episodes` independently selects how many to record (0 through `episodes`;
+omitted or null means all). The first N manifest ordinals are recorded, independent
+of outcomes and worker scheduling. Every episode still contributes to metrics.
+Unrecorded episodes retain lightweight results without frame/action chunks. The frozen
 manifest gives each episode separate environment and policy seeds, disjoint from
 training and Acceptance. Episode identity and randomness are independent of
 worker count, order, and retries. Monitoring is observational: training-only
 Goals remain training-only, and these results do not stop learning or promote
 policies. Goal-owned Modal Acceptance remains separate.
+
+FirstWall's `ppo.yaml` keeps monitoring disabled and configures 100 evaluation
+episodes, 50 recordings, and `contribution_bytes: 30000000000` (30 GB, decimal)
+per Run. This cumulative monitoring allowance includes retained chunks, metadata
+and representative media across checkpoints and retries; it excludes policy
+checkpoint bytes and is not replenished by deleting local files. Changing either
+count or the byte allowance invalidates prior calibration.
 
 Enablement requires a supported calibration report bound to the resolved
 configuration. No checked-in recipe is enabled by this change. The calibration operation reports incomplete, infeasible, or unproven evidence explicitly.
@@ -48,7 +60,7 @@ training-seed pairs with warm-up excluded. A report is not evidence of measureme
 that were never run. The live throughput and browser-playback campaign requires
 separate operator authorization; ordinary tests do not establish the 2% target.
 
-The `train.checkpoint_monitoring` contract freezes episode count, checkpoint
+The `train.checkpoint_monitoring` contract freezes evaluation and recording counts, checkpoint
 cadence through `checkpoint_freq`, active workers, full task CPU allocation,
 per-worker and shared memory/spool limits, cumulative retained bytes, dedicated W&B media memory/spool, chunk size,
 scratch headroom, watchdog, and a finite whole-Run deadline. Unavailable resources
@@ -57,7 +69,7 @@ or a reduced episode count. Post-training finalization expands to the declared
 CPU allocation within the same budgets. Complete episodes are reused on the
 single execution retry; diagnostic tails use content-addressed chunk names; video and W&B delivery do not rerun completed episodes.
 
-Each trajectory stores full lossless 210×160 RGB initial and true terminal frames,
+Each recorded trajectory stores full lossless 210×160 RGB initial and true terminal frames,
 requested/effective/executed/native actions, conditional overrides, provider and
 shaped rewards, facts and episode boundaries. Bounded ZIP chunks preserve a
 continuous step index and a shared boundary frame; long episodes cross chunks
@@ -71,10 +83,11 @@ mean/median normalized brick progress (denominator 216), native score, shaped
 return, episode length and count. Metrics with training counterparts use the same
 suffix under `eval/`; median, Wilson bounds and video retain `eval/monitor/`.
 All monitoring metrics use `eval/step`, the immutable
-Checkpoint step, while W&B delivery uses monotone `ops/sequence`. The full episode
-nearest median normalized progress, with manifest-order tie breaking, supplies
+Checkpoint step, while W&B delivery uses monotone `ops/sequence`. The recorded episode
+nearest the full evaluation-set median normalized progress, with manifest-order tie breaking, supplies
 one original-frame video. The supervisor alone publishes its canonical R2 video
-to W&B through the durable outbox. A complete terminal receipt requires all saved
+to W&B through the durable outbox. With zero recordings, selection/video are absent
+and the supervisor publishes scalar metrics only. A complete terminal receipt requires all saved
 Checkpoints, complete results, delivery and worker quiescence.
 
 # Publish selected Runs
@@ -93,7 +106,8 @@ snapshot to a compatible repository.
 
 Repeat `--run` to select multiple finalized Runs. Optional lower and upper bounds
 cover `stage`, `return`, `score`, and `bricks`. Stage is immutable Checkpoint step
-divided by planned training steps. Selection reads episode metadata before frame
+divided by planned training steps. Unrecorded episodes are excluded from dataset
+publication. Selection reads episode metadata before frame
 transfer. The command admits an explicit durable local publication job; use
 `gradlab jobs` to inspect it. Training never starts HF publication.
 

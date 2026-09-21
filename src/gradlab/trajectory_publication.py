@@ -147,6 +147,8 @@ def _commit(api, read, repo, files, *, compatible=None):
 
 
 def selected_episode(episode, filters):
+    if not episode.get("record", True):
+        return False
     if not episode["complete"] and not filters.get("include_prefixes", False):
         return False
     values = {

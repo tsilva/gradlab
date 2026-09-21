@@ -23,7 +23,7 @@ class MonitoringQueue:
             }
         )
         self.prefix = f"runs/{supervisor.manifest.run_id}/monitoring/{self.contract_hash}"
-        self.manifest = episode_manifest(self.settings["episodes"])
+        self.manifest = episode_manifest(self.settings["episodes"], self.settings.get("record_episodes"))
         original = supervisor.authority.control.get_json(
             f"runs/{supervisor.manifest.run_id}/manifest.json"
         )

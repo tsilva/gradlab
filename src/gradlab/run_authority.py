@@ -1722,7 +1722,7 @@ class RunAuthority:
                 raise ValueError("monitoring result checksum mismatch")
             if result["checkpoint_id"] != row["checkpoint_id"] or result["evaluation_id"] != row["evaluation_id"]:
                 raise ValueError("monitoring terminal identity mismatch")
-            verify_monitoring_inventory(self.models, result, episode_manifest(settings["episodes"]),
+            verify_monitoring_inventory(self.models, result, episode_manifest(settings["episodes"], settings.get("record_episodes")),
                                         prefix=expected.removesuffix("/result.json"))
 
     def create_attempt_terminal(

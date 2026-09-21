@@ -175,7 +175,8 @@ def test_supervisor_retains_all_checkpoints_and_expands_monitoring_after_learner
     assert not supervisor.stop_reason
 
 
-def test_supervisor_drains_monitoring_only_after_metrics_and_media_delivery(tmp_path):
+@pytest.mark.parametrize("record_count", [0, 1, 2])
+def test_supervisor_drains_monitoring_only_after_metrics_and_media_delivery(tmp_path, record_count):
     from gradlab.lifecycle_certification import CertificationFixture
     from gradlab.eval_backend import EvalHandle, EvalPoll
     from gradlab.checkpoint_monitoring import finalize_monitoring
@@ -188,6 +189,7 @@ def test_supervisor_drains_monitoring_only_after_metrics_and_media_delivery(tmp_
     settings = dict(
         enabled=True,
         episodes=2,
+        record_episodes=record_count,
         active_workers=1,
         task_cpus=1,
         whole_run_seconds=3600,
@@ -255,7 +257,8 @@ def test_supervisor_drains_monitoring_only_after_metrics_and_media_delivery(tmp_
     assert complete
     events = [e for e in prepared.runtime.wandb_events if e["kind"] == "monitoring"]
     assert len(events) == 1 and events[0]["step"] == 100
-    assert events[0]["payload"]["video"]["bytes"] > 0
+    assert bool(events[0]["payload"]["video"]) == bool(record_count)
+    assert sum(bool(e["chunks"]) for e in supervisor.monitor_backend.result["episodes"]) == record_count
     assert events[0]["payload"]["metrics"]["eval/episodes/count"] == 2
     assert "eval/pass" not in events[0]["payload"]["metrics"]
     assert supervisor.monitoring.receipt["workers_quiescent"]
@@ -394,6 +397,10 @@ def test_worker_loads_real_immutable_policy_bundle(backend_id, workers, tmp_path
 
         common = value["train_config"]
         common["task"]["termination"]["max_episode_steps"] = 20
+        common["checkpoint_monitoring"].update(
+            enabled=True, episodes=6, record_episodes=3,
+            calibration={"status": "measuring", "campaign_id": "e" * 64},
+        )
         common["training_backend"] = normalize_training_backend(
             {"id": backend_id, "config": {}}, common_config=common, label="backend"
         )
@@ -413,6 +420,7 @@ def test_worker_loads_real_immutable_policy_bundle(backend_id, workers, tmp_path
         base_materialized_recipe=resolved.base,
         canonical_goal=resolved.canonical_goal,
     )
+    assert document["recipe"]["monitoring"]["manifest"] == episode_manifest(6, 3)
     train = document["recipe"]["train_config"]
     config = resolve_env_config(env_config_from_mapping(train))
     env = make_eval_vec_env(config, n_envs=1, seed=7)
@@ -472,6 +480,7 @@ def test_worker_loads_real_immutable_policy_bundle(backend_id, workers, tmp_path
     settings = {
         **asdict(MonitoringConfig()),
         "episodes": 6,
+        "record_episodes": 3,
         "task_cpus": workers,
         "watchdog_steps": 20000,
         "calibration": {"status": "measuring", "campaign_id": "e" * 64},
@@ -483,7 +492,7 @@ def test_worker_loads_real_immutable_policy_bundle(backend_id, workers, tmp_path
         recipe_sha256="a" * 64,
         evaluation_id="b" * 64,
         prefix=f"monitoring/{run_id}/" + "b" * 64,
-        manifest=episode_manifest(6),
+        manifest=episode_manifest(6, 3),
         deadline=time.time() + 90,
         attempt_id="attempt-" + "a" * 16,
         contract_sha256="c" * 64,
@@ -509,6 +518,7 @@ def test_worker_loads_real_immutable_policy_bundle(backend_id, workers, tmp_path
         assert result.status == "succeeded", result.error
         assert result.provider_result["metrics"]["eval/episodes/count"] == 6
         assert result.provider_result["episodes"][0]["steps"] > 0
+        assert sum(bool(e["chunks"]) for e in result.provider_result["episodes"]) == 3
         assert result.provider_result["measurements"]["phase_seconds"]["inference"] > 0
         assert backend.quiescent()
         if workers > 1:
@@ -534,7 +544,8 @@ def test_worker_loads_real_immutable_policy_bundle(backend_id, workers, tmp_path
         backend.cancel(handle)
 
 
-def test_real_wandb_outbox_stages_video_with_checkpoint_axis(tmp_path):
+@pytest.mark.parametrize("record_video", [False, True])
+def test_real_wandb_outbox_stages_video_with_checkpoint_axis(tmp_path, record_video):
     import wandb
     from gradlab.video import write_video
     from gradlab.checkpoint_monitoring import verified_put
@@ -557,7 +568,7 @@ def test_real_wandb_outbox_stages_video_with_checkpoint_axis(tmp_path):
         checkpoint_step=100,
         metrics={name: (400 if name == "eval/episodes/count" else 0.5)
                  for name in MONITORING_SCALAR_METRICS},
-        video=reference,
+        video=reference if record_video else None,
     )
     store.append_monitoring(result, bucket_uri=bucket.config.uri)
     store.append_monitoring(result, bucket_uri=bucket.config.uri)
@@ -579,13 +590,16 @@ def test_real_wandb_outbox_stages_video_with_checkpoint_axis(tmp_path):
         for r in _offline_wandb_records(tmp_path)
         if r.WhichOneof("record_type") == "history"
     ]
-    rows = [r for r in history if "eval/monitor/video/_type" in r]
+    rows = [r for r in history if "eval/episodes/count" in r]
     assert len(rows) == 1, history
-    assert json.loads(rows[0]["eval/monitor/video/_type"]) == "video-file"
+    if record_video:
+        assert json.loads(rows[0]["eval/monitor/video/_type"]) == "video-file"
+    else:
+        assert "eval/monitor/video/_type" not in rows[0]
     assert MONITORING_SCALAR_METRICS.issubset(rows[0])
     assert rows[0]["eval/step"] == "100"
     assert "eval/pass" not in rows[0]
-    assert list(tmp_path.glob("wandb/*/files/media/videos/eval/monitor/*.mp4"))
+    assert bool(list(tmp_path.glob("wandb/*/files/media/videos/eval/monitor/*.mp4"))) == record_video
 
 
 def test_long_episode_crosses_8192_and_reconstructs_true_boundary(tmp_path, monkeypatch):
@@ -755,3 +769,116 @@ def test_monitoring_rejects_metrics_outside_observational_allowlist(tmp_path, me
              "checkpoint_step": 100, "video": {}},
             bucket_uri=f"file://{tmp_path}/r2",
         )
+
+
+@pytest.mark.parametrize("record_count", [0, 1, 3])
+def test_recording_subset_preserves_full_metrics_and_verified_inventory(tmp_path, monkeypatch, record_count):
+    from copy import deepcopy
+    from gradlab.checkpoint_monitoring import (
+        EpisodeRecording, finalize_monitoring, monitoring_aggregates, verify_monitoring_inventory,
+    )
+    from gradlab.trajectory_publication import selected_episode
+
+    goal = Path("experiments/goals/Breakout-Atari2600-v0/FirstWall")
+    train = compose_train_document(goal / "_goal.yaml", goal / "recipes/ppo.yaml")["train_config"]
+    config = resolve_env_config(env_config_from_mapping(train))
+    config.env_args["noop_reset_max"] = 0
+    config.task["termination"]["max_episode_steps"] = 3
+    bucket = R2Bucket(BucketConfig(uri=f"file://{tmp_path}/r2"))
+    planned = episode_manifest(3, record_count)
+    original_frame = EpisodeRecording._frame
+
+    def frame(recorder):
+        assert recorder.record, "Unrecorded episodes must not render or encode frames"
+        return original_frame(recorder)
+
+    monkeypatch.setattr(EpisodeRecording, "_frame", frame)
+    episodes = [monitor_episode(
+        model=RequestedRight(), config=config, episode=entry, bucket=bucket,
+        root=tmp_path / "spool", prefix=f"monitor/test/{entry['episode_id']}",
+        provenance=dict(checkpoint_id="checkpoint-test", checkpoint_step=100,
+                        planned_training_steps=200),
+        chunk_bytes=1024**2, watchdog_steps=10,
+    ) for entry in reversed(planned)]
+    assert sum(bool(e["chunks"]) for e in episodes) == record_count
+    assert len(list((tmp_path / "r2").rglob("episode.json"))) == 3
+    assert sum(selected_episode(e, {}) for e in episodes) == record_count
+    # Different scientific outcomes ensure the unrecorded rows affect aggregates
+    # and selection still uses the full-set median, not the recorded-set median.
+    for episode in episodes:
+        episode["bricks_destroyed"] = episode["ordinal"] * 54
+        episode["normalized_brick_progress"] = episode["bricks_destroyed"] / 216
+    result = finalize_monitoring(episodes, planned, bucket=bucket, root=tmp_path / "video",
+                                 prefix="monitor/test", fps=15)
+    assert result["metrics"]["eval/episodes/count"] == 3
+    assert result["metrics"]["eval/progress/bricks_destroyed_normalized/mean"] == 0.25
+    assert result["metrics"]["eval/monitor/progress/median"] == 0.25
+    if record_count:
+        assert result["selection"]["ordinal"] == (0 if record_count == 1 else 1)
+        assert result["video"]["bytes"] > 0
+    else:
+        assert result["selection"] is result["video"] is None
+    assert monitoring_aggregates(episodes[::-1], planned)[0:2] == (result["metrics"], result["selection"])
+    verify_monitoring_inventory(bucket, result, planned, prefix="monitor/test")
+    repeated = finalize_monitoring(episodes, planned, bucket=bucket, root=tmp_path / "video",
+                                   prefix="monitor/test", fps=15)
+    assert repeated == result
+    if record_count:
+        broken = deepcopy(result)
+        next(e for e in broken["episodes"] if e["record"])["chunks"] = []
+        with pytest.raises(ValueError, match="incomplete chunks"):
+            verify_monitoring_inventory(bucket, broken, planned, prefix="monitor/test")
+    if record_count == 1:
+        broken = deepcopy(result)
+        recorded = next(e for e in broken["episodes"] if e["record"])
+        next(e for e in broken["episodes"] if not e["record"])["chunks"] = recorded["chunks"]
+        with pytest.raises(ValueError, match="unexpected chunks"):
+            verify_monitoring_inventory(bucket, broken, planned, prefix="monitor/test")
+
+
+def test_recording_does_not_change_episode_scientific_results(tmp_path):
+    from gradlab.checkpoint_monitoring import EpisodeRecording
+    from unittest.mock import patch
+
+    goal = Path("experiments/goals/Breakout-Atari2600-v0/FirstWall")
+    train = compose_train_document(goal / "_goal.yaml", goal / "recipes/ppo.yaml")["train_config"]
+    config = resolve_env_config(env_config_from_mapping(train))
+    config.env_args["noop_reset_max"] = 0
+    config.task["termination"]["max_episode_steps"] = 12
+    bucket = R2Bucket(BucketConfig(uri=f"file://{tmp_path}/r2"))
+    arguments = dict(model=RequestedRight(), config=config, bucket=bucket, root=tmp_path / "spool",
+                     provenance=dict(checkpoint_id="test", checkpoint_step=100), watchdog_steps=20)
+    recorded = monitor_episode(**arguments, episode=episode_manifest(1, 1)[0], prefix="recorded")
+    with patch.object(EpisodeRecording, "_frame", side_effect=AssertionError("must not capture")):
+        unrecorded = monitor_episode(**arguments, episode=episode_manifest(1, 0)[0], prefix="unrecorded")
+    assert recorded.pop("record") is True
+    assert unrecorded.pop("record") is False
+    assert recorded.pop("chunks")
+    assert unrecorded.pop("chunks") == []
+    assert recorded == unrecorded
+
+
+@pytest.mark.parametrize("value", [-1, 101, True, 0.5, "50"])
+def test_reject_invalid_recording_counts(value):
+    from gradlab.monitor_config import resolve_monitoring
+    with pytest.raises(ValueError, match="record_episodes"):
+        resolve_monitoring(dict(episodes=100, record_episodes=value), {})
+    with pytest.raises(ValueError, match="record_episodes"):
+        episode_manifest(100, value)
+
+
+def test_breakout_recipe_freezes_disabled_100_50_and_30gb():
+    from gradlab.recipe_documents import compose_resolved_train_documents
+    from gradlab.monitor_config import resolve_monitoring, calibration_binding
+    goal = Path("experiments/goals/Breakout-Atari2600-v0/FirstWall")
+    documents = compose_resolved_train_documents(goal / "_goal.yaml", goal / "recipes/ppo.yaml")
+    train = documents.effective["train_config"]
+    settings = train["checkpoint_monitoring"]
+    assert settings["enabled"] is False
+    assert settings["episodes"] == 100 and settings["record_episodes"] == 50
+    assert settings["contribution_bytes"] == 30_000_000_000
+    assert train["checkpoint_eval_backend"] == "none"
+    assert train["checkpoint_freq"] == 10_000_000
+    assert calibration_binding(train, settings) != calibration_binding(train, {**settings, "record_episodes": 49})
+    assert resolve_monitoring(dict(episodes=100), {})["record_episodes"] is None
+    assert all(e.get("record", True) for e in episode_manifest(100))

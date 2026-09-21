@@ -75,7 +75,7 @@ def test_durable_queue_filters_before_transfer_and_reconciles_hub_commit(tmp_pat
     episode = monitor_episode(
         model=RequestedRight(),
         config=config,
-        episode=episode_manifest(1)[0],
+        episode=episode_manifest(2, 1)[0],
         bucket=bucket,
         root=tmp_path / "spool",
         prefix=prefix + "/monitor-000000",
@@ -90,9 +90,17 @@ def test_durable_queue_filters_before_transfer_and_reconciles_hub_commit(tmp_pat
         chunk_bytes=1024**2,
         watchdog_steps=10,
     )
+    unrecorded = monitor_episode(
+        model=RequestedRight(), config=config, episode=episode_manifest(2, 1)[1],
+        bucket=bucket, root=tmp_path / "spool", prefix=prefix + "/monitor-000001",
+        provenance=dict(evaluation_id=identity, checkpoint_id="checkpoint-test", checkpoint_step=100,
+                        planned_training_steps=200, run_id=manifest.run_id, training_seed=123),
+        chunk_bytes=1024**2, watchdog_steps=10,
+    )
+    assert unrecorded["chunks"] == []
     result = finalize_monitoring(
-        [episode],
-        episode_manifest(1),
+        [episode, unrecorded],
+        episode_manifest(2, 1),
         bucket=bucket,
         root=tmp_path / "video",
         prefix=prefix,
