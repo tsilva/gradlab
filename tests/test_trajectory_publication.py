@@ -1,3 +1,4 @@
+import pytest
 from types import SimpleNamespace
 
 
@@ -47,7 +48,9 @@ class Hub:
         return SimpleNamespace(oid=self.head)
 
 
-def test_durable_queue_filters_before_transfer_and_reconciles_hub_commit(tmp_path, monkeypatch):
+
+@pytest.mark.parametrize("export_format", ["png-shards", "trajectories-webp"])
+def test_durable_queue_filters_before_transfer_and_reconciles_hub_commit(tmp_path, monkeypatch, export_format):
     import json
     import gzip
     from pathlib import Path
@@ -155,6 +158,7 @@ def test_durable_queue_filters_before_transfer_and_reconciles_hub_commit(tmp_pat
         filters={"stage_min": 0.75},
         repo_root=Path.cwd(),
         store=queue,
+        export_format=export_format,
     )
     assert run_flusher(queue, idle_seconds=0) == 0
     assert queue.job(excluded["job"]["job_id"])["state"] == "succeeded"
@@ -165,13 +169,16 @@ def test_durable_queue_filters_before_transfer_and_reconciles_hub_commit(tmp_pat
         filters={"stage_min": 0.25},
         repo_root=Path.cwd(),
         store=queue,
+        export_format=export_format,
     )
     assert run_flusher(queue, idle_seconds=0) == 0
     assert queue.job(selected["job"]["job_id"])["state"] == "succeeded"
+    index_prefix = "indexes/" if export_format == "png-shards" else "trajectories/"
     indexes = [
-        json.loads(gzip.decompress(data))
+        json.loads(line)
         for key, data in api.files.items()
-        if key.startswith("indexes/") and key.endswith(".jsonl.gz")
+        if key.startswith(index_prefix) and key.endswith(".jsonl.gz")
+        for line in gzip.decompress(data).splitlines()
     ]
     assert len(indexes) == 1 and indexes[0]["run_id"] == manifest.run_id
     assert bucket.get_bytes(episode["chunks"][0]["key"])

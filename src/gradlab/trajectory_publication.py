@@ -173,8 +173,11 @@ class DatasetPublicationHandler:
 
     @classmethod
     def validate_payload(cls, payload):
-        if set(payload) != {"runs", "repo", "filters", "queue_root", "repo_root", "inventories"}:
+        if set(payload) not in ({"runs", "repo", "filters", "queue_root", "repo_root", "inventories"},
+                                {"runs", "repo", "filters", "queue_root", "repo_root", "inventories", "export_format"}):
             raise ValueError("malformed dataset publication request")
+        if payload.get("export_format", "png-shards") not in {"png-shards", "trajectories-webp"}:
+            raise ValueError("Unknown dataset export format")
         runs = payload["runs"]
         if (
             not isinstance(runs, list)
@@ -309,7 +312,12 @@ class DatasetPublicationHandler:
             except EntryNotFoundError:
                 return None
 
-        revision = publish_sharded(
+        publisher = publish_sharded
+        if payload.get("export_format") == "trajectories-webp":
+            from gradlab.trajectory_export import publish_trajectories, FORMAT as EXPORT_FORMAT
+            publisher = publish_trajectories
+            selection_id = canonical_json_sha256({**selection, "export_format": EXPORT_FORMAT})
+        revision = publisher(
             api, read, repo, contract, inventory, selection, models, work, budget,
             lambda: store.job(str(job["job_id"]))["cancel_requested"],
         )
@@ -338,7 +346,7 @@ def register_job_handler():
     register_handler(JOB_TYPE, 2, DatasetPublicationHandler, replace=True)
 
 
-def enqueue_publication(*, runs, repo, filters, repo_root, store=None, completed_snapshot=False):
+def enqueue_publication(*, runs, repo, filters, repo_root, store=None, completed_snapshot=False, export_format="trajectories-webp"):
     queue = store or JobStore()
     queue.init()
     from gradlab.operator_environment import load_repository_operator_environment
@@ -350,6 +358,7 @@ def enqueue_publication(*, runs, repo, filters, repo_root, store=None, completed
     inventories = select(R2Bucket(storage.control), R2Bucket(storage.models), runs)
     payload = DatasetPublicationHandler.validate_payload(
         {
+            "export_format": export_format,
             "runs": list(runs),
             "inventories": inventories,
             "repo": repo,

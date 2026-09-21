@@ -25,7 +25,7 @@ DEFAULT_WORKSPACE_MANIFEST = Path("experiments/goals/_workspaces.yaml")
 _SAFE_ID = re.compile(r"^[a-z][a-z0-9_-]*$")
 _RUN_SCOPES = frozenset({"all", "current_metrics_schema"})
 _PANEL_KINDS = frozenset(
-    {"line", "media", "occupancy", "occupancy_recent", "occupancy_cumulative", "curriculum"}
+    {"line", "train_eval", "media", "occupancy", "occupancy_recent", "occupancy_cumulative", "curriculum"}
 )
 _WORKSPACE_GRID_WIDTH = 24
 
@@ -207,6 +207,11 @@ def _panel_spec(panel_id: str, value: Any, *, label: str) -> WorkspacePanelSpec:
         )
         for index, item in enumerate(raw_y)
     )
+    if kind == "train_eval" and (x != TRAIN_GLOBAL_STEP or y != (
+        "train/progress/bricks_destroyed_normalized/mean",
+        "eval/progress/bricks_destroyed_normalized/mean",
+    )):
+        raise ValueError(f"{label} train_eval requires the train/eval normalized brick means")
     raw_templates = document.get("metric_templates", ())
     if not isinstance(raw_templates, Sequence) or isinstance(raw_templates, str | bytes):
         raise ValueError(f"{label}.metric_templates must be a list")

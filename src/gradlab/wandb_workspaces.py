@@ -80,6 +80,12 @@ def _section_panels(wr, section, *, entity=None):
                         y=row_y,
                     )
                 )
+            elif panel.kind == "train_eval":
+                from gradlab.comparison_charts import workspace_panel
+
+                panels.append(workspace_panel(wr, panel, entity=entity, layout=wr.Layout(
+                    x=column * slot_width, y=row_y, w=panel.width, h=panel.height,
+                )))
             elif panel.kind == "media":
                 panels.append(
                     wr.MediaBrowser(
@@ -270,7 +276,17 @@ def _load_managed_workspace(loader: WorkspaceLoader, url: str) -> tuple[str, Any
 def _default_workspace_loader(url: str):
     from wandb_workspaces.workspaces import Workspace
 
-    return Workspace.from_url(url)
+    from wandb_workspaces.reports.v2 import interface, internal
+    from gradlab.comparison_charts import query_preserving_chart_class
+
+    # Preserve the original query AST while loading: SDK dict conversion loses
+    # repeated history queries, breaking overlays and hiding actual view drift.
+    previous = interface.panel_mapping[internal.Vega2]
+    interface.panel_mapping[internal.Vega2] = query_preserving_chart_class()
+    try:
+        return Workspace.from_url(url)
+    finally:
+        interface.panel_mapping[internal.Vega2] = previous
 
 
 def _default_workspace_saver(workspace: Any):
@@ -336,6 +352,11 @@ def sync_workspaces(
         from gradlab.occupancy_charts import ensure_curriculum_chart
 
         ensure_curriculum_chart(api, entity=entity)
+
+    if any(panel.kind == "train_eval" for spec in specs for section in spec.sections for panel in section.panels):
+        from gradlab.comparison_charts import ensure_chart
+
+        ensure_chart(api, entity=entity)
 
     remote: dict[str, tuple[str, Any | None, str]] = {}
     for spec in specs:
