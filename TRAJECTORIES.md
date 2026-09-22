@@ -126,3 +126,11 @@ shards with `open_trajectory_parquet` before splitting, and preserve schema meta
 in output. The durable split publisher validates the prepared files and source
 view before upload. Schema checks do not replace the grouping and performance
 balance checks recorded by the split producer.
+
+Prepared migrations that preserve an existing split view use the durable
+`dataset-migration-publication` handler. It verifies the migrated base snapshot,
+split tables and statistics, card paths, source revision, and complete file hashes
+before uploading. One expected-parent commit adds new content-addressed trajectory,
+split and migration paths and switches the card and view pointer together. Existing
+data paths remain immutable. Publication shares the dataset budget and writer lock,
+supports lost-acknowledgement recovery, and is bounded to 100 files and 8 GiB.
