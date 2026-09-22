@@ -258,12 +258,16 @@ class DatasetPublicationHandler:
 
     def _publish(self, job):
         from gradlab.operator_environment import load_repository_operator_environment
-        from gradlab.r2_store import RunStorageConfig, R2Bucket
+        from gradlab.r2_store import BucketConfig, R2Bucket
 
         payload = self.validate_payload(job["payload"])
-        load_repository_operator_environment(Path(payload["repo_root"]))
-        storage = RunStorageConfig.from_env()
-        models = R2Bucket(storage.models)
+        # Admission has already frozen verified inventories. Execution needs only
+        # model-bucket reads, not the control/evaluation credentials of the operator.
+        model_names = {f"GRADLAB_MODELS_R2_{suffix}" for suffix in (
+            "URI", "ENDPOINT_URL", "REGION", "ACCESS_KEY_ID", "SECRET_ACCESS_KEY", "PUBLIC_BASE_URL"
+        )}
+        load_repository_operator_environment(Path(payload["repo_root"]), requested_names=model_names)
+        models = R2Bucket(BucketConfig.from_env("GRADLAB_MODELS_R2", public=True))
         store = JobStore(root=Path(payload["queue_root"]))
         api = HfApi()
         repo = payload["repo"]

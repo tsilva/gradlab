@@ -140,6 +140,15 @@ atomically only after all snapshot files are staged. IDs join tables within a
 pinned snapshot and must not be interpreted as row offsets or compared across
 snapshot revisions.
 
+The worker accepts `GRADLAB_TRAJECTORY_WORKERS` (1–12, default 1) for bounded
+parallel lossless frame preparation and `GRADLAB_TRAJECTORY_CACHE_MIB` (2–2048,
+default 64) for its SQLite cache. SQLite writes and frame IDs remain in source
+order. Conversion prefetches at most one following checksum-verified source chunk;
+image preparation batches contain at most 128 successors. Set these variables
+before starting a fresh queue worker; benchmark the target host before increasing
+concurrency. Admission requires finalized inventory verification, while execution
+of the frozen request requires only model-bucket and HF credentials.
+
 The publisher adapts shard row counts to at most 40 files each for frames and
 transitions while streaming fixed-size batches. It preuploads binary content in
 one batched SDK operation with two upload threads and publishes one expected-parent

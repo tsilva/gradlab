@@ -6,9 +6,11 @@ import hashlib
 import gzip
 import io
 import json
+import os
 import shutil
 import sqlite3
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -38,6 +40,31 @@ from gradlab.trajectory_dataset import table_inventory, verify_snapshot
 FORMAT = TRAJECTORY_FORMAT
 REFERENCE = "https://huggingface.co/datasets/tsilva/gradlab-breakout-trajectories/tree/9a22e4c0b6b9796a1358f36a6854f2569cbee0af"
 MAX_DISK = 16 * 1024**3
+
+
+def _validate_resources(workers, cache_mib):
+    if type(workers) is not int or not 1 <= workers <= 12:
+        raise ValueError("Trajectory encoder workers must be between 1 and 12")
+    if type(cache_mib) is not int or not 2 <= cache_mib <= 2048:
+        raise ValueError("Trajectory SQLite cache must be between 2 and 2048 MiB")
+
+
+def _prepare_frame(png):
+    image = Image.open(io.BytesIO(png))
+    if image.mode != "RGB" or image.size != (160, 210):
+        raise ValueError("Expected full native unmasked RGB")
+    rgb = np.asarray(image)
+    header = canonical_json_bytes(
+        dict(version=2, shape=[210, 160, 3], dtype="uint8", order="HWC", channels="RGB")
+    )
+    sha = hashlib.sha256(header + rgb.tobytes()).hexdigest()
+    out = io.BytesIO()
+    image.save(out, format="WEBP", lossless=True, quality=100, method=4, exact=True)
+    encoded = out.getvalue()
+    if not np.array_equal(np.asarray(Image.open(io.BytesIO(encoded))), rgb):
+        raise ValueError("Lossless WebP roundtrip mismatch")
+    grid, support, flags = extract_wall_batch(rgb[None, 57:93, 8:152])
+    return sha, encoded, grid[0].tobytes(), support[0].tobytes(), int(flags[0])
 
 
 def _shard_rows(total_rows):
@@ -72,10 +99,13 @@ def annotations(grid, support, flags, initial, native=None, prefix=""):
 
 
 class Converter:
-    def __init__(self, root, selection):
+    def __init__(self, root, selection, *, workers=1, cache_mib=64):
+        _validate_resources(workers, cache_mib)
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.db = sqlite3.connect(self.root / "frames.sqlite3")
+        self.db.execute(f"PRAGMA cache_size = {-cache_mib * 1024}")
+        self.workers = workers
         self.db.execute(
             "CREATE TABLE IF NOT EXISTS frames(id INTEGER PRIMARY KEY, sha TEXT UNIQUE, image BLOB, grid BLOB, support BLOB, flags INTEGER)"
         )
@@ -89,7 +119,7 @@ class Converter:
             raise ValueError("Export selection changed")
         marker.write_bytes(value)
 
-    def frame(self, png):
+    def frame(self, png, prepared=None):
         digest = hashlib.sha256(png).hexdigest()
         row = self.db.execute(
             "SELECT f.id,f.grid,f.support,f.flags FROM png p JOIN frames f ON f.id=p.frame WHERE p.sha=?",
@@ -103,29 +133,17 @@ class Converter:
                 np.frombuffer(row[2], np.uint8).reshape(6, 18),
                 row[3],
             )
-        image = Image.open(io.BytesIO(png))
-        if image.mode != "RGB" or image.size != (160, 210):
-            raise ValueError("Expected full native unmasked RGB")
-        rgb = np.asarray(image)
-        header = canonical_json_bytes(
-            dict(version=2, shape=[210, 160, 3], dtype="uint8", order="HWC", channels="RGB")
-        )
-        sha = hashlib.sha256(header + rgb.tobytes()).hexdigest()
+        sha, encoded, grid, support, flags = prepared or _prepare_frame(png)
         row = self.db.execute(
             "SELECT id,grid,support,flags FROM frames WHERE sha=?", (sha,)
         ).fetchone()
         new = row is None
         if new:
-            out = io.BytesIO()
-            image.save(out, format="WEBP", lossless=True, quality=100, method=4, exact=True)
-            if not np.array_equal(np.asarray(Image.open(io.BytesIO(out.getvalue()))), rgb):
-                raise ValueError("Lossless WebP roundtrip mismatch")
-            grid, support, flags = extract_wall_batch(rgb[None, 57:93, 8:152])
             fid = self.db.execute(
                 "INSERT INTO frames(sha,image,grid,support,flags) VALUES(?,?,?,?,?)",
-                (sha, out.getvalue(), grid[0].tobytes(), support[0].tobytes(), int(flags[0])),
+                (sha, encoded, grid, support, flags),
             ).lastrowid
-            row = (fid, grid[0].tobytes(), support[0].tobytes(), int(flags[0]))
+            row = (fid, grid, support, flags)
         self.db.execute("INSERT INTO png VALUES(?,?)", (digest, row[0]))
         return (
             row[0],
@@ -134,6 +152,43 @@ class Converter:
             np.frombuffer(row[2], np.uint8).reshape(6, 18),
             row[3],
         )
+
+    def _transitions(self, source, chunk):
+        # Only pure image work runs concurrently. The parent owns SQLite and assigns
+        # IDs in source order, including duplicate/new flags across batch boundaries.
+        raw_rows = source.read("transitions.jsonl").splitlines()
+        with ThreadPoolExecutor(max_workers=self.workers) as pool:
+            for start in range(0, len(raw_rows), 128):
+                records = [json.loads(raw) for raw in raw_rows[start:start + 128]]
+                if [row["step"] for row in records] != list(
+                    range(chunk["first_step"] + start, chunk["first_step"] + start + len(records))
+                ):
+                    raise ValueError("Transition gap or duplicate")
+                pngs = [source.read(f"frames/{row['step'] + 1}.png") for row in records]
+                missing = {}
+                if self.workers > 1:
+                    for png in pngs:
+                        digest = hashlib.sha256(png).hexdigest()
+                        if digest not in missing and not self.db.execute(
+                            "SELECT 1 FROM png WHERE sha=?", (digest,)
+                        ).fetchone():
+                            missing[digest] = png
+                prepared = dict(zip(missing, pool.map(_prepare_frame, missing.values())))
+                for record, png in zip(records, pngs):
+                    yield record, self.frame(png, prepared.get(hashlib.sha256(png).hexdigest()))
+
+    def _chunks(self, episode, models):
+        # At most the current and one prefetched bounded ZIP are resident.
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            chunks = iter(episode["chunks"])
+            current = next(chunks, None)
+            pending = pool.submit(verified_get, models, current) if current else None
+            while current is not None:
+                data = pending.result()
+                following = next(chunks, None)
+                pending = pool.submit(verified_get, models, following) if following else None
+                yield current, data
+                current = following
 
     def episode(self, index, episode, models):
         identity = episode_identity(episode)
@@ -149,8 +204,8 @@ class Converter:
         rows, frames = [], []
         contract = episode["recording_contract"]
         with self.db:
-            for chunk in episode["chunks"]:
-                with zipfile.ZipFile(io.BytesIO(verified_get(models, chunk))) as source:
+            for chunk, data in self._chunks(episode, models):
+                with zipfile.ZipFile(io.BytesIO(data)) as source:
                     first = source.read(f"frames/{chunk['first_step']}.png")
                     last = source.read(f"frames/{chunk['end_step']}.png")
                     if (
@@ -162,12 +217,11 @@ class Converter:
                         frames.append(self.frame(first))
                     elif self.frame(first)[0] != frames[-1][0]:
                         raise ValueError("Chunk frame join mismatch")
-                    for raw in source.read("transitions.jsonl").splitlines():
-                        source_row = json.loads(raw)
+                    for source_row, frame in self._transitions(source, chunk):
                         step = source_row["step"]
                         if step != len(rows) or step >= chunk["end_step"]:
                             raise ValueError("Transition gap or duplicate")
-                        frames.append(self.frame(source.read(f"frames/{step + 1}.png")))
+                        frames.append(frame)
                         action = source_row["executed_action"]
                         if contract["native_encoding"][action] != source_row["native_action"]:
                             raise ValueError("Action encoding mismatch")
@@ -351,6 +405,9 @@ def publish_trajectories(
     """Publish a frozen converted snapshot atomically; retain previous revisions/assets."""
     from huggingface_hub import CommitOperationAdd
 
+    workers = int(os.environ.get("GRADLAB_TRAJECTORY_WORKERS", "1"))
+    cache_mib = int(os.environ.get("GRADLAB_TRAJECTORY_CACHE_MIB", "64"))
+    _validate_resources(workers, cache_mib)
     selection = {**selection, "export_format": FORMAT, **trajectory_schema_identity()}
     sid = canonical_json_sha256(selection)
     prefix = f"trajectories/{sid}"
@@ -411,7 +468,7 @@ def publish_trajectories(
         episodes = list(merged.values())
         if existing is None and any(e.path != ".gitattributes" for e in tree):
             raise ValueError("HF target is not an empty or compatible monitoring dataset")
-        converter = Converter(root, selection)
+        converter = Converter(root, selection, workers=workers, cache_mib=cache_mib)
         try:
             for index, episode in enumerate(sorted(episodes, key=episode_identity), 1):
                 if canceled():

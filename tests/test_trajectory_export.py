@@ -207,7 +207,8 @@ def test_adaptive_shards_preserve_all_rows(tmp_path, monkeypatch):
     converter.db.close()
 
 
-def test_multichunk_boundary_and_failed_episode_resume(tmp_path):
+@pytest.mark.parametrize("workers", [1, 4])
+def test_multichunk_boundary_and_failed_episode_resume(tmp_path, workers):
     _, models, episodes, _ = recording()
     e = episodes[0]
     original = models.get_bytes("chunk")
@@ -237,7 +238,7 @@ def test_multichunk_boundary_and_failed_episode_resume(tmp_path):
         )
     e.update(chunks=chunks, steps=2)
     models.get_bytes = lambda key: blobs[key]
-    c = Converter(tmp_path, {})
+    c = Converter(tmp_path, {}, workers=workers)
     second = blobs.pop("1")
     with pytest.raises(KeyError):
         c.episode(1, e, models)
@@ -250,3 +251,42 @@ def test_multichunk_boundary_and_failed_episode_resume(tmp_path):
     assert rows[0]["successor_frame_id"] == rows[1]["source_frame_id"]
     assert rows[0]["terminated"] is False and rows[1]["terminated"] is True
     c.db.close()
+
+
+def test_parallel_frames_preserve_order_dedup_and_batch_boundaries(tmp_path):
+    pngs = []
+    for color, compression in [(0, 6), (1, 6), (1, 0), (2, 6)]:
+        out = io.BytesIO()
+        Image.fromarray(np.full((210, 160, 3), color, np.uint8)).save(
+            out, format="PNG", compress_level=compression
+        )
+        pngs.append(out.getvalue())
+    out = io.BytesIO()
+    with zipfile.ZipFile(out, "w") as archive:
+        archive.writestr("transitions.jsonl", "\n".join(json.dumps({"step": i}) for i in range(260)))
+        for i in range(260):
+            archive.writestr(f"frames/{i + 1}.png", pngs[i % 4])
+    results = []
+    for workers in (1, 4):
+        c = Converter(tmp_path / str(workers), {}, workers=workers)
+        with zipfile.ZipFile(io.BytesIO(out.getvalue())) as archive:
+            frames = [(record, (frame[0], frame[1], frame[2].tolist(), frame[3].tolist(), frame[4]))
+                      for record, frame in c._transitions(archive, {"first_step": 0})]
+        results.append((frames, c.db.execute("SELECT * FROM frames ORDER BY id").fetchall(),
+                        c.db.execute("SELECT * FROM png ORDER BY sha").fetchall()))
+        c.db.close()
+    assert results[0] == results[1]
+    assert len(results[0][1]) == 3
+
+
+@pytest.mark.parametrize("options", [{"workers": 0}, {"workers": 13}, {"workers": True},
+                                    {"cache_mib": 1}, {"cache_mib": 2049}])
+def test_invalid_converter_resource_limits(tmp_path, options):
+    with pytest.raises(ValueError):
+        Converter(tmp_path, {}, **options)
+
+
+def test_invalid_worker_setting_rejected_before_hub_access(monkeypatch):
+    monkeypatch.setenv("GRADLAB_TRAJECTORY_WORKERS", "13")
+    with pytest.raises(ValueError, match="workers must be between"):
+        publish_trajectories(None, None, None, None, None, None, None, None, None, None)
