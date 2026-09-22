@@ -58,9 +58,15 @@ class TrainImageTests(unittest.TestCase):
             with self.subTest(source=source):
                 source_path = Path(source)
                 self.assertTrue(source_path.exists())
-                self.assertIn(source, RUNTIME_INPUT_PATHS)
-                destination = "./" if source_path.is_file() else f"./{source}"
-                self.assertIn(f"COPY {source} {destination}", app_package)
+                inputs = [path for path in RUNTIME_INPUT_PATHS if source_path.is_relative_to(path)]
+                self.assertTrue(inputs, f"{source} is not covered by the runtime identity")
+                self.assertTrue(
+                    any(
+                        f"COPY {path} {'./' if Path(path).is_file() else f'./{path}'}" in app_package
+                        for path in inputs
+                    ),
+                    f"{source} is not copied into the package build",
+                )
 
     def test_modal_deploy_group_covers_config_runtime(self) -> None:
         project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
@@ -80,6 +86,9 @@ class TrainImageTests(unittest.TestCase):
             source = root / "src" / "module.py"
             source.parent.mkdir(parents=True)
             source.write_text("VALUE = 1\n", encoding="utf-8")
+            frontend = root / "frontend" / "Shell.svelte"
+            frontend.parent.mkdir()
+            frontend.write_text("<main>Player</main>\n", encoding="utf-8")
             dockerfile = root / "containers" / "train" / "Dockerfile"
             dockerfile.parent.mkdir(parents=True)
             dockerfile.write_text(
@@ -99,6 +108,12 @@ class TrainImageTests(unittest.TestCase):
             ignored.write_text("version = 1\n", encoding="utf-8")
             subprocess.run(["git", "add", "."], cwd=root, check=True)
             baseline = overlay_key(repo_root=root)
+
+            frontend.write_text("<main>Updated player</main>\n", encoding="utf-8")
+            subprocess.run(["git", "add", "frontend"], cwd=root, check=True)
+            updated_frontend = overlay_key(repo_root=root)
+            self.assertNotEqual(updated_frontend, baseline)
+            baseline = updated_frontend
 
             ignored.write_text("version = 2\n", encoding="utf-8")
             subprocess.run(["git", "add", "uv.lock"], cwd=root, check=True)
