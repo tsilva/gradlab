@@ -1,5 +1,6 @@
 import { mountPanel } from '../../../frontend/mount.ts';
 import Telemetry from '../../../frontend/components/Telemetry.svelte';
+import Events from '../../../frontend/components/Events.svelte';
 const mount = options => mountPanel(Telemetry, options);
 import { chartHarness, full, flush } from '../helpers/chart-history.mjs';
 
@@ -42,6 +43,33 @@ try {
   }
   h.history.setDemand(true);
   check(panels.every(panel => status(panel)?.textContent.includes('Loading')), 'All affected panels show loading');
+  let episodeId = 'events-a';
+  const eventRequests = [];
+  const events = mountPanel(Events, {
+    definition: { id: 'events', label: 'Events' },
+    services: {
+      getState: () => ({liveSnapshot: {trajectory: {episode_id: episodeId}}}),
+      loadEvents: () => new Promise((resolve, reject) => eventRequests.push({resolve, reject})),
+    },
+  });
+  document.querySelector('#panels').append(events.element);
+  events.renderHistory([], snapshot, {sessionEpoch: 1});
+  check(status(events).textContent === 'Loading events…', 'Events announces its pending request');
+  check(!events.element.querySelector('.widget-empty'), 'Loading events must not claim there is no data');
+  check(getComputedStyle(status(events)).fontFamily === getComputedStyle(status(panels[0])).fontFamily, 'Events loading uses the same typography as chart loading');
+  check(status(events).getBoundingClientRect().top < events.element.querySelector('[data-list]').getBoundingClientRect().top, 'Initial Events loading sits above the list');
+  eventRequests.shift().resolve({points: [], next_last: null}); await flush();
+  check(events.element.querySelector('.widget-empty')?.textContent.includes('No data available yet'), 'An empty completed request shows the empty state');
+  check(!status(events), 'Completed empty events do not retain a loading status');
+  episodeId = 'events-b'; events.renderHistory([], snapshot, {sessionEpoch: 1});
+  eventRequests.shift().reject(new Error('Events unavailable')); await flush();
+  check(status(events).textContent === 'Events unavailable', 'An event request failure remains visible');
+  check(!events.element.querySelector('.widget-empty'), 'An event request failure must not claim there is no data');
+  episodeId = 'events-c'; events.renderHistory([], snapshot, {sessionEpoch: 1});
+  eventRequests.shift().resolve({points: [{episode: 1, step: 10, events: ['reward']}], next_last: 9}); await flush();
+  check(events.element.querySelector('.event-item'), 'Loaded events remain visible');
+  check(status(events).textContent === 'Scroll down for older events', 'Loaded events preserve pagination guidance');
+  check(status(events).getBoundingClientRect().top >= events.element.querySelector('[data-list]').getBoundingClientRect().bottom, 'Pagination status stays below the event list');
   check(panels.every(panel => panel.element.querySelector('.panel').dataset.chartStatus === 'loading'), 'Panel state is shared');
   h.requests[0].resolve(full()); await flush();
   check(panels.every(panel => status(panel).hidden), 'Ready panels hide status');
@@ -92,7 +120,7 @@ try {
     check(chartHoverStep === null, 'Leaving a chart clears the shared hover');
     check(canvases.every(canvas => !canvas.parentElement.querySelector('[role="tooltip"]')), 'Leaving hides all synchronized tooltips');
   }
-  results.textContent = 'PASS: actual line, signal explorer and reward-table panels share loading, refresh, failure and Retry; obsolete plots are hidden; cursor and reference are unchanged; hover cursors and tooltips synchronize, show recorded values, fit within charts, and clear on leave.';
+  results.textContent = 'PASS: Events loading, empty, error and pagination states are distinct and match chart status styling; actual line, signal explorer and reward-table panels share loading, refresh, failure and Retry; obsolete plots are hidden; cursor and reference are unchanged; hover cursors and tooltips synchronize, show recorded values, fit within charts, and clear on leave.';
 } catch (error) {
   results.textContent = `FAIL: ${error.message}`;
   console.error(error);

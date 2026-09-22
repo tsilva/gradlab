@@ -85,7 +85,7 @@
       revision++;
       expanded = false;
       if (panel) panel.scrollTop = 0;
-      status = "";
+      status = key ? "Loading events…" : "";
       nextLast = null;
       updated = 0;
       points = [];
@@ -124,6 +124,9 @@
 
 <Panel {definition}>
   <div bind:this={container} use:observe style="display:contents">
+    {#if recorded && status && !visible.length}
+      <div class="chart-status" role="status">{status}</div>
+    {/if}
     <ol data-list class="event-list">
       {#each visible as point (`${point.episode}:${point.step}`)}
         {@const labels = eventLabels(point)}{@const selected = eventAtCursor(
@@ -154,10 +157,12 @@
             <div class="event-meta">step {point.step}</div></button
           >
         </li>
-      {:else}<li class="empty-state widget-empty">
-          No data available yet
-        </li>{/each}
+      {:else}{#if !recorded || !status}<li class="empty-state widget-empty">
+            No data available yet
+          </li>{/if}{/each}
     </ol>
-    <div role="status" hidden={!recorded}>{status}</div>
+    {#if recorded && status && visible.length}
+      <div class="chart-status" role="status">{status}</div>
+    {/if}
   </div>
 </Panel>
