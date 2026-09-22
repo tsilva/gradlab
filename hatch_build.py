@@ -10,6 +10,14 @@ from hatchling.builders.hooks.plugin.interface import BuildHookInterface
 class CustomBuildHook(BuildHookInterface):
     def initialize(self, version, build_data):
         if version == "editable":
+            # Editable installs use the source tree, including assets built later.
+            # Hatch otherwise force-includes dist before it exists on clean clones.
+            assets = Path(self.root) / "src/gradlab/web_player/dist"
+            build_data["force_include_editable"] = {
+                source: target
+                for source, target in self.build_config.get_force_include().items()
+                if Path(source) != assets
+            }
             return
         root = Path(self.root)
         manifest = root / "src/gradlab/web_player/dist/build-manifest.json"
