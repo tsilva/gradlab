@@ -63,6 +63,12 @@ class GatedEncoder:
 
 
 class SelectionRunner(WebPlaybackRunner):
+    def __init__(self, *args, loader, **kwargs):
+        # The base constructor captures the initial episode before activation
+        # installs the frame-delivery gate.
+        self.loader = loader
+        super().__init__(*args, **kwargs)
+
     def set_processing(self, features):
         # The synthetic recording includes images even before a window mounts panels.
         super().set_processing(set(features) | {"game", "observation"})
@@ -75,7 +81,7 @@ class SelectionRunner(WebPlaybackRunner):
 
     def episode_start_payload(self):
         snapshot, frames = super().episode_start_payload()
-        return snapshot, {} if self.encoder.loader.hold_frames else frames
+        return snapshot, {} if self.loader.hold_frames else frames
 
 
 class SelectionHost(PlaybackHost):
@@ -121,6 +127,7 @@ class SelectionLoader:
         runner = SelectionRunner(
             session,
             self.base_args,
+            loader=self,
             config_text="game: Game-v0",
             trajectory_bundle=load_policy_bundle(self.root),
         )

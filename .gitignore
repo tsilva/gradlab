@@ -74,3 +74,6 @@ artifacts/
 # Generated local settings and design QA output
 /_vizdoom.ini
 /design-qa.md
+
+# Compiled player assets (included in Python distributions)
+/src/gradlab/web_player/dist/

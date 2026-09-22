@@ -6,21 +6,13 @@ const app = readFileSync(
   new URL("../../src/gradlab/web_player/app.js", import.meta.url),
   "utf8",
 );
-const runtime = readFileSync(
-  new URL("../../src/gradlab/web_player/panels/runtime.js", import.meta.url),
-  "utf8",
-);
 const styles = readFileSync(
   new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
   "utf8",
 );
 
 test("stats panels expose one standardized persisted processing switch", () => {
-  assert.match(app, /input\.dataset\.panelEnabled = name/);
-  assert.match(app, /input\.role = "switch"/);
-  assert.match(app, /instance\.enabled = input\.checked/);
   assert.match(app, /processing: processing\(\)/);
-  assert.match(app, /menu\?\.before\(toggle\)/);
   assert.doesNotMatch(app, /label\.textContent = definition\.enabled \? "Enabled" : "Disabled"/);
   assert.match(
     styles,
@@ -35,17 +27,25 @@ test("stats panels expose one standardized persisted processing switch", () => {
 });
 
 test("diagnostic processing switches also control their captures", () => {
-  assert.match(app, /name === "attribution"/);
   assert.match(app, /function syncAttributionToPanel/);
   assert.match(app, /command\("set_attribution", payload\)/);
-  assert.match(app, /"CNN features"/);
   assert.match(app, /function syncCnnCaptureToPanel/);
   assert.match(app, /command\("set_cnn_inspection", \{ enabled: desired \}\)/);
 });
 
-test("disabled panels receive no snapshot, history, frame, or resize processing", () => {
-  assert.match(runtime, /if \(instance\.definition\.enabled\) this\.safeCall\(id, "render"/);
-  assert.match(runtime, /if \(!instance\.definition\.enabled\) return;/);
-  assert.match(runtime, /instance\.definition\.enabled && instance\.definition\.frameKinds/);
-  assert.match(runtime, /if \(instance\.definition\.enabled\) this\.safeCall\(id, "resize"/);
+
+test("disabled delivery gates every optional path and preserves disposal/reset", async () => {
+  const { PanelDelivery } = await import('../../frontend/panel-delivery.js');
+  const calls = [];
+  const delivery = new PanelDelivery();
+  const definition = {enabled:false,frameKinds:[2]};
+  const methods = Object.fromEntries(['render','renderHistory','prepareFrame','renderFrame','resize','resetFrames'].map(name=>[name,()=>calls.push(name)]));
+  delivery.instances.set('input',{definition,...methods});
+  delivery.renderSnapshot({sequence:1});delivery.renderHistory([]);
+  await delivery.prepareFrame(2,new Blob());await delivery.renderFrame(2,new Blob());
+  delivery.resize();delivery.invoke('input','resize');
+  assert.deepEqual(calls,[]);
+  delivery.resetFrames();assert.deepEqual(calls,['resetFrames']);
+  definition.enabled=true;delivery.renderSnapshot({sequence:2});
+  assert.deepEqual(calls,['resetFrames','render']);
 });

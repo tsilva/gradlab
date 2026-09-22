@@ -108,6 +108,32 @@ Use `gradlab <command> --help` for full arguments. Gameplay datasets, leader
 queries, W&B reports, and workspace management are also available through the
 `dataset`, `leaders`, `reports`, and `workspaces` commands.
 
+## Source development
+
+Published wheels and source distributions include the compiled player. Running
+an installed GradLab package does not require Node or pnpm.
+
+From a checkout, install Node 22.12+ and the pinned pnpm version in `package.json`,
+then build the player before running Playback or the Python browser tests:
+
+```bash
+uv sync --frozen
+pnpm install --frozen-lockfile
+pnpm check:web
+pnpm build:web
+uv run gradlab play
+```
+
+Rebuild after changing `frontend/` or `src/gradlab/web_player/`. Vite writes ignored
+assets to `src/gradlab/web_player/dist/`; commit source and `pnpm-lock.yaml`, never
+bundles. `uv build` checks that the compiled assets match their source inputs and
+includes them in both distribution formats. Building a wheel from the published
+source distribution uses those included assets without invoking Node.
+
+Run `pnpm test:web` for controller and calculation tests. Browser fixture commands
+and performance workloads are documented in
+[the player fixture guide](tests/web_player/fixtures/README.md).
+
 ## Research results
 
 Start with [Featured Research on Hugging Face](https://huggingface.co/collections/tsilva/gradlab-featured-research-6a76017e31c4e6f8fd5593f3)

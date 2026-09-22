@@ -1,4 +1,6 @@
-import { mount } from '../../../../src/gradlab/web_player/panels/telemetry-panel.js';
+import { mountPanel } from '../../../frontend/mount.ts';
+import Telemetry from '../../../frontend/components/Telemetry.svelte';
+const mount = options => mountPanel(Telemetry, options);
 import { chartHarness, full, flush } from '../helpers/chart-history.mjs';
 
 const results = document.querySelector('#results');
@@ -40,15 +42,15 @@ try {
   }
   h.history.setDemand(true);
   check(panels.every(panel => status(panel)?.textContent.includes('Loading')), 'All affected panels show loading');
-  check(panels.every(panel => panel.element.dataset.chartStatus === 'loading'), 'Panel state is shared');
+  check(panels.every(panel => panel.element.querySelector('.panel').dataset.chartStatus === 'loading'), 'Panel state is shared');
   h.requests[0].resolve(full()); await flush();
   check(panels.every(panel => status(panel).hidden), 'Ready panels hide status');
   h.history.selectRange({ first: 2, last: 5 });
-  check(panels.every(panel => panel.element.querySelector('.telemetry-block').hidden), 'Changing selection hides obsolete charts and tables');
+  check(panels.every(panel => !panel.element.querySelector('.telemetry-block').getClientRects().length), 'Changing selection hides obsolete charts and tables');
   check(h.requests.length === 2, 'Panels share one request per selection');
   h.requests[1].resolve(full([2, 5], 'b')); await flush();
   h.update({ lastStep: 11 }); await h.advance(1000);
-  check(panels.every(panel => !panel.element.querySelector('.telemetry-block').hidden), 'Same-range refresh keeps valid data visible');
+  check(panels.every(panel => !!panel.element.querySelector('.telemetry-block').getClientRects().length), 'Same-range refresh keeps valid data visible');
   h.requests[2].reject(new Error('History unavailable')); await flush();
   check(panels.every(panel => status(panel).textContent.includes('History unavailable')), 'Permanent error is visible in every panel');
   check(panels.every(panel => !status(panel).querySelector('button').hidden), 'Every affected panel offers Retry');
@@ -61,12 +63,14 @@ try {
   h.requests[3].resolve(hoverHistory); await flush();
   check(panels.every(panel => status(panel).hidden), 'Successful Retry clears status');
   check(reference.step === 1 && snapshot.transition.step === 10, 'Chart navigation preserves cursor and reward reference');
+  await new Promise(requestAnimationFrame);
   const canvases = panels.flatMap(panel => [...panel.element.querySelectorAll('canvas')]);
   for (const source of canvases) {
     const bounds = source.getBoundingClientRect();
     for (const fraction of [0.35, 0.7]) {
       cursors.clear();
-      source.dispatchEvent(new PointerEvent('pointermove', { clientX: bounds.left + bounds.width * fraction }));
+      source.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: bounds.left + bounds.width * fraction }));
+      await new Promise(requestAnimationFrame);
       for (const canvas of canvases) {
         const tooltip = canvas.parentElement.querySelector('[role="tooltip"]');
         check(tooltip && !tooltip.hidden, 'Every history chart shows its synchronized tooltip');
@@ -83,9 +87,10 @@ try {
       check(Math.max(...positions) - Math.min(...positions) < 1, 'Dashed lines track the same step');
       check(reference.step === 1 && snapshot.transition.step === 10, 'Hover preserves playback and reference');
     }
-    source.dispatchEvent(new PointerEvent('pointerleave'));
+    source.dispatchEvent(new PointerEvent('pointerleave', {bubbles: true}));
+    await new Promise(requestAnimationFrame);
     check(chartHoverStep === null, 'Leaving a chart clears the shared hover');
-    check(canvases.every(canvas => canvas.parentElement.querySelector('[role="tooltip"]').hidden), 'Leaving hides all synchronized tooltips');
+    check(canvases.every(canvas => !canvas.parentElement.querySelector('[role="tooltip"]')), 'Leaving hides all synchronized tooltips');
   }
   results.textContent = 'PASS: actual line, signal explorer and reward-table panels share loading, refresh, failure and Retry; obsolete plots are hidden; cursor and reference are unchanged; hover cursors and tooltips synchronize, show recorded values, fit within charts, and clear on leave.';
 } catch (error) {
