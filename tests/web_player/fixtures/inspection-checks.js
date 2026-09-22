@@ -37,8 +37,14 @@ export async function runChecks() {
     fps.value = '30'; fps.dispatchEvent(new Event('input', {bubbles:true}));
     const sampling = $('#playback-settings-content [data-sampling]');
     sampling.value = 'deterministic'; sampling.dispatchEvent(new Event('change', {bubbles:true}));
-    const settingsStatus = await control('status');
-    assert(settingsStatus.commands.includes('set_fps') && settingsStatus.commands.includes('set_action_selection_mode'), 'settings events did not reach the host');
+    let settingsStatus;
+    const commandDeadline = performance.now() + 15000;
+    do {
+      settingsStatus = await control('status');
+      if (settingsStatus.commands.includes('set_fps') && settingsStatus.commands.includes('set_action_selection_mode')) break;
+      assert(performance.now() < commandDeadline, 'settings events did not reach the host');
+      await new Promise(requestAnimationFrame);
+    } while (true);
     assert(settingsStatus.paused === 'paused' && selected(103), 'settings advanced the trajectory');
     assert(seed.value === '41414', 'snapshot update replaced the user seed');
     $('#playback-settings-close').click();

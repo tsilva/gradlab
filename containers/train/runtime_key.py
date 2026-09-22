@@ -14,8 +14,10 @@ else:
 
 RUNTIME_INPUT_PATHS = (
     ".dockerignore",
+    ".npmrc",
     "METRICS.md",
     "THIRD_PARTY_NOTICES.md",
+    "TRAJECTORIES.md",
     "containers/train/entrypoint.sh",
     "containers/train/gradlab",
     "containers/train/smoke.py",
@@ -23,9 +25,17 @@ RUNTIME_INPUT_PATHS = (
     "experiments/goals",
     "experiments/modal_eval.yaml",
     "experiments/recipes",
+    "frontend",
+    "hatch_build.py",
+    "package.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
     "pyproject.toml",
     "scripts",
     "src",
+    "svelte.config.js",
+    "tsconfig.json",
+    "vite.config.ts",
 )
 
 OVERLAY_KEY_SCHEMA = b"gradlab-runtime-overlay-key-v3\0"

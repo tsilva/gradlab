@@ -129,6 +129,17 @@ WORKDIR /src
 COPY pyproject.toml ./
 COPY THIRD_PARTY_NOTICES.md ./
 COPY METRICS.md ./
+COPY TRAJECTORIES.md ./
+COPY hatch_build.py ./
+COPY package.json ./
+COPY pnpm-lock.yaml ./
+COPY pnpm-workspace.yaml ./
+COPY .npmrc ./
+COPY vite.config.ts ./
+COPY svelte.config.js ./
+COPY tsconfig.json ./
+COPY frontend ./frontend
+COPY scripts ./scripts
 COPY experiments/goals ./experiments/goals
 COPY experiments/recipes ./experiments/recipes
 COPY src ./src

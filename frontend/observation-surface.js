@@ -65,6 +65,8 @@ export function createObservationSurface(element, display) {
     baseBitmap?.close();
     baseBitmap = null;
     baseIdentity = null;
+    lastBase = null;
+    lastOverlay = "";
   };
   const closePreparedBase = () => {
     preparedBaseBitmap?.close();
@@ -111,6 +113,7 @@ export function createObservationSurface(element, display) {
     const exactBase = Boolean(baseBitmap && baseIsExact());
     stage.hidden = !exactBase;
     if (!exactBase) {
+      lastOverlay = "";
       baseCanvas.hidden = true;
       overlayCanvas.hidden = true;
       renderLegend();
@@ -133,6 +136,8 @@ export function createObservationSurface(element, display) {
       selectedOverlay,
       attributionIdentity,
       cnnIdentity,
+      baseCanvas.width,
+      baseCanvas.height,
     ]);
     if (lastOverlay === overlayKey) {
       renderLegend();
