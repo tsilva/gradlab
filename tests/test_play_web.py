@@ -995,6 +995,7 @@ def test_paired_playback_server_opens_only_player_window() -> None:
         )
         with patch("gradlab.play_web.PlaybackBrowser") as browser_type:
             open_browser = browser_type.return_value.open = AsyncMock()
+            browser_type.return_value.wait_closed = asyncio.Event().wait
             task = asyncio.create_task(server.run())
             try:
                 deadline = asyncio.get_running_loop().time() + 3.0

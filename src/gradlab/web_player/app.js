@@ -283,8 +283,9 @@ function renderSourceMode(snapshot = null) {
   $("#source-browser").hidden = !sourceMode;
   $("#checkpoint-navigation").hidden = Boolean(sourceMode || !activeCheckpointRoute);
   $("#page-title").hidden = Boolean(sourceMode || activeRecordingRoute);
-  $("#source-back").hidden = false;
-  $("#source-back").disabled = Boolean(sourceMode && route?.level === "environments");
+  const atFirstScreen = Boolean(sourceMode && (!route || route?.level === "environments"));
+  $("#source-back").hidden = atFirstScreen;
+  $("#source-back").disabled = false;
   $("#more-toggle").hidden = sourceMode;
   $("#inspect-active").hidden = !(
     snapshot?.app?.has_active_runner || inspection.view.liveSnapshot?.app?.has_active_runner

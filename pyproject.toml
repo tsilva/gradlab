@@ -70,6 +70,7 @@ packages = ["src/gradlab"]
 [tool.hatch.build.targets.wheel.force-include]
 "THIRD_PARTY_NOTICES.md" = "THIRD_PARTY_NOTICES.md"
 "METRICS.md" = "gradlab/METRICS.md"
+"TRAJECTORIES.md" = "gradlab/TRAJECTORIES.md"
 "experiments/goals" = "gradlab/experiments/goals"
 "experiments/recipes" = "gradlab/experiments/recipes"
 
@@ -81,6 +82,7 @@ include = [
     "/README.md",
     "/LICENSE",
     "/METRICS.md",
+    "/TRAJECTORIES.md",
     "/THIRD_PARTY_NOTICES.md",
 ]
 

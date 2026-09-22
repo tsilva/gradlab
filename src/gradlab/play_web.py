@@ -4293,18 +4293,8 @@ class PlaybackWebServer:
                 self.stop_event.set()
                 break
             if (
-                self.desktop_browser is not None
-                and self.desktop_browser.windows
-                and all(
-                    window.process.poll() is not None
-                    for window in self.desktop_browser.windows.values()
-                )
-                and not self.clients
-            ):
-                self.stop_event.set()
-                break
-            if (
-                self.ever_connected
+                self.desktop_browser is None
+                and self.ever_connected
                 and not self.clients
                 and time.monotonic() - self.last_client_at >= LAST_CLIENT_GRACE_SECONDS
             ):
@@ -4440,16 +4430,22 @@ class PlaybackWebServer:
         await self._prepare_initial_catalog()
         await asyncio.to_thread(self.runner.start)
         pump = asyncio.create_task(self.pump())
+        waiters = [pump, asyncio.create_task(self.stop_event.wait())]
         browser = PlaybackBrowser()
         try:
             if not bool(getattr(self.args, "no_open", False)):
                 self.desktop_browser = browser
                 await browser.open(urls[0])
-            await self.stop_event.wait()
+                waiters.append(asyncio.create_task(browser.wait_closed()))
+            done, _pending = await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+            for completed in done:
+                await completed
         finally:
             try:
-                pump.cancel()
-                await asyncio.gather(pump, return_exceptions=True)
+                self.stop_event.set()
+                for waiter in waiters:
+                    waiter.cancel()
+                await asyncio.gather(*waiters, return_exceptions=True)
                 for peer in tuple(self.desktop_peers):
                     await peer.close(code=1001, message=b"player shutting down")
                 for client in tuple(self.clients.values()):

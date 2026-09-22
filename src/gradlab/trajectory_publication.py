@@ -173,11 +173,17 @@ class DatasetPublicationHandler:
 
     @classmethod
     def validate_payload(cls, payload):
-        if set(payload) not in ({"runs", "repo", "filters", "queue_root", "repo_root", "inventories"},
-                                {"runs", "repo", "filters", "queue_root", "repo_root", "inventories", "export_format"}):
+        schema_keys = {"trajectory_schema_version", "trajectory_schema_sha256"}
+        if set(payload) - schema_keys not in ({"runs", "repo", "filters", "queue_root", "repo_root", "inventories"},
+                                              {"runs", "repo", "filters", "queue_root", "repo_root", "inventories", "export_format"}):
             raise ValueError("malformed dataset publication request")
         if payload.get("export_format", "png-shards") not in {"png-shards", "trajectories-webp"}:
             raise ValueError("Unknown dataset export format")
+        if payload.get("export_format") == "trajectories-webp":
+            from gradlab.trajectory_format import require_current_trajectory_schema
+            require_current_trajectory_schema(payload)
+        elif schema_keys & set(payload):
+            raise ValueError("Trajectory schema cannot label a PNG-shard export")
         runs = payload["runs"]
         if (
             not isinstance(runs, list)
@@ -315,8 +321,10 @@ class DatasetPublicationHandler:
         publisher = publish_sharded
         if payload.get("export_format") == "trajectories-webp":
             from gradlab.trajectory_export import publish_trajectories, FORMAT as EXPORT_FORMAT
+            from gradlab.trajectory_format import trajectory_schema_identity
             publisher = publish_trajectories
-            selection_id = canonical_json_sha256({**selection, "export_format": EXPORT_FORMAT})
+            selection_id = canonical_json_sha256({**selection, "export_format": EXPORT_FORMAT,
+                                                 **trajectory_schema_identity()})
         revision = publisher(
             api, read, repo, contract, inventory, selection, models, work, budget,
             lambda: store.job(str(job["job_id"]))["cancel_requested"],
@@ -356,8 +364,10 @@ def enqueue_publication(*, runs, repo, filters, repo_root, store=None, completed
     storage = RunStorageConfig.from_env()
     select = completed_snapshot_inventories if completed_snapshot else finalized_inventories
     inventories = select(R2Bucket(storage.control), R2Bucket(storage.models), runs)
+    from gradlab.trajectory_format import trajectory_schema_identity
     payload = DatasetPublicationHandler.validate_payload(
         {
+            **(trajectory_schema_identity() if export_format == "trajectories-webp" else {}),
             "export_format": export_format,
             "runs": list(runs),
             "inventories": inventories,

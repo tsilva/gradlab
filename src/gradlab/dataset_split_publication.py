@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import hashlib
+import json
 import re
 import time
 
@@ -10,6 +11,7 @@ from huggingface_hub.errors import EntryNotFoundError
 
 from gradlab.dataset_shards import PublicationBudget, PublicationDeferred
 from gradlab.job_queue import HandlerResult, JobStore, SubjectUpdate, register_handler
+from gradlab.trajectory_format import open_trajectory_parquet, require_current_trajectory_schema
 
 JOB_TYPE = "dataset-split-publication"
 
@@ -88,6 +90,30 @@ class SplitPublicationHandler:
                 if hashlib.file_digest(f, "sha256").hexdigest() != digest:
                     raise ValueError(f"Prepared split bytes changed: {name}")
         receipt = (root / p["receipt"]).read_bytes()
+        manifest = json.loads(receipt)
+        require_current_trajectory_schema(manifest)
+        if manifest.get("source_revision") != p["parent"]:
+            raise ValueError("Split manifest must pin the requested source revision")
+        prefix = p["receipt"].removesuffix("manifest.json")
+        inventory = {}
+        for name, digest in p["files"].items():
+            if not name.endswith(".parquet"):
+                continue
+            parts = Path(name.removeprefix(prefix)).parts
+            if len(parts) != 3 or parts[0] not in {"transitions", "episodes"}:
+                raise ValueError("Split Parquet must be a transitions or episodes table")
+            with open_trajectory_parquet(root / name, parts[0]) as parquet:
+                inventory[name] = {"table": parts[0], "rows": parquet.metadata.num_rows,
+                                   "sha256": digest}
+        if {item["table"] for item in inventory.values()} != {"transitions", "episodes"}:
+            raise ValueError("Split snapshot requires transitions and episodes tables")
+        if manifest.get("tables") != inventory:
+            raise ValueError("Split manifest table inventory differs from prepared shards")
+
+        def read_json(name, revision):
+            return json.loads(Path(budget.call(
+                hf_hub_download, p["repo"], name, repo_type="dataset", revision=revision,
+            )).read_bytes())
 
         def read_receipt(revision):
             try:
@@ -112,6 +138,9 @@ class SplitPublicationHandler:
                 return head
             if head != p["parent"]:
                 raise ValueError("Dataset head changed; review split publication before retry")
+            view = read_json("trajectory-view.json", head)
+            require_current_trajectory_schema(view)
+            require_current_trajectory_schema(read_json(view["publication"], head))
             operations = []
             for name in sorted(p["files"]):
                 if JobStore(p["queue_root"]).job(job_id)["cancel_requested"]:
