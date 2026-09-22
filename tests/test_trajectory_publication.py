@@ -142,9 +142,10 @@ def test_durable_queue_filters_before_transfer_and_reconciles_hub_commit(tmp_pat
         return str(path)
 
     monkeypatch.setattr(
-        "gradlab.operator_environment.load_repository_operator_environment", lambda root: None
+        "gradlab.operator_environment.load_repository_operator_environment", lambda root, **kwargs: None
     )
     monkeypatch.setattr("gradlab.r2_store.RunStorageConfig.from_env", lambda: fixture.storage)
+    monkeypatch.setattr("gradlab.r2_store.BucketConfig.from_env", lambda *args, **kwargs: fixture.storage.models)
     monkeypatch.setattr(
         "gradlab.trajectory_publication.ensure_flusher",
         lambda store: WorkerStart("already_running"),
