@@ -157,5 +157,3 @@ test("observation receives CNN frames without demanding CNN processing", () => {
   assert.deepEqual(PANEL_TYPES.observation.frameKinds, [2, 3, 4]);
   assert.match(catalogSource, /cnn-inspection/);
 });
-
-

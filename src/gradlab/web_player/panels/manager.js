@@ -20,4 +20,3 @@ export function editorFieldsForBlock(block) {
     scope: block?.kind === "reward-breakdown",
   };
 }
-

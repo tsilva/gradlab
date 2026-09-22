@@ -7,4 +7,3 @@ export function eventAtCursor(point, view) {
   }
   return view.selectedSequence != null && point.sequence === view.selectedSequence;
 }
-
