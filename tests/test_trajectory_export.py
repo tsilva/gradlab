@@ -9,7 +9,7 @@ import pytest
 from PIL import Image
 
 from gradlab.trajectory_export import Converter, publish_trajectories
-from gradlab.trajectory_format import read_record
+from gradlab.trajectory_format import read_record, require_current_trajectory_schema, open_trajectory_parquet
 from gradlab.dataset_shards import PublicationBudget
 from tests.test_dataset_shards import fixture
 
@@ -144,6 +144,14 @@ def test_atomic_publication_replaces_view_preserves_assets_and_retries(tmp_path)
     publish_trajectories(**kwargs)
     view = json.loads(api.files["trajectory-view.json"])
     receipt = json.loads(api.files[view["publication"]])
+    require_current_trajectory_schema(view)
+    require_current_trajectory_schema(receipt)
+    prefix = view["publication"].removesuffix("publication.json")
+    for name, identity in receipt["tables"].items():
+        data = api.files[prefix + name]
+        assert hashlib.sha256(data).hexdigest() == identity["sha256"]
+        with open_trajectory_parquet(io.BytesIO(data), identity["table"]) as table:
+            assert table.metadata.num_rows == identity["rows"]
     assert receipt["statistics"] == {"episodes": 2, "transitions": 2, "unique_frames": 1}
     assert len(api.commits) == 2
 

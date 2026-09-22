@@ -45,6 +45,8 @@ pinned, SHA-256-verified runtime downloads once into `~/.cache/gradlab/neutralin
 from the existing icon automatically. No Node.js, npm, compiler, or rebuild is
 needed when changing GradLab; restart the command to use the current source.
 The **Stats** button opens or focuses a synchronized GradLab window.
+Closing the last Player or Stats window stops the local player cleanly; keeping
+either window open keeps the session running.
 Ctrl+C or killing the GradLab process closes its viewer windows without affecting
 your normal browser. Use `--no-open` for an external browser or headless use; this
 skips the runtime download entirely. Linux desktop use requires GTK 3 and

@@ -102,6 +102,23 @@ def _export_minari(args: argparse.Namespace) -> int:
     return export_minari_command(args)
 
 
+def _verify_trajectories(args: argparse.Namespace) -> int:
+    from gradlab.trajectory_dataset import verify_snapshot
+
+    print(json.dumps(verify_snapshot(args.source), indent=2))
+    return 0
+
+
+def _migrate_trajectories(args: argparse.Namespace) -> int:
+    from gradlab.trajectory_dataset import migrate_snapshot
+
+    print(json.dumps(migrate_snapshot(
+        args.source, args.output, source_revision=args.source_revision,
+        source_format=args.source_format,
+    ), indent=2))
+    return 0
+
+
 def _publish_runs(args: argparse.Namespace) -> int:
     from gradlab.trajectory_publication import enqueue_publication
 
@@ -126,6 +143,22 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     subparsers = parser.add_subparsers(dest="command", metavar="<command>", required=True)
+
+    verify_trajectories = subparsers.add_parser(
+        "verify-trajectories", help="Verify a versioned local trajectory snapshot."
+    )
+    verify_trajectories.add_argument("source", type=Path)
+    verify_trajectories.set_defaults(handler=_verify_trajectories)
+
+    migrate_trajectories = subparsers.add_parser(
+        "migrate-trajectories", help="Explicitly migrate a legacy snapshot into a new local directory."
+    )
+    migrate_trajectories.add_argument("source", type=Path)
+    migrate_trajectories.add_argument("output", type=Path)
+    migrate_trajectories.add_argument("--source-revision", required=True, help="Full immutable HF commit SHA.")
+    migrate_trajectories.add_argument("--source-format", required=True,
+                                    choices=("gradlab.trajectories.webp.v1-unversioned",))
+    migrate_trajectories.set_defaults(handler=_migrate_trajectories)
 
     publish = subparsers.add_parser("publish-runs", help="Queue additive HF publication from finalized R2 Runs.")
     publish.add_argument("--run", action="append", required=True, help="Finalized Run ID; repeat for multiple Runs.")

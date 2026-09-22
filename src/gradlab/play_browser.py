@@ -165,6 +165,16 @@ class PlaybackBrowser:
                 self.windows.pop(window, None)
                 raise
 
+    async def wait_closed(self) -> None:
+        """Native window ownership, not a page's WebSocket, determines desktop lifetime."""
+        while True:
+            async with self._lock:
+                if self.windows and all(
+                    window.process.poll() is not None for window in self.windows.values()
+                ):
+                    return
+            await asyncio.sleep(0.1)
+
     def close(self) -> None:
         for window in self.windows.values():
             window.close()

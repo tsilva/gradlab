@@ -27,9 +27,15 @@ from gradlab.trajectory_format import (
     transition_schema,
     record_json,
     transition_record,
+    TRAJECTORY_FORMAT,
+    open_trajectory_parquet,
+    require_current_trajectory_schema,
+    trajectory_schema_contract,
+    trajectory_schema_identity,
 )
+from gradlab.trajectory_dataset import table_inventory, verify_snapshot
 
-FORMAT = "gradlab.trajectories.webp.v1"
+FORMAT = TRAJECTORY_FORMAT
 REFERENCE = "https://huggingface.co/datasets/tsilva/gradlab-breakout-trajectories/tree/9a22e4c0b6b9796a1358f36a6854f2569cbee0af"
 MAX_DISK = 8 * 1024**3
 
@@ -70,7 +76,7 @@ class Converter:
             "CREATE TABLE IF NOT EXISTS done(id INTEGER PRIMARY KEY, identity TEXT UNIQUE, summary TEXT, session TEXT)"
         )
         marker = self.root / "selection.json"
-        value = canonical_json_bytes(selection)
+        value = canonical_json_bytes({**selection, **trajectory_schema_identity()})
         if marker.exists() and marker.read_bytes() != value:
             raise ValueError("Export selection changed")
         marker.write_bytes(value)
@@ -232,6 +238,7 @@ class Converter:
                     session_id=identity,
                     monitoring_episode=episode,
                     export_format=FORMAT,
+                    **trajectory_schema_identity(),
                     hud_mask=None,
                     split_assignment=None,
                 )
@@ -276,22 +283,23 @@ class Converter:
         number, count, writer = 0, 0, None
         try:
             for (index,) in self.db.execute("SELECT id FROM done ORDER BY id"):
-                for batch in pq.ParquetFile(
-                    self.root / f"episode-{index:06d}.parquet"
-                ).iter_batches(batch_size=2048):
-                    if writer is None:
-                        writer = pq.ParquetWriter(
-                            output / f"transitions/all/{number:05d}.parquet",
-                            transition_schema,
-                            compression="zstd",
-                        )
-                    writer.write_batch(batch)
-                    count += len(batch)
-                    if count >= 100000:
-                        writer.close()
-                        writer = None
-                        count = 0
-                        number += 1
+                with open_trajectory_parquet(
+                    self.root / f"episode-{index:06d}.parquet", "transitions"
+                ) as parquet:
+                    for batch in parquet.iter_batches(batch_size=2048):
+                        if writer is None:
+                            writer = pq.ParquetWriter(
+                                output / f"transitions/all/{number:05d}.parquet",
+                                transition_schema,
+                                compression="zstd",
+                            )
+                        writer.write_batch(batch)
+                        count += len(batch)
+                        if count >= 100000:
+                            writer.close()
+                            writer = None
+                            count = 0
+                            number += 1
                 guard_space(self.root)
         finally:
             if writer:
@@ -312,6 +320,9 @@ class Converter:
             output / "sessions/metadata/00000.parquet",
             compression="zstd",
         )
+        for name, schema in (("frames/assets", frame_schema), ("transitions/all", transition_schema)):
+            if not any((output / name).glob("*.parquet")):
+                pq.write_table(pa.Table.from_pylist([], schema=schema), output / name / "00000.parquet")
         return dict(
             episodes=len(summaries),
             transitions=sum(e["length"] for e in summaries),
@@ -325,7 +336,7 @@ def publish_trajectories(
     """Publish a frozen converted snapshot atomically; retain previous revisions/assets."""
     from huggingface_hub import CommitOperationAdd
 
-    selection = {**selection, "export_format": FORMAT}
+    selection = {**selection, "export_format": FORMAT, **trajectory_schema_identity()}
     sid = canonical_json_sha256(selection)
     prefix = f"trajectories/{sid}"
     marker = f"{prefix}/publication.json"
@@ -337,6 +348,7 @@ def publish_trajectories(
         previous = budget.call(read, marker, head)
         if previous is not None:
             receipt = json.loads(previous)
+            require_current_trajectory_schema(receipt)
             if receipt["selection"] != selection:
                 raise ValueError("Immutable trajectory contribution conflict")
             return head
@@ -351,7 +363,13 @@ def publish_trajectories(
         view = budget.call(read, "trajectory-view.json", head)
         previous_episodes = []
         if view is not None:
-            previous_index = json.loads(view)["episode_index"]
+            view = json.loads(view)
+            require_current_trajectory_schema(view)
+            previous_receipt = json.loads(budget.call(read, view["publication"], head))
+            require_current_trajectory_schema(previous_receipt)
+            if previous_receipt.get("format") != FORMAT:
+                raise ValueError("Incompatible trajectory export format")
+            previous_index = view["episode_index"]
             previous_episodes = [
                 json.loads(line)
                 for line in gzip.decompress(budget.call(read, previous_index, head)).splitlines()
@@ -389,6 +407,7 @@ def publish_trajectories(
         finally:
             converter.db.close()
         receipt = dict(
+            **trajectory_schema_identity(),
             format=FORMAT,
             selection=selection,
             statistics=stats,
@@ -396,8 +415,11 @@ def publish_trajectories(
             hud_mask=None,
             split_assignment=None,
             source_revision=head,
+            tables=table_inventory(output),
         )
+        (output / "schema.json").write_bytes(canonical_json_bytes(trajectory_schema_contract()))
         (output / "publication.json").write_bytes(canonical_json_bytes(receipt))
+        verify_snapshot(output)
         (output / "episodes.jsonl.gz").write_bytes(
             gzip.compress(
                 b"".join(
@@ -427,6 +449,9 @@ def publish_trajectories(
             "",
             f"{stats['episodes']} complete episodes, {stats['transitions']} transitions, {stats['unique_frames']} unique lossless WebP RGB images.",
             "",
+            f"Trajectory schema version {receipt['trajectory_schema_version']}; [machine-readable contract]({prefix}/schema.json).",
+            "The publication receipt and every Parquet shard declare the version and contract fingerprint.",
+            "",
             f"Table schemas and brick annotations match [the existing trajectories dataset]({REFERENCE}).",
             "The full 210×160 RGB image includes the HUD. There is no train/validation/test assignment;",
             "`all` is a single container split and the episode `split` column is null.",
@@ -447,9 +472,10 @@ def publish_trajectories(
         operations = []
         files = sorted(output.rglob("*.parquet")) + [
             output / "publication.json",
+            output / "schema.json",
             output / "episodes.jsonl.gz",
         ]
-        if len(files) + 1 > 100:
+        if len(files) + 2 + (existing is None) > 100:
             raise ValueError(
                 "Snapshot exceeds bounded 100-file atomic publication; use larger shards"
             )
@@ -467,7 +493,7 @@ def publish_trajectories(
             CommitOperationAdd(
                 path_in_repo="trajectory-view.json",
                 path_or_fileobj=canonical_json_bytes(
-                    {"episode_index": f"{prefix}/episodes.jsonl.gz", "publication": marker}
+                    {**trajectory_schema_identity(), "episode_index": f"{prefix}/episodes.jsonl.gz", "publication": marker}
                 ),
             )
         )

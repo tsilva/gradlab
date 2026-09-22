@@ -97,6 +97,10 @@ Checkpoints, complete results, delivery and worker quiescence.
 
 # Publish selected Runs
 
+Trajectory tables use an independently versioned contract; see
+[`TRAJECTORIES.md`](../TRAJECTORIES.md) for declarations, compatibility validation,
+and explicit local migrations. Current publication rejects unversioned WebP views.
+
 ```bash
 gradlab dataset publish-runs \
   --run gradlab-0123456789abcdef0123456789abcdef \
