@@ -23,6 +23,7 @@ class InspectionPlayer(SelectionPlayer):
         return web.Response(
             text=response.text.replace(
                 '<script type="module" src="/assets/app.js">',
+                '<script src="/assets/performance-gates.js"></script>'
                 '<script type="module" src="/assets/inspection-gates.js"></script>'
                 '<script type="module" src="/assets/app.js">',
             ),
@@ -30,7 +31,7 @@ class InspectionPlayer(SelectionPlayer):
         )
 
     async def asset(self, request):
-        if request.match_info["path"] in {"inspection-gates.js", "inspection-checks.js"}:
+        if request.match_info["path"] in {"inspection-gates.js", "inspection-checks.js", "performance-gates.js"}:
             return web.FileResponse(Path(__file__).with_name(request.match_info["path"]))
         return await super().asset(request)
 

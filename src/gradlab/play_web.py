@@ -2940,7 +2940,7 @@ class PlaybackWebServer:
 
     @property
     def asset_root(self) -> Path:
-        return Path(__file__).with_name("web_player")
+        return Path(__file__).with_name("web_player") / "dist"
 
     def dashboard_urls(self) -> tuple[str, ...]:
         main_path = "/"

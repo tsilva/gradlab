@@ -1,4 +1,7 @@
-import { mount } from '../../../../src/gradlab/web_player/panels/telemetry-panel.js';
+import { mountPanel } from '../../../frontend/mount.ts';
+import Telemetry from '../../../frontend/components/Telemetry.svelte';
+import Events from '../../../frontend/components/Events.svelte';
+const mount = options => mountPanel(Telemetry, options);
 import { chartHarness, full, flush } from '../helpers/chart-history.mjs';
 
 const results = document.querySelector('#results');
@@ -40,15 +43,42 @@ try {
   }
   h.history.setDemand(true);
   check(panels.every(panel => status(panel)?.textContent.includes('Loading')), 'All affected panels show loading');
-  check(panels.every(panel => panel.element.dataset.chartStatus === 'loading'), 'Panel state is shared');
+  let episodeId = 'events-a';
+  const eventRequests = [];
+  const events = mountPanel(Events, {
+    definition: { id: 'events', label: 'Events' },
+    services: {
+      getState: () => ({liveSnapshot: {trajectory: {episode_id: episodeId}}}),
+      loadEvents: () => new Promise((resolve, reject) => eventRequests.push({resolve, reject})),
+    },
+  });
+  document.querySelector('#panels').append(events.element);
+  events.renderHistory([], snapshot, {sessionEpoch: 1});
+  check(status(events).textContent === 'Loading events…', 'Events announces its pending request');
+  check(!events.element.querySelector('.widget-empty'), 'Loading events must not claim there is no data');
+  check(getComputedStyle(status(events)).fontFamily === getComputedStyle(status(panels[0])).fontFamily, 'Events loading uses the same typography as chart loading');
+  check(status(events).getBoundingClientRect().top < events.element.querySelector('[data-list]').getBoundingClientRect().top, 'Initial Events loading sits above the list');
+  eventRequests.shift().resolve({points: [], next_last: null}); await flush();
+  check(events.element.querySelector('.widget-empty')?.textContent.includes('No data available yet'), 'An empty completed request shows the empty state');
+  check(!status(events), 'Completed empty events do not retain a loading status');
+  episodeId = 'events-b'; events.renderHistory([], snapshot, {sessionEpoch: 1});
+  eventRequests.shift().reject(new Error('Events unavailable')); await flush();
+  check(status(events).textContent === 'Events unavailable', 'An event request failure remains visible');
+  check(!events.element.querySelector('.widget-empty'), 'An event request failure must not claim there is no data');
+  episodeId = 'events-c'; events.renderHistory([], snapshot, {sessionEpoch: 1});
+  eventRequests.shift().resolve({points: [{episode: 1, step: 10, events: ['reward']}], next_last: 9}); await flush();
+  check(events.element.querySelector('.event-item'), 'Loaded events remain visible');
+  check(status(events).textContent === 'Scroll down for older events', 'Loaded events preserve pagination guidance');
+  check(status(events).getBoundingClientRect().top >= events.element.querySelector('[data-list]').getBoundingClientRect().bottom, 'Pagination status stays below the event list');
+  check(panels.every(panel => panel.element.querySelector('.panel').dataset.chartStatus === 'loading'), 'Panel state is shared');
   h.requests[0].resolve(full()); await flush();
   check(panels.every(panel => status(panel).hidden), 'Ready panels hide status');
   h.history.selectRange({ first: 2, last: 5 });
-  check(panels.every(panel => panel.element.querySelector('.telemetry-block').hidden), 'Changing selection hides obsolete charts and tables');
+  check(panels.every(panel => !panel.element.querySelector('.telemetry-block').getClientRects().length), 'Changing selection hides obsolete charts and tables');
   check(h.requests.length === 2, 'Panels share one request per selection');
   h.requests[1].resolve(full([2, 5], 'b')); await flush();
   h.update({ lastStep: 11 }); await h.advance(1000);
-  check(panels.every(panel => !panel.element.querySelector('.telemetry-block').hidden), 'Same-range refresh keeps valid data visible');
+  check(panels.every(panel => !!panel.element.querySelector('.telemetry-block').getClientRects().length), 'Same-range refresh keeps valid data visible');
   h.requests[2].reject(new Error('History unavailable')); await flush();
   check(panels.every(panel => status(panel).textContent.includes('History unavailable')), 'Permanent error is visible in every panel');
   check(panels.every(panel => !status(panel).querySelector('button').hidden), 'Every affected panel offers Retry');
@@ -61,12 +91,14 @@ try {
   h.requests[3].resolve(hoverHistory); await flush();
   check(panels.every(panel => status(panel).hidden), 'Successful Retry clears status');
   check(reference.step === 1 && snapshot.transition.step === 10, 'Chart navigation preserves cursor and reward reference');
+  await new Promise(requestAnimationFrame);
   const canvases = panels.flatMap(panel => [...panel.element.querySelectorAll('canvas')]);
   for (const source of canvases) {
     const bounds = source.getBoundingClientRect();
     for (const fraction of [0.35, 0.7]) {
       cursors.clear();
-      source.dispatchEvent(new PointerEvent('pointermove', { clientX: bounds.left + bounds.width * fraction }));
+      source.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, clientX: bounds.left + bounds.width * fraction }));
+      await new Promise(requestAnimationFrame);
       for (const canvas of canvases) {
         const tooltip = canvas.parentElement.querySelector('[role="tooltip"]');
         check(tooltip && !tooltip.hidden, 'Every history chart shows its synchronized tooltip');
@@ -83,11 +115,12 @@ try {
       check(Math.max(...positions) - Math.min(...positions) < 1, 'Dashed lines track the same step');
       check(reference.step === 1 && snapshot.transition.step === 10, 'Hover preserves playback and reference');
     }
-    source.dispatchEvent(new PointerEvent('pointerleave'));
+    source.dispatchEvent(new PointerEvent('pointerleave', {bubbles: true}));
+    await new Promise(requestAnimationFrame);
     check(chartHoverStep === null, 'Leaving a chart clears the shared hover');
-    check(canvases.every(canvas => canvas.parentElement.querySelector('[role="tooltip"]').hidden), 'Leaving hides all synchronized tooltips');
+    check(canvases.every(canvas => !canvas.parentElement.querySelector('[role="tooltip"]')), 'Leaving hides all synchronized tooltips');
   }
-  results.textContent = 'PASS: actual line, signal explorer and reward-table panels share loading, refresh, failure and Retry; obsolete plots are hidden; cursor and reference are unchanged; hover cursors and tooltips synchronize, show recorded values, fit within charts, and clear on leave.';
+  results.textContent = 'PASS: Events loading, empty, error and pagination states are distinct and match chart status styling; actual line, signal explorer and reward-table panels share loading, refresh, failure and Retry; obsolete plots are hidden; cursor and reference are unchanged; hover cursors and tooltips synchronize, show recorded values, fit within charts, and clear on leave.';
 } catch (error) {
   results.textContent = `FAIL: ${error.message}`;
   console.error(error);

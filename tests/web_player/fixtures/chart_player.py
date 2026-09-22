@@ -28,17 +28,21 @@ class BrowserSession(ScriptedSession):
 
 
 class ChartPlayer(PlaybackWebServer):
+    @property
+    def asset_root(self):
+        return self.args.assets_root or super().asset_root
+
     async def page(self, request):
         html = (self.asset_root / "index.html").read_text()
         return web.Response(
-            text=html.replace("</body>", '<script src="/assets/chart-player-controls.js"></script></body>'),
+            text=html.replace('<script type="module" src="/assets/app.js">', '<script src="/assets/performance-gates.js"></script><script type="module" src="/assets/app.js">').replace("</body>", '<script src="/assets/chart-player-controls.js"></script></body>'),
             content_type="text/html",
             headers={"Cross-Origin-Opener-Policy": "same-origin-allow-popups"},
         )
 
     async def asset(self, request):
-        if request.match_info["path"] == "chart-player-controls.js":
-            return web.FileResponse(Path(__file__).with_name("chart-player-controls.js"))
+        if request.match_info["path"] in {"chart-player-controls.js", "performance-gates.js"}:
+            return web.FileResponse(Path(__file__).with_name(request.match_info["path"]))
         return await super().asset(request)
 
     async def chart_history(self, request):
@@ -52,6 +56,8 @@ class ChartPlayer(PlaybackWebServer):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--assets-root", type=Path)
+    parser.add_argument("--recorded-steps", type=int, default=140)
     parser.add_argument("--chart-delay", type=float, default=0.3)
     parser.add_argument("--chart-failures", type=int, default=1)
     parser.add_argument("--imported", action="store_true", help="Inspect an exported data-only recording")
@@ -61,7 +67,7 @@ def main():
         root = Path(temporary)
         write_bundle(root)
         runner = WebPlaybackRunner(
-            BrowserSession(length=1000), args, config_text="game: Game-v0",
+            BrowserSession(length=max(1000, args.recorded_steps + 1000)), args, config_text="game: Game-v0",
             trajectory_bundle=load_policy_bundle(root),
         )
         if args.imported:
@@ -69,21 +75,21 @@ def main():
             from gradlab.play_trajectory_runner import TrajectoryPlaybackRunner
 
             runner.start()
-            for _ in range(140):
+            for _ in range(args.recorded_steps):
                 runner._step_once()
             archive = export_trajectory(runner.freeze_trajectory(), root / "browser.trj")
             runner.stop()
             runner = TrajectoryPlaybackRunner(archive, args)
-            runner._load_step(140)
+            runner._load_step(args.recorded_steps)
 
         async def serve():
             server = asyncio.create_task(ChartPlayer(runner, args).run())
             while not runner._thread.is_alive():
                 await asyncio.sleep(0.01)
             if not args.imported:
-                for _ in range(140):
+                for _ in range(args.recorded_steps):
                     await asyncio.to_thread(runner._step_once)
-            print("Fixture ready at step 140, paused", flush=True)
+            print(f"Fixture ready at step {args.recorded_steps}, paused", flush=True)
             return await server
 
         try:

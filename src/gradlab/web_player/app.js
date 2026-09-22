@@ -1,3 +1,5 @@
+import { flushSync } from "svelte";
+import { shellState } from "../../../frontend/shell-state.svelte.ts";
 import { frameScheduler } from "./chart-transport.js";
 import { desktopChannel } from "./desktop-workspace.js";
 import { createPlaybackInspection, hasIndependentInference } from "./playback-inspection.js";
@@ -16,7 +18,7 @@ import {
 import { episodeReport } from "./episode-report.js";
 import { timelineEventMarkers } from "./episode-timeline.js";
 import { eventColorFill, eventLabels } from "./event-colors.js";
-import { mountPlaybackSettings } from "./playback-settings.js";
+import { mountPlaybackSettings } from "../../../frontend/mount.ts";
 import { CheckpointSelection } from "./checkpoint-selection.js";
 import {
   playbackSourceTitle,
@@ -25,8 +27,8 @@ import {
   transportPresentation,
   workspaceIsEditable,
 } from "./player-presentation.js";
-import { PanelManager } from "./panels/manager.js";
-import { PanelRuntime } from "./panels/runtime.js";
+import { PanelManager } from "../../../frontend/panel-manager.ts";
+import { PanelHost } from "../../../frontend/panel-host.svelte.ts";
 import {
   DEFAULT_GRID_CELL_HEIGHT,
   viewportGridCellHeight,
@@ -181,12 +183,9 @@ function setDetachedLayout() {
 }
 
 function showToast(message, error = false) {
-  const toast = $("#toast");
-  toast.textContent = message;
-  toast.style.borderColor = error ? "var(--red)" : "var(--cyan)";
-  toast.classList.add("visible");
+  shellState.toast = {message, error, visible: true};
   clearTimeout(showToast.timer);
-  showToast.timer = setTimeout(() => toast.classList.remove("visible"), 3200);
+  showToast.timer = setTimeout(() => { shellState.toast.visible = false; }, 3200);
 }
 
 const checkpointSelection = new CheckpointSelection(command);
@@ -200,10 +199,7 @@ checkpointSelection.subscribe(({ loading }) => {
 });
 
 function updateConnection(label, kind = "") {
-  const badge = $("#connection-status");
-  badge.textContent = label;
-  badge.className = `sync-status ${kind}`.trim();
-  badge.hidden = label === "Synced" && !kind;
+  shellState.connection = {label, kind};
 }
 
 function resetSession(epoch) {
@@ -814,9 +810,6 @@ function syncCnnCaptureToPanel() {
 }
 
 function updateTimelinePlaybackControl() {
-  const playbackToggle = $("#timeline-playback-toggle");
-  const playbackIcon = $("#timeline-playback-icon");
-  if (!playbackToggle || !playbackIcon) return;
   const session = inspection.view.liveSnapshot?.session || inspection.view.snapshot?.session || {};
   const presentation = transportPresentation({
     running: inspection.view.running,
@@ -827,27 +820,13 @@ function updateTimelinePlaybackControl() {
     session,
     recording: (inspection.view.liveSnapshot?.mode || inspection.view.snapshot?.mode) === "recording",
   });
-  playbackToggle.dataset.action = presentation.action;
-  playbackToggle.disabled = presentation.disabled;
-  playbackToggle.title = presentation.reason;
-  playbackToggle.classList.toggle("primary", presentation.action !== "pause");
-  playbackToggle.setAttribute("aria-label", presentation.label);
-  setSvgUseHref(playbackIcon, `/assets/tabler-icons.svg#ti-${presentation.icon}`);
-  const reset = $("#timeline-reset");
-  if (reset) {
-    const mode = inspection.view.liveSnapshot?.mode || inspection.view.snapshot?.mode;
-    const canReset = (
-      state.hasControl
-      && !["recording", "dataset", "trajectory"].includes(mode)
-      && (!session.awaiting_next_episode || session.can_start_next_episode)
-    );
-    reset.disabled = !canReset;
-    reset.title = !state.hasControl
-      ? "Another window has control"
-      : canReset
-        ? "Reset to the selected seed and pause"
-        : "The configured episode limit has been reached";
-  }
+  Object.assign(shellState.transport, presentation);
+  const mode = inspection.view.liveSnapshot?.mode || inspection.view.snapshot?.mode;
+  const canReset = state.hasControl && !["recording", "dataset", "trajectory"].includes(mode)
+    && (!session.awaiting_next_episode || session.can_start_next_episode);
+  shellState.transport.resetDisabled = !canReset;
+  shellState.transport.resetTitle = !state.hasControl ? "Another window has control"
+    : canReset ? "Reset to the selected seed and pause" : "The configured episode limit has been reached";
 }
 
 function updateControlState() {
@@ -858,24 +837,20 @@ function updateControlState() {
 }
 
 function renderWorkspaceStatus() {
-  $("#timeline-label").textContent = timelineLabel(
+  shellState.timeline.label = timelineLabel(
     inspection.view.snapshot || inspection.view.liveSnapshot,
   );
 }
 
 function renderPlaybackEvidenceStatus(snapshot) {
-  const status = $("#playback-evidence-status");
-  if (!status || !snapshot || checkpointSelection.view.sourceMode || state.windowId !== "main") {
-    if (status) status.hidden = true;
+  if (!snapshot || checkpointSelection.view.sourceMode || state.windowId !== "main") {
+    shellState.evidence.text = "";
     return;
   }
   const report = episodeReport(snapshot);
-  const evidenceWarning = /not evidence|differ|incomparable/i.test(
-    `${report.semantics} ${report.disclaimer}`,
-  );
-  status.hidden = !evidenceWarning;
-  status.textContent = evidenceWarning ? report.semantics : "";
-  status.title = evidenceWarning ? report.disclaimer : "";
+  const warning = /not evidence|differ|incomparable/i.test(`${report.semantics} ${report.disclaimer}`);
+  shellState.evidence.text = warning ? report.semantics : "";
+  shellState.evidence.title = warning ? report.disclaimer : "";
 }
 
 function renderSnapshot() {
@@ -939,49 +914,23 @@ function renderTimeline() {
   const range = inspection.view.range;
   const selected = inspection.view.seekingStep ?? Number(trajectory?.imported ? trajectory.current_step
     : inspection.view.snapshot?.transition?.step ?? inspection.view.snapshot?.session?.step ?? range?.first ?? 0);
-  scrubber.min = String(range?.first ?? 0);
-  scrubber.max = String(range?.last ?? 0);
-  scrubber.step = "1";
-  scrubber.disabled = !range || range.first === range.last || Boolean(trajectory?.imported && !state.hasControl);
-  scrubber.value = String(selected);
-  scrubber.setAttribute("aria-label", "Inspect an episode step");
-  scrubber.setAttribute("aria-valuetext", `Step ${selected}`);
-  scrubber.style.setProperty("--timeline-progress", `${timelineProgress(
-    selected - (range?.first ?? 0), (range?.last ?? 0) - (range?.first ?? 0) + 1,
-  )}%`);
-  $("#timeline").setAttribute("aria-busy", String(inspection.view.seekingStep !== null));
+  Object.assign(shellState.timeline, {
+    first: range?.first ?? 0, last: range?.last ?? 0, selected,
+    disabled: !range || range.first === range.last || Boolean(trajectory?.imported && !state.hasControl),
+    progress: timelineProgress(selected - (range?.first ?? 0), (range?.last ?? 0) - (range?.first ?? 0) + 1),
+    busy: inspection.view.seekingStep !== null,
+    zoom: chartHistory.read().range,
+  });
   renderWorkspaceStatus();
-  const zoomLabel = $("#timeline-zoom");
-  const chartRange = chartHistory.read().range;
-  zoomLabel.hidden = !chartRange;
-  zoomLabel.textContent = chartRange ? `Steps ${chartRange.first}–${chartRange.last} · Reset zoom` : "";
-  const zoomBand = $("#timeline-zoom-band");
-  zoomBand.hidden = !chartRange || !range;
-  if (chartRange && range) {
-    const span = Math.max(1, range.last - range.first);
-    zoomBand.style.left = `${100 * (chartRange.first - range.first) / span}%`;
-    for (const handle of zoomBand.querySelectorAll(".timeline-range-handle")) {
-      const start = handle.dataset.edge === "first";
-      handle.setAttribute("aria-valuemin", String(start ? range.first : chartRange.first + 1));
-      handle.setAttribute("aria-valuemax", String(start ? chartRange.last - 1 : range.last));
-      handle.setAttribute("aria-valuenow", String(chartRange[handle.dataset.edge]));
-      handle.setAttribute("aria-valuetext", `Step ${chartRange[handle.dataset.edge]}`);
-    }
-    zoomBand.style.width = `${100 * (chartRange.last - chartRange.first) / span}%`;
-  }
-  const markers = $("#timeline-markers");
-  if (!range) { markers.replaceChildren(); return; }
   const markerSlots = Math.max(1, Math.min(120, Math.floor(scrubber.clientWidth / 9)));
-  const interesting = timelineEventMarkers(inspection.view.eventPoints, range, markerSlots);
-  markers.replaceChildren(...interesting.map((point) => {
-    const marker = document.createElement("span");
-    marker.className = "timeline-marker";
-    marker.style.left = `${point.position * 100}%`;
-    marker.dataset.step = String(point.step);
-    marker.dataset.count = String(point.count);
-    marker.style.setProperty("--event-colors", eventColorFill(eventLabels(point)));
-    return marker;
-  }));
+  const markers = range ? timelineEventMarkers(inspection.view.eventPoints, range, markerSlots) : [];
+  const key = JSON.stringify(markers);
+  if (shellState.timeline.markerKey !== key) {
+    shellState.timeline.markerKey = key;
+    shellState.timeline.markers = markers;
+  }
+
+  flushSync();
 }
 
 function restoreTimelineHome() {
@@ -1172,48 +1121,22 @@ function readSavedLayouts() {
 }
 
 function renderSavedLayouts() {
-  const target = $("#saved-layouts");
-  const saved = readSavedLayouts();
-  const rows = Object.keys(saved).sort().map((name) => {
-    const row = document.createElement("div");
-    row.className = "saved-layout-row";
-    const load = document.createElement("button");
-    load.type = "button";
-    load.className = "quiet";
-    load.textContent = name;
-    load.title = `Load layout ${name}`;
-    load.addEventListener("click", () => {
-      state.layout = normalizeWorkspace(saved[name], {
-        paired: pairedWorkspace,
-        writer: state.windowId,
-      });
-      state.layout.name = name;
-      persistLayout();
-      applyLayout();
-      $("#layout-menu").hidden = true;
-      showToast(`Loaded layout “${name}”.`);
-    });
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.className = "quiet danger";
-    remove.textContent = "Delete";
-    remove.title = `Delete layout ${name}`;
-    remove.addEventListener("click", () => {
-      const next = readSavedLayouts();
-      delete next[name];
-      localStorage.setItem(SAVED_LAYOUTS_KEY, JSON.stringify(next));
-      renderSavedLayouts();
-    });
-    row.append(load, remove);
-    return row;
-  });
-  if (!rows.length) {
-    const empty = document.createElement("span");
-    empty.className = "empty-state";
-    empty.textContent = "No named layouts saved yet.";
-    target.replaceChildren(empty);
-  } else target.replaceChildren(...rows);
+  shellState.savedLayouts = Object.keys(readSavedLayouts()).sort();
 }
+shellState.loadLayout = (name) => {
+  state.layout = normalizeWorkspace(readSavedLayouts()[name], {paired: pairedWorkspace, writer: state.windowId});
+  state.layout.name = name;
+  persistLayout();
+  applyLayout();
+  $("#layout-menu").hidden = true;
+  showToast(`Loaded layout “${name}”.`);
+};
+shellState.deleteLayout = (name) => {
+  const next = readSavedLayouts();
+  delete next[name];
+  localStorage.setItem(SAVED_LAYOUTS_KEY, JSON.stringify(next));
+  renderSavedLayouts();
+};
 
 function renderPanelShelf() {
   panelManager?.renderShelf();
@@ -1221,43 +1144,6 @@ function renderPanelShelf() {
 
 function bindPanelElement(panel, name) {
   const definition = panelDefinition(state.layout, name);
-  if (definition?.switchable) {
-    const captureLabel = name === "cnn"
-      ? "CNN features"
-      : name === "attribution"
-        ? "attribution"
-        : null;
-    const toggle = document.createElement("label");
-    toggle.className = "panel-processing-toggle";
-    toggle.title = captureLabel
-      ? `Enable or disable ${captureLabel} capture`
-      : `Enable or disable ${panelLabel(name)} data processing`;
-    const input = document.createElement("input");
-    input.type = "checkbox";
-    input.role = "switch";
-    input.checked = definition.enabled;
-    input.dataset.panelEnabled = name;
-    input.setAttribute(
-      "aria-label",
-      captureLabel ? `${captureLabel} capture` : `${panelLabel(name)} data processing`,
-    );
-    input.title = toggle.title;
-    input.addEventListener("change", () => {
-      const instance = state.layout.panels[name];
-      if (!instance) return;
-      instance.enabled = input.checked;
-      persistLayout();
-      void applyLayout();
-      showToast(
-        captureLabel
-          ? `${panelLabel(name)} capture ${input.checked ? "enabled" : "disabled"}.`
-          : `${panelLabel(name)} processing ${input.checked ? "enabled" : "disabled"}.`,
-      );
-    });
-    toggle.append(input);
-    const menu = panel.querySelector("[data-panel-menu]");
-    menu?.before(toggle);
-  }
   const handle = panel.querySelector("[data-drag-handle]");
   if (handle) {
     handle.draggable = false;
@@ -1887,12 +1773,21 @@ function initWorkspace() {
   });
 }
 
-panelRuntime = new PanelRuntime({
+panelRuntime = new PanelHost({
   definitionFor: panelDefinition,
   isSuspended: panelSuspended,
   container: $("#dashboard"),
   services: {
     getState: playerState,
+    setPanelEnabled(name, enabled) {
+      const instance = state.layout.panels[name];
+      if (!instance) return;
+      instance.enabled = enabled;
+      persistLayout();
+      void applyLayout();
+      const kind = ["cnn", "attribution"].includes(name) ? "capture" : "processing";
+      showToast(`${panelLabel(name)} ${kind} ${enabled ? "enabled" : "disabled"}.`);
+    },
     setRgbEnabled(enabled) {
       command("set_fps", {
         fps: Number(inspection.view.liveSnapshot?.session?.target_fps || 0),
@@ -1949,11 +1844,6 @@ panelRuntime = new PanelRuntime({
   },
   onLayout: (panel, name, placement, gridItem, definition) => {
     gridStack.update(gridItem, gridWidgetFor(name, placement));
-    panel.classList.toggle("panel-disabled", !definition.enabled);
-    const enabled = panel.querySelector("[data-panel-enabled]");
-    if (enabled) {
-      enabled.checked = definition.enabled;
-    }
   },
   onUnmount: (_panel, _name, gridItem) => {
     gridStack.removeWidget(gridItem, false, false);

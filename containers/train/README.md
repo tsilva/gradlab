@@ -33,6 +33,8 @@ uv run --frozen --only-group train-image-build \
 Build and smoke locally:
 
 ```bash
+pnpm install --frozen-lockfile
+pnpm build:web
 docker buildx build \
   --platform linux/amd64 \
   -f containers/train/Dockerfile \
@@ -42,6 +44,11 @@ docker buildx build \
 
 docker run --rm gradlab-train:local
 ```
+
+The image workflow performs the same locked frontend build before Docker. The
+Python package stage verifies its source and output hashes without Node; stale or
+missing assets fail the build. Frontend sources, build configuration and the pnpm
+lockfile participate in the runtime identity. Generated assets stay untracked.
 
 Published runs use only a verified immutable reference of the form
 `docker:ghcr.io/tsilva/gradlab/gradlab-train@sha256:<digest>`. The image workflow

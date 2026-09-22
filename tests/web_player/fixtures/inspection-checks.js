@@ -27,6 +27,38 @@ export async function runChecks() {
     assert((await control('status')).paused === 'paused', 'load must pause inference');
     pass('Policy opens paused with its exact frame');
 
+    // Exercise the mounted settings form through actual DOM events and observe
+    // commands at the production host boundary, without advancing the episode.
+    $('#playback-settings-toggle').click();
+    await wait(() => !$('#playback-settings-menu').hidden, 'settings menu');
+    const seed = $('#playback-settings-content [data-seed]');
+    seed.value = '41414'; seed.dispatchEvent(new Event('input', {bubbles:true}));
+    const fps = $('#playback-settings-content [data-fps]');
+    fps.value = '30'; fps.dispatchEvent(new Event('input', {bubbles:true}));
+    const sampling = $('#playback-settings-content [data-sampling]');
+    sampling.value = 'deterministic'; sampling.dispatchEvent(new Event('change', {bubbles:true}));
+    let settingsStatus;
+    const commandDeadline = performance.now() + 15000;
+    do {
+      settingsStatus = await control('status');
+      if (settingsStatus.commands.includes('set_fps') && settingsStatus.commands.includes('set_action_selection_mode')) break;
+      assert(performance.now() < commandDeadline, 'settings events did not reach the host');
+      await new Promise(requestAnimationFrame);
+    } while (true);
+    assert(settingsStatus.paused === 'paused' && selected(103), 'settings advanced the trajectory');
+    assert(seed.value === '41414', 'snapshot update replaced the user seed');
+    $('#playback-settings-close').click();
+    const processing = $('[data-panel-enabled="value"]');
+    processing.click();
+    await wait(() => !processing.checked && $('.panel[data-panel="value"]').classList.contains('panel-disabled'), 'processing disabled');
+    processing.click();
+    await wait(() => processing.checked && !$('.panel[data-panel="value"]').classList.contains('panel-disabled'), 'processing restored');
+    $('#panel-add').click();
+    await wait(() => $('#panel-editor').open, 'panel editor');
+    $('#panel-editor-cancel').click();
+    await wait(() => !$('#panel-editor').open, 'panel editor close');
+    pass('settings dispatch without inference, preserve edited seed, and panel controls toggle and edit');
+
     button('hold read'); seek(101);
     await wait(() => gate('read').pending === 1, 'first recorded read held');
     seek(102); seek(101); seek(102);

@@ -22,6 +22,7 @@ on:
   pull_request:
     paths:
       - .dockerignore
+      - .npmrc
       - .github/workflows/gradlab-train-dependencies.yml
       - .github/workflows/gradlab-train-foundations.yml
       - .github/workflows/gradlab-train-image.yml
@@ -30,6 +31,15 @@ on:
       - ops/dstack/**
       - experiments/modal_eval.yaml
       - experiments/recipes/**
+      - frontend/**
+      - hatch_build.py
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - svelte.config.js
+      - tsconfig.json
+      - vite.config.ts
+      - TRAJECTORIES.md
       - scripts/**
       - src/**
       - pyproject.toml
@@ -104,6 +114,14 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: type=raw,value=runtime-${{ steps.runtime_meta.outputs.runtime_input_sha256 }}
+
+      - name: Build locked player assets
+        if: github.event_name == 'pull_request' || steps.existing_image.outputs.digest == ''
+        run: |
+          npm install --global pnpm@10.33.0 --ignore-scripts --min-release-age=10080
+          pnpm install --frozen-lockfile
+          pnpm check:web
+          pnpm build:web
 
       - name: Build image
         id: build

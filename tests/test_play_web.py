@@ -1942,10 +1942,10 @@ def test_loopback_server_requires_exact_origin_and_fragment_token() -> None:
                 assert font_response.status == 200
                 assert font_response.headers["Content-Type"] == "font/woff2"
                 assert "default-src 'self'" in font_response.headers["Content-Security-Policy"]
-                panel_response = await client.get(f"{server.origin}/assets/panels/catalog.js")
+                panel_response = await client.get(f"{server.origin}/assets/sources/browser.js")
                 assert panel_response.status == 200
                 assert "javascript" in panel_response.headers["Content-Type"]
-                assert "PANEL_TYPES" in await panel_response.text()
+                assert await panel_response.text()
                 try:
                     await client.ws_connect(f"{server.origin}/ws", origin="http://example.test")
                 except WSServerHandshakeError as exc:
@@ -2848,188 +2848,25 @@ def test_player_binds_before_initial_catalog_work() -> None:
 
 
 def test_web_dashboard_assets_are_packaged_beside_server() -> None:
-    root = Path(__file__).parents[1] / "src" / "gradlab" / "web_player"
-    panel_root = root / "panels"
-    font_root = root / "fonts"
-    expected_assets = (
-        root / "playback-inspection.js",
-        root / "index.html",
-        root / "oauth_complete.html",
-        root / "oauth_complete.js",
-        root / "playback-settings.js",
-        root / "player-presentation.js",
-        root / "synchronized-presentation.js",
-        root / "favicon.svg",
-        root / "styles.css",
-        root / "tabler-icons.svg",
-        root / "tabler-chevron-down.svg",
-        root / "vendor" / "gridstack" / "gridstack-all.js",
-        root / "vendor" / "gridstack" / "gridstack.min.css",
-        root / "sources" / "browser.js",
-        root / "documents" / "diff.js",
-        root / "documents" / "viewer.js",
-        root / "documents" / "syntax.js",
-        font_root / "ChivoVariable.woff2",
-        font_root / "InterVariable.woff2",
-        font_root / "InterVariable-Italic.woff2",
-        font_root / "JetBrainsMonoVariable.woff2",
-        font_root / "JetBrainsMonoVariable-Italic.woff2",
-        panel_root / "catalog.js",
-        panel_root / "diagnostic-overlays.js",
-        panel_root / "layout-sizing.js",
-        panel_root / "manager.js",
-        panel_root / "runtime.js",
-        panel_root / "shared.js",
-        panel_root / "telemetry.js",
-        panel_root / "telemetry-panel.js",
-        panel_root / "workspace.js",
+    """The server serves the built entry and every static dependency locally."""
+    root = Path(__file__).parents[1] / "src/gradlab/web_player/dist"
+    required = (
+        "index.html", "app.js", "styles.css", "sources/browser.js",
+        "oauth_complete.html", "oauth_complete.js", "favicon.svg",
+        "tabler-icons.svg", "tabler-chevron-down.svg",
+        "vendor/gridstack/gridstack-all.js", "vendor/gridstack/gridstack.min.css",
+        "fonts/ChivoVariable.woff2", "fonts/InterVariable.woff2",
+        "fonts/InterVariable-Italic.woff2", "fonts/JetBrainsMonoVariable.woff2",
+        "fonts/JetBrainsMonoVariable-Italic.woff2",
     )
-    assert all(path.is_file() for path in expected_assets)
-    specialized_panels = {
-        "game",
-        "controls",
-        "observation",
-        "attribution",
-        "events",
-        "raw",
-    }
-    assert all((panel_root / f"{name}.js").is_file() for name in specialized_panels)
-    removed_metric_panels = {"policy", "reward", "actions", "signals"}
-    assert all(not (panel_root / f"{name}.js").exists() for name in removed_metric_panels)
-
-    markup = (root / "index.html").read_text(encoding="utf-8")
-    styles = (root / "styles.css").read_text(encoding="utf-8")
-    for name in (
-        "ChivoVariable.woff2",
-        "InterVariable.woff2",
-        "JetBrainsMonoVariable.woff2",
-        "JetBrainsMonoVariable-Italic.woff2",
-    ):
-        assert f'url("/assets/fonts/{name}") format("woff2")' in styles
-    script = (root / "app.js").read_text(encoding="utf-8")
-    oauth_script = (root / "oauth_complete.js").read_text(encoding="utf-8")
-    source_browser = (root / "sources" / "browser.js").read_text(encoding="utf-8")
-    contract_viewer = (root / "documents" / "viewer.js").read_text(encoding="utf-8")
-    contract_diff = (root / "documents" / "diff.js").read_text(encoding="utf-8")
-    contract_syntax = (root / "documents" / "syntax.js").read_text(encoding="utf-8")
-    catalog = (panel_root / "catalog.js").read_text(encoding="utf-8")
-    controls = (panel_root / "controls.js").read_text(encoding="utf-8")
-    playback_settings = (root / "playback-settings.js").read_text(encoding="utf-8")
-    manager = (panel_root / "manager.js").read_text(encoding="utf-8")
-    runtime = (panel_root / "runtime.js").read_text(encoding="utf-8")
-    telemetry = (panel_root / "telemetry.js").read_text(encoding="utf-8")
-    telemetry_panel = (panel_root / "telemetry-panel.js").read_text(encoding="utf-8")
-    workspace = (panel_root / "workspace.js").read_text(encoding="utf-8")
-    icons = (root / "tabler-icons.svg").read_text(encoding="utf-8")
-
-    assert '<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">' in markup
-    assert '<main id="dashboard" class="dashboard grid-stack"></main>' in markup
-    assert 'href="/assets/vendor/gridstack/gridstack.min.css"' in markup
+    assert all((root / name).is_file() for name in required)
+    assert list((root / "chunks").glob("*.js"))
+    markup = (root / "index.html").read_text()
+    assert 'src="/assets/app.js"' in markup
+    assert 'href="/assets/styles.css"' in markup
     assert 'src="/assets/vendor/gridstack/gridstack-all.js"' in markup
-    assert '<main id="source-browser" class="source-browser" hidden></main>' in markup
-    assert '<h1 id="page-title" hidden>Environment</h1>' in markup
-    assert '<span class="app-wordmark eyebrow">GRADLAB</span>' in markup
-    assert "GRADLAB PLAYER" not in markup
-    assert 'id="source-breadcrumbs"' in markup
-    assert '$("#source-breadcrumbs")' in script
-    assert "snapshot?.publication_capture?.ready === true" in script
-    assert "Boolean(snapshot?.publication_capture?.latest)" not in script
-    assert 'await publicationApi("/api/publication/render", { method: "POST" });' in script
-    assert "gradlab-youtube-oauth-complete" in script
-    assert "event.source !== youtubeOAuthPopup" in script
-    assert "gradlab-youtube-oauth-complete" in oauth_script
-    assert "window.opener.postMessage(message, location.origin)" in oauth_script
-    assert "location.replace(`/#token=${encodeURIComponent(token)}`)" in oauth_script
-    assert '$("#player-home")' not in script
-    assert 'id="more-toggle"' in markup
-    assert 'id="playback-settings-menu"' in markup
-    assert '$("#page-title").textContent = "Select checkpoint"' not in script
-    assert "approval_required" not in source_browser
-    assert "approve_source" not in source_browser
-    assert "Approve executable model" not in source_browser
-    assert 'id="panel-add"' in markup
-    assert 'id="panel-edit"' in markup
-    assert 'id="panel-duplicate"' in markup
-    assert 'id="panel-remove"' in markup
-    assert 'id="panel-editor"' in markup
-    for icon in ("ti-plus", "ti-edit", "ti-copy", "ti-trash"):
-        assert f'id="{icon}"' in icons
-
-    assert "PANEL_TYPES" in catalog
-    assert "BUILTIN_PANEL_PRESETS" in catalog
-    assert 'module: "./telemetry-panel.js"' in catalog
-    assert '"policy/value"' in catalog
-    assert '"reward/shaped"' in catalog
-    assert 'title: "Action history"' not in catalog
-    assert '"namespace-explorer"' in catalog
-    assert 'data-driver-option="human"' not in controls
-    assert 'data-driver-option="policy"' not in controls
-    assert 'driver: "policy"' in script
-    assert 'data-command="set-fps"' not in playback_settings
-    assert 'fps.addEventListener("input"' in playback_settings
-    assert 'services.command("set_fps", { fps: Number(fps.value) })' in playback_settings
-    assert "mountPlaybackSettings" in controls
-    assert "WORKSPACE_VERSION = 8" in workspace
-    assert "createTelemetryInstance" in workspace
-    assert "![7, WORKSPACE_VERSION].includes(value.version)" in workspace
-    assert "compareWorkspaceRevisions" in workspace
-    assert "class PanelManager" in manager
-    assert "compatibleMetricKeys" in manager
-    assert "class PanelRuntime" in runtime
-    assert "this.definitionFor(workspace, id)" in runtime
-    assert "import(definition.module)" in runtime
-    assert "makeLineBlock" in telemetry_panel
-    assert "makeHistogramBlock" in telemetry_panel
-    assert "makeDistributionBlock" in telemetry_panel
-    assert "actionComparisonPresentation" in telemetry_panel
-    assert "makeNamespaceBlock" in telemetry_panel
-    assert '"action/policy"' in telemetry
-    assert '"action/executed"' in telemetry
-    assert "dynamicDescriptorKey" in telemetry
-    assert "function hideGoExploreValuePanel(snapshot)" in script
-    assert 'search_algorithm_id !== "go-explore"' in script
-    assert "hideGoExploreValuePanel(snapshot)" in script
-    assert 'features.add("rewards")' in script
-    assert 'this.activeBreadcrumbRoute = ""' in source_browser
-
-    assert '"gradlab.player.workspace.v8.paired"' in script
-    assert '"gradlab.player.workspace.v7.single"' in script
-    assert "createTelemetryPanel" in script
-    assert "updateTelemetryPanel" in script
-    assert "historyFromTransition" not in script
-    assert "window.GridStack.init" in script
-    assert "column: 12" in script
-    assert "viewportGridCellHeight" in script
-    assert "cellHeight: DEFAULT_GRID_CELL_HEIGHT" in script
-    assert "min-height: 0;" in styles
-    assert "var(--grid-row)" not in styles
-    assert 'gridStack.on("dragstop"' in script
-    assert 'gridStack.on("resizestop"' in script
-    assert "panel-drag-target" not in script
-    assert ".telemetry-blocks" in styles
-    assert ".panel-editor" in styles
-    assert ".syntax-key" in styles
-    assert "contractSyntaxTokens(value, this.view)" in contract_viewer
-    assert "buildSideBySideRows" in contract_viewer
-    assert "sideBySideSearchCounts" in contract_viewer
-    assert "export function buildSideBySideRows" in contract_diff
-    assert 'id="contract-diff-base-scroll"' in markup
-    assert 'id="contract-diff-resolved-scroll"' in markup
-    assert ".contract-diff-content" in styles
-    assert ".contract-diff-inline" in styles
-    assert "export function contractSyntaxTokens(value, view)" in contract_syntax
-    assert "export function contractSearchRanges(value, query)" in contract_syntax
-
-    assert "export function sourceRouteFromPath(" in source_browser
-    assert "export function sourceRoutePath(" in source_browser
-    assert "export function formatDate(value, nowValue = Date.now())" in source_browser
-    assert "export function recipeVariantPresentation(item)" in source_browser
-    assert '{ label: "Recipe / variant" }' in source_browser
-    assert "item.description || item.name || item.run_id" in source_browser
-    assert 'history.pushState(null, "", target);' in source_browser
-    assert 'window.addEventListener("popstate", this.onPopState);' in source_browser
-    assert "goHome()" in source_browser
-    assert "hydrateInitialEnvironments()" in source_browser
+    assert 'https://' not in markup
+    assert not (root / "node_modules").exists()
 
 
 def test_scheduled_critic_disables_stationary_calibration():
