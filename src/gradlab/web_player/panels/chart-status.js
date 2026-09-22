@@ -12,4 +12,3 @@ export function chartPoints(history, view) {
   // to a different retained-history window while the selected range is loading.
   return view?.chartStatus ? view.chartHistory ?? [] : view?.chartHistory ?? history;
 }
-

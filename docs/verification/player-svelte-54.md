@@ -88,8 +88,8 @@ count is not an algorithmic-complexity measure.
 
 | Size | Baseline | Svelte |
 | --- | ---: | ---: |
-| Application source bytes | 580,450 | 581,628 |
-| Application source lines | 15,077 | 16,158 |
+| Application source bytes | 580,450 | 581,620 |
+| Application source lines | 15,077 | 16,150 |
 | Shipped assets, including fonts/vendor/build manifest | 1,834,431 B | 1,644,103 B |
 | Application JavaScript shipped, excluding vendor | 558,504 B | 383,273 B |
 | Sum of individually gzipped application JS files | 138,258 B | 119,598 B |

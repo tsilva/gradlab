@@ -51,4 +51,3 @@ export function frameSkipPresentation(playbackContract) {
     label: `Frame skip · training ${training} · playback ${playback}`,
   };
 }
-

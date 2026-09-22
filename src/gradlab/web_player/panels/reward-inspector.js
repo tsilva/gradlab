@@ -34,4 +34,3 @@ export const REWARD_LABELS = Object.freeze({
   "reward/provider": "Native reward",
   "reward/shaped": "Shaped reward",
 });
-

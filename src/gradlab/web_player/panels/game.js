@@ -66,4 +66,3 @@ export function gameFrameTerminationTone(snapshot) {
   const outcome = String(transition.outcome || "").toLowerCase();
   return ["success", "failure", "timeout"].includes(outcome) ? outcome : "";
 }
-

@@ -107,4 +107,3 @@ test("terminal badge tone follows the canonical success or failure outcome", () 
     },
   }), "");
 });
-

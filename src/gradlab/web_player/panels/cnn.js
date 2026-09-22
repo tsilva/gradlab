@@ -21,4 +21,3 @@ function response(value) {
   if (Math.abs(numeric) >= 1000 || Math.abs(numeric) < 0.001) return numeric.toExponential(2);
   return numeric.toFixed(3);
 }
-
