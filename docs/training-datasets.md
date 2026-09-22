@@ -154,3 +154,19 @@ attempt. Jobs defer durably rather than exhaust retries while quota is unavailab
 Use whole-Run or training-seed-group holdouts to avoid leakage across correlated
 Checkpoints; GradLab assigns no downstream split. The isolated trajectory
 collector remains a separate workflow.
+
+## Explicit derived split views
+
+An operator may explicitly request train/validation/test assignments after publication.
+These are immutable derived views of a pinned dataset revision, never a new default
+for monitoring collection. Keep complete episodes and reused environment/policy seeds
+in one partition across checkpoints. Balance episode brick-progress distributions
+first, then check returns, lengths and checkpoint coverage; publish the actual
+statistics, grouping, deterministic assignment and thresholds with the split manifest.
+Shared frame assets remain unchanged. Only training-referenced frame IDs may be used
+to fit models or preprocessing; identical RGB states can recur across episodes.
+
+Prepared split tables and their hashes use the durable `dataset-split-publication`
+handler, the shared publication budget and one expected-parent commit of at most
+100 files. A changed parent or changed prepared bytes blocks publication. The Hub
+README selects the derived tables; previous unsplit files and revisions remain valid.

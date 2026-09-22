@@ -37,10 +37,18 @@ gradlab play --recipe gradlab__bandit/ppo
 ```
 
 `gradlab play` starts the local web player and prints its loopback URL.
-It opens an installed Chrome or Chromium browser in a separate instance with a
-temporary profile. Ctrl+C closes that instance and its player tabs without closing
-your normal browser windows. Each session starts with fresh browser preferences.
-Use `--no-open` to open the printed URL yourself instead.
+It opens a dedicated Neutralinojs window titled **GradLab — Player**, with a cyan
+play-badge icon. **GradLab — Stats** has an amber chart-badge icon; the two viewers
+also have distinct macOS app identities and browser-tab icons. The
+pinned, SHA-256-verified runtime downloads once into `~/.cache/gradlab/neutralino`
+(or `$XDG_CACHE_HOME/gradlab/neutralino`). On macOS, GradLab creates its app bundle
+from the existing icon automatically. No Node.js, npm, compiler, or rebuild is
+needed when changing GradLab; restart the command to use the current source.
+The **Stats** button opens or focuses a synchronized GradLab window.
+Ctrl+C or killing the GradLab process closes its viewer windows without affecting
+your normal browser. Use `--no-open` for an external browser or headless use; this
+skips the runtime download entirely. Linux desktop use requires GTK 3 and
+WebKitGTK 4.1 installed by your distribution.
 Use `gradlab play --latest` to open the highest-step published checkpoint from the
 newest run in the player catalog that has a published checkpoint. It starts paused; click **Play** to begin inference.
 Runs without published checkpoints are skipped; the command reports when none are available.

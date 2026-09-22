@@ -1,5 +1,15 @@
 # Third-party notices
 
+## Neutralinojs desktop viewer
+
+The optional desktop runtime is downloaded from the official Neutralinojs
+`v6.9.0` release and verified against the hashes in `desktop_runtime.py`.
+Its full upstream license and dependency notices are distributed in
+`src/gradlab/desktop/NEUTRALINO_LICENSE.txt` and copied beside the cached runtime.
+The original GradLab icon is `image-assets/icon/icon-1024.png`, copied unchanged
+to `src/gradlab/desktop/icon.png`. Player and Stats variants were created from it
+with the built-in imagegen tool; prompts are in `src/gradlab/desktop/README.md`.
+
 GradLab's Gymrec v3 dataset provider boundary and compatibility behavior include
 code adapted from Gymrec 0.1.1 (`08b0328c990d0955a0df12636117ce08458afb5b`).
 

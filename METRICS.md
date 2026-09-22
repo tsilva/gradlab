@@ -382,7 +382,9 @@ resuming as its cause without a matched uninterrupted continuation.
 - Breakout also declares `bricks_destroyed` and `bricks_destroyed_normalized` as
   reward-independent episode progress. The Breakout workspace primary panels show normalized
   bricks destroyed mean, maximum, and minimum as fractions; diagnostics show the absolute mean.
-  The primary mean chart overlays train (rolling 100 episodes) and eval (the complete
+  A standard primary line plot shows `train/progress/bricks_destroyed_normalized/mean`
+  against `train/step` for comparison across selected Runs. A separate custom
+  mean chart overlays train (rolling 100 episodes) and eval (the complete
   evaluation manifest), using `train/step` and `eval/step` respectively on one timestep
   axis. Independent history queries preserve sparse asynchronous eval points at their
   checkpoint steps. The eval median remains a separate monitoring diagnostic.

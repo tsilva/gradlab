@@ -15,5 +15,5 @@ This specification applies to GradLab's current publication providers and public
 - A Release for a visual or interactive Policy must include its representative replay as root `replay.mp4` when the publication provider supports that preview.
 - Public model, video, source, and telemetry surfaces for one result must link to each other and use the same stable result identity.
 - Dataset Publication remains an explicit durable local operation on finalized verified Run inventories; training requires no HF target or credentials.
-- Checkpoint-evaluation dataset Publication must filter lightweight indexes before image transfer, preserve complete multi-chunk episodes and Run/training-seed/Checkpoint/evaluation/episode grouping, and leave split assignment to consumers.
+- Checkpoint-evaluation dataset Publication must filter lightweight indexes before image transfer, preserve complete multi-chunk episodes and Run/training-seed/Checkpoint/evaluation/episode grouping, and leave split assignment to consumers unless they explicitly request a derived split view.
 - Publication must append immutable contributions with expected-parent protection, idempotence, conflict rejection and bounded temporary space; it must preserve R2 sources and historical dataset meaning.
