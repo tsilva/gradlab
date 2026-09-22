@@ -61,6 +61,9 @@ def test_open_focuses_existing_window_and_reopens_closed_window():
             patch("gradlab.play_browser.DesktopWindow", side_effect=[first, second]) as factory,
         ):
             browser = PlaybackBrowser()
+            player = Mock()
+            player.process.poll.return_value = None
+            browser.windows["main"] = player
             await browser.open("http://127.0.0.1:1/?workspace=paired#token=secret", "stats")
             await browser.open("http://127.0.0.1:1/", "stats")
             assert factory.call_count == 1
@@ -71,8 +74,50 @@ def test_open_focuses_existing_window_and_reopens_closed_window():
             await browser.open("http://127.0.0.1:1/", "stats")
             assert factory.call_count == 2
             first.close.assert_called_once()
+            player.close.assert_not_called()
             browser.close()
             second.close.assert_called_once()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("window_name", ["main", "stats"])
+def test_companion_requests_cannot_reopen_a_closed_player(window_name):
+    async def scenario():
+        browser = PlaybackBrowser()
+        main, stats = Mock(), Mock()
+        main.process.poll.return_value = 0
+        stats.process.poll.return_value = None
+        browser.windows = {"main": main, "stats": stats}
+        with patch("gradlab.play_browser.DesktopWindow") as factory:
+            with pytest.raises(RuntimeError, match="Player.*closed"):
+                await browser.open("http://127.0.0.1:1/", window_name)
+            factory.assert_not_called()
+            stats.focus.assert_not_called()
+        await asyncio.wait_for(browser.wait_closed(), 1)
+        browser.close()
+        main.close.assert_called_once()
+        stats.close.assert_called_once()
+        with pytest.raises(RuntimeError, match="Player.*closed"):
+            await browser.open("http://127.0.0.1:1/", window_name)
+
+    asyncio.run(scenario())
+
+
+def test_player_exiting_during_focus_still_ends_the_session():
+    async def scenario():
+        browser = PlaybackBrowser()
+        player, stats = Mock(), Mock()
+        player.process.poll.return_value = None
+        stats.process.poll.return_value = None
+        player.focus = AsyncMock(side_effect=RuntimeError("viewer disconnected"))
+        browser.windows = {"main": player, "stats": stats}
+        with pytest.raises(RuntimeError, match="viewer disconnected"):
+            await browser.open("http://127.0.0.1:1/", "main")
+        await asyncio.wait_for(browser.wait_closed(), 1)
+        browser.close()
+        player.close.assert_called_once()
+        stats.close.assert_called_once()
 
     asyncio.run(scenario())
 
