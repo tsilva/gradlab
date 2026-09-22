@@ -132,7 +132,7 @@ frame timing remain null. Session records retain complete original episode
 provenance, including Run, training seed, Checkpoint and evaluation identity.
 
 Conversion resumes at completed episode boundaries, with a SQLite frame-deduplication
-index, an 8 GiB temporary spool cap and 1 GiB free-space reserve. Images are checked
+index, a 16 GiB temporary spool cap and 1 GiB free-space reserve. Images are checked
 for exact decoded RGB equality after WebP encoding. The dataset keeps original
 R2 recordings and previous HF files/revisions. Later contributions merge earlier
 complete episodes into a new immutable snapshot; the current dataset view switches
@@ -140,9 +140,11 @@ atomically only after all snapshot files are staged. IDs join tables within a
 pinned snapshot and must not be interpreted as row offsets or compared across
 snapshot revisions.
 
-The publisher preuploads binary content with two upload threads and publishes
-one expected-parent commit, bounded to 100 files. Larger snapshots fail before
-publication rather than expose incomplete data. A lost commit acknowledgement
+The publisher adapts shard row counts to at most 40 files each for frames and
+transitions while streaming fixed-size batches. It preuploads binary content in
+one batched SDK operation with two upload threads and publishes one expected-parent
+commit, bounded to 100 files. Snapshots exceeding the disk or file bounds fail
+before publication rather than expose incomplete data. A lost commit acknowledgement
 is reconciled using the immutable receipt. Previously queued PNG-shard jobs
 retain their original export format; new publications default to trajectory tables.
 

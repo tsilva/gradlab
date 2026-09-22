@@ -8,10 +8,32 @@ import pyarrow.parquet as pq
 import pytest
 from PIL import Image
 
-from gradlab.trajectory_export import Converter, publish_trajectories
+from gradlab.trajectory_export import Converter, publish_trajectories, _shard_rows
 from gradlab.trajectory_format import read_record, require_current_trajectory_schema, open_trajectory_parquet
 from gradlab.dataset_shards import PublicationBudget
 from tests.test_dataset_shards import fixture
+
+
+@pytest.mark.parametrize(
+    "used,free,allowed",
+    [(9 * 1024**3, 2 * 1024**3, True),
+     (16 * 1024**3, 1024**3, True),
+     (16 * 1024**3 + 1, 2 * 1024**3, False),
+     (0, 1024**3 - 1, False)],
+)
+def test_spool_cap_keeps_free_disk_safeguard(monkeypatch, used, free, allowed):
+    from types import SimpleNamespace
+    import gradlab.trajectory_export as export
+
+    file = SimpleNamespace(is_file=lambda: True, stat=lambda: SimpleNamespace(st_size=used))
+    monkeypatch.setattr(export, "Path", lambda _: SimpleNamespace(rglob=lambda _: [file]))
+    monkeypatch.setattr(export.shutil, "disk_usage", lambda _: SimpleNamespace(free=free))
+    assert export.MAX_DISK == 16 * 1024**3
+    if allowed:
+        export.guard_space("spool")
+    else:
+        with pytest.raises(ValueError, match="16 GiB spool or 1 GiB free-space reserve"):
+            export.guard_space("spool")
 
 
 def recording():
@@ -110,9 +132,12 @@ def test_atomic_publication_replaces_view_preserves_assets_and_retries(tmp_path)
     )
 
     # Test adapter stages file bytes like the public Hub preupload API.
+    upload_batches = []
+
     def preupload(repo, **kwargs):
         from pathlib import Path
 
+        upload_batches.append(len(kwargs["additions"]))
         for op in kwargs["additions"]:
             if isinstance(op.path_or_fileobj, str):
                 op.path_or_fileobj = Path(op.path_or_fileobj).read_bytes()
@@ -133,6 +158,7 @@ def test_atomic_publication_replaces_view_preserves_assets_and_retries(tmp_path)
     publish_trajectories(**kwargs)
     publish_trajectories(**kwargs)
     assert len(api.commits) == 1
+    assert upload_batches == [7]
     assert api.files["shards/old.zip"] == b"old source"
     assert b"split: all" in api.files["README.md"] and b"split: train" not in api.files["README.md"]
     assert "trajectory-view.json" in api.files
@@ -154,6 +180,31 @@ def test_atomic_publication_replaces_view_preserves_assets_and_retries(tmp_path)
             assert table.metadata.num_rows == identity["rows"]
     assert receipt["statistics"] == {"episodes": 2, "transitions": 2, "unique_frames": 1}
     assert len(api.commits) == 2
+
+
+@pytest.mark.parametrize("rows", [0, 1, 100000, 4000000, 9573810, 9574810, 100000000])
+def test_adaptive_shards_fit_atomic_publication(rows):
+    size = _shard_rows(rows)
+    assert size >= 100000
+    assert (rows + size - 1) // size <= 40
+
+
+def test_adaptive_shards_preserve_all_rows(tmp_path, monkeypatch):
+    from copy import deepcopy
+
+    _, models, episodes, _ = recording()
+    converter = Converter(tmp_path, {})
+    for index in range(1, 4):
+        episode = deepcopy(episodes[0])
+        episode["episode_id"] = str(index)
+        converter.episode(index, episode, models)
+    monkeypatch.setattr("gradlab.trajectory_export._shard_rows", lambda _: 2)
+    stats = converter.tables(tmp_path / "output")
+    paths = sorted((tmp_path / "output/transitions/all").glob("*.parquet"))
+    assert [pq.read_metadata(path).num_rows for path in paths] == [2, 1]
+    assert [row["episode_id"] for path in paths for row in pq.read_table(path).to_pylist()] == [1, 2, 3]
+    assert stats == {"episodes": 3, "transitions": 3, "unique_frames": 1}
+    converter.db.close()
 
 
 def test_multichunk_boundary_and_failed_episode_resume(tmp_path):
