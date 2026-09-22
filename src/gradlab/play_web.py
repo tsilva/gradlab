@@ -2899,6 +2899,8 @@ class PlaybackWebServer:
         self.publication_authority_client_id: str | None = None
         self.publication_capability: str | None = None
         self.stop_event = asyncio.Event()
+        self.desktop_browser: PlaybackBrowser | None = None
+        self.desktop_peers: set[web.WebSocketResponse] = set()
         self.ever_connected = False
         self.last_client_at = time.monotonic()
         self._observed_session_change = int(getattr(self.runner, "session_change", 0))
@@ -2974,12 +2976,63 @@ class PlaybackWebServer:
         response.headers["Cross-Origin-Opener-Policy"] = "same-origin-allow-popups"
         return response
 
+    async def desktop_window(self, request: web.Request) -> web.Response:
+        self._authorize_api(request)
+        if self.desktop_browser is None:
+            raise web.HTTPConflict(text="desktop viewer is not active")
+        payload = await request.json()
+        window = str(payload.get("window", ""))
+        if (
+            not window
+            or len(window) > 64
+            or any(c not in "abcdefghijklmnopqrstuvwxyz0123456789-" for c in window)
+        ):
+            raise web.HTTPBadRequest(text="invalid workspace window")
+        query = "?workspace=paired" if self.paired_windows else ""
+        url = (
+            self.dashboard_urls()[0]
+            if window == "main"
+            else (f"{self.origin}/workspace/{window}{query}#token={self.token}")
+        )
+        await self.desktop_browser.open(url, window)
+        return web.json_response({"opened": window})
+
+    async def desktop_peer(self, request: web.Request) -> web.WebSocketResponse:
+        """Relay workspace messages across native webview processes, including frames."""
+        if request.headers.get("Origin") != self.origin or self.desktop_browser is None:
+            raise web.HTTPForbidden()
+        socket = web.WebSocketResponse(max_msg_size=16 * 1024 * 1024)
+        await socket.prepare(request)
+        try:
+            hello = await socket.receive_json(timeout=5)
+            if not secrets.compare_digest(str(hello.get("token", "")), self.token):
+                await socket.close(code=1008, message=b"invalid token")
+                return socket
+            self.desktop_peers.add(socket)
+            await socket.send_json({"ready": True})
+            async for message in socket:
+                if message.type != WSMsgType.TEXT:
+                    continue
+                for peer in tuple(self.desktop_peers - {socket}):
+                    try:
+                        async with asyncio.timeout(2):
+                            await peer.send_str(message.data)
+                    except TimeoutError, ConnectionError:
+                        await peer.close()
+        finally:
+            self.desktop_peers.discard(socket)
+            await socket.close()
+        return socket
+
     async def publication_oauth_complete(self, _request: web.Request) -> web.FileResponse:
         response = web.FileResponse(self.asset_root / "oauth_complete.html")
         response.headers["Cross-Origin-Opener-Policy"] = "same-origin-allow-popups"
         return response
 
     async def asset(self, request: web.Request) -> web.FileResponse:
+        if request.match_info["path"] in {"viewer-player.png", "viewer-stats.png"}:
+            name = request.match_info["path"].removeprefix("viewer-")
+            return web.FileResponse(Path(__file__).with_name("desktop") / name)
         relative = Path(request.match_info["path"])
         root = self.asset_root.resolve()
         candidate = (root / relative).resolve()
@@ -3196,6 +3249,16 @@ class PlaybackWebServer:
         except Exception as exc:
             return web.json_response({"error": str(exc)}, status=400)
         self._oauth_transactions[transaction.state] = transaction
+        if request.headers.get("X-Gradlab-Desktop") == "1" and self.desktop_browser is not None:
+            import webbrowser
+
+            opened = await asyncio.to_thread(webbrowser.open, transaction.authorization_url)
+            if not opened:
+                self._oauth_transactions.pop(transaction.state, None)
+                return web.json_response(
+                    {"error": "Could not open the authorization browser"}, status=400
+                )
+            return web.json_response({"opened_external": True})
         return web.json_response({"authorization_url": transaction.authorization_url})
 
     async def publication_oauth_callback(self, request: web.Request) -> web.Response:
@@ -3216,6 +3279,9 @@ class PlaybackWebServer:
                 config = load_private_json(paths.client, root=paths.root)
                 token = exchange_oauth_code(config, transaction, code=code)
                 save_private_json(paths.token, token, root=paths.root)
+            authority = self.clients.get(self.publication_authority_client_id)
+            if authority is not None:
+                authority.offer_reliable({"type": "publication_credentials_changed"})
         except Exception as exc:
             return web.Response(
                 text=f"YouTube authorization failed: {exc}",
@@ -4227,6 +4293,17 @@ class PlaybackWebServer:
                 self.stop_event.set()
                 break
             if (
+                self.desktop_browser is not None
+                and self.desktop_browser.windows
+                and all(
+                    window.process.poll() is not None
+                    for window in self.desktop_browser.windows.values()
+                )
+                and not self.clients
+            ):
+                self.stop_event.set()
+                break
+            if (
                 self.ever_connected
                 and not self.clients
                 and time.monotonic() - self.last_client_at >= LAST_CLIENT_GRACE_SECONDS
@@ -4242,6 +4319,8 @@ class PlaybackWebServer:
         app.add_routes(
             [
                 web.get("/", self.page),
+                web.post("/api/desktop/window", self.desktop_window),
+                web.get("/api/desktop/peer", self.desktop_peer),
                 web.get("/environments/{environment_id}", self.page),
                 web.get("/environments/{environment_id}/goals/{goal_id}", self.page),
                 web.get(
@@ -4364,12 +4443,15 @@ class PlaybackWebServer:
         browser = PlaybackBrowser()
         try:
             if not bool(getattr(self.args, "no_open", False)):
-                browser.open(urls[0])
+                self.desktop_browser = browser
+                await browser.open(urls[0])
             await self.stop_event.wait()
         finally:
             try:
                 pump.cancel()
                 await asyncio.gather(pump, return_exceptions=True)
+                for peer in tuple(self.desktop_peers):
+                    await peer.close(code=1001, message=b"player shutting down")
                 for client in tuple(self.clients.values()):
                     await client.socket.close(code=1001, message=b"player shutting down")
                 try:

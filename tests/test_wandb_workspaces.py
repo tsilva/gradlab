@@ -83,12 +83,13 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
         self.assertEqual(breakout.run_scope, "current_metrics_schema")
         self.assertEqual(
             [panel.panel_id for panel in breakout.sections[0].panels],
-            ["primary_0", "primary_1", "primary_2", "primary_3"],
+            ["primary_0", "primary_mean", "primary_1", "primary_2", "primary_3"],
         )
         self.assertEqual(
             [panel.panel_id for section in breakout.sections for panel in section.panels],
             [
                 "primary_0",
+                "primary_mean",
                 "primary_1",
                 "primary_2",
                 "primary_3",

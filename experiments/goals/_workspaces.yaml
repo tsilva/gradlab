@@ -139,6 +139,12 @@ sections:
       y:
       - train/progress/bricks_destroyed_normalized/mean
       - eval/progress/bricks_destroyed_normalized/mean
+    - id: primary_mean
+      kind: line
+      y_title: fraction (last 100 episodes)
+      x: train/step
+      y:
+      - train/progress/bricks_destroyed_normalized/mean
     - id: primary_1
       kind: line
       y_title: fraction (last 100 episodes)

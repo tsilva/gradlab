@@ -206,6 +206,8 @@ def load_builtin_handlers() -> None:
     catalog_jobs.register_job_handler()
     publication_jobs.register_job_handler()
     trajectory_publication.register_job_handler()
+    from gradlab import dataset_split_publication
+    dataset_split_publication.register_job_handler()
 
 
 def handler_for(job_type: str, version: int) -> JobHandler:

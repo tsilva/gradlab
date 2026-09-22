@@ -1,4 +1,5 @@
 import { frameScheduler } from "./chart-transport.js";
+import { desktopChannel } from "./desktop-workspace.js";
 import { createPlaybackInspection, hasIndependentInference } from "./playback-inspection.js";
 import { rewardReferenceStore } from "./panels/reward-reference.js";
 import { createChartHistory } from "./chart-history.js";
@@ -49,6 +50,7 @@ const workspaceWindowName = location.pathname.startsWith("/workspace/")
   ? location.pathname.slice("/workspace/".length)
   : null;
 const pairedWorkspace = new URLSearchParams(location.search).get("workspace") === "paired";
+const desktopWorkspace = new URLSearchParams(location.search).get("desktop");
 const token = new URLSearchParams(location.hash.slice(1)).get("token") || "";
 const WORKSPACE_ID_KEY = "gradlab.player.workspace.v7.id";
 const LAYOUT_KEY = pairedWorkspace
@@ -56,10 +58,13 @@ const LAYOUT_KEY = pairedWorkspace
   : "gradlab.player.workspace.v7.single";
 const SAVED_LAYOUTS_KEY = "gradlab.player.workspace.saved.v7";
 const STATS_WINDOW_ID = "stats";
-const workspaceId = localStorage.getItem(WORKSPACE_ID_KEY) || crypto.randomUUID();
+const workspaceId = desktopWorkspace || localStorage.getItem(WORKSPACE_ID_KEY) || crypto.randomUUID();
 localStorage.setItem(WORKSPACE_ID_KEY, workspaceId);
 const rewardReferences = rewardReferenceStore(localStorage, workspaceId);
 const windowId = panelName ? `panel-${panelName}` : (workspaceWindowName || "main");
+const viewerIcon = document.querySelector('link[rel="icon"]');
+viewerIcon.type = "image/png";
+viewerIcon.href = `/assets/viewer-${windowId === "main" ? "player" : "stats"}.png`;
 const workspaceWindowTarget = (id) => `gradlab-${workspaceId}-${id}`;
 window.name = workspaceWindowTarget(windowId);
 
@@ -104,7 +109,7 @@ let panelManager = null;
 let playbackSettings = null;
 let youtubeOAuthPopup = null;
 
-const workspaceChannel = "BroadcastChannel" in window
+const workspaceChannel = desktopWorkspace ? desktopChannel(token) : "BroadcastChannel" in window
   ? new BroadcastChannel(`gradlab-player-${workspaceId}`)
   : null;
 
@@ -308,7 +313,7 @@ function renderSourceMode(snapshot = null) {
     updateLayoutTitle();
     return;
   }
-  document.title = "Select playback source · gradlab";
+  document.title = `GradLab — ${windowId === "main" ? "Player" : "Stats"} · Select playback source`;
   const expected = snapshot;
   void ensureSourceBrowser().then((browser) => {
     if (checkpointSelection.view.sourceMode && state.applicationSnapshot === expected) browser.render(expected);
@@ -363,6 +368,10 @@ function connect() {
 }
 
 function handleMessage(message) {
+  if (message.type === "publication_credentials_changed" && desktopWorkspace) {
+    void checkPublicationCredentials().catch(error => showToast(error.message, true));
+    return;
+  }
   if (message.type === "welcome") {
     state.connected = true;
     state.clientId = message.client_id;
@@ -448,6 +457,7 @@ async function publicationApi(path, { method = "GET", body } = {}) {
       "X-Gradlab-Client": state.clientId,
       "X-Gradlab-Control-Epoch": String(state.controlEpoch),
       "X-Gradlab-Publication-Capability": state.publicationCapability,
+      ...(desktopWorkspace ? { "X-Gradlab-Desktop": "1" } : {}),
       ...(body === undefined ? {} : { "Content-Type": "application/json" }),
     },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -626,6 +636,10 @@ function currentEpisodeHistory() { return inspection.view.currentHistory; }
 function setRewardReference(step) {
   if (!Number.isInteger(step) || step !== inspection.view.snapshot?.transition?.step) return;
   rewardReferences.set(inspection.view.snapshot, inspection.view.sessionEpoch);
+  if (desktopWorkspace) workspaceChannel.postMessage({
+    type: "reward-reference", source: state.windowId,
+    value: localStorage.getItem(`gradlab-reward-reference-${workspaceId}`),
+  });
   panelRuntime?.renderHistory(currentEpisodeHistory(), inspection.view.snapshot, panelView());
 }
 
@@ -1080,7 +1094,8 @@ function updateLayoutTitle() {
       : environmentTitle;
   $("#page-title").textContent = title;
   $("#layout-name-input").value = state.layout.name;
-  document.title = `${title} · gradlab`;
+  const role = state.windowId === "main" ? "Player" : "Stats";
+  document.title = `GradLab — ${role} · ${environmentTitle}${panelName ? ` · ${panelLabel(panelName)}` : ""}`;
 }
 
 function updateWorkspaceEditing() {
@@ -1334,10 +1349,26 @@ function windowUrl(targetWindow) {
   return `${location.origin}/workspace/${encodeURIComponent(targetWindow)}${location.search}#token=${encodeURIComponent(token)}`;
 }
 
-function movePanelToNewWindow(name) {
+async function openWorkspaceWindow(targetWindow) {
+  if (desktopWorkspace) {
+    const response = await fetch("/api/desktop/window", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ window: targetWindow }),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    return;
+  }
+  const tab = window.open("", workspaceWindowTarget(targetWindow));
+  if (!tab) throw new Error("The browser blocked the workspace tab. Allow popups and try again.");
+  if (tab.location.href === "about:blank") tab.location.replace(windowUrl(targetWindow));
+  tab.focus();
+}
+
+async function movePanelToNewWindow(name) {
   const targetWindow = `window-${crypto.randomUUID().slice(0, 8)}`;
-  const popup = window.open(windowUrl(targetWindow), `gradlab-${targetWindow}`, "popup");
-  if (!popup) { showToast("The browser blocked the new workspace window.", true); return; }
+  try { await openWorkspaceWindow(targetWindow); }
+  catch (error) { showToast(error.message, true); return; }
   const placement = state.layout.panels[name].placement;
   placement.window = targetWindow;
   placement.visible = true;
@@ -1426,13 +1457,7 @@ function bindWorkspaceMenus() {
   switchWindow.querySelector("span").textContent = targetLabel;
   switchWindow.title = `Open or focus ${targetLabel.toLowerCase()}`;
   switchWindow.addEventListener("click", () => {
-    const tab = window.open("", workspaceWindowTarget(targetWindow));
-    if (!tab) {
-      showToast("The browser blocked the workspace tab. Allow popups and try again.", true);
-      return;
-    }
-    if (tab.location.href === "about:blank") tab.location.replace(windowUrl(targetWindow));
-    tab.focus();
+    void openWorkspaceWindow(targetWindow).catch(error => showToast(error.message, true));
   });
   const closePlayerMenu = () => {
     $("#player-menu").hidden = true;
@@ -1547,8 +1572,7 @@ function bindWorkspaceMenus() {
   $("#new-window").addEventListener("click", () => {
     if (!workspaceIsEditable(state.layout.preset)) return;
     const targetWindow = `window-${crypto.randomUUID().slice(0, 8)}`;
-    const popup = window.open(windowUrl(targetWindow), `gradlab-${targetWindow}`, "popup");
-    if (!popup) showToast("The browser blocked the new workspace window.", true);
+    void openWorkspaceWindow(targetWindow).catch(error => showToast(error.message, true));
   });
   document.addEventListener("click", (event) => {
     if (!$("#player-menu").contains(event.target) && !event.target.closest("#more-toggle")) {
@@ -1616,7 +1640,15 @@ function bindWorkspaceSync() {
           applyLayout();
         }
       } else if (message.type === "heartbeat") {
+        if (desktopWorkspace && !state.activeWindows.has(message.window)) {
+          workspaceChannel.postMessage({ type: "layout", layout: state.layout, source: state.windowId });
+          workspaceChannel.postMessage({ type: "reward-reference", source: state.windowId,
+            value: localStorage.getItem(`gradlab-reward-reference-${workspaceId}`) });
+        }
         state.activeWindows.set(message.window, Date.now());
+      } else if (message.type === "reward-reference" && desktopWorkspace && message.value) {
+        localStorage.setItem(`gradlab-reward-reference-${workspaceId}`, message.value);
+        panelRuntime?.renderHistory(currentEpisodeHistory(), inspection.view.snapshot, panelView());
       } else if (["inspection-cursor", "inspection-frame-request", "inspection-frame"].includes(message.type)) {
         inspection.receivePeer(message);
       } else if (message.type === "window-closing" && state.windowId === "main") {
@@ -1770,7 +1802,13 @@ function initWorkspace() {
   });
   $("#publication-authorize-youtube").addEventListener("click", async () => {
     try {
-      const result = await publicationApi("/api/publication/oauth/start", { method: "POST" });
+      const result = await publicationApi("/api/publication/oauth/start", {
+        method: "POST",
+      });
+      if (result.opened_external) {
+        showToast("Finish YouTube authorization in your browser, then return to GradLab.");
+        return;
+      }
       youtubeOAuthPopup = window.open(
         result.authorization_url,
         "gradlab-youtube-oauth",
