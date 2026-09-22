@@ -64,10 +64,15 @@ dataset-minari = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build.hooks.custom]
+path = "hatch_build.py"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/gradlab"]
+exclude = ["src/gradlab/web_player"]
 
 [tool.hatch.build.targets.wheel.force-include]
+"src/gradlab/web_player/dist" = "gradlab/web_player/dist"
 "THIRD_PARTY_NOTICES.md" = "THIRD_PARTY_NOTICES.md"
 "METRICS.md" = "gradlab/METRICS.md"
 "TRAJECTORIES.md" = "gradlab/TRAJECTORIES.md"
@@ -77,6 +82,16 @@ packages = ["src/gradlab"]
 [tool.hatch.build.targets.sdist]
 include = [
     "/src/gradlab",
+    "/frontend",
+    "/hatch_build.py",
+    "/package.json",
+    "/pnpm-lock.yaml",
+    "/pnpm-workspace.yaml",
+    "/.npmrc",
+    "/vite.config.ts",
+    "/svelte.config.js",
+    "/tsconfig.json",
+    "/scripts/player-build-inputs.mjs",
     "/experiments/goals",
     "/experiments/recipes",
     "/README.md",
@@ -85,6 +100,9 @@ include = [
     "/TRAJECTORIES.md",
     "/THIRD_PARTY_NOTICES.md",
 ]
+
+[tool.hatch.build.targets.sdist.force-include]
+"src/gradlab/web_player/dist" = "src/gradlab/web_player/dist"
 
 [tool.uv]
 exclude-newer = "7 days"

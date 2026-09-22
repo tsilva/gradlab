@@ -13,33 +13,3 @@ export function chartPoints(history, view) {
   return view?.chartStatus ? view.chartHistory ?? [] : view?.chartHistory ?? history;
 }
 
-export function createChartStatus(retry) {
-  const element = document.createElement("div");
-  element.className = "chart-status";
-  element.setAttribute("role", "status");
-  element.setAttribute("aria-live", "polite");
-  element.hidden = true;
-  const message = document.createElement("span");
-  const button = document.createElement("button");
-  button.type = "button";
-  button.textContent = "Retry";
-  button.hidden = true;
-  button.addEventListener("click", () => retry?.());
-  element.append(message, button);
-  return {
-    element,
-    render(chart) {
-      const empty = chart?.status === "idle"
-        || chart?.status === "ready" && chart.data?.length === 0;
-      element.hidden = !chart || !empty && ["ready", "refreshing"].includes(chart.status);
-      element.classList.toggle("widget-empty", empty);
-      button.hidden = chart?.status !== "error";
-      message.textContent = empty ? "No data available yet" : chart?.status === "error"
-        ? chart.error || "Unable to load episode charts"
-        : chart?.status === "recovering" ? "Recovering chart history…"
-          : chart?.status === "loading" ? "Loading chart history…"
-            : chart?.status === "refreshing" || chart?.status === "ready" ? ""
-              : "No data available yet";
-    },
-  };
-}

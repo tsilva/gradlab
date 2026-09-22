@@ -53,81 +53,6 @@ export function number(value, digits = 3) {
   return Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : "—";
 }
 
-export function createPanel({
-  id,
-  label,
-  body = "",
-  className = "",
-  tag = "section",
-  headerClass = "",
-}) {
-  const element = document.createElement(tag);
-  element.className = `panel ${className}`.trim();
-  element.dataset.panel = id;
-  const heading = `${id}-panel-heading`;
-  element.setAttribute("aria-labelledby", heading);
-  element.innerHTML = `
-    <header class="panel-header ${headerClass}">
-      <button data-drag-handle class="icon-button icon-only panel-drag" type="button"><svg class="icon" aria-hidden="true"><use href="${ICONS}#ti-grip-vertical"></use></svg></button>
-      <div class="panel-title"><h2 id="${heading}"></h2></div>
-      <button data-panel-menu="${id}" class="icon-button icon-only" type="button"><svg class="icon" aria-hidden="true"><use href="${ICONS}#ti-dots-vertical"></use></svg></button>
-    </header>
-    ${body}
-  `;
-  const renderedLabel = text(label, "Panel");
-  const drag = element.querySelector("[data-drag-handle]");
-  const menu = element.querySelector("[data-panel-menu]");
-  element.querySelector("h2").textContent = renderedLabel;
-  drag.setAttribute("aria-label", `Move ${renderedLabel} panel`);
-  drag.title = drag.getAttribute("aria-label");
-  menu.setAttribute("aria-label", `${renderedLabel} panel options`);
-  menu.title = menu.getAttribute("aria-label");
-  return element;
-}
-
-export function setStats(target, values) {
-  target.replaceChildren(...values.map(([label, value]) => {
-    const box = document.createElement("div");
-    box.className = "stat";
-    const key = document.createElement("span");
-    key.className = "stat-label";
-    key.textContent = label;
-    const rendered = document.createElement("span");
-    rendered.className = "stat-value";
-    rendered.textContent = text(value);
-    box.append(key, rendered);
-    return box;
-  }));
-}
-
-export function renderJson(target, value, fallback) {
-  if (value === null || value === undefined) {
-    target.textContent = fallback;
-    return;
-  }
-  const source = JSON.stringify(value, null, 2);
-  const tokens = /"(?:\\.|[^"\\])*"(?=\s*:)|"(?:\\.|[^"\\])*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|\b(?:true|false|null)\b/g;
-  const fragment = document.createDocumentFragment();
-  let cursor = 0;
-  for (const match of source.matchAll(tokens)) {
-    fragment.append(document.createTextNode(source.slice(cursor, match.index)));
-    const token = document.createElement("span");
-    const raw = match[0];
-    if (raw.startsWith('"')) {
-      token.className = source.slice(match.index + raw.length).match(/^\s*:/)
-        ? "json-key"
-        : "json-string";
-    } else if (raw === "true" || raw === "false") token.className = "json-boolean";
-    else if (raw === "null") token.className = "json-null";
-    else token.className = "json-number";
-    token.textContent = raw;
-    fragment.append(token);
-    cursor = match.index + raw.length;
-  }
-  fragment.append(document.createTextNode(source.slice(cursor)));
-  target.replaceChildren(fragment);
-}
-
 function resizeCanvas(canvas) {
   const ratio = window.devicePixelRatio || 1;
   const width = Math.max(240, canvas.clientWidth);
@@ -342,6 +267,7 @@ function fitCanvasLabel(context, value, maxWidth) {
   return end > 0 ? `${label.slice(0, end)}…` : "…";
 }
 
+/** @param {any} canvas @param {number[]} counts @param {(string|null)[]} names @param {{highlightIndex?: number|null}} options */
 export function drawHistogram(
   canvas,
   counts,

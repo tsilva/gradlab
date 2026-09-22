@@ -9,11 +9,6 @@ import {
   gameFrameTerminationTone,
 } from "../../src/gradlab/web_player/panels/game.js";
 
-const source = readFileSync(
-  new URL("../../src/gradlab/web_player/panels/game.js", import.meta.url),
-  "utf8",
-);
-
 test("game frame phase distinguishes initial, after-action, and terminal frames", () => {
   assert.equal(gameFramePhase({ transition: null }), "Initial observation");
   assert.equal(
@@ -113,7 +108,3 @@ test("terminal badge tone follows the canonical success or failure outcome", () 
   }), "");
 });
 
-test("game presents frame boundary metadata", () => {
-  assert.match(source, /data-frame-boundary hidden/);
-  assert.match(source, /boundaryElement\.hidden = !boundaryKind/);
-});
