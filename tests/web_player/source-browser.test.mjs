@@ -949,7 +949,7 @@ test("source discovery progressively discloses secondary controls", async () => 
     "utf8",
   );
   const html = await readFile(
-    new URL("../../src/gradlab/web_player/index.html", import.meta.url),
+    new URL("../../frontend/components/Shell.svelte", import.meta.url),
     "utf8",
   );
 
@@ -961,7 +961,7 @@ test("source discovery progressively discloses secondary controls", async () => 
   assert.match(styles, /\.source-search-disclosure\[open\] > summary \{ display: none; \}/);
   assert.match(styles, /grid-template-columns: auto minmax\(0, 1fr\) auto;/);
   assert.doesNotMatch(source, /resultCount > 8/);
-  assert.match(html, /id="contract-search-disclosure" class="contract-search-disclosure"/);
+  assert.match(html, /id="contract-search-disclosure"\s+class="contract-search-disclosure"/);
   assert.match(source, /differencesSummary\.textContent = .* from current`/);
   assert.doesNotMatch(source, /Evaluation & technical details/);
   assert.doesNotMatch(source, /Compare all checkpoints/);

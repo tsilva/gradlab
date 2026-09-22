@@ -5,6 +5,7 @@
 .env
 .env.*
 .venv
+node_modules
 .uv-cache
 .matplotlib
 .mypy_cache
@@ -27,4 +28,3 @@ reports
 *.mov
 *.avi
 *.mkv
-

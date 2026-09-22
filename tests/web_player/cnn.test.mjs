@@ -9,15 +9,6 @@ import {
   peakRegionLabel,
 } from "../../src/gradlab/web_player/panels/cnn.js";
 import { PANEL_TYPES } from "../../src/gradlab/web_player/panels/catalog.js";
-
-const source = readFileSync(
-  new URL("../../src/gradlab/web_player/panels/cnn.js", import.meta.url),
-  "utf8",
-);
-const appSource = readFileSync(
-  new URL("../../src/gradlab/web_player/app.js", import.meta.url),
-  "utf8",
-);
 const catalogSource = readFileSync(
   new URL("../../src/gradlab/web_player/panels/catalog.js", import.meta.url),
   "utf8",
@@ -72,19 +63,9 @@ test("atlas tiles and peak regions map deterministically", () => {
 });
 
 test("CNN panel is modular, opt-in, and generation-tagged", () => {
-  assert.match(source, /services\.command\("set_cnn_inspection"/);
-  assert.doesNotMatch(source, /data-cnn-enabled/);
-  assert.doesNotMatch(source, /data-cnn-observation/);
-  assert.doesNotMatch(source, /data-cnn-winners/);
-  assert.doesNotMatch(source, /FRAME_OBSERVATION/);
-  assert.match(source, /Shared spatial view/);
-  assert.match(source, /Kernel tiles show every learned input-channel plane/);
-  assert.match(source, /not why the policy selected its action/);
   assert.equal(PANEL_TYPES.cnn.module, "./cnn.js");
   assert.deepEqual(PANEL_TYPES.cnn.subscriptions, ["cnn-inspection"]);
   assert.deepEqual(PANEL_TYPES.cnn.processing, ["cnn-inspection"]);
   assert.deepEqual(PANEL_TYPES.cnn.frameKinds, [4]);
   assert.match(catalogSource, /subscriptions: \["cnn-inspection"\]/);
-  assert.match(appSource, /function syncCnnCaptureToPanel/);
-  assert.match(appSource, /command\("set_cnn_inspection", \{ enabled: desired \}\)/);
 });

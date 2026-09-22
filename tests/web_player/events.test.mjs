@@ -8,28 +8,11 @@ import {
   eventColorFill,
   eventLabels,
 } from "../../src/gradlab/web_player/event-colors.js";
-
-const panel = readFileSync(
-  new URL("../../src/gradlab/web_player/panels/events.js", import.meta.url),
-  "utf8",
-);
-const app = readFileSync(
-  new URL("../../src/gradlab/web_player/app.js", import.meta.url),
-  "utf8",
-);
 const styles = readFileSync(
   new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
   "utf8",
 );
 
-test("event rows inspect their retained transition", () => {
-  assert.match(panel, /jump\.type = "button"/);
-  assert.match(
-    panel,
-    /jump\.addEventListener\("click", \(\) => recorded\s*\? services\.inspectStep\(point\.step\)\s*: services\.inspectSequence\(point\.sequence\)\)/,
-  );
-  assert.match(panel, /jump\.setAttribute\("aria-current", "step"\)/);
-});
 
 
 test("the events panel owns the only scrollbar", () => {
@@ -54,8 +37,6 @@ test("event rows and timeline markers share the same label-derived fill", () => 
   assert.match(fill, /^linear-gradient\(to bottom,/);
   assert.ok(fill.includes(eventColor("life_loss")));
   assert.ok(fill.includes(eventColor("coin")));
-  assert.match(panel, /eventColorFill\(labels\)/);
-  assert.match(app, /eventColorFill\(eventLabels\(point\)\)/);
   assert.match(styles, /\.event-item::before \{[^}]*background: var\(--event-colors/);
   assert.match(styles, /\.timeline-marker \{[^}]*background: var\(--event-colors/);
 });

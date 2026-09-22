@@ -1,8 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { mountRenderSpeed } from "../../src/gradlab/web_player/panels/render-speed.js";
-import { mount } from "../../src/gradlab/web_player/panels/game.js";
+import { createRenderSpeed } from "../../src/gradlab/web_player/panels/render-speed.js";
+import { createGameSurface } from "../../frontend/game-surface.js";
+const displaySpeed = element => value => {
+  element.querySelector('[data-fps-value]').textContent = value.value;
+  element.querySelector('[data-fps-area]').setAttribute('d', value.path);
+  element.title = value.title;
+};
+const mountRenderSpeed = element => createRenderSpeed(displaySpeed(element));
+const mount = ({services}) => {
+  const element = document.createElement('div');
+  return createGameSurface(element, services, () => {}, () => {}, displaySpeed(element.querySelector('[data-render-speed]')));
+};
 
 function browserClock(t) {
   let now = 0;

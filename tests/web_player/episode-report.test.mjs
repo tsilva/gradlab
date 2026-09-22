@@ -4,7 +4,7 @@ import test from "node:test";
 
 import { episodeReport } from "../../src/gradlab/web_player/episode-report.js";
 
-const html = readFileSync(new URL("../../src/gradlab/web_player/index.html", import.meta.url), "utf8");
+const html = readFileSync(new URL("../../frontend/components/Shell.svelte", import.meta.url), "utf8");
 
 test("the player omits the redundant episode outcome panel", () => {
   assert.doesNotMatch(html, /id="episode-report"/);

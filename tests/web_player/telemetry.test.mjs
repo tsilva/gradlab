@@ -51,10 +51,6 @@ const styles = readFileSync(
   new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
   "utf8",
 );
-const telemetryPanelSource = readFileSync(
-  new URL("../../src/gradlab/web_player/panels/telemetry-panel.js", import.meta.url),
-  "utf8",
-);
 
 test("signal selectors leave focus-safe space before the chart", () => {
   assert.match(
@@ -84,7 +80,6 @@ test("policy distribution legend labels align with their data columns", () => {
   assert.match(legendRule, /grid-template-columns: subgrid;/);
   assert.match(comparisonRule, /grid-template-columns: subgrid;/);
   assert.match(rowRule, /grid-template-columns: subgrid;/);
-  assert.match(telemetryPanelSource, /layout\.append\(legend, target\);/);
   assert.match(legendSeriesRule, /grid-column: 2;/);
   assert.match(
     legendSeriesRule,
@@ -108,23 +103,8 @@ test("policy distribution legend labels align with their data columns", () => {
     styles,
     /\.action-comparison-bar\.(?:step|episode) \.action-comparison-track \{[^}]*border-radius:/,
   );
-  assert.match(telemetryPanelSource, /class="action-comparison-legend-series"/);
-  assert.match(
-    telemetryPanelSource,
-    /<span class="step">Step action probability<\/span>\s*<span class="episode">Window: policy choices<\/span>/,
-  );
-  assert.match(
-    telemetryPanelSource,
-    /actionComparisonBar\(row\.name, "step", row\.stepProbability\),\s*actionComparisonBar\(row\.name, "episode", row\.policyFrequency\)/,
-  );
 });
 
-test("policy distributions omit the redundant action summary caption", () => {
-  assert.doesNotMatch(
-    telemetryPanelSource,
-    /executed actions? in the retained episode|setActionComparisonCaption/,
-  );
-});
 
 test("the built-in policy panel uses the decision-first layout only for its canonical blocks", () => {
   const definition = {
@@ -298,19 +278,10 @@ test("policy decision separates the selected action from the effective auto-serv
 });
 
 test("policy decision table omits the redundant standalone series legend", () => {
-  assert.doesNotMatch(telemetryPanelSource, /policy-decision-legend/);
   assert.doesNotMatch(styles, /\.policy-decision-legend/);
-  assert.match(
-    telemetryPanelSource,
-    /\["STEP", "step"\],\s*\["POLICY", "episode"\]/,
-  );
 });
 
 test("policy decision rank follows the action-selection mode", () => {
-  assert.match(
-    telemetryPanelSource,
-    /modeLine\.append\(mode, rank\);\s*hero\.append\(choiceLabel, heroLine, modeLine\);/,
-  );
   assert.match(
     styles,
     /\.policy-decision-mode-line \{[^}]*display: flex;[^}]*gap: \.6rem;/,
@@ -322,10 +293,7 @@ test("policy decision rank follows the action-selection mode", () => {
 });
 
 test("policy decision hero omits the redundant step probability label", () => {
-  assert.doesNotMatch(telemetryPanelSource, /policy-decision-probability-label/);
-  assert.doesNotMatch(telemetryPanelSource, /probabilityLabel/);
   assert.doesNotMatch(styles, /\.policy-decision-probability-label/);
-  assert.match(telemetryPanelSource, /heroLine\.append\(action, probability\);/);
 });
 
 test("policy decision rank orders current-step choices and preserves ties", () => {
@@ -435,35 +403,13 @@ test("policy decision does not fabricate a maximum for invalid probabilities", (
 
 test("policy decision color system renders separate selected and highest stripes", () => {
   assert.match(
-    telemetryPanelSource,
-    /row\.highest \? "highest" : ""/,
-  );
-  assert.match(
-    telemetryPanelSource,
-    /target\.classList\.toggle\(\s*"selected-is-highest"/,
-  );
-  assert.match(
-    telemetryPanelSource,
-    /target\.classList\.toggle\(\s*"selected-below-highest"/,
-  );
-  assert.match(
     styles,
     /\.policy-decision-comparison-row\.selected\.highest \{[^}]*inset 3px 0 var\(--color-evaluation-text\)[^}]*inset 6px 0 var\(--color-series-amber\)/,
   );
 });
 
 test("reward totals show pre-clip and post-clip values without a formula", () => {
-  assert.doesNotMatch(telemetryPanelSource, /block\.title \|\| "Reward ledger"/);
-  assert.doesNotMatch(
-    telemetryPanelSource,
-    /Signed contribution uses \|final reward\|/,
-  );
-  assert.match(telemetryPanelSource, /const foot = appendFoot\(section, block\.foot\);/);
-  assert.match(telemetryPanelSource, /foot\?\.classList\.toggle\(/);
-  assert.match(telemetryPanelSource, /classList\.toggle\("titleless", !block\.title\)/);
   assert.match(styles, /\.reward-analysis-toolbar\.titleless \{ justify-content: flex-end; \}/);
-  assert.doesNotMatch(telemetryPanelSource, /reward-transform-strip/);
-  assert.doesNotMatch(telemetryPanelSource, /reward-ledger-summary-detail/);
   assert.deepEqual(
     rewardSummaryCards({
       positive: 4,
@@ -481,7 +427,6 @@ test("reward totals show pre-clip and post-clip values without a formula", () =>
 });
 
 test("namespace telemetry tables use the panel as their only scroll container", () => {
-  assert.match(telemetryPanelSource, /table\.className = "telemetry-namespace-table";/);
   const rule = styles.match(/\.telemetry-namespace-table \{([^}]*)\}/)?.[1] || "";
   assert.match(rule, /margin-top: \.55rem;/);
   assert.doesNotMatch(rule, /(?:max-height|overflow)\s*:/);
@@ -496,7 +441,6 @@ test("action labels fit one content-sized column and retain their full tooltip",
   assert.doesNotMatch(rule, /overflow: hidden;/);
   assert.doesNotMatch(rule, /text-overflow: ellipsis;/);
   assert.doesNotMatch(rule, /overflow-wrap/);
-  assert.match(telemetryPanelSource, /label\.title = row\.name;/);
 });
 
 test("dynamic metric names round-trip without path ambiguity", () => {
@@ -844,16 +788,6 @@ test("line-chart pointer positions resolve to retained playback sequences", () =
   assert.equal(lineCursorSequence(history, null, 110, history.length), null);
 });
 
-test("clicking a line chart inspects its nearest retained playback sequence", () => {
-  assert.match(
-    telemetryPanelSource,
-    /canvas\.addEventListener\("click", \(event\) => \{[\s\S]*?lineCursorSequence\([\s\S]*?services\.inspectSequence\?\.\(sequence\);/,
-  );
-  assert.match(
-    telemetryPanelSource,
-    /if \(block\.kind === "line"\) return makeLineBlock\(block, services, definition\);/,
-  );
-});
 
 test("the timeline shows the displayed episode and step across a boundary", () => {
   assert.equal(

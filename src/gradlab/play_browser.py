@@ -130,6 +130,7 @@ class PlaybackBrowser:
         self.workspace_id = uuid4().hex
         self.executables: dict[str, Path] = {}
         self._lock = asyncio.Lock()
+        self._closing = False
 
     def desktop_url(self, url: str) -> str:
         parts = urlsplit(url)
@@ -139,6 +140,9 @@ class PlaybackBrowser:
 
     async def open(self, url: str, window: str = "main") -> None:
         async with self._lock:
+            player = self.windows.get("main")
+            if self._closing or (player is not None and player.process.poll() is not None):
+                raise RuntimeError("Player window is closed; the desktop session is shutting down")
             existing = self.windows.get(window)
             if existing is not None and existing.process.poll() is not None:
                 await asyncio.to_thread(existing.close)
@@ -161,21 +165,24 @@ class PlaybackBrowser:
             try:
                 await existing.focus()
             except BaseException:
+                if window == "main":
+                    self._closing = True
                 await asyncio.to_thread(existing.close)
                 self.windows.pop(window, None)
                 raise
 
     async def wait_closed(self) -> None:
-        """Native window ownership, not a page's WebSocket, determines desktop lifetime."""
+        """Player owns desktop lifetime; Stats and external tabs cannot keep it alive."""
         while True:
             async with self._lock:
-                if self.windows and all(
-                    window.process.poll() is not None for window in self.windows.values()
-                ):
+                player = self.windows.get("main")
+                if self._closing or (player is not None and player.process.poll() is not None):
+                    self._closing = True
                     return
             await asyncio.sleep(0.1)
 
     def close(self) -> None:
+        self._closing = True
         for window in self.windows.values():
             window.close()
         self.windows.clear()

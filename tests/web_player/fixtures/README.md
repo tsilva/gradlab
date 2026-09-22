@@ -1,3 +1,9 @@
+Build the current frontend with `pnpm install --frozen-lockfile && pnpm build:web`
+before starting a complete-player fixture. For the mounted chart fixture, also run
+`pnpm build:web:fixtures`, serve the checkout using `python -m http.server`, and
+open `tests/web_player/fixtures/chart-panels.html`. These test bundles stay under
+ignored `logs/web-fixtures/` and are never included in distributions.
+
 # Chart history browser verification
 
 The fixtures use synthetic recorded transitions and controlled requests. They need
@@ -107,3 +113,25 @@ window stays at its old step, and release. Input metadata and the second playbar
 must settle on the latest selection. Selecting the last step in either window
 returns both to live without starting inference. Inspect server command history
 with **Fixture status** to check that peer reception adds no inferred Pause.
+
+## Paired performance workload
+
+Run `uv run --frozen python -m tests.web_player.fixtures.chart_player --recorded-steps 3000`.
+Open the printed origin with `/?workspace=paired#token=...` and then
+`/workspace/stats?workspace=paired#token=...`. In Stats, click **Measure player
+workload**. Keep both views open and avoid other interactions until the JSONL
+results finish. Use a fresh fixture for each build; closing/reloading its primary
+view can intentionally stop the production Playback Session.
+
+Each of three repetitions measures settled idle (1.2 seconds), 90 history hovers,
+and 12 alternating seeks between step 1 and 3000. Seek completion checks the
+selected metadata and the actual game pixel in the companion view. Browser API
+wrappers count decode work, pending work, canvas calls, DOM allocations and
+mutations, synchronous input dispatch and scheduled UI callback time. RAF latency
+and coarse heap occupancy are recorded separately. The wrappers are diagnostic
+proxies, not a complete CPU or allocation profiler; heap deltas include garbage
+collection. They never replace production controllers or transport.
+
+For the baseline, pass `--assets-root` pointing to the immutable extracted frontend.
+Use the same Python checkout, workload, browser, viewport and device pixel ratio.
+Do not compare other projects or different host configurations.

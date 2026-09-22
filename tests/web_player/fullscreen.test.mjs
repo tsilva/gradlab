@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 import test from "node:test";
-import { PanelRuntime } from "../../src/gradlab/web_player/panels/runtime.js";
+import { PanelDelivery } from "../../frontend/panel-delivery.js";
 
 const source = readFileSync(new URL("../../src/gradlab/web_player/app.js", import.meta.url), "utf8");
 
@@ -26,7 +26,7 @@ test("fullscreen suspends only panels outside the game in this document", () => 
 test("suspended instances keep their state, skip work and resume with fresh data", async () => {
   let fullscreen = true;
   const calls = [];
-  const runtime = new PanelRuntime({ isSuspended: (id) => fullscreen && id !== "game" });
+  const runtime = new PanelDelivery({ isSuspended: (id) => fullscreen && id !== "game" });
   const panel = {
     definition: { enabled: true, frameKinds: [1] },
     selection: "episode",
