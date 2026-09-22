@@ -37,13 +37,21 @@ from gradlab.trajectory_dataset import table_inventory, verify_snapshot
 
 FORMAT = TRAJECTORY_FORMAT
 REFERENCE = "https://huggingface.co/datasets/tsilva/gradlab-breakout-trajectories/tree/9a22e4c0b6b9796a1358f36a6854f2569cbee0af"
-MAX_DISK = 8 * 1024**3
+MAX_DISK = 16 * 1024**3
+
+
+def _shard_rows(total_rows):
+    # Leave room in the 100-file atomic commit for both large tables and metadata.
+    # Writers still stream small batches; larger files do not increase batch memory.
+    return max(100000, (total_rows + 39) // 40)
 
 
 def guard_space(root):
     used = sum(p.stat().st_size for p in Path(root).rglob("*") if p.is_file())
     if used > MAX_DISK or shutil.disk_usage(root).free < 1024**3:
-        raise ValueError("Trajectory export exceeds 8 GiB spool or 1 GiB free-space reserve")
+        raise ValueError(
+            f"Trajectory export exceeds {MAX_DISK // 1024**3} GiB spool or 1 GiB free-space reserve"
+        )
 
 
 def annotations(grid, support, flags, initial, native=None, prefix=""):
@@ -248,8 +256,15 @@ class Converter:
             )
 
     def tables(self, output):
-        """Stream compact shards, at most 100k transitions/frames in a file."""
+        """Stream compact shards, at most 40 files per large table."""
         output = Path(output)
+        total_transitions = sum(
+            json.loads(summary)["length"]
+            for (summary,) in self.db.execute("SELECT summary FROM done")
+        )
+        total_frames = self.db.execute("SELECT count(*) FROM frames").fetchone()[0]
+        frame_rows = _shard_rows(total_frames)
+        transition_rows = _shard_rows(total_transitions)
         for kind in ("frames/assets", "transitions/all", "episodes/all", "sessions/metadata"):
             (output / kind).mkdir(parents=True, exist_ok=True)
         cursor = self.db.execute("SELECT id,sha,image FROM frames ORDER BY id")
@@ -272,7 +287,7 @@ class Converter:
                     )
                 )
                 count += len(batch)
-                if count >= 100000:
+                if count >= frame_rows:
                     writer.close()
                     writer = None
                     count = 0
@@ -295,7 +310,7 @@ class Converter:
                             )
                         writer.write_batch(batch)
                         count += len(batch)
-                        if count >= 100000:
+                        if count >= transition_rows:
                             writer.close()
                             writer = None
                             count = 0
@@ -485,10 +500,10 @@ def publish_trajectories(
                 path_in_repo=f"{prefix}/{path.relative_to(output).as_posix()}",
                 path_or_fileobj=str(path),
             )
-            budget.call(
-                api.preupload_lfs_files, repo, repo_type="dataset", additions=[op], num_threads=2
-            )
             operations.append(op)
+        budget.call(
+            api.preupload_lfs_files, repo, repo_type="dataset", additions=operations, num_threads=2
+        )
         operations.append(
             CommitOperationAdd(
                 path_in_repo="trajectory-view.json",
