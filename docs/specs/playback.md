@@ -33,6 +33,8 @@ This specification applies to the public checkpoint browser and interactive web 
 - Inspection must not alter the active trajectory or Policy randomness.
 - Pause must stop both Playback and Policy inference. Play must advance recorded Playback from the selected cursor and resume unfinished Policy inference from the live head, even when the cursor is behind it; scrubbing while paused must not run either. Episode boundaries, storage limits, execution errors, and human-control safety must still stop execution when required.
 - Recorded episodes must remain seekable from their first captured step as they grow, with bounded memory, synchronized recorded frames and diagnostics, and step navigation through the playbar. Reaching the episode storage limit must pause Playback and preserve captured steps until the user replaces the episode.
+- Full episode recording must be off by default and start only when the user chooses Record; ordinary Playback must retain a smaller temporary step store for seeking and inspection.
+- Leaving Player through Back or closing its window must remove that session's temporary step store, recording, and prepared downloads from disk.
 - Trajectory archives may contain exact Checkpoints as opaque, hash-verified attachments. Imported Playback must never load or execute them.
 - Playback must expose only actor, critic, action-value, program, attribution, and calibration diagnostics that apply to the selected Policy and recorded contract.
 - Unsupported, missing, and scientifically incomparable diagnostics must remain visibly distinct without fabricated values.

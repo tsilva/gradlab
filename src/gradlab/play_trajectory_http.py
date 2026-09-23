@@ -49,7 +49,9 @@ class TrajectoryTransfers:
         self.authorize = authorize
         self.authorize_control = authorize_control
         self.downloads: dict[str, tuple[Path, float]] = {}
+        self.streaming: dict[asyncio.Task, Path] = {}
         self.preparing = 0
+        self.generation = 0
 
     def routes(self):
         return [
@@ -63,6 +65,7 @@ class TrajectoryTransfers:
         self.expire()
         if self.preparing + len(self.downloads) >= 2:
             raise web.HTTPTooManyRequests(text="Finish the current trajectory downloads first")
+        generation = self.generation
         self.preparing += 1
         root = Path(tempfile.mkdtemp(prefix="gradlab-trajectory-transfer-"))
         frozen = None
@@ -72,7 +75,11 @@ class TrajectoryTransfers:
                 self.runner.freeze_trajectory,
                 cancelled_result=lambda path: shutil.rmtree(path, ignore_errors=True),
             )
+            if generation != self.generation:
+                raise ValueError("the Playback Session has been replaced")
             path = await finish_thread(prepare_archive, frozen, root)
+            if generation != self.generation:
+                raise ValueError("the Playback Session has been replaced")
             ticket = secrets.token_urlsafe(32)
             self.downloads[ticket] = (path, time.monotonic())
             return web.json_response({"url": f"/api/trajectory/download/{ticket}", "filename": path.name})
@@ -94,6 +101,9 @@ class TrajectoryTransfers:
             raise web.HTTPNotFound()
         path, _ = item
         root = path.parent
+        task = asyncio.current_task()
+        if task is not None:
+            self.streaming[task] = root
         try:
             response = web.StreamResponse(
                 headers={
@@ -110,6 +120,8 @@ class TrajectoryTransfers:
             await response.write_eof()
             return response
         finally:
+            if task is not None:
+                self.streaming.pop(task, None)
             shutil.rmtree(root, ignore_errors=True)
 
     async def import_episode(self, request):
@@ -141,7 +153,13 @@ class TrajectoryTransfers:
                 del self.downloads[ticket]
                 shutil.rmtree(path.parent, ignore_errors=True)
 
-    def close(self):
+    def revoke(self):
+        self.generation += 1
         for path, _ in self.downloads.values():
             shutil.rmtree(path.parent, ignore_errors=True)
         self.downloads.clear()
+        for task in tuple(self.streaming):
+            task.cancel()
+
+    def close(self):
+        self.revoke()

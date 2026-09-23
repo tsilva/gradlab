@@ -1029,9 +1029,10 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         from gradlab.play_diagnostics import DiagnosticReads, LiveRecordingSource
 
         self.diagnostics = DiagnosticReads(LiveRecordingSource(
-            self._diagnostic_lock, lambda: self.recording, lambda: self.history
+            self._diagnostic_lock, lambda: self.seek_recording, lambda: self.history
         ))
         self._inspection_history: tuple[str, int, int, list[dict[str, Any]]] | None = None
+        self.seek_recording: EpisodeRecording | None = None
         self.recording: EpisodeRecording | None = None
         self.recording_enabled = False
         self._recording_options = dict(recording_options or {})
@@ -1044,49 +1045,62 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 ("recipe.json", trajectory_bundle.recipe_path),
             ):
                 shutil.copyfile(path, self._checkpoint_root / name)
-            self.recording_enabled = True
             self._begin_recording()
 
     def _begin_recording(self) -> None:
         with self._trajectory_lock, self._diagnostic_lock:
+            previous_seek = self.seek_recording
             previous = self.recording
+            self.seek_recording = None
             self.recording = None
+            if previous_seek is not None:
+                previous_seek.close()
             if previous is not None:
                 previous.close()
+            self.session.trajectory_seeking = self._checkpoint_root is not None
             self.session.trajectory_recording = self.recording_enabled
-            if not self.recording_enabled:
+            if self._checkpoint_root is None:
                 return
-            import yaml
+            self.seek_recording = EpisodeRecording(self._recording_metadata(), compress=True)
+            if self.recording_enabled:
+                self._begin_full_recording()
 
-            config = portable_metadata(self.session.config)
-            if not isinstance(config, Mapping):
-                from omegaconf import OmegaConf
+    def _recording_metadata(self) -> dict[str, Any]:
+        import yaml
 
-                config = portable_metadata(
-                    OmegaConf.to_container(self.session.config, resolve=True)
-                )
-            snapshot = self._snapshot_payload(None)
-            snapshot["session"]["config"] = yaml.safe_dump(config, sort_keys=False)
-            reasons = self._critic_comparison_reasons()
-            snapshot["session"]["critic_comparison"] = {
-                "available": not reasons,
-                "reasons": reasons,
-                "discount": self.value_discount,
-            }
-            metadata = {
-                "first_step": self.session.step_index + 1,
-                "episode": self.session.episode,
-                "seed": self.session.active_seed,
-                "classification": self._recording_classification(),
-                "resolved_environment": config,
-                "contract": portable_metadata(self.contract_details),
-                "execution": self._trajectory_execution,
-                "discount": self.value_discount,
-                "discount_semantics": "per policy decision; termination stops return, truncation requires recorded bootstrap",
-                "initial_snapshot": portable_metadata(snapshot),
-                "initial_observation_status": "captured with first recorded decision",
-            }
-            self.recording = EpisodeRecording(metadata, **self._recording_options)
+        config = portable_metadata(self.session.config)
+        if not isinstance(config, Mapping):
+            from omegaconf import OmegaConf
+
+            config = portable_metadata(OmegaConf.to_container(self.session.config, resolve=True))
+        snapshot = self._snapshot_payload(None)
+        snapshot["session"]["config"] = yaml.safe_dump(config, sort_keys=False)
+        reasons = self._critic_comparison_reasons()
+        snapshot["session"]["critic_comparison"] = {
+            "available": not reasons,
+            "reasons": reasons,
+            "discount": self.value_discount,
+        }
+        return {
+            "first_step": self.session.step_index + 1,
+            "episode": self.session.episode,
+            "seed": self.session.active_seed,
+            "classification": self._recording_classification(),
+            "resolved_environment": config,
+            "contract": portable_metadata(self.contract_details),
+            "execution": self._trajectory_execution,
+            "discount": self.value_discount,
+            "discount_semantics": "per policy decision; termination stops return, truncation requires recorded bootstrap",
+            "initial_snapshot": portable_metadata(snapshot),
+            "initial_observation_status": "captured with first recorded decision",
+        }
+
+    def _begin_full_recording(self) -> None:
+        previous = self.recording
+        self.recording = None
+        if previous is not None:
+            previous.close()
+        self.recording = EpisodeRecording(self._recording_metadata(), **self._recording_options)
 
     def _recording_classification(self, seed: int | None = None) -> str:
         if (
@@ -1113,13 +1127,20 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         return "faithful"
 
     def recording_status(self) -> dict[str, Any]:
+        seek = self.seek_recording.status() if self.seek_recording is not None else {}
+        full = self.recording.status() if self.recording is not None else {}
         status = {
             "available": self._checkpoint_root is not None,
             "enabled": self.recording_enabled,
-            "activation": "automatic",
+            "activation": "manual",
             "scientific_evidence": False,
-            **(self.recording.status() if self.recording is not None else {}),
+            **seek,
+            "recorded_transitions": full.get("transitions", 0),
+            "recording_first_step": full.get("first_step"),
+            "recording_error": full.get("error"),
         }
+        if self.recording_enabled and full.get("error"):
+            status["error"] = full["error"]
         initial, _ = self.episode_start_payload()
         if (
             status.get("episode_id")
@@ -1132,13 +1153,16 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
     def history_payload(self) -> dict[str, Any]:
         payload = super().history_payload()
         with self._trajectory_lock:
-            if self.recording is not None:
-                payload["timeline"] = self.recording.event_overview()
+            if self.seek_recording is not None:
+                payload["timeline"] = self.seek_recording.event_overview()
         return payload
 
     def close_recording(self) -> None:
         self.diagnostics.close()
         with self._trajectory_lock, self._diagnostic_lock:
+            if self.seek_recording is not None:
+                self.seek_recording.close()
+                self.seek_recording = None
             if self.recording is not None:
                 self.recording.close()
                 self.recording = None
@@ -1150,7 +1174,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         from gradlab.play_diagnostics import RecordedPrefix
 
         with self._diagnostic_lock:
-            recording = self.recording
+            recording = self.seek_recording
             if recording is None or recording.metadata["episode_id"] != episode_id:
                 raise ValueError("the recorded episode has been replaced")
             status = self.recording_status()
@@ -1238,7 +1262,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                     }
                 )
             with self._diagnostic_lock:
-                if self.recording is not recording:
+                if self.seek_recording is not recording:
                     raise ValueError("the recorded episode has been replaced")
                 self._inspection_history = cache
             return {"snapshot": snapshot, "points": points, "frames": frames}
@@ -1268,10 +1292,38 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         *,
         full: dict[str, Any],
     ) -> None:
-        if not self.recording_enabled or self.recording is None:
+        if self.seek_recording is None:
             return
         from dataclasses import fields
 
+        inspection_snapshot = self._snapshot_payload(transition, current=full)
+        inspection_snapshot["sequence"] = transition.sequence
+        inspection_snapshot["session"].update(
+            episode=transition.episode,
+            step=transition.step,
+            total_reward=transition.total_reward,
+        )
+        inspection_images = {}
+        if transition.attribution is not None and transition.before_frames:
+            inspection_images[str(FRAME_ATTRIBUTION)] = render_attribution_stack(
+                transition.before_frames, transition.attribution
+            )
+        if transition.cnn_inspection is not None:
+            inspection_images[str(FRAME_CNN_INSPECTION)] = transition.cnn_inspection.atlas
+        self.seek_recording.append({
+            "step": transition.step,
+            "boundary": transition.boundary,
+            "classification": self._recording_classification(transition.seed),
+            "inspection_snapshot": portable_metadata(inspection_snapshot),
+            "inspection_images": inspection_images,
+            "after_image": transition.after_frame
+            if not transition.boundary or transition.after_frame_role == "terminal_observation"
+            else None,
+            "observation_frames": transition.before_frames,
+            "presentation": {"events": full.get("events", [])},
+        })
+        if not self.recording_enabled or self.recording is None:
+            return
         # Archive presentation omits live diagnostics and may mark a terminal
         # image missing. Keep those edits separate from the inspection/live view.
         presentation = {**full, "after": dict(full["after"])}
@@ -1323,20 +1375,6 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             }
         decision = transition.decision
         # Recorded inspection must retain evidence independently of connected panels.
-        inspection_snapshot = self._snapshot_payload(transition, current=full)
-        inspection_snapshot["sequence"] = transition.sequence
-        inspection_snapshot["session"].update(
-            episode=transition.episode,
-            step=transition.step,
-            total_reward=transition.total_reward,
-        )
-        inspection_images = {}
-        if transition.attribution is not None and transition.before_frames:
-            inspection_images[str(FRAME_ATTRIBUTION)] = render_attribution_stack(
-                transition.before_frames, transition.attribution
-            )
-        if transition.cnn_inspection is not None:
-            inspection_images[str(FRAME_CNN_INSPECTION)] = transition.cnn_inspection.atlas
         self.recording.append(
             {
                 "inspection_snapshot": portable_metadata(inspection_snapshot),
@@ -1825,7 +1863,13 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             self._response(command, ok=True)
             return
         try:
-            if command.name == "set_recording":
+            if command.name == "retry_storage":
+                if self.seek_recording is not None:
+                    self.seek_recording.retry()
+                if self.recording is not None:
+                    self.recording.retry()
+                self._set_state("paused", message="storage retry requested")
+            elif command.name == "set_recording":
                 if self._checkpoint_root is None:
                     raise ValueError("recording requires an exact resolved Checkpoint")
                 enabled = command.payload.get("enabled")
@@ -1833,12 +1877,15 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                     raise ValueError("recording enabled must be boolean")
                 if enabled and not self.recording_enabled:
                     self._require_active_episode()
+                    self._begin_full_recording()
                     self.recording_enabled = True
-                    self._begin_recording()
+                    self.session.trajectory_recording = True
                 elif not enabled:
                     self.recording_enabled = False
                     self.session.trajectory_recording = False
                 elif self.recording is not None:
+                    if self.seek_recording is not None:
+                        self.seek_recording.retry()
                     self.recording.retry()
                 self._set_state(
                     "paused",
@@ -2027,6 +2074,8 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
 
     def _step_and_record(self) -> _PlaybackTransition | None:
         try:
+            if self.seek_recording is not None:
+                self.seek_recording.check_capacity()
             if self.recording_enabled and self.recording is not None:
                 self.recording.check_capacity()
             transition = (
@@ -2101,6 +2150,12 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         next_step_at = time.perf_counter()
         while not self._stop.is_set():
             self._drain_commands()
+            if self.seek_recording is not None:
+                error = self.seek_recording.status().get("error")
+                if error:
+                    message = f"Playback storage failed: {error}. Reset the episode to resume."
+                    if self._status_message != message:
+                        self._set_state("paused", message=message)
             if self.recording_enabled and self.recording is not None:
                 error = self.recording.status().get("error")
                 if error:
@@ -3946,6 +4001,7 @@ class PlaybackWebServer:
         return int(getattr(self.runner, "session_epoch", 0))
 
     async def _announce_session_change(self) -> None:
+        self.trajectory_transfers.revoke()
         epoch = await asyncio.to_thread(self._runner_epoch)
         history = await asyncio.to_thread(self.runner.history_payload)
         for client in tuple(self.clients.values()):

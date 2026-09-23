@@ -26,6 +26,7 @@ import threading
 from typing import Any
 import uuid
 import zipfile
+import zlib
 
 import numpy as np
 
@@ -180,11 +181,17 @@ def decode_tree(tree: Mapping[str, Any]) -> Any:
     return node(json.loads(tree["structure"]))
 
 
-def pack_record(value: Any) -> bytes:
+def pack_record(value: Any, *, compress: bool = False) -> bytes:
     tree = encode_tree(value)
     buffers = []
     for leaf in tree["arrays"]:
         data = leaf.pop("data")
+        if compress and len(data) >= 1024:
+            encoded = zlib.compress(data, level=1)
+            if len(encoded) < len(data):
+                leaf["compression"] = "zlib"
+                leaf["decoded_size"] = len(data)
+                data = encoded
         leaf["size"] = len(data)
         buffers.append(data)
     header = json.dumps(tree, separators=(",", ":")).encode()
@@ -201,8 +208,22 @@ def unpack_record(data: bytes) -> Any:
     offset = HEADER.size + size
     for leaf in tree["arrays"]:
         length = leaf.pop("size")
-        leaf["data"] = data[offset : offset + length]
+        encoded = data[offset : offset + length]
         offset += length
+        compression = leaf.pop("compression", None)
+        if compression is None:
+            leaf["data"] = encoded
+        elif compression == "zlib":
+            decoded_size = leaf.pop("decoded_size", None)
+            if type(decoded_size) is not int or not 0 <= decoded_size <= MAX_RECORD_BYTES:
+                raise ValueError("invalid compressed trajectory array size")
+            decoder = zlib.decompressobj()
+            decoded = decoder.decompress(encoded, decoded_size + 1)
+            if not decoder.eof or decoder.unused_data or decoder.unconsumed_tail or len(decoded) != decoded_size:
+                raise ValueError("invalid compressed trajectory array")
+            leaf["data"] = decoded
+        else:
+            raise ValueError("unsupported trajectory array compression")
     if offset != len(data):
         raise ValueError("invalid trajectory record length")
     return decode_tree(tree)
@@ -219,6 +240,7 @@ class EpisodeRecording:
         buffer_bytes: int = BUFFER_BYTES,
         max_bytes: int = MAX_RECORDING_BYTES,
         write_record=None,
+        compress: bool = False,
     ):
         self.root = Path(tempfile.mkdtemp(prefix="gradlab-episode-", dir=root))
         self.metadata = deepcopy(dict(metadata))
@@ -233,6 +255,7 @@ class EpisodeRecording:
         self.max_bytes = max_bytes
         self._accepted_bytes = 0
         self._write_record = write_record or self._append
+        self._compress = compress
         self._condition = threading.Condition()
         self._pending: deque[bytes] = deque()
         self._pending_bytes = 0
@@ -292,7 +315,7 @@ class EpisodeRecording:
     def append(self, row: Mapping[str, Any]) -> None:
         # This owns all arrays before another step can reuse a provider buffer.
         try:
-            data = pack_record(row)
+            data = pack_record(row, compress=self._compress)
         except ValueError as exc:
             # Never advance over an unencodable decision. Keep its owned inputs until
             # the user explicitly replaces the episode; the accepted prefix is exportable.

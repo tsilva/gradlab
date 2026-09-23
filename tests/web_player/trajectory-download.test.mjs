@@ -7,8 +7,10 @@ test("episode downloads require confirmation, show preparation, and recover from
   const element = (id) => {
     if (!elements.has(id)) elements.set(id, {
       handlers: {}, hidden: false, disabled: false, textContent: "",
+      classList: { toggle() {} },
       addEventListener(type, handler) { this.handlers[type] = handler; },
       setAttribute() {}, removeAttribute() {}, after() {}, prepend() {},
+      querySelector() { return this.label ||= { textContent: "" }; },
       showModal() { this.open = true; }, close() { this.open = false; },
       click() { this.clicked = true; }, remove() {},
     });
@@ -22,7 +24,7 @@ test("episode downloads require confirmation, show preparation, and recover from
   let resolveRequest;
   let rejectRequest;
   let requests = 0;
-  const trajectory = { available: true, enabled: true, transitions: 42 };
+  const trajectory = { available: true, enabled: true, transitions: 42, recorded_transitions: 42 };
   try {
     const controls = mountTrajectoryControls({
       command() {}, toast() {},
@@ -33,7 +35,7 @@ test("episode downloads require confirmation, show preparation, and recover from
       },
     });
     controls.render();
-    assert.equal(element("#trajectory-status").hidden, true);
+    assert.equal(element("#trajectory-status").hidden, false);
     element("#trajectory-download").handlers.click();
     assert.equal(requests, 0);
     assert.equal(element("#trajectory-download-dialog").open, true);
@@ -63,6 +65,44 @@ test("episode downloads require confirmation, show preparation, and recover from
     trajectory.error = "Disk full";
     controls.render();
     assert.equal(element("#trajectory-status").hidden, false);
+  } finally {
+    globalThis.document = oldDocument;
+  }
+});
+
+test("Record starts off and enables archive download only after capture", () => {
+  const elements = new Map();
+  const element = (id) => {
+    if (!elements.has(id)) elements.set(id, {
+      handlers: {}, hidden: false, disabled: false, textContent: "",
+      classList: { toggle() {} },
+      addEventListener(type, handler) { this.handlers[type] = handler; },
+      setAttribute(name, value) { this[name] = value; },
+      querySelector() { return this.label ||= { textContent: "" }; },
+    });
+    return elements.get(id);
+  };
+  const oldDocument = globalThis.document;
+  globalThis.document = { querySelector: element };
+  const trajectory = { available: true, enabled: false, transitions: 2, recorded_transitions: 0 };
+  const sent = [];
+  try {
+    const controls = mountTrajectoryControls({
+      command: (...args) => sent.push(args),
+      getState: () => ({ hasControl: true, snapshot: { trajectory } }),
+      request() {}, toast() {},
+    });
+    controls.render();
+    assert.equal(element("#trajectory-record").hidden, false);
+    assert.equal(element("#trajectory-record").label.textContent, "Record");
+    assert.equal(element("#trajectory-download").disabled, true);
+    element("#trajectory-record").handlers.click();
+    assert.deepEqual(sent.pop(), ["set_recording", { enabled: true }]);
+    trajectory.enabled = true;
+    trajectory.recorded_transitions = 1;
+    controls.render();
+    assert.equal(element("#trajectory-record").label.textContent, "Stop recording");
+    assert.equal(element("#trajectory-download").disabled, false);
   } finally {
     globalThis.document = oldDocument;
   }
