@@ -2882,6 +2882,63 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert not (root / "node_modules").exists()
 
 
+def test_web_server_rejects_missing_player_assets_before_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = HumanRecordingRunner(FakeHumanSession(), human_args())
+    server = PlaybackWebServer(runner, human_args())
+    monkeypatch.setattr(PlaybackWebServer, "asset_root", property(lambda _self: tmp_path))
+
+    with pytest.raises(RuntimeError, match="Player web assets are missing"):
+        asyncio.run(asyncio.wait_for(server.run(), timeout=0.3))
+
+    assert server.origin == ""
+
+
+def test_source_player_uses_vite_assets_and_keeps_api_on_player_origin() -> None:
+    async def scenario() -> None:
+        runner = HumanRecordingRunner(FakeHumanSession(), human_args())
+        server = PlaybackWebServer(runner, human_args(hot_reload=True))
+        assert server.dev_assets is not None
+        task = asyncio.create_task(server.run())
+        try:
+            deadline = asyncio.get_running_loop().time() + 20.0
+            while not server.origin and asyncio.get_running_loop().time() < deadline:
+                if task.done():
+                    await task
+                await asyncio.sleep(0.02)
+            assert server.origin
+            vite_url = server.dev_assets.url
+            assert vite_url is not None
+            async with ClientSession() as client:
+                response = await client.get(server.origin)
+                assert response.status == 200
+                markup = await response.text()
+                assert f'{vite_url}/@vite/client' in markup
+                assert f'{vite_url}/frontend/main.ts' in markup
+                assert '/assets/app.js' not in markup
+                assert vite_url in response.headers["Content-Security-Policy"]
+                source_asset = await client.get(f"{server.origin}/assets/tabler-icons.svg")
+                assert source_asset.status == 200
+                vite_module = await client.get(
+                    f"{vite_url}/frontend/main.ts", headers={"Origin": server.origin}
+                )
+                assert vite_module.status == 200
+                assert vite_module.headers["Access-Control-Allow-Origin"] == server.origin
+                try:
+                    await client.ws_connect(f"{server.origin}/ws", origin=vite_url)
+                except WSServerHandshakeError as exc:
+                    assert exc.status == 403
+                else:
+                    raise AssertionError("Vite origin unexpectedly accessed player websocket")
+        finally:
+            runner.stop()
+            await asyncio.wait_for(task, timeout=5.0)
+        assert server.dev_assets.process is None
+
+    asyncio.run(scenario())
+
+
 def test_scheduled_critic_disables_stationary_calibration():
     config = {"game": "Game-v0", "task": {"termination": {}}}
     session = argparse.Namespace(

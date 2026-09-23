@@ -19,7 +19,8 @@ The run writes a directly playable policy below `~/.config/gradlab/runs/`.
 
 ## Install
 
-[Install uv](https://docs.astral.sh/uv/getting-started/installation/), then run:
+[Install uv](https://docs.astral.sh/uv/getting-started/installation/) and Node 22.12+
+with the pinned pnpm version from `package.json`, then run:
 
 ```bash
 git clone https://github.com/tsilva/gradlab.git
@@ -43,7 +44,9 @@ also have distinct macOS app identities and browser-tab icons. The
 pinned, SHA-256-verified runtime downloads once into `~/.cache/gradlab/neutralino`
 (or `$XDG_CACHE_HOME/gradlab/neutralino`). On macOS, GradLab creates its app bundle
 from the existing icon automatically. No Node.js, npm, compiler, or rebuild is
-needed when changing GradLab; restart the command to use the current source.
+needed to run the installed player. From a source checkout, `gradlab play`
+starts Vite automatically and reloads frontend changes in the open viewer.
+Use `--no-hot-reload` to serve the compiled player instead.
 The **Stats** button opens or focuses a synchronized GradLab window.
 Closing the last Player or Stats window stops the local player cleanly; keeping
 either window open keeps the session running.
@@ -114,7 +117,7 @@ Published wheels and source distributions include the compiled player. Running
 an installed GradLab package does not require Node or pnpm.
 
 From a checkout, install Node 22.12+ and the pinned pnpm version in `package.json`,
-then build the player before running Playback or the Python browser tests:
+then install dependencies before running Playback or the Python browser tests:
 
 ```bash
 uv sync --frozen
@@ -124,7 +127,10 @@ pnpm build:web
 uv run gradlab play
 ```
 
-Rebuild after changing `frontend/` or `src/gradlab/web_player/`. Vite writes ignored
+`gradlab play` uses hot reload by default in this checkout. Changes under
+`frontend/` and `src/gradlab/web_player/` update the open viewer; Python changes
+still require restarting the command. `pnpm build:web` remains necessary for
+package builds, compiled-mode testing, and `--no-hot-reload`. Vite writes ignored
 assets to `src/gradlab/web_player/dist/`; commit source and `pnpm-lock.yaml`, never
 bundles. `uv build` checks that the compiled assets match their source inputs and
 includes them in both distribution formats. Building a wheel from the published

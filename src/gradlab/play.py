@@ -30,6 +30,9 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     argv_list = list(sys.argv[1:] if argv is None else argv)
     args = parser.parse_args(argv_list)
+    from gradlab.play_dev_assets import source_checkout_root
+
+    args.hot_reload = source_checkout_root() is not None and not args.no_hot_reload
     selected_sources = sum(
         bool(value)
         for value in (
