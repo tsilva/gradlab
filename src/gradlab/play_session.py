@@ -1168,6 +1168,7 @@ class _PlaybackSession:
             sampling_temperature=sampling_temperature,
             include_diagnostics=(
                 bool(getattr(self, "trajectory_recording", False))
+                or bool(getattr(self, "trajectory_seeking", False))
                 or bool(self.processing_features & {"policy", "raw"})
             ),
             execution_context=(
@@ -1233,11 +1234,12 @@ class _PlaybackSession:
     ) -> _PlaybackTransition:
         processing = self.processing_features
         recording = bool(getattr(self, "trajectory_recording", False))
+        seeking = bool(getattr(self, "trajectory_seeking", False))
         needs_raw = recording or "raw" in processing
-        needs_observation = recording or bool(
+        needs_observation = recording or seeking or bool(
             processing & {"observation", "attribution", "cnn-inspection"}
         )
-        needs_policy_input = recording or bool(
+        needs_policy_input = recording or seeking or bool(
             processing & {"observation", "raw", "attribution", "cnn-inspection"}
         )
         model_obs = self.model_obs

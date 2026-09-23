@@ -99,7 +99,7 @@ def test_sequential_inspection_reuses_overlapping_history_rows(tmp_path, monkeyp
     try:
         for _ in range(192):
             runner._step_once()
-        episode = runner.recording.metadata["episode_id"]
+        episode = runner.seek_recording.metadata["episode_id"]
         first_page = runner.inspect_recorded_step(episode, 100)["points"]
         reads = []
         read = RecordedPrefix.transition
@@ -255,7 +255,7 @@ def test_writer_failure_preserves_pending_step_for_inspection(tmp_path):
             time.sleep(0.005)
         status = runner.recording_status()
         assert status["error"] == "disk unavailable"
-        assert status["written"] == 0
+        assert runner.recording.status()["written"] == 0
         result = runner.inspect_recorded_step(status["episode_id"], 1)
         assert result["snapshot"]["transition"]["step"] == 1
     finally:

@@ -1497,7 +1497,16 @@ def test_transition_payload_includes_policy_input_for_observation_processing() -
     ]
 
 
-def test_playback_transition_retains_policy_input_for_observation_processing() -> None:
+@pytest.mark.parametrize(
+    "processing,seeking",
+    [
+        (frozenset({"observation"}), False),
+        (frozenset(), True),
+    ],
+)
+def test_playback_transition_keeps_seek_frames_and_policy_input_without_raw_context(
+    processing, seeking
+) -> None:
     class Env:
         def step(self, action):
             self.action = action
@@ -1522,7 +1531,8 @@ def test_playback_transition_retains_policy_input_for_observation_processing() -
 
     model_obs = np.arange(16, dtype=np.uint8).reshape(1, 4, 2, 2)
     session = argparse.Namespace(
-        processing_features=frozenset({"observation"}),
+        processing_features=processing,
+        trajectory_seeking=seeking,
         model_obs=model_obs,
         active_task=None,
         current_frame=np.zeros((2, 2, 3), dtype=np.uint8),
@@ -1562,8 +1572,11 @@ def test_playback_transition_retains_policy_input_for_observation_processing() -
         action_source="policy",
     )
 
+    assert len(transition.before_frames) == 4
     assert np.array_equal(transition.model_obs, model_obs)
     assert transition.model_obs is not model_obs
+    assert transition.before_frame is None
+    assert transition.next_model_obs is None
 
 
 @pytest.mark.parametrize("recording", [False, True])
@@ -2960,13 +2973,14 @@ def test_web_client_drops_queued_rgb_after_unsubscribe() -> None:
     asyncio.run(scenario())
 
 
-@pytest.mark.parametrize("recording", [False, True])
-def test_policy_recording_retains_scalar_diagnostics_without_subscribers(recording):
+@pytest.mark.parametrize("recording,seeking", [(False, False), (False, True), (True, False)])
+def test_policy_recording_retains_scalar_diagnostics_without_subscribers(recording, seeking):
     decision = PolicyDecision(np.array([1]), np.array([1]), "stochastic", value=2.5)
     runtime = argparse.Namespace(decide=Mock(return_value=argparse.Namespace(decisions=[decision])))
     session = argparse.Namespace(
         policy_runtime=runtime,
         trajectory_recording=recording,
+        trajectory_seeking=seeking,
         processing_features=frozenset(),
         model_obs=np.array([0]),
         env=argparse.Namespace(),
@@ -2976,5 +2990,5 @@ def test_policy_recording_retains_scalar_diagnostics_without_subscribers(recordi
     _PlaybackSession.step(session)
 
     runtime.decide.assert_called_once()
-    assert runtime.decide.call_args.kwargs["include_diagnostics"] is recording
+    assert runtime.decide.call_args.kwargs["include_diagnostics"] is (recording or seeking)
     assert session._advance.call_args.kwargs["decision"] is decision

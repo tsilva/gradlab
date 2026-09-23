@@ -41,6 +41,18 @@
       ><span>Stats</span></button
     >
     <button
+      id="trajectory-record"
+      class="quiet button-with-icon"
+      type="button"
+      aria-label="Start recording episode"
+      aria-pressed="false"
+      title="Start recording this episode"
+      hidden
+      ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"
+        ><circle cx="12" cy="12" r="7" fill="currentColor" /></svg
+      ><span>Record</span></button
+    >
+    <button
       id="trajectory-download"
       class="quiet icon-only"
       type="button"
@@ -347,7 +359,7 @@
   hidden
 >
   <button id="trajectory-retry" class="quiet" type="button" hidden
-    >Retry recording</button
+    >Retry storage</button
   >
   <span id="trajectory-navigation" hidden>
     <button

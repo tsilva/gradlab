@@ -6,12 +6,13 @@ export function recordingDescription(trajectory = {}) {
     return `${completeness} · transitions ${range}${prefix} · ${trajectory.classification.replaceAll("_", " ")} Playback · inspection only`;
   }
   if (trajectory.error) return `Recording storage failed: ${trajectory.error}`;
-  if (!trajectory.transitions) return trajectory.enabled ? "Recording current episode" : "Recording off";
-  const prefix = trajectory.first_step > 1 ? ` · starts at transition ${trajectory.first_step}` : "";
-  return `${trajectory.enabled ? "Recording" : "Recorded"} ${trajectory.transitions} transitions${prefix}`;
+  if (!trajectory.recorded_transitions) return trajectory.enabled ? "Recording from the next step" : "Recording off · episode seeking available";
+  const prefix = trajectory.recording_first_step > 1 ? ` · starts at transition ${trajectory.recording_first_step}` : "";
+  return `${trajectory.enabled ? "Recording" : "Recorded"} ${trajectory.recorded_transitions} transitions${prefix}`;
 }
 
 export function mountTrajectoryControls({ command, inspectStep, getState, request, toast }) {
+  const record = document.querySelector("#trajectory-record");
   const retry = document.querySelector("#trajectory-retry");
   const download = document.querySelector("#trajectory-download");
   const importButton = document.querySelector("#trajectory-import");
@@ -27,7 +28,11 @@ export function mountTrajectoryControls({ command, inspectStep, getState, reques
   let preparing = false;
   let importing = false;
 
-  retry.addEventListener("click", () => command("set_recording", { enabled: true }));
+  record.addEventListener("click", () => {
+    const snapshot = getState().liveSnapshot || getState().snapshot;
+    command("set_recording", { enabled: !Boolean(snapshot?.trajectory?.enabled) });
+  });
+  retry.addEventListener("click", () => command("retry_storage"));
   seek.addEventListener("change", () => inspectStep(Number(seek.value)));
   seek.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
@@ -104,17 +109,24 @@ export function mountTrajectoryControls({ command, inspectStep, getState, reques
     const trajectory = snapshot?.trajectory || {};
     const imported = Boolean(trajectory.imported);
     const available = trajectory.available || imported;
-    document.querySelector("#trajectory-controls").hidden = !available || (!imported && !trajectory.error);
+    document.querySelector("#trajectory-controls").hidden = !available;
     document.querySelector("#trajectory-navigation").hidden = !imported;
+    record.hidden = !available || imported;
+    record.disabled = !state.hasControl;
+    record.classList.toggle("recording", Boolean(trajectory.enabled));
+    record.setAttribute("aria-pressed", String(Boolean(trajectory.enabled)));
+    record.setAttribute("aria-label", trajectory.enabled ? "Stop recording episode" : "Start recording episode");
+    record.title = trajectory.enabled ? "Stop recording this episode" : "Start recording this episode";
+    record.querySelector("span").textContent = trajectory.enabled ? "Stop recording" : "Record";
     retry.hidden = !trajectory.error;
     retry.disabled = !state.hasControl;
     download.hidden = !available || imported;
-    download.disabled = preparing || !trajectory.transitions;
+    download.disabled = preparing || !trajectory.recorded_transitions;
     importButton.disabled = importing || !state.hasControl;
     const status = document.querySelector("#trajectory-status");
-    status.hidden = !imported && !trajectory.error;
+    status.hidden = !available;
     status.textContent = status.hidden ? "" : recordingDescription(trajectory);
-    if (!preparing) confirm.disabled = imported || !trajectory.transitions;
+    if (!preparing) confirm.disabled = imported || !trajectory.recorded_transitions;
     if (imported) {
       seek.min = String(trajectory.first_step);
       seek.max = String(trajectory.last_step);

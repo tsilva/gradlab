@@ -1,17 +1,22 @@
 # Player episode trajectories
 
-Use the **Download episode** icon in Player to review the archive contents, then
+Select **Record** to start a full episode archive; recording is off when a Checkpoint
+opens. It starts with the next transition, so starting partway through an episode
+produces a partial archive. Select **Stop recording** to keep the captured prefix
+available for download without adding more transitions. Use the **Download episode**
+icon in Player to review the archive contents, then
 select **Confirm** to save the current episode as `<environment>-checkpoint-<checkpoint-hash>-<content-sha256>.trj`. A progress
 bar remains visible during preparation until the browser download starts.
-Capture starts automatically when an exact Checkpoint is loaded. Downloading fixes
-an immutable transition cutoff; live Playback may continue while the archive is
-prepared. A completed episode remains available until another episode or
-Checkpoint replaces it. An unfinished download does not invent a termination.
+Downloading fixes an immutable transition cutoff; live Playback may continue while
+the archive is prepared. A completed recording remains available until another
+episode or Checkpoint replaces it. An unfinished download does not invent a termination.
 
-The live timeline spans the current recorded episode, including steps older than
+The live timeline spans the current episode, including steps older than
 the 4,096-transition memory cache. Scrubbing or **Go to step** loads recorded
 frames, decisions, and a bounded diagnostic history around the selected step from
-disk; it never reruns the Policy or rewinds the live environment. Use **Zoom** for
+the temporary seek store; it never reruns the Policy or rewinds the live environment.
+This smaller, losslessly compressed store exists even when full recording is off.
+Use **Zoom** for
 100- or 1,000-step windows and **Return to latest** to return to the live cursor.
 Play while inspecting advances through the recorded steps before returning to
 latest. The episode remains available until it is replaced or the session closes.
@@ -19,11 +24,12 @@ Event dots use a separate episode-wide overview, so scrubbing does not replace
 them with the chart's local history window. Nearby events share a dot when the
 track is dense; zooming separates them where the retained overview permits it.
 
-Each episode has a 32 GiB local recording budget. Playback reserves space for
+The seek store and optional full recording each have a 32 GiB local storage budget.
+Playback reserves space for
 the next decision and pauses with a storage message when that budget is reached
-or the writer cannot keep up. Existing steps remain inspectable and downloadable,
-including queued steps after a writer failure. The timeline begins at the first
-captured step when recording was enabled partway through an episode.
+or the writer cannot keep up. Existing steps remain inspectable; recorded prefixes
+remain downloadable, including queued steps after a writer failure. The archive
+begins at the first captured step after Record was selected.
 
 Chart, event, and reward-history reads run in a separate diagnostic process over
 a pinned recording prefix. Recording can advance or retire that episode while a
@@ -147,12 +153,13 @@ encoding happens during download preparation. The pending write budget is 64 MiB
 plus at most one transition of up to 32 MiB. Temporary serialization copies and
 the existing bounded Player history are additional memory. If a write fails or
 the budget is exhausted, Playback pauses visibly at a decision boundary and keeps
-the captured prefix. **Retry recording** retries a failed write before advancing.
+the captured prefix. **Retry storage** retries a failed write before advancing.
 An unencodable transition remains held and blocks further capture; the accepted
 prefix can still be downloaded, and replacing the episode discards that failed
 capture explicitly.
 
-Downloads pin the Checkpoint and cutoff independently of active source changes.
+Downloads pin the Checkpoint and cutoff during preparation. Back and window close
+purge the temporary seek store, recording, and any prepared download from disk.
 At most two prepared/in-flight download archives are retained. Unclaimed download
 capabilities expire after five minutes on the next preparation or shutdown;
 completed/cancelled transfers remove their temporary files. Old episode stores

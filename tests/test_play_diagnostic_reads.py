@@ -13,6 +13,10 @@ from aiohttp.test_utils import TestClient, TestServer
 from gradlab.play_web import PlaybackWebServer
 
 
+def inspected_recording(runner):
+    return runner.seek_recording if hasattr(runner, "seek_recording") else runner.recording
+
+
 @pytest.mark.parametrize("kind", ["chart", "reward", "event"])
 @pytest.mark.parametrize("error,status", [
     (ValueError("too many pending diagnostic reads"), 400),
@@ -53,7 +57,7 @@ def test_preparation_failure_releases_recording_and_allows_later_reads(tmp_path,
     runner = live_runner(tmp_path)
     try:
         runner._step_once()
-        recording = runner.recording
+        recording = inspected_recording(runner)
         episode = recording.metadata["episode_id"]
         # Calibration annotations are prepared after acquiring the recording.
         with monkeypatch.context() as patch:
@@ -117,7 +121,7 @@ def calculation_threads(monkeypatch):
 def test_host_reads_preserve_values_and_cursor(playback, calculation_threads, kind):
     host, runner, _ = playback
     before = runner.snapshot()
-    episode = runner.recording.metadata["episode_id"]
+    episode = inspected_recording(runner).metadata["episode_id"]
     result = host.read_diagnostics(0, DiagnosticRead(kind, episode, 1))
     assert result["episode_id"] == episode
     if kind == "chart":
@@ -142,7 +146,7 @@ def test_failures_release_pins_and_allow_recovery(
     playback, calculation_threads, monkeypatch, kind, failure
 ):
     host, runner, _ = playback
-    recording = runner.recording
+    recording = inspected_recording(runner)
     query = DiagnosticRead(kind, recording.metadata["episode_id"])
 
     def fail(*args, **kwargs):
@@ -173,7 +177,7 @@ def test_session_activation_precedes_old_diagnostic_drain(
     import threading
 
     host, runner, archive = playback
-    recording = runner.recording
+    recording = inspected_recording(runner)
     entered, release, draining = threading.Event(), threading.Event(), threading.Event()
     calculate = calculation_threads.query_prefix
     close = runner.diagnostics.close
@@ -217,7 +221,7 @@ def test_episode_replacement_retains_read_then_rejects_result(tmp_path, calculat
 
     runner = live_runner(tmp_path, length=10)
     runner._step_once()
-    recording = runner.recording
+    recording = inspected_recording(runner)
     entered, release = threading.Event(), threading.Event()
     calculate = calculation_threads.query_prefix
 
@@ -240,7 +244,7 @@ def test_episode_replacement_retains_read_then_rejects_result(tmp_path, calculat
                 old.result(timeout=2)
         assert not recording.root.exists()
         runner._step_once()
-        assert runner.diagnostics.read(DiagnosticRead(kind, runner.recording.metadata["episode_id"]))
+        assert runner.diagnostics.read(DiagnosticRead(kind, inspected_recording(runner).metadata["episode_id"]))
     finally:
         runner.stop()
 
@@ -253,7 +257,7 @@ def test_admission_and_shutdown_release_running_and_cancelled_reads(
     import threading
 
     host, runner, _ = playback
-    recording = runner.recording
+    recording = inspected_recording(runner)
     query = DiagnosticRead(kind, recording.metadata["episode_id"])
     entered, release, four_submitted, closing = [threading.Event() for _ in range(4)]
     calculate = calculation_threads.query_prefix
@@ -317,7 +321,7 @@ def test_export_inspection_and_diagnostics_share_recording_retention(
 
     runner = live_runner(tmp_path, length=10)
     runner._step_once()
-    recording = runner.recording
+    recording = inspected_recording(runner)
     archive = recording.reserve_prefix()
     inspection = recording.reserve_read()
     entered, release = threading.Event(), threading.Event()
@@ -507,7 +511,7 @@ def test_spawned_calculation_shutdown_drains_and_exits(tmp_path, monkeypatch):
     monkeypatch.setattr(diagnostics, "ProcessPoolExecutor", ObservedPool)
     runner = live_runner(tmp_path, length=10)
     runner._step_once()
-    recording = runner.recording
+    recording = inspected_recording(runner)
     query = DiagnosticRead("chart", recording.metadata["episode_id"])
     try:
         with ThreadPoolExecutor(5) as calls:
