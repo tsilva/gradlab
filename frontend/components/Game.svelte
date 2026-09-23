@@ -12,6 +12,11 @@
   });
   let rgbEnabled = $state(true),
     hasControl = $state(false);
+  let recordingAvailable = $state(false),
+    recordingEnabled = $state(false);
+  let recordingLabel = $derived(
+    recordingEnabled ? "Stop recording episode" : "Start recording episode",
+  );
   let rgbLabel = $derived(
     rgbEnabled
       ? "Hide RGB and play at maximum speed"
@@ -33,7 +38,14 @@
     );
     return () => surface.destroy();
   });
-  export const render = (snapshot: unknown) => surface?.render(snapshot);
+  export const render = (snapshot: unknown) => {
+    surface?.render(snapshot);
+    const state = services.getState();
+    const trajectory = (state.liveSnapshot || state.snapshot)?.trajectory || {};
+    recordingAvailable = Boolean(trajectory.available) && !trajectory.imported;
+    recordingEnabled = Boolean(trajectory.enabled);
+    hasControl = Boolean(state.hasControl);
+  };
   export const prepareFrame = (
     ...args: Parameters<typeof surface.prepareFrame>
   ) => surface?.prepareFrame(...args);
@@ -94,6 +106,22 @@
           title="Move game panel"
           ><svg class="icon" aria-hidden="true"
             ><use href="/assets/tabler-icons.svg#ti-grip-vertical"></use></svg
+          ></button
+        >
+        <button
+          id="trajectory-record"
+          class="icon-button icon-only"
+          class:recording={recordingEnabled}
+          type="button"
+          aria-label={recordingLabel}
+          title={recordingLabel}
+          aria-pressed={recordingEnabled}
+          hidden={!recordingAvailable}
+          disabled={!hasControl}
+          onclick={() =>
+            services.command("set_recording", { enabled: !recordingEnabled })}
+          ><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"
+            ><circle cx="12" cy="12" r="7" fill="currentColor" /></svg
           ></button
         >
         <button

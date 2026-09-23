@@ -268,7 +268,6 @@ button:disabled {
   width: var(--header-control-height);
   padding: 0;
 }
-#trajectory-record.recording { color: var(--color-error-text); border-color: var(--color-error-text); }
 
 .header-divider { width: 1px; height: 1.3rem; background: var(--color-outline-strong); }
 
@@ -1596,6 +1595,7 @@ canvas { display: block; max-width: 100%; }
 }
 .game-actions { padding: .2rem; border: 1px solid var(--color-border-translucent); border-radius: .45rem; background: var(--color-inverse-overlay); opacity: .78; transition: opacity .15s ease; }
 .game-actions .icon-button { color: var(--color-inverse-text); }
+.game-actions #trajectory-record.recording { color: var(--color-error-text); border-color: var(--color-error-text); }
 .game-stage:hover .game-actions, .game-stage:focus-within .game-actions { opacity: 1; }
 
 .panel.transport { position: relative; align-self: stretch; max-height: none; }
@@ -2674,8 +2674,6 @@ body.recording #timeline { opacity: .72; }
 
 @media (max-width: 720px) {
   .app-header { padding-inline: .65rem; }
-  #trajectory-record { width: var(--header-control-height); padding-inline: 0; }
-  #trajectory-record span { display: none; }
   .app-brand .eyebrow, .header-divider { display: none; }
   .header-status { gap: .3rem; }
   .header-status button { padding-inline: .42rem; font-size: var(--font-size-sm); }

@@ -70,7 +70,7 @@ test("episode downloads require confirmation, show preparation, and recover from
   }
 });
 
-test("Record starts off and enables archive download only after capture", () => {
+test("archive download enables only after capture and the status row stays hidden", () => {
   const elements = new Map();
   const element = (id) => {
     if (!elements.has(id)) elements.set(id, {
@@ -85,23 +85,19 @@ test("Record starts off and enables archive download only after capture", () => 
   const oldDocument = globalThis.document;
   globalThis.document = { querySelector: element };
   const trajectory = { available: true, enabled: false, transitions: 2, recorded_transitions: 0 };
-  const sent = [];
   try {
     const controls = mountTrajectoryControls({
-      command: (...args) => sent.push(args),
+      command() {},
       getState: () => ({ hasControl: true, snapshot: { trajectory } }),
       request() {}, toast() {},
     });
     controls.render();
-    assert.equal(element("#trajectory-record").hidden, false);
-    assert.equal(element("#trajectory-record").label.textContent, "Record");
+    assert.equal(element("#trajectory-controls").hidden, true);
     assert.equal(element("#trajectory-download").disabled, true);
-    element("#trajectory-record").handlers.click();
-    assert.deepEqual(sent.pop(), ["set_recording", { enabled: true }]);
     trajectory.enabled = true;
     trajectory.recorded_transitions = 1;
     controls.render();
-    assert.equal(element("#trajectory-record").label.textContent, "Stop recording");
+    assert.equal(element("#trajectory-controls").hidden, true);
     assert.equal(element("#trajectory-download").disabled, false);
   } finally {
     globalThis.document = oldDocument;

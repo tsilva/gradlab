@@ -12,7 +12,6 @@ export function recordingDescription(trajectory = {}) {
 }
 
 export function mountTrajectoryControls({ command, inspectStep, getState, request, toast }) {
-  const record = document.querySelector("#trajectory-record");
   const retry = document.querySelector("#trajectory-retry");
   const download = document.querySelector("#trajectory-download");
   const importButton = document.querySelector("#trajectory-import");
@@ -28,10 +27,6 @@ export function mountTrajectoryControls({ command, inspectStep, getState, reques
   let preparing = false;
   let importing = false;
 
-  record.addEventListener("click", () => {
-    const snapshot = getState().liveSnapshot || getState().snapshot;
-    command("set_recording", { enabled: !Boolean(snapshot?.trajectory?.enabled) });
-  });
   retry.addEventListener("click", () => command("retry_storage"));
   seek.addEventListener("change", () => inspectStep(Number(seek.value)));
   seek.addEventListener("keydown", (event) => {
@@ -109,15 +104,8 @@ export function mountTrajectoryControls({ command, inspectStep, getState, reques
     const trajectory = snapshot?.trajectory || {};
     const imported = Boolean(trajectory.imported);
     const available = trajectory.available || imported;
-    document.querySelector("#trajectory-controls").hidden = !available;
+    document.querySelector("#trajectory-controls").hidden = !imported && !trajectory.error;
     document.querySelector("#trajectory-navigation").hidden = !imported;
-    record.hidden = !available || imported;
-    record.disabled = !state.hasControl;
-    record.classList.toggle("recording", Boolean(trajectory.enabled));
-    record.setAttribute("aria-pressed", String(Boolean(trajectory.enabled)));
-    record.setAttribute("aria-label", trajectory.enabled ? "Stop recording episode" : "Start recording episode");
-    record.title = trajectory.enabled ? "Stop recording this episode" : "Start recording this episode";
-    record.querySelector("span").textContent = trajectory.enabled ? "Stop recording" : "Record";
     retry.hidden = !trajectory.error;
     retry.disabled = !state.hasControl;
     download.hidden = !available || imported;

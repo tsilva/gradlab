@@ -66,9 +66,6 @@
               : `${ordinal(data.rank)} of ${data.choiceCount} choices`}</span
           >
         </div>
-        <div class="policy-decision-context-label">
-          Probability of choosing this command
-        </div>
         <div
           class="policy-decision-execution"
           class:overridden={Boolean(data.overrideRuleId)}
