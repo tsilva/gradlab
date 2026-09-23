@@ -8,6 +8,7 @@ import {
   bestRunEfficiency,
   catalogItemMatchesSearch,
   checkpointCanEvaluate,
+  checkpointEvaluationPresentation,
   checkpointMetricBestBadge,
   checkpointMetricDescription,
   checkpointMetricHeaderLabel,
@@ -417,7 +418,7 @@ test("checkpoint selection boxes are centered and distinguish enabled from disab
   assert.match(styles, /\.source-selection-cell input:disabled \{[^}]*border-color: var\(--color-border\);[^}]*opacity: \.42;/);
 });
 
-test("checkpoint table uses compact metric labels with full accessible descriptions", async () => {
+test("checkpoint table shows exact metric keys with full accessible descriptions", async () => {
   const source = await readFile(
     new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
     "utf8",
@@ -432,7 +433,9 @@ test("checkpoint table uses compact metric labels with full accessible descripti
   assert.doesNotMatch(source, /roleLabel\.className = `checkpoint-metric-role/);
   assert.doesNotMatch(source, /\{ label: "Evaluation" \}/);
   assert.doesNotMatch(source, /\{ label: "Evidence" \}/);
-  assert.doesNotMatch(source, /checkpoint-evidence/);
+  assert.match(source, /checkpoint-evidence-note/);
+  assert.match(source, /trainGroup\.textContent = "Train"/);
+  assert.match(source, /evalGroup\.textContent = "Eval"/);
 });
 
 test("catalog list hover highlights the complete row", async () => {
@@ -965,7 +968,7 @@ test("source discovery progressively discloses secondary controls", async () => 
   assert.match(source, /differencesSummary\.textContent = .* from current`/);
   assert.doesNotMatch(source, /Evaluation & technical details/);
   assert.doesNotMatch(source, /Compare all checkpoints/);
-  assert.match(source, /body\.append\(this\.renderEvaluationActions\(\), results\)/);
+  assert.match(source, /body\.append\(evidenceNote, this\.renderEvaluationActions\(\), results\)/);
 });
 
 test("catalog refresh animates and disables only the header refresh control", async () => {
@@ -1194,27 +1197,37 @@ test("run metrics use compact labels and values", () => {
   assert.equal(formatMetricValue(METRIC, null), "—");
 });
 
-test("checkpoint metric headers preserve semantics in one short line", () => {
+test("checkpoint metric headers show exact metric keys", () => {
   assert.equal(checkpointMetricHeaderLabel({
     metric: "eval/success/min",
     evidence: "evaluation",
-  }), "Eval success");
+  }), "eval/success/min");
   assert.equal(checkpointMetricHeaderLabel({
     metric: "train/success/min",
     evidence: "training",
-  }), "Train success");
+  }), "train/success/min");
   assert.equal(checkpointMetricHeaderLabel({
     metric: "eval/return/mean",
     evidence: "evaluation",
-  }), "Eval return");
+  }), "eval/return/mean");
   assert.equal(checkpointMetricHeaderLabel({
-    metric: "train/return/mean",
+    metric: "train/progress/bricks_destroyed/max",
     evidence: "training",
-  }), "Train return");
-  assert.equal(checkpointMetricHeaderLabel({
-    metric: "eval/progress/kills/mean",
-    evidence: "evaluation",
-  }), "Eval kills");
+  }), "train/progress/bricks_destroyed/max");
+});
+
+test("checkpoint evaluation status distinguishes missing, running, and verified evidence", () => {
+  assert.deepEqual(checkpointEvaluationPresentation({}), {
+    label: "Not evaluated", tone: "absent",
+  });
+  assert.deepEqual(checkpointEvaluationPresentation({ evaluation_queue: { state: "running", evaluation: {
+    episodes_completed: 43, episodes_planned: 100,
+  } } }), { label: "Running · 43/100", tone: "running" });
+  assert.deepEqual(checkpointEvaluationPresentation({ evaluation: {
+    source: "monitoring", status: "verified", episodes_completed: 100, episodes_planned: 100,
+  } }), {
+    label: "Verified · 100/100", tone: "verified", title: "Checkpoint Monitoring · observational",
+  });
 });
 
 test("run finish reasons distinguish resource, training, and evaluation outcomes", () => {

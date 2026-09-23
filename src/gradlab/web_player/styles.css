@@ -107,7 +107,7 @@
 .source-table { font-family: var(--font-family-ui); }
 .source-table .data-cell,
 .source-table .checkpoint-metric-cell,
-.source-table .checkpoint-cell small,
+.source-table .checkpoint-step-cell small,
 .source-table .run-cell small { font-family: var(--font-family-mono); }
 
 [hidden] { display: none !important; }
@@ -959,6 +959,11 @@ h2 { font-size: var(--font-size-lg); margin: 0; font-weight: var(--font-weight-s
 }
 
 .source-table-scroll { overflow: auto; }
+.checkpoint-evidence-note {
+  margin: 0 0 .7rem;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+}
 .source-table {
   min-width: 48rem;
   font-family: var(--font-family-ui);
@@ -979,6 +984,45 @@ h2 { font-size: var(--font-size-lg); margin: 0; font-weight: var(--font-weight-s
   text-transform: uppercase;
 }
 .source-table.checkpoint-table th { padding-inline: .45rem; }
+.source-table.checkpoint-table .checkpoint-group-row th {
+  top: 0;
+  z-index: 3;
+  height: 2.4rem;
+  text-align: center;
+  text-transform: uppercase;
+}
+.source-table.checkpoint-table thead tr:nth-child(2) th {
+  top: 2.4rem;
+  z-index: 2;
+}
+.source-table.checkpoint-table .checkpoint-group-row .checkpoint-fixed-header {
+  text-align: left;
+  vertical-align: middle;
+}
+.source-table.checkpoint-table .checkpoint-train-group {
+  background: color-mix(in srgb, var(--color-interaction) 26%, var(--color-surface-secondary));
+  color: var(--color-text);
+}
+.source-table.checkpoint-table .checkpoint-eval-group {
+  background: color-mix(in srgb, var(--color-evaluation-text) 23%, var(--color-surface-secondary));
+  color: var(--color-text);
+}
+.source-table.checkpoint-table .checkpoint-key-header {
+  min-width: 10rem;
+  max-width: 14rem;
+  font-family: var(--font-family-mono);
+  letter-spacing: normal;
+  text-transform: none;
+}
+.source-table.checkpoint-table .checkpoint-train-header {
+  background: color-mix(in srgb, var(--color-interaction) 8%, var(--color-surface-secondary));
+}
+.source-table.checkpoint-table .checkpoint-eval-header {
+  background: color-mix(in srgb, var(--color-evaluation-text) 8%, var(--color-surface-secondary));
+}
+.source-table.checkpoint-table .checkpoint-key-header .source-sort-label > span:first-child {
+  overflow-wrap: anywhere;
+}
 .source-table.checkpoint-table .source-sort-label > span:first-child {
   overflow: visible;
   line-height: var(--line-height-tight);
@@ -1108,12 +1152,27 @@ h2 { font-size: var(--font-size-lg); margin: 0; font-weight: var(--font-weight-s
   text-transform: uppercase;
   white-space: nowrap;
 }
-.source-table .checkpoint-identity {
+.source-table .checkpoint-step {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: .4rem;
 }
+.source-table .checkpoint-step-cell { min-width: 9rem; font-family: var(--font-family-mono); }
+.source-table .checkpoint-eval-status-cell { min-width: 8rem; }
+.source-table .checkpoint-eval-status {
+  display: inline-flex;
+  width: fit-content;
+  padding: .24rem .42rem;
+  border: 1px solid var(--color-border);
+  border-radius: 99rem;
+  white-space: nowrap;
+}
+.source-table .checkpoint-eval-status.verified { color: var(--color-evaluation-text); }
+.source-table .checkpoint-eval-status.running { color: var(--color-interaction-active); }
+.source-table .checkpoint-eval-status.failed { color: var(--color-error-text); }
+.source-table .checkpoint-eval-status.absent,
+.source-table .checkpoint-eval-status.pending { color: var(--color-text-muted); }
 .source-table .checkpoint-purpose-badge {
   display: inline-flex;
   flex-shrink: 0;

@@ -59,7 +59,11 @@ authority for that decision.
   When `checkpoint_eval_backend` is `none`, the supervisor intentionally omits
   `checkpoint_eval_contract`; the catalog must validate that expected absence against the immutable
   recipe and W&B run dimensions without suppressing otherwise compatible training-proxy history.
-  Full-evaluation columns remain unavailable until verified checkpoint-evaluation evidence exists.
+  Full-evaluation values remain unavailable until verified checkpoint-evaluation evidence exists.
+  Breakout Training-Only checkpoint tables also expose observational `eval/success/mean`,
+  `eval/progress/bricks_destroyed_normalized/mean`, and `eval/return/mean` from complete
+  Checkpoint Monitoring events, with an explicit evaluation status. These values never
+  imply Acceptance or Promotion.
 - W&B config contains run-defining dimensions: `metrics_schema_version: 24`,
   `metrics_episode_window_size: 100`, `training_backend_id`,
   `training_backend_config_hash`, `algorithm_id`, goal,

@@ -803,27 +803,50 @@ export function checkpointMetricRoleLabel(column) {
   if (roles.has("acceptance")) return "Acceptance";
   if (roles.has("training_proxy")) return "Training proxy";
   if (roles.has("optimization")) return "Optimization";
+  if (roles.has("observation")) return "Observation";
   return "";
 }
 
 export function checkpointMetricHeaderLabel(column) {
-  const metric = String(column?.metric || "");
-  const evidence = (
-    column?.evidence === "evaluation"
-    || /^(eval\/|leader\/)/.test(metric)
-  ) ? "Eval" : "Train";
-  if (/\/success\//.test(metric)) return `${evidence} success`;
-  if (/\/return_(mean|max)$/.test(metric)) return `${evidence} return`;
-  const progress = metric.match(/\/progress\/([^/]+)\//);
-  if (progress) return `${evidence} ${humanizeMetricPart(progress[1]).toLowerCase()}`;
-  if (metric === "leader/step") return "Checkpoint step";
-  return column?.label || metricLabel(metric);
+  return String(column?.metric || "");
+}
+
+export function checkpointEvaluationPresentation(item) {
+  const queue = item?.evaluation_queue;
+  const state = String(queue?.state || "").toLowerCase();
+  const evaluation = queue?.evaluation || item?.evaluation;
+  const completed = Number(evaluation?.episodes_completed);
+  const planned = Number(evaluation?.episodes_planned);
+  const progress = Number.isFinite(completed) && Number.isFinite(planned) && planned > 0
+    ? ` · ${completed}/${planned}` : "";
+  if (["queued", "retry_wait", "waiting_for_training_terminal", "waiting_for_run_lease", "submitted", "submission_uncertain", "awaiting_projection", "flusher_unavailable"].includes(state)) {
+    return { label: "Queued", tone: "pending" };
+  }
+  if (state === "running") return { label: `Running${progress}`, tone: "running" };
+  if (["failed", "blocked", "expired", "canceled"].includes(state)) {
+    return { label: state === "canceled" ? "Canceled" : "Failed", tone: "failed" };
+  }
+  if (evaluation?.source === "monitoring" && evaluation.status === "verified") {
+    return { label: `Verified${progress}`, tone: "verified", title: "Checkpoint Monitoring · observational" };
+  }
+  if (evaluation?.status === "accepted" || state === "accepted") {
+    return { label: `Accepted${progress}`, tone: "verified", title: evaluation.manual ? "Manual Acceptance evaluation" : "Acceptance evaluation" };
+  }
+  if (evaluation?.status === "rejected" || state === "rejected") {
+    return { label: `Rejected${progress}`, tone: "failed", title: evaluation.manual ? "Manual Acceptance evaluation" : "Acceptance evaluation" };
+  }
+  if (evaluation?.status === "verified") {
+    return { label: `Verified${progress}`, tone: "verified" };
+  }
+  return { label: "Not evaluated", tone: "absent" };
 }
 
 export function checkpointMetricDescription(column) {
   const role = checkpointMetricRoleLabel(column);
   const evidence = column?.evidence === "evaluation"
-    ? "Frozen checkpoint-evaluation evidence"
+    ? Array.isArray(column?.roles) && column.roles.includes("observation")
+      ? "Verified observational checkpoint evaluation; no Acceptance authority"
+      : "Frozen checkpoint-evaluation evidence"
     : Array.isArray(column?.roles) && column.roles.includes("training_proxy")
       ? "Diagnostic online training proxy; checkpoint evaluation remains authoritative"
       : "Diagnostic online training evidence";
@@ -2624,7 +2647,10 @@ export class SourceBrowser {
             : this.renderTable();
     if (this.route.level === "runs" && this.route.run_id) {
       body.classList.add("source-checkpoint-results");
-      body.append(this.renderEvaluationActions(), results);
+      const evidenceNote = document.createElement("p");
+      evidenceNote.className = "checkpoint-evidence-note";
+      evidenceNote.textContent = "Training values are recent episode windows. Evaluation values require verified checkpoint evidence.";
+      body.append(evidenceNote, this.renderEvaluationActions(), results);
     } else {
       body.append(results);
     }
@@ -3333,7 +3359,10 @@ export class SourceBrowser {
     if (showingCheckpoints) table.classList.add("checkpoint-table");
     const runRankingColumns = showingRuns ? this.activeRunMetricColumns() : [];
     const runMetricColumns = availableRunMetricColumns(this.items, runRankingColumns);
-    const checkpointMetricColumns = showingCheckpoints ? this.metricColumns : [];
+    const trainingCheckpointColumns = showingCheckpoints
+      ? this.metricColumns.filter((column) => column.evidence === "training") : [];
+    const evaluationCheckpointColumns = showingCheckpoints
+      ? this.metricColumns.filter((column) => column.evidence === "evaluation") : [];
     const columns = showingRuns
       ? [
           { label: "Run" },
@@ -3349,15 +3378,21 @@ export class SourceBrowser {
         ]
       : [
           ...(showingCheckpoints ? [{ label: "", selection: true }] : []),
-          { label: "Checkpoint" },
           { label: "Step" },
-          ...checkpointMetricColumns.map((column) => ({
+          ...trainingCheckpointColumns.map((column) => ({
             ...column,
             fullLabel: column.label || metricLabel(column.metric),
             label: checkpointMetricHeaderLabel(column),
           })),
-          ...(showingCheckpoints ? [{ label: "Created" }] : []),
+          ...(showingCheckpoints ? [{ label: "Eval status", evaluationStatus: true }] : []),
+          ...evaluationCheckpointColumns.map((column) => ({
+            ...column,
+            fullLabel: column.label || metricLabel(column.metric),
+            label: checkpointMetricHeaderLabel(column),
+          })),
         ];
+    const groupRow = showingCheckpoints ? document.createElement("tr") : null;
+    if (groupRow) groupRow.className = "checkpoint-group-row";
     columns.forEach((column) => {
       const cell = document.createElement("th");
       cell.scope = "col";
@@ -3407,7 +3442,14 @@ export class SourceBrowser {
         const labelGroup = document.createElement("span");
         labelGroup.className = "source-sort-label";
         const label = document.createElement("span");
-        label.textContent = column.label;
+        if (showingCheckpoints) {
+          String(column.label).split("/").forEach((part, index) => {
+            if (index) label.append(document.createTextNode("/"), document.createElement("wbr"));
+            label.append(document.createTextNode(part));
+          });
+        } else {
+          label.textContent = column.label;
+        }
         labelGroup.append(label);
         const indicator = document.createElement("span");
         indicator.className = "source-sort-indicator";
@@ -3425,8 +3467,40 @@ export class SourceBrowser {
       } else {
         cell.textContent = column.label;
       }
-      headerRow.append(cell);
+      if (showingCheckpoints && (column.selection || column.label === "Step")) {
+        cell.rowSpan = 2;
+        cell.classList.add("checkpoint-fixed-header");
+        groupRow.append(cell);
+      } else {
+        if (showingCheckpoints && column.metric) {
+          cell.classList.add("checkpoint-key-header");
+        }
+        if (showingCheckpoints && (column.evaluationStatus || column.evidence === "evaluation")) {
+          cell.classList.add("checkpoint-eval-header");
+        }
+        if (showingCheckpoints && column.evidence === "training") {
+          cell.classList.add("checkpoint-train-header");
+        }
+        headerRow.append(cell);
+      }
     });
+    if (groupRow) {
+      if (trainingCheckpointColumns.length) {
+        const trainGroup = document.createElement("th");
+        trainGroup.scope = "colgroup";
+        trainGroup.colSpan = trainingCheckpointColumns.length;
+        trainGroup.className = "checkpoint-train-group";
+        trainGroup.textContent = "Train";
+        groupRow.append(trainGroup);
+      }
+      const evalGroup = document.createElement("th");
+      evalGroup.scope = "colgroup";
+      evalGroup.colSpan = evaluationCheckpointColumns.length + 1;
+      evalGroup.className = "checkpoint-eval-group";
+      evalGroup.textContent = "Eval";
+      groupRow.append(evalGroup);
+      head.append(groupRow);
+    }
     head.append(headerRow);
     const body = document.createElement("tbody");
     const items = showingRuns
@@ -3471,18 +3545,11 @@ export class SourceBrowser {
             [null, "", "inspection-cell"],
           ]
         : (() => {
-            const checkpointName = /final/i.test(String(item.purpose || ""))
-              ? "Final checkpoint"
-              : `Checkpoint at ${Number(item.step).toLocaleString()} steps`;
+            const evaluationPresentation = checkpointEvaluationPresentation(item);
             return [
               ...(showingCheckpoints ? [[null, "", "source-selection-cell"]] : []),
-              [
-                checkpointName,
-                "",
-                "checkpoint-cell",
-              ],
-              [Number(item.step).toLocaleString(), "", "data-cell"],
-              ...checkpointMetricColumns.map((column) => [
+              [Number(item.step).toLocaleString(), "", "checkpoint-step-cell", null, { purpose: item.purpose }],
+              ...trainingCheckpointColumns.map((column) => [
                 formatMetricValue(column.metric, item.metrics?.[column.metric]),
                 "",
                 "checkpoint-metric-cell",
@@ -3493,11 +3560,18 @@ export class SourceBrowser {
                   column,
                 },
               ]),
-              ...(showingCheckpoints
-                ? [
-                    [formatDate(item.created_at), "", "data-cell"],
-                  ]
-                : []),
+              [evaluationPresentation.label, "", "checkpoint-eval-status-cell", null, evaluationPresentation],
+              ...evaluationCheckpointColumns.map((column) => [
+                formatMetricValue(column.metric, item.metrics?.[column.metric]),
+                "",
+                "checkpoint-metric-cell checkpoint-eval-metric-cell",
+                null,
+                {
+                  isBest: checkpointMetricIsBest(item, column.metric),
+                  label: column.label || metricLabel(column.metric),
+                  column,
+                },
+              ]),
             ];
           })();
       values.forEach(([
@@ -3594,7 +3668,7 @@ export class SourceBrowser {
           main.setAttribute("aria-label", `Loading ${metadata.label}`);
           cell.setAttribute("aria-busy", "true");
         }
-        if (className.includes("checkpoint-cell")) {
+        if (className.includes("checkpoint-step-cell")) {
           main.title = String(item.checkpoint_id || "");
         }
         if (className.includes("run-cell")) {
@@ -3621,9 +3695,9 @@ export class SourceBrowser {
           cell.append(identity);
           const success = renderSuccessBadges(item);
           if (success) cell.append(success);
-        } else if (className.includes("checkpoint-cell") && showingCheckpoints) {
+        } else if (className.includes("checkpoint-step-cell") && showingCheckpoints) {
           const identity = document.createElement("div");
-          identity.className = "checkpoint-identity";
+          identity.className = "checkpoint-step";
           identity.append(main);
           if (/final/i.test(String(item.purpose || ""))) {
             const badge = document.createElement("span");
@@ -3633,6 +3707,10 @@ export class SourceBrowser {
             identity.append(badge);
           }
           cell.append(identity);
+        } else if (className.includes("checkpoint-eval-status-cell")) {
+          main.className = `checkpoint-eval-status ${metadata.tone}`;
+          if (metadata.title) main.title = metadata.title;
+          cell.append(main);
         } else {
           cell.append(main);
         }

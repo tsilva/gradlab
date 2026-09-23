@@ -24,6 +24,7 @@ This specification applies to the public checkpoint browser and interactive web 
 - In the desktop viewer, closing Stats must leave Player and Playback running. Closing Player must close Stats and terminate the desktop Playback application, including when Stats closes as a consequence; no desktop application process may remain after its windows close.
 - Checkpoint lists must show the exact Goal Variant's Acceptance and ranking measures with applicable Training Success proxies.
 - Training Success proxies must remain visibly distinct from authoritative checkpoint-evaluation evidence.
+- Checkpoint tables must group Train and Eval measures under their exact metric names, identify each Checkpoint by step with a Final badge where applicable, show evaluation status, and leave unavailable evaluation values visibly empty.
 - Interactive Playback must provide independently arranged and synchronized views of frames, Policy inputs and decisions, transition facts, and bounded histories.
 - Selecting a step in the reward panel, Events panel, or playbar must move the shared Playback cursor and synchronize the frame and matching row highlights; Events must highlight only an event at the exact cursor step.
 - The reference step for discounted reward inspection must remain separate from the Playback cursor and change only through an explicit user action, so users can scrub without changing the calculation reference.
