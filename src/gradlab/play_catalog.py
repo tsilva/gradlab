@@ -111,7 +111,7 @@ LIVE_TRAINING_METRICS = (
 )
 CHECKPOINT_STRUCTURAL_METRICS = frozenset({LEADER_CHECKPOINT_STEP, TRAIN_GLOBAL_STEP})
 CHECKPOINT_COLUMN_ROLES = frozenset(
-    {"objective", "tie_breaker", "acceptance", "training_proxy", "optimization"}
+    {"objective", "tie_breaker", "acceptance", "training_proxy", "optimization", "observation"}
 )
 _EVAL_PROGRESS_METRIC_RE = re.compile(r"^eval/progress/([A-Za-z0-9_.-]+)/(mean|max)$")
 _TRAIN_PROGRESS_METRIC_RE = re.compile(
@@ -628,6 +628,15 @@ def checkpoint_metric_contract(
         direction="max",
         role="optimization",
     )
+    # A training-only Breakout run can still have observational Checkpoint Monitoring.
+    # These columns have no ranking or Acceptance authority.
+    if evaluation_backend == "none" and "bricks_destroyed_normalized" in progress_fields:
+        for metric in (
+            "eval/success/mean",
+            "eval/progress/bricks_destroyed_normalized/mean",
+            "eval/return/mean",
+        ):
+            add_column(metric, direction=None, role="observation")
     return CheckpointMetricContract(
         metrics_schema_version=schema_version,
         evaluation_backend=evaluation_backend,
@@ -3282,6 +3291,40 @@ class PlayCatalog:
             if metric_contract.evaluation_backend == "none" or not metric_contract.acceptance:
                 evaluations = {}
                 evaluation_seed = None
+                monitoring_metrics = tuple(
+                    str(column["metric"])
+                    for column in metric_contract.columns
+                    if "observation" in column.get("roles", ())
+                )
+                if monitoring_metrics:
+                    marker = "eval/monitor/progress/median"
+                    for raw in run.scan_history(
+                        keys=[EVAL_CHECKPOINT_STEP, marker, "eval/episodes/count", *monitoring_metrics],
+                        page_size=10_000,
+                    ):
+                        if not isinstance(raw, Mapping):
+                            continue
+                        step = _safe_int(raw.get(EVAL_CHECKPOINT_STEP))
+                        values = {
+                            metric: _safe_float(raw.get(metric))
+                            for metric in monitoring_metrics
+                        }
+                        episode_count = _safe_int(raw.get("eval/episodes/count"))
+                        if (
+                            step is None
+                            or episode_count is None
+                            or episode_count <= 0
+                            or _safe_float(raw.get(marker)) is None
+                            or any(value is None for value in values.values())
+                        ):
+                            continue
+                        evaluations[step] = {
+                            "status": "verified",
+                            "source": "monitoring",
+                            "episodes_completed": episode_count,
+                            "episodes_planned": episode_count,
+                            "metrics": values,
+                        }
             else:
                 assert isinstance(contract, Mapping)
                 evaluation_seed = _safe_int(contract.get("seed"))

@@ -1685,6 +1685,86 @@ def test_catalog_attaches_training_metrics_when_checkpoint_evaluation_is_disable
     }
 
 
+def test_breakout_checkpoint_table_uses_verified_monitoring_event_for_eval_columns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint = checkpoint_row(step=500_000, digest="3" * 64, purpose="final")
+    monkeypatch.setattr(
+        "gradlab.play_catalog._public_json",
+        lambda _url: {
+            "schema_version": 1,
+            "run_id": RUN_ID,
+            "checkpoints": [checkpoint],
+            "promotion": None,
+        },
+    )
+    train_config = {
+        "metrics_schema_version": METRICS_SCHEMA_VERSION,
+        "checkpoint_eval_backend": "none",
+        "selection_rank": [
+            "max(train/progress/bricks_destroyed/mean)",
+            "max(train/progress/bricks_destroyed/max)",
+            "min(train/episode_steps/mean)",
+        ],
+        "episode_progress_fields": ["bricks_destroyed", "bricks_destroyed_normalized"],
+    }
+
+    class Run:
+        config = {
+            "metrics_schema_version": METRICS_SCHEMA_VERSION,
+            "checkpoint_eval_backend": "none",
+            "selection_rank": train_config["selection_rank"],
+            "seed": 7,
+        }
+
+        @staticmethod
+        def scan_history(*, keys, page_size):
+            assert page_size == 10_000
+            if "eval/monitor/progress/median" in keys:
+                return [{
+                    "eval/step": 500_000,
+                    "eval/monitor/progress/median": 0.48,
+                    "eval/episodes/count": 100,
+                    "eval/success/mean": 0.84,
+                    "eval/progress/bricks_destroyed_normalized/mean": 0.47,
+                    "eval/return/mean": 138.2,
+                }]
+            return []
+
+    class Api:
+        @staticmethod
+        def run(_path):
+            return Run()
+
+    catalog = PlayCatalog(
+        public_models_base_url="https://models.example",
+        wandb_run_location=WandbRunLocation(entity="research", project="Breakout", run_id=RUN_ID),
+    )
+    bind_checkpoint_recipe(catalog, monkeypatch, (checkpoint,), train_config)
+    catalog._api = Api()
+
+    page = catalog.checkpoints(run_id=RUN_ID)
+    row = page.items[0]
+    assert [column["metric"] for column in page.metric_columns if column["evidence"] == "evaluation"] == [
+        "eval/success/mean",
+        "eval/progress/bricks_destroyed_normalized/mean",
+        "eval/return/mean",
+    ]
+    assert row["evaluation"] == {
+        "status": "verified",
+        "source": "monitoring",
+        "episodes_completed": 100,
+        "episodes_planned": 100,
+        "metrics": {
+            "eval/success/mean": 0.84,
+            "eval/progress/bricks_destroyed_normalized/mean": 0.47,
+            "eval/return/mean": 138.2,
+        },
+    }
+    assert row["metrics"]["eval/success/mean"] == 0.84
+    assert all(metric not in row["best_metrics"] for metric in row["evaluation"]["metrics"])
+
+
 def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
