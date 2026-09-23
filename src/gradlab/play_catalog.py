@@ -246,6 +246,7 @@ class RunSummary:
     stop_reason: str
     final_step: int | None
     early_stop: Mapping[str, Any] | None
+    training_success: Mapping[str, Any] | None
     goal: str
     recipe: str
     recipe_sha256: str
@@ -2001,6 +2002,11 @@ class PlayCatalog:
                             if isinstance(raw.get("early_stop"), Mapping)
                             else None
                         ),
+                        training_success=(
+                            dict(raw["training_success"])
+                            if isinstance(raw.get("training_success"), Mapping)
+                            else None
+                        ),
                         goal=str(raw["goal_slug"]),
                         recipe=str(raw.get("recipe_slug") or ""),
                         recipe_sha256=str(raw.get("recipe_sha256") or ""),
@@ -3029,11 +3035,15 @@ class PlayCatalog:
         if not isinstance(projected, Mapping):
             return None
         early_stop = projected.get("early_stop")
+        training_success = projected.get("training_success")
         return {
             "run_id": run_id,
             "state": str(projected.get("state") or ""),
             "stop_reason": str(projected.get("stop_reason") or ""),
             "early_stop": dict(early_stop) if isinstance(early_stop, Mapping) else None,
+            "training_success": (
+                dict(training_success) if isinstance(training_success, Mapping) else None
+            ),
             "updated_at": str(projected.get("updated_at") or ""),
         }
 

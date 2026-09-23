@@ -3,6 +3,11 @@ defaults:
 - _self_
 goal_id: FirstWall
 title: Clear the first Breakout wall
+objective:
+  training_success:
+    metric: train/progress/bricks_destroyed_normalized/mean
+    operator: '>='
+    threshold: 0.5
 train:
   checkpoint_freq: 10000000
   environment:

@@ -49,7 +49,11 @@ def goal_catalog_run_success_badges(run: Mapping[str, Any]) -> tuple[str, ...]:
 
     stop_reason = str(run.get("stop_reason") or "").strip()
     early_stop = run.get("early_stop")
+    evidence = run.get("training_success")
     training_success = (
+        isinstance(evidence, Mapping)
+        and evidence.get("status") == "met"
+    ) or (
         isinstance(early_stop, Mapping)
         and str(early_stop.get("outcome") or "").strip().lower() == "success"
     ) or stop_reason.startswith("early_stop_success") or stop_reason in {

@@ -951,11 +951,19 @@ export function environmentSuccessStatus(item, badge) {
 }
 
 export function runTrainingEvidenceStatus(item) {
+  const trainingSuccess = item?.training_success;
+  const criterion = trainingSuccess?.criterion;
+  const best = trainingSuccess?.best;
+  const criterionDetail = criterion
+    ? `${criterion.metric} ${criterion.operator} ${criterion.threshold}`
+    : "the declared Training Success criterion";
   if (successBadgeLabels(item).includes("train/success")) {
     return {
       label: "✅",
       className: "met",
-      description: "The Run met its declared Training Success proxy",
+      description: trainingSuccess?.status === "met"
+        ? `Training Success reached: ${criterionDetail}`
+        : "The Run met its declared Training Success proxy",
     };
   }
   const state = String(item?.state || "").trim().toLowerCase();
@@ -966,10 +974,19 @@ export function runTrainingEvidenceStatus(item) {
       description: "The Run is still in progress",
     };
   }
+  if (trainingSuccess?.status === "unavailable") {
+    return {
+      label: "∅",
+      className: "not-applicable",
+      description: `No training samples are available for ${criterionDetail}`,
+    };
+  }
   return {
     label: "❌",
     className: "not-met",
-    description: "The Run did not meet its declared Training Success proxy",
+    description: trainingSuccess?.status === "not_met" && best
+      ? `${criterionDetail} was not reached; best observed value ${best.value} at step ${best.step}`
+      : "The Run did not meet its declared Training Success proxy",
   };
 }
 

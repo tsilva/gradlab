@@ -18,7 +18,7 @@ GOAL_FIELDS = frozenset(
     }
 )
 GOAL_EVALUATION_MODES = frozenset({"evaluated", "training_only"})
-GOAL_OBJECTIVE_FIELDS = frozenset({"rank", "states"})
+GOAL_OBJECTIVE_FIELDS = frozenset({"rank", "states", "training_success"})
 GOAL_TRAIN_FIELDS = frozenset(
     {
         "checkpoint_freq",

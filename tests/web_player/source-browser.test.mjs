@@ -407,6 +407,20 @@ test("run evidence status distinguishes missing evaluation from failed evaluatio
   });
   assert.equal(runTrainingEvidenceStatus({ state: "running" }).label, "⏳");
   assert.equal(runTrainingEvidenceStatus({ state: "finished" }).label, "❌");
+  const historical = runTrainingEvidenceStatus({
+    state: "finished",
+    training_success: {
+      criterion: {
+        metric: "train/progress/bricks_destroyed_normalized/mean",
+        operator: ">=",
+        threshold: 0.5,
+      },
+      status: "not_met",
+      best: { step: 189161472, value: 0.4992129623889923 },
+    },
+  });
+  assert.equal(historical.label, "❌");
+  assert.match(historical.description, /0\.4992129623889923 at step 189161472/);
 
   assert.deepEqual(runEvaluationEvidenceStatus({ evaluation_status: "not_evaluated" }), {
     label: "∅",
