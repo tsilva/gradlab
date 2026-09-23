@@ -379,6 +379,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Print the play and stats dashboard URLs without opening a dedicated browser.",
     )
     parser.add_argument(
+        "--no-hot-reload",
+        action="store_true",
+        help="Use compiled player assets in a source checkout instead of live frontend assets.",
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="Start paused for interactive transition debugging (now the default).",

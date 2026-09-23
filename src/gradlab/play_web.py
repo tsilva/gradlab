@@ -27,6 +27,7 @@ from PIL import Image
 
 from gradlab.action_contract import action_contract_payload
 from gradlab.play_browser import PlaybackBrowser
+from gradlab.play_dev_assets import PlayerDevAssets, development_page, source_checkout_root
 from gradlab.play_session import (
     _PlaybackSession,
     _PlaybackTransition,
@@ -2943,6 +2944,12 @@ class PlaybackWebServer:
             else runner
         )
         self.args = args
+        checkout_root = source_checkout_root()
+        self.dev_assets = (
+            PlayerDevAssets(checkout_root)
+            if bool(getattr(args, "hot_reload", False)) and checkout_root is not None
+            else None
+        )
         self.paired_windows = paired_windows
         self.catalog = catalog
         self.token = secrets.token_urlsafe(32)
@@ -2995,7 +3002,28 @@ class PlaybackWebServer:
 
     @property
     def asset_root(self) -> Path:
-        return Path(__file__).with_name("web_player") / "dist"
+        root = Path(__file__).with_name("web_player")
+        return root if self.dev_assets is not None else root / "dist"
+
+    def require_player_assets(self) -> None:
+        if self.dev_assets is not None:
+            return
+        root = self.asset_root
+        required = ("index.html", "app.js", "styles.css", "vendor/gridstack/gridstack-all.js")
+        missing = [name for name in required if not (root / name).is_file()]
+        manifest = root / "build-manifest.json"
+        if manifest.is_file():
+            try:
+                outputs = json.loads(manifest.read_text())["outputs"]
+                missing.extend(name for name in outputs if not (root / name).is_file())
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                raise RuntimeError(f"Player web asset manifest is invalid: {manifest}") from exc
+        if missing:
+            raise RuntimeError(
+                "Player web assets are missing (" + ", ".join(sorted(set(missing))) + "). "
+                "From a source checkout, run pnpm install --frozen-lockfile && pnpm build:web "
+                "before gradlab play; otherwise reinstall GradLab."
+            )
 
     def dashboard_urls(self) -> tuple[str, ...]:
         main_path = "/"
@@ -3019,15 +3047,33 @@ class PlaybackWebServer:
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
-        response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; "
-            "connect-src 'self' ws: wss:; object-src 'none'; base-uri 'none'; "
-            "frame-ancestors 'none'"
-        )
+        vite_url = self.dev_assets.url if self.dev_assets is not None else None
+        if vite_url:
+            vite_ws = vite_url.replace("http://", "ws://", 1)
+            response.headers["Content-Security-Policy"] = (
+                f"default-src 'self'; script-src 'self' {vite_url}; "
+                f"style-src 'self' {vite_url} 'unsafe-inline'; img-src 'self' blob:; "
+                f"connect-src 'self' ws: wss: {vite_url} {vite_ws}; "
+                "object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+            )
+        else:
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' blob:; "
+                "connect-src 'self' ws: wss:; object-src 'none'; base-uri 'none'; "
+                "frame-ancestors 'none'"
+            )
         return response
 
-    async def page(self, _request: web.Request) -> web.FileResponse:
-        response = web.FileResponse(self.asset_root / "index.html")
+    async def page(self, _request: web.Request) -> web.StreamResponse:
+        if self.dev_assets is not None:
+            assert self.dev_assets.url is not None
+            markup = (self.asset_root / "index.html").read_text()
+            response = web.Response(
+                text=development_page(markup, self.dev_assets.url),
+                content_type="text/html",
+            )
+        else:
+            response = web.FileResponse(self.asset_root / "index.html")
         response.headers["Cross-Origin-Opener-Policy"] = "same-origin-allow-popups"
         return response
 
@@ -4360,6 +4406,17 @@ class PlaybackWebServer:
             await asyncio.sleep(1.0 / 120.0)
 
     async def run(self) -> int:
+        if self.dev_assets is None:
+            return await self._run()
+        try:
+            url = await self.dev_assets.start()
+            print(f"Player hot reload: {url}", flush=True)
+            return await self._run()
+        finally:
+            await self.dev_assets.stop()
+
+    async def _run(self) -> int:
+        self.require_player_assets()
         app = web.Application(middlewares=[self.security_headers])
         app.add_routes(self.trajectory_transfers.routes())
         app.add_routes(
