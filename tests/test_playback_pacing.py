@@ -13,6 +13,12 @@ def test_default_display_fps():
     assert build_parser().get_default("fps") == 30.0
 
 
+def test_hot_reload_requires_explicit_flag():
+    parser = build_parser()
+    assert not parser.parse_args([]).hotreload
+    assert parser.parse_args(["--hotreload"]).hotreload
+
+
 def test_policy_loop_does_not_wait_for_display_clock():
     runner = object.__new__(WebPlaybackRunner)
     runner._stop = threading.Event()

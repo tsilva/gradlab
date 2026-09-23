@@ -80,6 +80,14 @@ def test_catalog_authority_helper_reads_only_allowlisted_control_documents(
             },
             missing_key: None,
         }
+        monitoring_key = (
+            "runs/gradlab-" + "a" * 32 + "/monitoring/" + "b" * 64
+            + "/" + "c" * 64 + "/state.json"
+        )
+        monitoring_target = control / monitoring_key
+        monitoring_target.parent.mkdir(parents=True)
+        monitoring_target.write_text(json.dumps({"status": "running"}), encoding="utf-8")
+        assert helper.get_json_optional(monitoring_key) == {"status": "running"}
         with pytest.raises(CatalogIntegrityError, match="unsupported control object"):
             helper.get_json_optional("runs/not-a-run/manifest.json")
         with pytest.raises(CatalogIntegrityError, match="unsupported control object"):

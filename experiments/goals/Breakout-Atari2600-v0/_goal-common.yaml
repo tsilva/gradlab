@@ -7,8 +7,8 @@ tags:
 - "env_id:{{ env_id }}"
 objective:
   rank:
-  - max(train/progress/bricks_destroyed/mean)
-  - max(train/progress/bricks_destroyed/max)
+  - max(train/progress/bricks_destroyed_normalized/mean)
+  - max(train/progress/bricks_destroyed_normalized/max)
   - min(train/episode_steps/mean)
 train:
   checkpoint_freq: 500000

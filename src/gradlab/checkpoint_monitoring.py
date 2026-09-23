@@ -529,6 +529,7 @@ def monitoring_aggregates(episodes, manifest):
         "eval/monitor/success/ci95/lower": max(0.0, center - radius),
         "eval/monitor/success/ci95/upper": min(1.0, center + radius),
         "eval/progress/bricks_destroyed_normalized/mean": statistics.mean(progress),
+        "eval/progress/bricks_destroyed_normalized/max": max(progress),
         "eval/monitor/progress/median": median,
         "eval/progress/score/mean": statistics.mean(r["native_score"] for r in ordered),
         "eval/return/mean": statistics.mean(r["shaped_return"] for r in ordered),

@@ -18,6 +18,7 @@
     nextLast: number | null = null,
     expanded = false,
     pending = false,
+    loaded = false,
     revision = 0,
     updated = 0,
     disposed = false;
@@ -30,7 +31,7 @@
     if (pending || !identity || disposed) return;
     pending = true;
     const request = revision;
-    status = "Loading events…";
+    if (!loaded && !status) status = "Loading events…";
     try {
       const result = await services.loadEvents(
         identity.split(":").slice(1).join(":"),
@@ -50,10 +51,14 @@
         for (const point of result.points) merged.set(point.step, point);
         points = [...merged.values()].sort((a, b) => b.step - a.step);
       } else points = result.points;
+      loaded = true;
       status = nextLast === null ? "" : "Scroll down for older events";
       updated = Date.now();
     } catch (error) {
-      if (request === revision && !disposed) status = (error as Error).message;
+      if (request === revision && !disposed) {
+        status = (error as Error).message;
+        updated = Date.now();
+      }
     } finally {
       pending = false;
       if (request !== revision && !disposed) void load();
@@ -84,6 +89,7 @@
       identity = key;
       revision++;
       expanded = false;
+      loaded = false;
       if (panel) panel.scrollTop = 0;
       status = key ? "Loading events…" : "";
       nextLast = null;

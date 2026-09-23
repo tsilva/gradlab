@@ -2882,6 +2882,14 @@ def test_web_dashboard_assets_are_packaged_beside_server() -> None:
     assert not (root / "node_modules").exists()
 
 
+def test_player_uses_compiled_assets_without_hot_reload() -> None:
+    runner = HumanRecordingRunner(FakeHumanSession(), human_args())
+    server = PlaybackWebServer(runner, human_args())
+    assert server.dev_assets is None
+    response = asyncio.run(server.page(None))
+    assert isinstance(response, web.FileResponse)
+
+
 def test_web_server_rejects_missing_player_assets_before_binding(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2914,6 +2922,7 @@ def test_source_player_uses_vite_assets_and_keeps_api_on_player_origin() -> None
                 response = await client.get(server.origin)
                 assert response.status == 200
                 markup = await response.text()
+                assert '<body data-hot-reload="true">' in markup
                 assert f'{vite_url}/@vite/client' in markup
                 assert f'{vite_url}/frontend/main.ts' in markup
                 assert '/assets/app.js' not in markup

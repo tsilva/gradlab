@@ -789,7 +789,8 @@ def test_latest_local_recipe_model_uses_newest_completed_receipt(tmp_path: Path)
     ) == (tmp_path / "newer" / "final_model.zip")
 
 
-def test_play_recipe_selects_latest_local_model(tmp_path: Path) -> None:
+@pytest.mark.parametrize("hotreload", [False, True])
+def test_play_recipe_selects_latest_local_model(tmp_path: Path, hotreload: bool) -> None:
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     model_path = run_dir / "final_model.zip"
@@ -819,6 +820,7 @@ def test_play_recipe_selects_latest_local_model(tmp_path: Path) -> None:
                     "--runs-dir",
                     str(tmp_path),
                     "--no-open",
+                    *(["--hotreload"] if hotreload else []),
                 ]
             )
             == 23
@@ -826,6 +828,7 @@ def test_play_recipe_selects_latest_local_model(tmp_path: Path) -> None:
 
     host, args = run_application.call_args.args[:2]
     assert args.model == str(model_path)
+    assert args.hot_reload is hotreload
     assert host.snapshot()["app"]["source"]["kind"] == "local"
     assert host.snapshot()["app"]["source"]["value"] == str(model_path)
 

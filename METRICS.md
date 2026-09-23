@@ -52,7 +52,14 @@ authority for that decision.
   eval R2 contains intents, results, and episode evidence. Private control R2 contains leases,
   journals, promotions, and terminal receipts.
 - Player checkpoint tables populate full-evaluation columns only from verified checkpoint-evaluation
-  evidence. Training-proxy columns sample W&B history at the latest `train/step` no greater
+  evidence. Train columns contain training-family ranking measures, available proxies for evaluation
+  ranking or Acceptance measures, and `train/return/mean`; Eval columns contain evaluation-family
+  ranking or Acceptance measures, or the Breakout observational monitoring set. Breakout checkpoint
+  tables pair Train and Eval success rate, normalized brick-progress mean and maximum, episode length,
+  and return. Historical raw-brick ranks are displayed through their equivalent normalized values
+  (raw bricks divided by 216), while retaining the recorded rank contract. For a single-start run,
+  the Train success mean is the recorded success minimum because the two reductions are identical.
+  Training-proxy columns sample W&B history at the latest `train/step` no greater
   than the checkpoint step, but only after W&B's metrics schema, selection rank, and checkpoint
   acceptance contract match the immutable recipe. Any contract mismatch suppresses all optional
   W&B enrichment and surfaces a warning rather than displaying potentially misbound proxy values.
@@ -61,9 +68,13 @@ authority for that decision.
   recipe and W&B run dimensions without suppressing otherwise compatible training-proxy history.
   Full-evaluation values remain unavailable until verified checkpoint-evaluation evidence exists.
   Breakout Training-Only checkpoint tables also expose observational `eval/success/mean`,
-  `eval/progress/bricks_destroyed_normalized/mean`, and `eval/return/mean` from complete
+  `eval/progress/bricks_destroyed_normalized/mean`,
+  `eval/progress/bricks_destroyed_normalized/max`, `eval/episode_steps/mean`, and `eval/return/mean` from complete
   Checkpoint Monitoring events, with an explicit evaluation status. These values never
-  imply Acceptance or Promotion.
+  imply Acceptance or Promotion. Matching `train/` and `eval/` suffixes still summarize different
+  episode sets: recent online training episodes versus the checkpoint's complete frozen evaluation
+  manifest. The status badge's completed/planned episode count is evidence completeness, not the
+  evaluation success rate.
 - W&B config contains run-defining dimensions: `metrics_schema_version: 24`,
   `metrics_episode_window_size: 100`, `training_backend_id`,
   `training_backend_config_hash`, `algorithm_id`, goal,
@@ -282,7 +293,7 @@ resuming as its cause without a matched uninterrupted continuation.
   that means 100 consecutive genuine target-origin clears; for multiple starts, every configured
   start's latest 100 attempts must all clear. This training stop is not acceptance or promotion;
   explicitly evaluated Mario checkpoints rank by earliest `leader/step`, then highest
-  `eval/return/mean`. Breakout is training-only and ranks individual current-contract runs using `train/progress/bricks_destroyed/mean`, which
+  `eval/return/mean`. Breakout is training-only and ranks individual current-contract runs using `train/progress/bricks_destroyed_normalized/mean`, which
   excludes archive-curriculum origins and non-episode control boundaries; ties prefer higher
   rolling maximum target-origin bricks, then lower rolling mean episode length across all origins.
 - Recent training `train/success/min` and `train/success/mean` reduce success fractions across
@@ -410,8 +421,8 @@ resuming as its cause without a matched uninterrupted continuation.
   terminal wall-clear state is not an additional collected transition.
   All three statistics
   include warm-up before the window is full and are online behavior-policy training proxies rather
-  than frozen-checkpoint evaluation evidence. Breakout ranks runs first by the rolling mean
-  terminal `bricks_destroyed` count, then by higher rolling maximum target-origin bricks,
+  than frozen-checkpoint evaluation evidence. Breakout ranks current-contract runs first by the rolling mean
+  normalized brick progress, then by higher rolling maximum normalized target-origin brick progress,
   then by lower rolling mean episode length across all origins. A low rolling minimum can persist
   while the mean improves because a single low-progress episode determines the minimum until it
   leaves the window. For an illustrative fixed policy with independent episodes and probability
@@ -755,7 +766,7 @@ and target-progress fields are not registry metrics and cannot enter the publish
 | `eval/success/min` | Full-eval start success rate min | Minimum success rate across represented evaluation starts. | fraction | evaluation | history | last | eval/step | evaluation | leader/success/min | train/success/min |
 | `eval/success/mean` | Full-eval start success rate mean | Mean success rate across represented evaluation starts; monitoring reports the success fraction of its complete episode manifest. | fraction | evaluation | history | last | eval/step | evaluation | - | train/success/mean |
 | `eval/progress/{progress}/mean` | Full-eval {progress} mean | Mean goal-declared progress across completed evaluation episodes, including complete monitoring manifests. | value | evaluation | history | last | eval/step | evaluation | leader/progress/{progress}/mean | train/progress/{progress}/mean |
-| `eval/progress/{progress}/max` | Full-eval {progress} max | Maximum goal-declared progress value across completed full-evaluation episodes. | value | evaluation | history | last | eval/step | evaluation | leader/progress/{progress}/max | - |
+| `eval/progress/{progress}/max` | Full-eval {progress} max | Maximum goal-declared progress value across completed full-evaluation episodes; Breakout monitoring reports the normalized-brick maximum of its complete manifest. | value | evaluation | history | last | eval/step | evaluation | leader/progress/{progress}/max | - |
 | `eval/pass` | Acceptance pass | Per-checkpoint acceptance result; its W&B history summary uses max and is not the terminal run verdict. | boolean | acceptance evaluation | history | max | eval/step | acceptance | - | - |
 | `eval/episodes/count` | Evaluation episodes completed | Valid planned episodes completed; Acceptance may stop on fail-fast rejection, while monitoring requires the full manifest. | episodes | evaluation | history | last | eval/step | evaluation | - | train/episodes/count |
 | `eval/starts/table` | Full-eval evidence by start | Structured full-evaluation evidence by start, including success, return, and failure-reason aggregates. | table | evaluation | history | none | eval/step | evaluation_table | - | - |
@@ -889,7 +900,7 @@ See [W&B media panel configuration](https://docs.wandb.ai/models/app/features/pa
 
 Monitoring uses the matching training metric suffix under `eval/`: `return/mean`,
 `episode_steps/mean`, `episodes/count`, `success/mean`,
-`progress/bricks_destroyed_normalized/mean`, and `progress/score/mean`.
+`progress/bricks_destroyed_normalized/mean`, `progress/bricks_destroyed_normalized/max`, and `progress/score/mean`.
 Normalized brick progress divides by 216 (FirstWall success is 0.5); score is
 native game score, distinct from shaped return. The median, Wilson bounds and
 video retain their `eval/monitor/` names because they have no training counterpart.

@@ -75,7 +75,12 @@ from gradlab.recipe_documents import (
     load_recipe_source_document,
 )
 from gradlab.reward_programs import goal_for_contract_validation
-from gradlab.run_contracts import CheckpointManifest, RUN_ID_PATTERN, RunManifest
+from gradlab.run_contracts import (
+    CheckpointManifest,
+    RUN_ID_PATTERN,
+    SHA256_PATTERN,
+    RunManifest,
+)
 from gradlab.run_authority import RunAuthority
 from gradlab.wandb_utils import load_wandb_env
 
@@ -303,7 +308,7 @@ class _RepositoryNamespace:
 
 @dataclass(frozen=True)
 class _CheckpointEvaluationData:
-    evaluations: Mapping[int, dict[str, Any]]
+    evaluations: Mapping[int | str, dict[str, Any]]
     training_seed: int | None
     evaluation_seed: int | None
     training_metric_history: Mapping[str, tuple[tuple[int, float], ...]]
@@ -544,6 +549,8 @@ def checkpoint_metric_contract(
         direction: Literal["min", "max"] | None,
         role: str,
         rank_index: int | None = None,
+        rank_source_metric: str | None = None,
+        source_metric: str | None = None,
         acceptance_rule: Mapping[str, Any] | None = None,
         proxy_for: str | None = None,
     ) -> dict[str, Any]:
@@ -566,6 +573,10 @@ def checkpoint_metric_contract(
             }
             by_metric[metric] = column
             columns.append(column)
+        if rank_source_metric is not None:
+            column["rank_source_metric"] = rank_source_metric
+        if source_metric is not None:
+            column["source_metric"] = source_metric
         if role not in column["roles"]:
             column["roles"].append(role)
         if rank_index is not None:
@@ -583,15 +594,27 @@ def checkpoint_metric_contract(
             column["proxy_for"] = proxy_for
         return column
 
+    breakout_monitoring = (
+        evaluation_backend == "none" and "bricks_destroyed_normalized" in progress_fields
+    )
     for rank_index, criterion in enumerate(rank):
         if criterion.metric in CHECKPOINT_STRUCTURAL_METRICS:
             continue
         role = "objective" if rank_index == 0 else "tie_breaker"
+        display_metric = criterion.metric
+        if breakout_monitoring and criterion.metric in {
+            "train/progress/bricks_destroyed/mean",
+            "train/progress/bricks_destroyed/max",
+        }:
+            # Historical Breakout ranks use raw bricks. The normalized measure is
+            # the same value divided by the fixed 216-brick provider denominator.
+            display_metric = criterion.metric.replace("bricks_destroyed/", "bricks_destroyed_normalized/")
         add_column(
-            criterion.metric,
+            display_metric,
             direction=criterion.direction,
             role=role,
             rank_index=rank_index,
+            rank_source_metric=criterion.metric if display_metric != criterion.metric else None,
         )
         proxy = _checkpoint_training_proxy(
             criterion.metric,
@@ -628,15 +651,36 @@ def checkpoint_metric_contract(
         direction="max",
         role="optimization",
     )
-    # A training-only Breakout run can still have observational Checkpoint Monitoring.
-    # These columns have no ranking or Acceptance authority.
-    if evaluation_backend == "none" and "bricks_destroyed_normalized" in progress_fields:
-        for metric in (
-            "eval/success/mean",
-            "eval/progress/bricks_destroyed_normalized/mean",
-            "eval/return/mean",
-        ):
-            add_column(metric, direction=None, role="observation")
+    if breakout_monitoring:
+        single_start = len(train_config.get("states") or (train_config.get("state") or "default",)) == 1
+        suffixes = (
+            "success/mean",
+            "progress/bricks_destroyed_normalized/mean",
+            "progress/bricks_destroyed_normalized/max",
+            "episode_steps/mean",
+            "return/mean",
+        )
+        for suffix in suffixes:
+            training_metric = f"train/{suffix}"
+            if training_metric not in by_metric:
+                add_column(
+                    training_metric,
+                    direction=None,
+                    role="observation",
+                    source_metric=(
+                        "train/success/min" if suffix == "success/mean" and single_start else None
+                    ),
+                )
+            add_column(f"eval/{suffix}", direction=None, role="observation")
+        # Match the two groups column for column while retaining rank roles.
+        columns.sort(key=lambda column: (
+            0 if column["evidence"] == "training" else 1,
+            (
+                suffixes.index(str(column["metric"]).split("/", 1)[1])
+                if str(column["metric"]).split("/", 1)[1] in suffixes
+                else len(suffixes)
+            ),
+        ))
     return CheckpointMetricContract(
         metrics_schema_version=schema_version,
         evaluation_backend=evaluation_backend,
@@ -719,18 +763,19 @@ def _checkpoint_training_metric_history(
     history: dict[str, tuple[tuple[int, float], ...]] = {}
     for column in columns:
         metric = str(column["metric"])
+        source_metric = str(column.get("source_metric") or metric)
         if column.get("evidence") != "training" or metric == TRAIN_GLOBAL_STEP:
             continue
         samples: dict[int, float] = {}
         rows = run.scan_history(
-            keys=[TRAIN_GLOBAL_STEP, metric],
+            keys=[TRAIN_GLOBAL_STEP, source_metric],
             page_size=10_000,
         )
         for raw in rows:
             if not isinstance(raw, Mapping):
                 continue
             step = _safe_int(raw.get(TRAIN_GLOBAL_STEP))
-            value = _safe_float(raw.get(metric))
+            value = _safe_float(raw.get(source_metric))
             if step is not None and value is not None:
                 samples[step] = value
         if samples:
@@ -3102,12 +3147,129 @@ class PlayCatalog:
                 return goal.goal_id, str(validated["variant_id"])
         raise ValueError(f"run goal is not declared in the repository: {goal_slug}")
 
+    def _checkpoint_monitoring_states(
+        self,
+        *,
+        run_id: str,
+        checkpoints: Sequence[CheckpointManifest],
+        recipe_sha256: str,
+        settings: Mapping[str, Any],
+    ) -> dict[str, dict[str, Any]]:
+        if self.control_bucket is None or settings.get("enabled") is not True:
+            return {}
+        contract_hash = compact_json_sha256(
+            {"recipe_sha256": recipe_sha256, "settings": dict(settings)}
+        )
+        keys = {
+            checkpoint.checkpoint_id: (
+                f"runs/{run_id}/monitoring/{contract_hash}/"
+                f"{compact_json_sha256({'checkpoint': checkpoint.checkpoint_id, 'contract': contract_hash})}"
+                "/state.json"
+            )
+            for checkpoint in checkpoints
+        }
+        read_many = getattr(self.control_bucket, "get_json_many_optional", None)
+        documents = (
+            read_many(keys.values())
+            if callable(read_many)
+            else {key: self.control_bucket.get_json_optional(key) for key in keys.values()}
+        )
+        steps = {checkpoint.checkpoint_id: checkpoint.step for checkpoint in checkpoints}
+        states = {}
+        for checkpoint_id, key in keys.items():
+            state = documents.get(key)
+            if state is None:
+                continue
+            if not isinstance(state, Mapping):
+                raise ValueError("checkpoint monitoring state is malformed")
+            status = str(state.get("status") or "")
+            if status not in {
+                "pending",
+                "submitting",
+                "running",
+                "verified",
+                "complete",
+                "failed",
+                "canceled",
+            }:
+                raise ValueError("checkpoint monitoring state has an invalid status")
+            digest = str(state.get("result_sha256") or "")
+            if status in {"verified", "complete"} and SHA256_PATTERN.fullmatch(digest) is None:
+                raise ValueError("verified checkpoint monitoring state has no result hash")
+            states[checkpoint_id] = {
+                "status": status,
+                "result_sha256": digest,
+                "step": steps[checkpoint_id],
+            }
+        return states
+
+    @staticmethod
+    def _monitoring_history(
+        run: Any,
+        metric_contract: CheckpointMetricContract,
+        *,
+        expected_episodes: int | None = None,
+    ) -> dict[int, dict[str, Any]]:
+        monitoring_metrics = tuple(
+            str(column["metric"])
+            for column in metric_contract.columns
+            if "observation" in column.get("roles", ())
+        )
+        if not monitoring_metrics:
+            return {}
+        marker = "eval/monitor/progress/median"
+        core_metrics = (
+            "eval/success/mean",
+            "eval/progress/bricks_destroyed_normalized/mean",
+            "eval/return/mean",
+        )
+        optional_metrics = tuple(metric for metric in monitoring_metrics if metric not in core_metrics)
+        evaluations = {}
+        for raw in run.scan_history(
+            keys=[EVAL_CHECKPOINT_STEP, marker, "eval/episodes/count", *core_metrics],
+            page_size=10_000,
+        ):
+            if not isinstance(raw, Mapping):
+                continue
+            step = _safe_int(raw.get(EVAL_CHECKPOINT_STEP))
+            values = {metric: _safe_float(raw.get(metric)) for metric in core_metrics}
+            episode_count = _safe_int(raw.get("eval/episodes/count"))
+            if (
+                step is None
+                or episode_count is None
+                or episode_count <= 0
+                or (expected_episodes is not None and episode_count != expected_episodes)
+                or _safe_float(raw.get(marker)) is None
+                or any(value is None for value in values.values())
+            ):
+                continue
+            evaluations[step] = {
+                "status": "verified",
+                "source": "monitoring",
+                "episodes_completed": episode_count,
+                "episodes_planned": episode_count,
+                "metrics": values,
+            }
+        # Older completed monitoring rows lack newer observational measures.
+        # Fetch those independently so their absence cannot hide verified evidence.
+        for metric in optional_metrics:
+            for raw in run.scan_history(keys=[EVAL_CHECKPOINT_STEP, metric], page_size=10_000):
+                if not isinstance(raw, Mapping):
+                    continue
+                step = _safe_int(raw.get(EVAL_CHECKPOINT_STEP))
+                value = _safe_float(raw.get(metric))
+                if step in evaluations and value is not None:
+                    evaluations[step]["metrics"][metric] = value
+        return evaluations
+
     def _checkpoint_evaluations(
         self,
         *,
         run_id: str,
         metric_contract: CheckpointMetricContract,
         include_wandb: bool,
+        monitoring_states: Mapping[str, Mapping[str, Any]] | None = None,
+        monitoring_episodes: int | None = None,
         on_training_metric: Callable[[str, tuple[tuple[int, float], ...]], None] | None = None,
     ) -> _CheckpointEvaluationData:
         def validate_wandb_config(config: Mapping[str, Any]) -> None:
@@ -3198,7 +3360,7 @@ class PlayCatalog:
             raw_evaluations = (
                 projected_run.get("evaluations") if isinstance(projected_run, Mapping) else None
             )
-            evaluations: dict[int, dict[str, Any]] = {}
+            evaluations: dict[int | str, dict[str, Any]] = {}
             evaluation_seed = None
             if isinstance(raw_evaluations, Mapping):
                 for checkpoint_id, raw in raw_evaluations.items():
@@ -3239,6 +3401,26 @@ class PlayCatalog:
                         ],
                         "metrics": ranked_metrics,
                     }
+            if not metric_contract.acceptance:
+                monitoring_status = {
+                    "pending": "queued",
+                    "submitting": "queued",
+                    "running": "running",
+                    "verified": "finalizing",
+                    "complete": "verified",
+                    "failed": "failed",
+                    "canceled": "canceled",
+                }
+                for checkpoint_id, state in (monitoring_states or {}).items():
+                    status = str(state["status"])
+                    finished = status in {"verified", "complete"}
+                    evaluations[checkpoint_id] = {
+                        "status": monitoring_status[status],
+                        "source": "monitoring",
+                        "episodes_planned": monitoring_episodes,
+                        "episodes_completed": monitoring_episodes if finished else None,
+                        "metrics": {},
+                    }
             training_metric_history = {}
             warning = None
             training_seed = _safe_int(manifest.get("seed"))
@@ -3257,6 +3439,25 @@ class PlayCatalog:
                         metric_contract.columns,
                         on_training_metric,
                     )
+                    if not metric_contract.acceptance and monitoring_states:
+                        history = self._monitoring_history(
+                            run,
+                            metric_contract,
+                            expected_episodes=monitoring_episodes,
+                        )
+                        complete_steps = [
+                            int(state["step"])
+                            for state in monitoring_states.values()
+                            if state["status"] == "complete"
+                        ]
+                        for checkpoint_id, state in monitoring_states.items():
+                            step = int(state["step"])
+                            if (
+                                state["status"] == "complete"
+                                and complete_steps.count(step) == 1
+                                and step in history
+                            ):
+                                evaluations[checkpoint_id] = history[step]
                 except Exception as exc:
                     warning = {
                         "code": (
@@ -3291,40 +3492,7 @@ class PlayCatalog:
             if metric_contract.evaluation_backend == "none" or not metric_contract.acceptance:
                 evaluations = {}
                 evaluation_seed = None
-                monitoring_metrics = tuple(
-                    str(column["metric"])
-                    for column in metric_contract.columns
-                    if "observation" in column.get("roles", ())
-                )
-                if monitoring_metrics:
-                    marker = "eval/monitor/progress/median"
-                    for raw in run.scan_history(
-                        keys=[EVAL_CHECKPOINT_STEP, marker, "eval/episodes/count", *monitoring_metrics],
-                        page_size=10_000,
-                    ):
-                        if not isinstance(raw, Mapping):
-                            continue
-                        step = _safe_int(raw.get(EVAL_CHECKPOINT_STEP))
-                        values = {
-                            metric: _safe_float(raw.get(metric))
-                            for metric in monitoring_metrics
-                        }
-                        episode_count = _safe_int(raw.get("eval/episodes/count"))
-                        if (
-                            step is None
-                            or episode_count is None
-                            or episode_count <= 0
-                            or _safe_float(raw.get(marker)) is None
-                            or any(value is None for value in values.values())
-                        ):
-                            continue
-                        evaluations[step] = {
-                            "status": "verified",
-                            "source": "monitoring",
-                            "episodes_completed": episode_count,
-                            "episodes_planned": episode_count,
-                            "metrics": values,
-                        }
+                evaluations = self._monitoring_history(run, metric_contract)
             else:
                 assert isinstance(contract, Mapping)
                 evaluation_seed = _safe_int(contract.get("seed"))
@@ -3501,6 +3669,8 @@ class PlayCatalog:
             )
         recipe_document: Mapping[str, Any] | None = None
         metric_contract: CheckpointMetricContract | None = None
+        recipe_digest = ""
+        train_config: Mapping[str, Any] | None = None
         try:
             recipe_document, _metadata = recipe_future.result()
             if recipe_document is None:
@@ -3532,6 +3702,40 @@ class PlayCatalog:
                     "source": "recipe",
                 }
             )
+
+        monitoring_states: dict[str, dict[str, Any]] = {}
+        monitoring_episodes = None
+        settings = (
+            train_config.get("checkpoint_monitoring")
+            if isinstance(train_config, Mapping)
+            else None
+        )
+        if (
+            metric_contract is not None
+            and isinstance(settings, Mapping)
+            and settings.get("enabled") is True
+        ):
+            try:
+                monitoring_episodes = int(settings["episodes"])
+                if monitoring_episodes <= 0:
+                    raise ValueError("checkpoint monitoring episode count must be positive")
+                monitoring_states = self._checkpoint_monitoring_states(
+                    run_id=run_id,
+                    checkpoints=manifests,
+                    recipe_sha256=recipe_digest,
+                    settings=settings,
+                )
+            except Exception as exc:
+                warnings.append(
+                    {
+                        "code": "checkpoint_monitoring_status_unavailable",
+                        "message": f"Checkpoint Monitoring status is unavailable: {exc}",
+                        "retryable": isinstance(
+                            exc, (CatalogUnavailable, TimeoutError, URLError, OSError)
+                        ),
+                        "source": "control-catalog",
+                    }
+                )
 
         expected_effective_goal_hash = ""
         selected_variant = str(goal_variant_id or "").strip()
@@ -3591,6 +3795,8 @@ class PlayCatalog:
                 run_id=run_id,
                 metric_contract=metric_contract,
                 include_wandb=include_wandb,
+                monitoring_states=monitoring_states,
+                monitoring_episodes=monitoring_episodes,
                 on_training_metric=training_progress if on_training_progress else None,
             )
             if metric_contract is not None
@@ -3601,7 +3807,9 @@ class PlayCatalog:
         columns = metric_contract.columns if metric_contract is not None else ()
         rows: list[CheckpointSummary] = []
         for manifest in manifests:
-            evaluation = evaluation_data.evaluations.get(manifest.step)
+            evaluation = evaluation_data.evaluations.get(
+                manifest.checkpoint_id
+            ) or evaluation_data.evaluations.get(manifest.step)
             playback_seed = (
                 evaluation_data.evaluation_seed
                 if evaluation is not None and evaluation_data.evaluation_seed is not None

@@ -21,7 +21,6 @@ from huggingface_hub.errors import HfHubHTTPError
 from gradlab.file_utils import atomic_write_json, file_sha256
 from gradlab.job_queue import (
     HandlerResult,
-    JobSubject,
     JobStore,
     SubjectUpdate,
     register_handler,
@@ -50,10 +49,6 @@ from gradlab.youtube_publication import (
 
 class PublicationCanceled(RuntimeError):
     pass
-
-
-FEATURED_PUBLICATION_JOB_TYPE = "publication-featured-curation"
-FEATURED_PUBLICATION_JOB_VERSION = 1
 
 
 def _json_object(path: Path, *, label: str) -> dict[str, Any]:
@@ -909,35 +904,6 @@ class PlayerPublicationJobHandler:
                 state["phase"] = "succeeded"
                 state["message"] = "YouTube, Hugging Face, and environment containers verified"
                 self._save_state(state_path, state)
-                if request.get("feature") is True and not state.get("featured_job_id"):
-                    featured_payload = {
-                        "queue_root": str(store.root),
-                        "repo_id": str(request["repo_id"]),
-                        "release_version": str(request["release_version"]),
-                        "youtube_video_id": str(state["youtube_video_id"]),
-                        "principals": deepcopy(dict(request["principals"])),
-                    }
-                    featured_fingerprint = canonical_json_sha256(featured_payload)
-                    try:
-                        queued = store.enqueue(
-                            job_type=FEATURED_PUBLICATION_JOB_TYPE,
-                            handler_version=FEATURED_PUBLICATION_JOB_VERSION,
-                            payload=featured_payload,
-                            idempotency_key=featured_fingerprint,
-                            subjects=[
-                                JobSubject(
-                                    subject_type="research-release-featured",
-                                    subject_id=(
-                                        f"{request['repo_id']}@{request['release_version']}"
-                                    ),
-                                )
-                            ],
-                        )
-                        if queued.job is not None:
-                            state["featured_job_id"] = queued.job["job_id"]
-                    except Exception as exc:
-                        state["featured_enqueue_error"] = str(exc)
-                    self._save_state(state_path, state)
             if state["phase"] != "succeeded":
                 raise RuntimeError(f"unsupported publication phase: {state['phase']}")
             return HandlerResult(
@@ -972,150 +938,6 @@ class PlayerPublicationJobHandler:
             return self._block(request, state, state_path, f"{type(exc).__name__}: {exc}")
 
 
-class FeaturedPublicationJobHandler:
-    job_type = FEATURED_PUBLICATION_JOB_TYPE
-    version = FEATURED_PUBLICATION_JOB_VERSION
-
-    def __init__(
-        self,
-        *,
-        hf_api_factory: Callable[..., Any] = HfApi,
-        youtube_client_factory: Callable[[str], YouTubeClient] = YouTubeClient,
-    ) -> None:
-        self.hf_api_factory = hf_api_factory
-        self.youtube_client_factory = youtube_client_factory
-
-    @classmethod
-    def validate_payload(cls, payload: Mapping[str, Any]) -> dict[str, Any]:
-        expected = {
-            "queue_root",
-            "repo_id",
-            "release_version",
-            "youtube_video_id",
-            "principals",
-        }
-        if set(payload) != expected or not isinstance(payload.get("principals"), Mapping):
-            raise ValueError("featured publication payload is malformed")
-        return deepcopy(dict(payload))
-
-    def advance(self, job: Mapping[str, Any]) -> HandlerResult:
-        payload = self.validate_payload(job.get("payload") or {})
-        subject_id = f"{payload['repo_id']}@{payload['release_version']}"
-        try:
-            credential = resolve_huggingface_credential()
-            api = self.hf_api_factory(token=credential.token)
-            whoami = api.whoami()
-            if str(whoami.get("name") or "") != str(
-                payload["principals"]["huggingface_username"]
-            ):
-                raise ValueError("Hugging Face principal changed before featured curation")
-            client, principal = _youtube_access(
-                client_factory=self.youtube_client_factory
-            )
-            if principal.get("channel_id") != payload["principals"]["youtube_channel_id"]:
-                raise ValueError("YouTube principal changed before featured curation")
-            title = "GradLab — Featured Research"
-            matches = [
-                item
-                for item in api.list_collections(
-                    owner=payload["principals"]["huggingface_namespace"], limit=100
-                )
-                if str(item.title) == title
-            ]
-            if len(matches) > 1:
-                raise ValueError("multiple Featured Research collections exist")
-            collection = (
-                matches[0]
-                if matches
-                else api.create_collection(
-                    title,
-                    namespace=str(payload["principals"]["huggingface_namespace"]),
-                    description="Editorially selected GradLab research releases.",
-                    private=False,
-                    exists_ok=False,
-                )
-            )
-            immutable_url = (
-                f"https://huggingface.co/{payload['repo_id']}/tree/"
-                f"{payload['release_version']}"
-            )
-            note = f"Immutable featured release: {immutable_url}"
-            current_collection = api.get_collection(str(collection.slug))
-            matching = [
-                item
-                for item in current_collection.items
-                if str(item.item_type) == "model"
-                and str(item.item_id) == str(payload["repo_id"])
-            ]
-            if len(matching) > 1:
-                raise ValueError("Featured Research contains duplicate models")
-            if matching:
-                api.update_collection_item(
-                    str(collection.slug),
-                    str(matching[0].item_object_id),
-                    note=note,
-                )
-            else:
-                api.add_collection_item(
-                    str(collection.slug),
-                    str(payload["repo_id"]),
-                    "model",
-                    note=note,
-                    exists_ok=False,
-                )
-            playlist_id = client.find_or_create_playlist(title, privacy="public")
-            client.add_video_to_playlist(
-                playlist_id=playlist_id,
-                video_id=str(payload["youtube_video_id"]),
-            )
-            detail = {
-                "urls": {
-                    "huggingface_featured": (
-                        f"https://huggingface.co/collections/{collection.slug}"
-                    ),
-                    "youtube_featured": (
-                        f"https://www.youtube.com/playlist?list={playlist_id}"
-                    ),
-                }
-            }
-            return HandlerResult(
-                state="succeeded",
-                message="featured editorial curation verified",
-                subjects=(
-                    SubjectUpdate(
-                        "research-release-featured", subject_id, "succeeded", detail
-                    ),
-                ),
-            )
-        except (OSError, TimeoutError, YouTubePublicationError, HfHubHTTPError) as exc:
-            retryable = not isinstance(exc, YouTubePublicationError) or exc.retryable
-            return HandlerResult(
-                state="retry_wait" if retryable else "blocked",
-                available_at=(time.time() + _retry_delay(job)) if retryable else None,
-                message=str(exc),
-                subjects=(
-                    SubjectUpdate(
-                        "research-release-featured",
-                        subject_id,
-                        "retry_wait" if retryable else "blocked",
-                        {"message": str(exc)},
-                    ),
-                ),
-            )
-        except (KeyError, TypeError, ValueError) as exc:
-            return HandlerResult(
-                state="blocked",
-                message=str(exc),
-                subjects=(
-                    SubjectUpdate(
-                        "research-release-featured",
-                        subject_id,
-                        "blocked",
-                        {"message": str(exc)},
-                    ),
-                ),
-            )
-
 
 def register_job_handler() -> None:
     register_handler(
@@ -1124,18 +946,9 @@ def register_job_handler() -> None:
         PlayerPublicationJobHandler,
         replace=True,
     )
-    register_handler(
-        FEATURED_PUBLICATION_JOB_TYPE,
-        FEATURED_PUBLICATION_JOB_VERSION,
-        FeaturedPublicationJobHandler,
-        replace=True,
-    )
 
 
 __all__ = [
-    "FEATURED_PUBLICATION_JOB_TYPE",
-    "FEATURED_PUBLICATION_JOB_VERSION",
-    "FeaturedPublicationJobHandler",
     "PlayerPublicationJobHandler",
     "PublicationCanceled",
     "register_job_handler",

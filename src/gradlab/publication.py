@@ -1152,7 +1152,7 @@ def render_historical_model_card(manifest: Mapping[str, Any]) -> str:
         "the current publication identity; and `replay.mp4` is representative media.\n\n"
         "## Limitations\n\n"
         "This historical import failed its recorded acceptance contract and cannot establish "
-        "acceptance, promotion, or featured status. Results apply only to the recorded source "
+        "acceptance or promotion. Results apply only to the recorded source "
         "runtime, environment, checkpoint, seeds, and evaluation contract.\n\n"
         "## Licensing\n\n"
         "The policy weights and publication material are licensed under the repository `LICENSE`. "
@@ -1343,7 +1343,6 @@ def build_release_manifest(
         "publication": dict(publication),
         "containers": {
             "environment": environment_container,
-            "featured": "GradLab — Featured Research",
         },
         "comparison": dict(comparison or {"comparable": False, "reason": "no prior release selected"}),
         "history": history_value,
@@ -1441,7 +1440,6 @@ def build_historical_release_manifest(
         "publication": deepcopy(dict(publication)),
         "containers": {
             "environment": f"GradLab — {identity.canonical_environment_id}",
-            "featured": "GradLab — Featured Research",
         },
         "comparison": {
             "comparable": False,

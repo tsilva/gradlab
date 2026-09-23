@@ -7,7 +7,7 @@ from pathlib import Path
 import sys
 from unittest.mock import AsyncMock, Mock
 
-from aiohttp import ClientSession, WSServerHandshakeError
+from aiohttp import ClientSession, WSServerHandshakeError, web
 import pytest
 
 from gradlab.play_web import HumanRecordingRunner, PlaybackWebServer
@@ -214,5 +214,51 @@ def test_player_close_reaps_companion_process_and_stops_app(tmp_path):
             finally:
                 server.stop_event.set()
                 await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(scenario())
+
+
+def test_native_close_event_stops_viewer_without_reentering_neutralino_close():
+    from gradlab.play_browser import DesktopWindow
+
+    async def scenario():
+        connected = asyncio.Event()
+        socket_ref = {}
+
+        async def websocket(request):
+            socket = web.WebSocketResponse()
+            await socket.prepare(request)
+            socket_ref["socket"] = socket
+            connected.set()
+            async for _message in socket:
+                pass
+            return socket
+
+        app = web.Application()
+        app.router.add_get("/", websocket)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]
+        window = DesktopWindow.__new__(DesktopWindow)
+        window.close = Mock()
+        ready = asyncio.get_running_loop().create_future()
+        task = asyncio.create_task(
+            window._listen_for_close({"nlPort": port, "nlConnectToken": "test"}, ready)
+        )
+        try:
+            await asyncio.wait_for(ready, 2)
+            await connected.wait()
+            await socket_ref["socket"].send_json({"event": "windowFocus"})
+            await asyncio.sleep(0)
+            window.close.assert_not_called()
+            await socket_ref["socket"].send_json({"event": "windowClose"})
+            await asyncio.wait_for(task, 2)
+            window.close.assert_called_once()
+        finally:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+            await runner.cleanup()
 
     asyncio.run(scenario())
