@@ -53,6 +53,12 @@ try {
     },
   });
   document.querySelector('#panels').append(events.element);
+  const refreshEvents = () => {
+    const now = Date.now;
+    Date.now = () => now() + 2000;
+    try { events.renderHistory([], snapshot, {sessionEpoch: 1}); }
+    finally { Date.now = now; }
+  };
   events.renderHistory([], snapshot, {sessionEpoch: 1});
   check(status(events).textContent === 'Loading events…', 'Events announces its pending request');
   check(!events.element.querySelector('.widget-empty'), 'Loading events must not claim there is no data');
@@ -61,6 +67,10 @@ try {
   eventRequests.shift().resolve({points: [], next_last: null}); await flush();
   check(events.element.querySelector('.widget-empty')?.textContent.includes('No data available yet'), 'An empty completed request shows the empty state');
   check(!status(events), 'Completed empty events do not retain a loading status');
+  refreshEvents();
+  check(eventRequests.length === 1, 'An empty recorded history refreshes');
+  check(!status(events), 'Refreshing an empty history does not flash loading');
+  eventRequests.shift().resolve({points: [], next_last: null}); await flush();
   episodeId = 'events-b'; events.renderHistory([], snapshot, {sessionEpoch: 1});
   eventRequests.shift().reject(new Error('Events unavailable')); await flush();
   check(status(events).textContent === 'Events unavailable', 'An event request failure remains visible');
@@ -70,6 +80,15 @@ try {
   check(events.element.querySelector('.event-item'), 'Loaded events remain visible');
   check(status(events).textContent === 'Scroll down for older events', 'Loaded events preserve pagination guidance');
   check(status(events).getBoundingClientRect().top >= events.element.querySelector('[data-list]').getBoundingClientRect().bottom, 'Pagination status stays below the event list');
+  refreshEvents();
+  check(eventRequests.length === 1, 'Recorded events refresh in the background');
+  check(status(events).textContent === 'Scroll down for older events', 'Refreshing retains pagination guidance without flashing loading');
+  check(events.element.querySelector('.event-item'), 'Refreshing retains loaded events');
+  eventRequests.shift().resolve({points: [
+    {episode: 1, step: 11, events: ['reward']},
+    {episode: 1, step: 10, events: ['reward']},
+  ], next_last: 9}); await flush();
+  check(events.element.querySelectorAll('.event-item').length === 2, 'New events appear after the quiet refresh');
   check(panels.every(panel => panel.element.querySelector('.panel').dataset.chartStatus === 'loading'), 'Panel state is shared');
   h.requests[0].resolve(full()); await flush();
   check(panels.every(panel => status(panel).hidden), 'Ready panels hide status');
@@ -120,7 +139,7 @@ try {
     check(chartHoverStep === null, 'Leaving a chart clears the shared hover');
     check(canvases.every(canvas => !canvas.parentElement.querySelector('[role="tooltip"]')), 'Leaving hides all synchronized tooltips');
   }
-  results.textContent = 'PASS: Events loading, empty, error and pagination states are distinct and match chart status styling; actual line, signal explorer and reward-table panels share loading, refresh, failure and Retry; obsolete plots are hidden; cursor and reference are unchanged; hover cursors and tooltips synchronize, show recorded values, fit within charts, and clear on leave.';
+  results.textContent = 'PASS: Events initial loading, quiet empty and populated refresh, error, and pagination states are distinct; chart panels share loading, refresh, failure and Retry; obsolete plots are hidden; cursor and reference are unchanged; hover cursors and tooltips synchronize and clear on leave.';
 } catch (error) {
   results.textContent = `FAIL: ${error.message}`;
   console.error(error);

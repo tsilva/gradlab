@@ -30,6 +30,7 @@
     ></nav>
   </div>
   <div class="header-status">
+    <span class="hotreload-warning" role="status" title="Live frontend changes update this player automatically">Hot reload active</span>
     <button
       id="switch-window"
       class="quiet button-with-icon"
@@ -774,10 +775,6 @@
               required
             /></label
           >
-          <label class="publication-feature"
-            ><input id="publication-feature" type="checkbox" /><span
-              >Feature in GradLab — Featured Research</span
-            ></label
           >
           <label class="publication-wide"
             ><span>Extra tags (comma-separated)</span><input

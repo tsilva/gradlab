@@ -15,6 +15,7 @@ This specification applies to the public checkpoint browser and interactive web 
 - Playback must expose the resolved Research Goal and Run Configuration as YAML.
 - Goal Variants and overridden Run Configurations must show their proven differences from their authoritative bases.
 - A selected Run's Checkpoint list must show its authoritative current Run state and make unavailable state explicit.
+- Revisiting any Discovery table must restore results cached within the current player session without a new table request; Refresh must request current results and update the cache when successful.
 
 ## Evidence and Inspection
 
@@ -24,7 +25,8 @@ This specification applies to the public checkpoint browser and interactive web 
 - In the desktop viewer, closing Stats must leave Player and Playback running. Closing Player must close Stats and terminate the desktop Playback application, including when Stats closes as a consequence; no desktop application process may remain after its windows close.
 - Checkpoint lists must show the exact Goal Variant's Acceptance and ranking measures with applicable Training Success proxies.
 - Training Success proxies must remain visibly distinct from authoritative checkpoint-evaluation evidence.
-- Checkpoint tables must group Train and Eval measures under their exact metric names, identify each Checkpoint by step with a Final badge where applicable, show evaluation status, and leave unavailable evaluation values visibly empty.
+- Checkpoint tables must group Train and Eval measures under metric names without their redundant `train/` and `eval/` prefixes, identify each Checkpoint by step with a Final badge where applicable, show evaluation status, and leave unavailable evaluation values visibly empty.
+- Breakout checkpoint tables must pair Train and Eval measures by the same metric suffix and display brick progress in normalized units, including equivalent normalized views of historical raw-brick ranks.
 - Interactive Playback must provide independently arranged and synchronized views of frames, Policy inputs and decisions, transition facts, and bounded histories.
 - Selecting a step in the reward panel, Events panel, or playbar must move the shared Playback cursor and synchronize the frame and matching row highlights; Events must highlight only an event at the exact cursor step.
 - The reference step for discounted reward inspection must remain separate from the Playback cursor and change only through an explicit user action, so users can scrub without changing the calculation reference.

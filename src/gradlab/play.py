@@ -32,7 +32,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv_list)
     from gradlab.play_dev_assets import source_checkout_root
 
-    args.hot_reload = source_checkout_root() is not None and not args.no_hot_reload
+    if args.hotreload and source_checkout_root() is None:
+        parser.error("--hotreload requires a source checkout")
+    args.hot_reload = args.hotreload
     selected_sources = sum(
         bool(value)
         for value in (

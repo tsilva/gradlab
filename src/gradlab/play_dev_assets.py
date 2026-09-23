@@ -25,7 +25,7 @@ class PlayerDevAssets:
         if node is None or not vite.is_dir():
             raise RuntimeError(
                 "Hot reload requires Node and checkout dependencies. "
-                "Run pnpm install --frozen-lockfile, or use --no-hot-reload."
+                "Run pnpm install --frozen-lockfile, or omit --hotreload."
             )
         self.process = await asyncio.create_subprocess_exec(
             node,
@@ -62,7 +62,7 @@ class PlayerDevAssets:
 
 def development_page(markup: str, vite_url: str) -> str:
     return (
-        markup.replace(
+        markup.replace("<body>", '<body data-hot-reload="true">').replace(
             '<link rel="stylesheet" href="/assets/styles.css">',
             f'<link rel="stylesheet" href="{vite_url}/src/gradlab/web_player/styles.css">',
         ).replace(

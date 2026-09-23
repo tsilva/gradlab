@@ -19,6 +19,7 @@ from gradlab.play_browser import DesktopWindow, PlaybackBrowser
 
 def test_window_launch_has_no_page_native_capability_and_owned_pipe(tmp_path):
     process = Mock()
+    process.stdin.closed = False
     with patch("gradlab.play_browser.subprocess.Popen", return_value=process) as popen:
         window = DesktopWindow(Path("/viewer"), "http://127.0.0.1:1234/", "GradLab")
         root = Path(window.profile.name)
@@ -118,6 +119,42 @@ def test_player_exiting_during_focus_still_ends_the_session():
         browser.close()
         player.close.assert_called_once()
         stats.close.assert_called_once()
+
+    asyncio.run(scenario())
+
+
+def test_close_listener_clearing_player_process_ends_session_without_error():
+    async def scenario():
+        browser = PlaybackBrowser()
+        player = Mock()
+        player.process = None  # DesktopWindow.close() has already reaped it.
+        browser.windows["main"] = player
+
+        await asyncio.wait_for(browser.wait_closed(), 1)
+        with pytest.raises(RuntimeError, match="Player.*closed"):
+            await browser.open("http://127.0.0.1:1/", "stats")
+        browser.close()
+        player.close.assert_called_once()
+
+    asyncio.run(scenario())
+
+
+def test_closed_stats_window_can_reopen_after_listener_clears_process():
+    async def scenario():
+        browser = PlaybackBrowser()
+        player, stats, replacement = Mock(), Mock(), Mock()
+        player.process.poll.return_value = None
+        stats.process = None
+        replacement.focus = AsyncMock()
+        browser.windows = {"main": player, "stats": stats}
+        with (
+            patch("gradlab.play_browser.viewer_executable", return_value=Path("/viewer")),
+            patch("gradlab.play_browser.DesktopWindow", return_value=replacement),
+        ):
+            await browser.open("http://127.0.0.1:1/", "stats")
+        stats.close.assert_called_once()
+        replacement.focus.assert_awaited_once()
+        browser.close()
 
     asyncio.run(scenario())
 

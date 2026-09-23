@@ -703,6 +703,8 @@ class PlayerPublicationService:
         return result
 
     def preview(self, settings: Mapping[str, Any]) -> dict[str, Any]:
+        if settings.get("feature") is True:
+            raise ValueError("Featured Research has been retired; use the environment collection")
         active = self._active()
         capture = _required_mapping(active.get("capture_document"), label="capture")
         bundle = active.get("bundle")
@@ -770,7 +772,6 @@ class PlayerPublicationService:
             "comparison": comparison,
             "containers": {
                 "environment": metadata["container_name"],
-                "featured": "GradLab — Featured Research",
             },
             "operator_note": metadata["operator_note"],
             "feature": metadata["feature"],
@@ -870,6 +871,8 @@ class PlayerPublicationService:
         *,
         credential_result: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
+        if settings.get("feature") is True:
+            raise ValueError("Featured Research has been retired; use the environment collection")
         active = self._active()
         capture = active["capture_document"]
         bundle = active["bundle"]

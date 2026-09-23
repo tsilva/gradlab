@@ -9,10 +9,9 @@ import {
   catalogItemMatchesSearch,
   checkpointCanEvaluate,
   checkpointEvaluationPresentation,
-  checkpointMetricBestBadge,
   checkpointMetricDescription,
   checkpointMetricHeaderLabel,
-  checkpointMetricIsBest,
+  checkpointMetricIsLoading,
   checkpointMetricRoleLabel,
   checkpointNavigationPresentation,
   checkpointPrefetchSources,
@@ -183,6 +182,27 @@ test("adjacent checkpoint prefetch is deduplicated before reaching the worker", 
     commands[0].payload.sources.map((source) => source.checkpoint_id),
     ["checkpoint-100-a", "checkpoint-300-c"],
   );
+});
+
+test("checkpoint navigation uses the session's fetched table", async () => {
+  const browser = Object.create(SourceBrowser.prototype);
+  const route = { run_id: "run-a", goal_variant_id: "variant-a", checkpoint_id: "checkpoint-1" };
+  browser.activeCheckpointCache = new Map([[JSON.stringify({
+    run_id: "run-a", goal_variant_id: "variant-a",
+  }), [{ checkpoint_id: "checkpoint-1" }]]]);
+  browser.activeCheckpointRequestSerial = 0;
+  browser.activeCheckpointError = "old error";
+  const controller = new AbortController();
+  browser.activeCheckpointController = controller;
+  const prefetched = [];
+  browser.prefetchAdjacentCheckpoints = (value) => prefetched.push(value);
+
+  await browser.loadActiveCheckpointNavigation(route, "route");
+
+  assert.equal(controller.signal.aborted, true);
+  assert.equal(browser.activeCheckpointRequestSerial, 1);
+  assert.equal(browser.activeCheckpointError, "");
+  assert.deepEqual(prefetched, [route]);
 });
 
 test("catalog search filters the displayed authoritative page synchronously", () => {
@@ -418,7 +438,7 @@ test("checkpoint selection boxes are centered and distinguish enabled from disab
   assert.match(styles, /\.source-selection-cell input:disabled \{[^}]*border-color: var\(--color-border\);[^}]*opacity: \.42;/);
 });
 
-test("checkpoint table shows exact metric keys with full accessible descriptions", async () => {
+test("checkpoint table keeps full metric descriptions for accessible sorting", async () => {
   const source = await readFile(
     new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
     "utf8",
@@ -433,7 +453,7 @@ test("checkpoint table shows exact metric keys with full accessible descriptions
   assert.doesNotMatch(source, /roleLabel\.className = `checkpoint-metric-role/);
   assert.doesNotMatch(source, /\{ label: "Evaluation" \}/);
   assert.doesNotMatch(source, /\{ label: "Evidence" \}/);
-  assert.match(source, /checkpoint-evidence-note/);
+  assert.doesNotMatch(source, /checkpoint-evidence-note/);
   assert.match(source, /trainGroup\.textContent = "Train"/);
   assert.match(source, /evalGroup\.textContent = "Eval"/);
 });
@@ -968,7 +988,7 @@ test("source discovery progressively discloses secondary controls", async () => 
   assert.match(source, /differencesSummary\.textContent = .* from current`/);
   assert.doesNotMatch(source, /Evaluation & technical details/);
   assert.doesNotMatch(source, /Compare all checkpoints/);
-  assert.match(source, /body\.append\(evidenceNote, this\.renderEvaluationActions\(\), results\)/);
+  assert.match(source, /body\.append\(this\.renderEvaluationActions\(\), results\)/);
 });
 
 test("catalog refresh animates and disables only the header refresh control", async () => {
@@ -998,12 +1018,20 @@ test("catalog refresh animates and disables only the header refresh control", as
   );
 });
 
-test("returning to environments keeps the last table visible during refresh", async (context) => {
+test("returning to environments restores the completed table without refreshing", async (context) => {
   const originalLocation = globalThis.location;
+  const originalFetch = globalThis.fetch;
+  const requests = [];
   globalThis.location = { pathname: "/embedded-player", search: "", hash: "" };
+  globalThis.fetch = (...args) => {
+    requests.push(args);
+    throw new Error("cached environments should not request the catalog");
+  };
   context.after(() => {
     if (originalLocation === undefined) delete globalThis.location;
     else globalThis.location = originalLocation;
+    if (originalFetch === undefined) delete globalThis.fetch;
+    else globalThis.fetch = originalFetch;
   });
 
   const sourceBrowser = new SourceBrowser(
@@ -1029,18 +1057,17 @@ test("returning to environments keeps the last table visible during refresh", as
   sourceBrowser.sourceItems = [{ goal_id: "Level1-1" }];
   sourceBrowser.items = [...sourceBrowser.sourceItems];
   sourceBrowser.renderView = () => {};
-  const loads = [];
-  sourceBrowser.ensureLoaded = (options) => loads.push(options);
 
   sourceBrowser.applyRoute({
     level: "environments",
     environment_id: "",
     goal_id: "",
   });
+  await new Promise(setImmediate);
 
   assert.deepEqual(sourceBrowser.items, [{ name: "Mario", goal_count: 18 }]);
-  assert.deepEqual(loads, [{ quiet: true }]);
-  assert.equal(sourceBrowser.loadedKey, "");
+  assert.equal(sourceBrowser.loadedKey, sourceBrowser.routeKey());
+  assert.equal(requests.length, 0);
 });
 
 test("returning to goals restores the last table without refreshing", async (context) => {
@@ -1095,6 +1122,154 @@ test("returning to goals restores the last table without refreshing", async (con
   assert.deepEqual(sourceBrowser.items, [{ goal_id: "Level1-1", recipe_count: 1 }]);
   assert.equal(sourceBrowser.loadedKey, sourceBrowser.routeKey());
   assert.equal(requests.length, 0);
+});
+
+test("repeating a search and clearing it restore session results without requests", (context) => {
+  const originalLocation = globalThis.location;
+  globalThis.location = { pathname: "/embedded-player", search: "", hash: "" };
+  context.after(() => {
+    if (originalLocation === undefined) delete globalThis.location;
+    else globalThis.location = originalLocation;
+  });
+  const browser = new SourceBrowser({}, { replaceChildren() {}, hidden: false }, {
+    token: "token", command() {}, getState: () => ({ hasControl: true }), showToast() {},
+  });
+  browser.renderView = () => {};
+  browser.sourceItems = [{ name: "Mario" }, { name: "Doom" }];
+  browser.loadedKey = browser.routeKey();
+  browser.rememberEnvironmentCatalog();
+  browser.query = "mario";
+  browser.sourceItems = [{ name: "Mario" }];
+  browser.loadedKey = browser.routeKey();
+  browser.rememberSearchCatalog();
+
+  browser.query = "other";
+  browser.sourceItems = [];
+  browser.setSearch("mario");
+  assert.deepEqual(browser.items, [{ name: "Mario" }]);
+  assert.equal(browser.loadedKey, browser.routeKey());
+  browser.setSearch("");
+  assert.deepEqual(browser.items, [{ name: "Mario" }, { name: "Doom" }]);
+  assert.equal(browser.loadedKey, browser.routeKey());
+});
+
+test("revisiting Goal Variant activity restores the page without a request", async (context) => {
+  const originalLocation = globalThis.location;
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.location = { pathname: "/embedded-player", search: "", hash: "" };
+  globalThis.fetch = (...args) => {
+    requests.push(args);
+    throw new Error("cached activity should not request the catalog");
+  };
+  context.after(() => {
+    if (originalLocation === undefined) delete globalThis.location;
+    else globalThis.location = originalLocation;
+    if (originalFetch === undefined) delete globalThis.fetch;
+    else globalThis.fetch = originalFetch;
+  });
+  const browser = new SourceBrowser({}, { replaceChildren() {}, hidden: false }, {
+    token: "token", command() {}, getState: () => ({ hasControl: true }), showToast() {},
+  });
+  browser.renderView = () => {};
+  browser.route = { ...browser.route, level: "goal_variants", environment_id: "Mario", goal_id: "Level1-1" };
+  browser.sourceItems = [{ variant_id: "current", run_count: 2 }];
+  browser.goalVariantRunPages.set("current", { loaded: true, items: [{ run_id: "run-a" }], nextCursor: null });
+  browser.loadedKey = browser.routeKey();
+  browser.rememberGoalActivity();
+  browser.route = { ...browser.route, level: "goals", goal_id: "" };
+
+  browser.applyRoute({ level: "goal_variants", goal_id: "Level1-1" });
+  await new Promise(setImmediate);
+
+  assert.deepEqual(browser.items, [{ variant_id: "current", run_count: 2 }]);
+  assert.deepEqual(browser.goalVariantRunPages.get("current").items, [{ run_id: "run-a" }]);
+  assert.equal(browser.loadedKey, browser.routeKey());
+  assert.equal(requests.length, 0);
+});
+
+test("checkpoint table returns from memory only within the current player session", async (context) => {
+  const originalLocation = globalThis.location;
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.location = { pathname: "/embedded-player", search: "", hash: "" };
+  globalThis.fetch = (...args) => {
+    requests.push(args);
+    throw new Error("cached checkpoints should not request the catalog");
+  };
+  context.after(() => {
+    if (originalLocation === undefined) delete globalThis.location;
+    else globalThis.location = originalLocation;
+    if (originalFetch === undefined) delete globalThis.fetch;
+    else globalThis.fetch = originalFetch;
+  });
+
+  const createBrowser = () => {
+    const browser = new SourceBrowser({}, { replaceChildren() {}, hidden: false }, {
+      token: "token", command() {}, getState: () => ({ hasControl: true }), showToast() {},
+    });
+    browser.renderView = () => {};
+    return browser;
+  };
+  const browser = createBrowser();
+  browser.route = { ...browser.route, level: "runs", run_id: "run-a", goal_variant_id: "variant-a" };
+  browser.sourceItems = [{ checkpoint_id: "checkpoint-1", step: 100, metrics: { "train/return": 3 } }];
+  browser.items = [...browser.sourceItems];
+  browser.metricColumns = [{ metric: "train/return", evidence: "training" }];
+  browser.runStatus = { state: "finished" };
+  browser.selectionFence = "fence-a";
+  browser.nextCursor = "page-two";
+  assert.equal(browser.rememberCheckpointCatalog(), true);
+
+  browser.route = { ...browser.route, checkpoint_id: "checkpoint-1" };
+  browser.applyRoute({ checkpoint_id: "" });
+  await new Promise(setImmediate);
+  assert.deepEqual(browser.items, [{ checkpoint_id: "checkpoint-1", step: 100, metrics: { "train/return": 3 } }]);
+  assert.deepEqual(browser.metricColumns, [{ metric: "train/return", evidence: "training" }]);
+  assert.deepEqual(browser.runStatus, { state: "finished" });
+  assert.equal(browser.selectionFence, "fence-a");
+  assert.equal(browser.nextCursor, "page-two");
+  assert.equal(browser.loadedKey, browser.routeKey());
+  assert.equal(requests.length, 0);
+
+  const newSession = createBrowser();
+  newSession.route = { ...browser.route };
+  assert.equal(newSession.restoreCheckpointCatalog(), false);
+  browser.route = { ...browser.route, run_id: "run-b" };
+  assert.equal(browser.restoreCheckpointCatalog(), false);
+  browser.route = { ...browser.route, run_id: "run-a", goal_variant_id: "variant-b" };
+  assert.equal(browser.restoreCheckpointCatalog(), false);
+});
+
+test("returning to a checkpoint table resumes pending evidence without reloading its rows", async (context) => {
+  const originalLocation = globalThis.location;
+  globalThis.location = { pathname: "/embedded-player", search: "", hash: "" };
+  context.after(() => {
+    if (originalLocation === undefined) delete globalThis.location;
+    else globalThis.location = originalLocation;
+  });
+  const browser = new SourceBrowser({}, { replaceChildren() {}, hidden: false }, {
+    token: "token", command() {}, getState: () => ({ hasControl: true }), showToast() {},
+  });
+  browser.route = { ...browser.route, level: "runs", run_id: "run-a" };
+  browser.sourceItems = [{ checkpoint_id: "checkpoint-1", step: 100 }];
+  browser.checkpointTrainingPending = true;
+  browser.rememberCheckpointCatalog();
+  browser.route = { ...browser.route, checkpoint_id: "checkpoint-1" };
+  browser.renderView = () => {};
+  const resumed = [];
+  browser.loadCheckpointTraining = (key) => {
+    browser.checkpointTrainingController = {};
+    resumed.push(key);
+  };
+
+  browser.applyRoute({ checkpoint_id: "" });
+  browser.restoreCheckpointCatalog(); // The app can render the same route after navigation.
+  await new Promise(setImmediate);
+
+  assert.deepEqual(browser.items, [{ checkpoint_id: "checkpoint-1", step: 100 }]);
+  assert.deepEqual(resumed, [browser.routeKey()]);
+  assert.equal(browser.loadedKey, browser.routeKey());
 });
 
 test("refreshing cached goals keeps old rows until the new catalog arrives", async (context) => {
@@ -1197,23 +1372,27 @@ test("run metrics use compact labels and values", () => {
   assert.equal(formatMetricValue(METRIC, null), "—");
 });
 
-test("checkpoint metric headers show exact metric keys", () => {
+test("checkpoint metric headers omit the prefix shown by their group", () => {
   assert.equal(checkpointMetricHeaderLabel({
     metric: "eval/success/min",
     evidence: "evaluation",
-  }), "eval/success/min");
+  }), "success/min");
   assert.equal(checkpointMetricHeaderLabel({
     metric: "train/success/min",
     evidence: "training",
-  }), "train/success/min");
+  }), "success/min");
   assert.equal(checkpointMetricHeaderLabel({
     metric: "eval/return/mean",
     evidence: "evaluation",
-  }), "eval/return/mean");
+  }), "return/mean");
   assert.equal(checkpointMetricHeaderLabel({
     metric: "train/progress/bricks_destroyed/max",
     evidence: "training",
-  }), "train/progress/bricks_destroyed/max");
+  }), "progress/bricks_destroyed/max");
+  assert.equal(checkpointMetricHeaderLabel({
+    metric: "custom/score",
+    evidence: "training",
+  }), "custom/score");
 });
 
 test("checkpoint evaluation status distinguishes missing, running, and verified evidence", () => {
@@ -1224,10 +1403,22 @@ test("checkpoint evaluation status distinguishes missing, running, and verified 
     episodes_completed: 43, episodes_planned: 100,
   } } }), { label: "Running · 43/100", tone: "running" });
   assert.deepEqual(checkpointEvaluationPresentation({ evaluation: {
+    source: "monitoring", status: "queued", episodes_planned: 100,
+  } }), { label: "Queued", tone: "pending", title: "Checkpoint Monitoring · observational" });
+  assert.deepEqual(checkpointEvaluationPresentation({ evaluation: {
+    source: "monitoring", status: "running", episodes_planned: 100,
+  } }), { label: "Running", tone: "running", title: "Checkpoint Monitoring · observational" });
+  assert.deepEqual(checkpointEvaluationPresentation({ evaluation: {
+    source: "monitoring", status: "finalizing", episodes_completed: 100, episodes_planned: 100,
+  } }), { label: "Finalizing · 100/100", tone: "pending", title: "Checkpoint Monitoring · observational" });
+  assert.deepEqual(checkpointEvaluationPresentation({ evaluation: {
     source: "monitoring", status: "verified", episodes_completed: 100, episodes_planned: 100,
   } }), {
-    label: "Verified · 100/100", tone: "verified", title: "Checkpoint Monitoring · observational",
+    label: "FINISHED", progress: "100/100", tone: "verified", title: "Checkpoint Monitoring · observational",
   });
+  assert.deepEqual(checkpointEvaluationPresentation({ evaluation: {
+    status: "verified", episodes_completed: 100, episodes_planned: 100,
+  } }), { label: "FINISHED", progress: "100/100", tone: "verified" });
 });
 
 test("run finish reasons distinguish resource, training, and evaluation outcomes", () => {
@@ -1412,18 +1603,17 @@ test("unevaluated and unsuccessfully evaluated checkpoints are selectable", () =
   );
 });
 
-test("checkpoint metric cells identify their own leaders", async () => {
+test("checkpoint metric cells show loading until their values resolve", async () => {
   const trainSuccess = "train/success/mean";
   const evalReturn = "eval/return/mean";
-  const checkpoint = { best_metrics: [trainSuccess, evalReturn] };
-
-  assert.equal(checkpointMetricIsBest(checkpoint, trainSuccess), true);
-  assert.equal(checkpointMetricIsBest(checkpoint, evalReturn), true);
-  assert.equal(
-    checkpointMetricIsBest(checkpoint, "eval/success/mean"),
-    false,
-  );
-  assert.equal(checkpointMetricIsBest({}, trainSuccess), false);
+  const trainColumn = { metric: trainSuccess, evidence: "training" };
+  const evalColumn = { metric: evalReturn, evidence: "evaluation" };
+  const loading = { training_pending: true, training_loaded_metrics: [], metrics: {} };
+  assert.equal(checkpointMetricIsLoading(loading, trainColumn), true);
+  assert.equal(checkpointMetricIsLoading(loading, evalColumn), true);
+  assert.equal(checkpointMetricIsLoading({ ...loading, metrics: { [evalReturn]: 1 } }, evalColumn), false);
+  assert.equal(checkpointMetricIsLoading({ ...loading, training_loaded_metrics: [trainSuccess] }, trainColumn), false);
+  assert.equal(checkpointMetricIsLoading({ ...loading, training_pending: false }, evalColumn), false);
 
   const objective = {
     evidence: "evaluation",
@@ -1437,8 +1627,6 @@ test("checkpoint metric cells identify their own leaders", async () => {
   };
   assert.equal(checkpointMetricRoleLabel(objective), "Objective · gate");
   assert.equal(checkpointMetricRoleLabel(proxy), "Training proxy");
-  assert.equal(checkpointMetricBestBadge(objective), "Best");
-  assert.equal(checkpointMetricBestBadge(proxy), "Best");
   assert.match(checkpointMetricDescription(objective), /Frozen checkpoint-evaluation evidence/);
   assert.match(checkpointMetricDescription(proxy), /Diagnostic online training proxy/);
 
@@ -1447,19 +1635,15 @@ test("checkpoint metric cells identify their own leaders", async () => {
     "utf8",
   );
   assert.match(source, /"checkpoint-metric-cell"/);
-  assert.match(source, /badge\.className = "checkpoint-best-badge"/);
-  assert.match(source, /badge\.textContent = badgeLabel/);
-  assert.doesNotMatch(source, /Best objective/);
-  assert.doesNotMatch(source, /Best observed/);
+  assert.match(source, /pendingTrainingColumns \? \[\{ label: "", trainingPlaceholder: true \}\] : \[\]/);
+  assert.match(source, /checkpointMetricIsLoading\(item, metadata\?\.column\)/);
+  assert.doesNotMatch(source, /checkpoint-best-badge/);
 
   const styles = await readFile(
     new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
     "utf8",
   );
-  assert.match(
-    styles,
-    /\.source-table \.checkpoint-best-badge \{[^}]*border: 1px solid var\(--color-training-success-text\);[^}]*background: var\(--color-training-success-surface\);[^}]*color: var\(--color-training-success-text\);/,
-  );
+  assert.doesNotMatch(styles, /checkpoint-best-badge/);
 });
 
 test("selected checkpoints are admitted together through the evaluation API", async (context) => {
@@ -1883,20 +2067,26 @@ test("interrupted checkpoint evidence keeps received values and releases refresh
   assert.match(browser.catalogWarnings[0].message, /ended before completion/);
 });
 
-test("goal activity restores available content while leaving refresh pending", () => {
+test("goal activity restores its complete table and expanded run pages", () => {
   const view = Object.create(SourceBrowser.prototype);
   Object.assign(view, {
     route: { level: "goal_variants", environment_id: "env", goal_id: "goal" },
     query: "", goalActivityCache: new Map(), loadedKey: "",
     sourceItems: [{ variant_id: "current", recent_runs: [] }], activityRevision: "revision",
+    metricColumns: [], fallbackMetricColumns: [], nextCursor: "next", freshness: "fresh",
+    catalogWarnings: [], catalogSource: null, generatedAt: null, selectionFence: "fence",
+    goalVariantRunPages: new Map([["current", { loaded: true, items: [{ run_id: "run-a" }], nextCursor: null }]]),
   });
   view.rememberGoalActivity();
   view.sourceItems = [];
   view.items = [];
+  view.goalVariantRunPages.clear();
   assert.equal(view.restoreGoalActivity(), true);
   assert.equal(view.items[0].variant_id, "current");
-  assert.equal(view.loadedKey, "");
-  assert.equal(view.freshness, "stale");
+  assert.equal(view.loadedKey, view.routeKey());
+  assert.equal(view.freshness, "fresh");
+  assert.equal(view.nextCursor, "next");
+  assert.deepEqual(view.goalVariantRunPages.get("current").items, [{ run_id: "run-a" }]);
   view.route.goal_id = "different";
   assert.equal(view.restoreGoalActivity(), false);
 });

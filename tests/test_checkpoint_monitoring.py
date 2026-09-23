@@ -812,6 +812,7 @@ def test_recording_subset_preserves_full_metrics_and_verified_inventory(tmp_path
                                  prefix="monitor/test", fps=15)
     assert result["metrics"]["eval/episodes/count"] == 3
     assert result["metrics"]["eval/progress/bricks_destroyed_normalized/mean"] == 0.25
+    assert result["metrics"]["eval/progress/bricks_destroyed_normalized/max"] == 0.5
     assert result["metrics"]["eval/monitor/progress/median"] == 0.25
     if record_count:
         assert result["selection"]["ordinal"] == (0 if record_count == 1 else 1)

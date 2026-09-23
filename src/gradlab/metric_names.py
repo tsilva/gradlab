@@ -11,6 +11,7 @@ METRICS_SCHEMA_VERSION = 24
 # Monitoring events share scientific names with evaluation but never carry Acceptance authority.
 MONITORING_SCALAR_METRICS = frozenset({
     "eval/progress/bricks_destroyed_normalized/mean",
+    "eval/progress/bricks_destroyed_normalized/max",
     "eval/progress/score/mean",
     "eval/return/mean",
     "eval/episode_steps/mean",

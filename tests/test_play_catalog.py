@@ -15,6 +15,7 @@ from gradlab.goal_catalog import (
     goal_catalog_pointer_key,
     validate_goal_catalog_generation,
 )
+from gradlab.json_utils import canonical_json_sha256 as compact_json_sha256
 from gradlab.play_catalog import (
     PlayCatalog,
     WandbRunLocation,
@@ -1720,6 +1721,8 @@ def test_breakout_checkpoint_table_uses_verified_monitoring_event_for_eval_colum
         @staticmethod
         def scan_history(*, keys, page_size):
             assert page_size == 10_000
+            if keys == ["train/step", "train/success/min"]:
+                return [{"train/step": 500_000, "train/success/min": 0.75}]
             if "eval/monitor/progress/median" in keys:
                 return [{
                     "eval/step": 500_000,
@@ -1745,11 +1748,21 @@ def test_breakout_checkpoint_table_uses_verified_monitoring_event_for_eval_colum
 
     page = catalog.checkpoints(run_id=RUN_ID)
     row = page.items[0]
-    assert [column["metric"] for column in page.metric_columns if column["evidence"] == "evaluation"] == [
-        "eval/success/mean",
-        "eval/progress/bricks_destroyed_normalized/mean",
-        "eval/return/mean",
+    suffixes = [
+        "success/mean",
+        "progress/bricks_destroyed_normalized/mean",
+        "progress/bricks_destroyed_normalized/max",
+        "episode_steps/mean",
+        "return/mean",
     ]
+    assert [column["metric"] for column in page.metric_columns if column["evidence"] == "training"] == [
+        f"train/{suffix}" for suffix in suffixes
+    ]
+    assert [column["metric"] for column in page.metric_columns if column["evidence"] == "evaluation"] == [
+        f"eval/{suffix}" for suffix in suffixes
+    ]
+    assert page.metric_columns[0]["source_metric"] == "train/success/min"
+    assert page.metric_columns[1]["rank_source_metric"] == "train/progress/bricks_destroyed/mean"
     assert row["evaluation"] == {
         "status": "verified",
         "source": "monitoring",
@@ -1762,7 +1775,158 @@ def test_breakout_checkpoint_table_uses_verified_monitoring_event_for_eval_colum
         },
     }
     assert row["metrics"]["eval/success/mean"] == 0.84
+    assert row["metrics"]["train/success/mean"] == 0.75
+    assert row["metrics"]["eval/progress/bricks_destroyed_normalized/max"] is None
     assert all(metric not in row["best_metrics"] for metric in row["evaluation"]["metrics"])
+
+
+def test_current_breakout_goal_ranks_normalized_bricks() -> None:
+    root = Path.cwd() / "experiments/goals/Breakout-Atari2600-v0"
+    for goal_id in ("FirstWall", "TwoWalls"):
+        goal = load_goal_contract(root / goal_id / "_goal.yaml", Path.cwd())
+        assert goal["objective"]["rank"] == [
+            "max(train/progress/bricks_destroyed_normalized/mean)",
+            "max(train/progress/bricks_destroyed_normalized/max)",
+            "min(train/episode_steps/mean)",
+        ]
+
+
+def test_breakout_checkpoint_table_reads_paired_monitoring_metrics() -> None:
+    config = {
+        "metrics_schema_version": METRICS_SCHEMA_VERSION,
+        "checkpoint_eval_backend": "none",
+        "selection_rank": [
+            "max(train/progress/bricks_destroyed_normalized/mean)",
+            "max(train/progress/bricks_destroyed_normalized/max)",
+            "min(train/episode_steps/mean)",
+        ],
+        "episode_progress_fields": ["bricks_destroyed_normalized"],
+        "state": "Start",
+    }
+    contract = checkpoint_metric_contract(config)
+
+    class Run:
+        @staticmethod
+        def scan_history(*, keys, page_size):
+            assert page_size == 10_000
+            if keys == ["eval/step", "eval/progress/bricks_destroyed_normalized/max"]:
+                return [{"eval/step": 500_000, keys[1]: 0.5}]
+            if keys == ["eval/step", "eval/episode_steps/mean"]:
+                return [{"eval/step": 500_000, keys[1]: 1200.0}]
+            if "eval/monitor/progress/median" in keys:
+                return [{
+                    "eval/step": 500_000,
+                    "eval/monitor/progress/median": 0.42,
+                    "eval/episodes/count": 100,
+                    "eval/success/mean": 0.8,
+                    "eval/progress/bricks_destroyed_normalized/mean": 0.4,
+                    "eval/return/mean": 100.0,
+                }]
+            return []
+
+    evaluation = PlayCatalog._monitoring_history(Run(), contract)[500_000]
+    assert evaluation["metrics"]["eval/progress/bricks_destroyed_normalized/max"] == 0.5
+    assert evaluation["metrics"]["eval/episode_steps/mean"] == 1200.0
+
+
+def test_checkpoint_monitoring_state_and_values_for_control_backed_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    running = checkpoint_row(step=250_000, digest="2" * 64, purpose="periodic")
+    complete = checkpoint_row(step=500_000, digest="3" * 64, purpose="final")
+    monkeypatch.setattr(
+        "gradlab.play_catalog._public_json",
+        lambda _url: {
+            "schema_version": 1,
+            "run_id": RUN_ID,
+            "checkpoints": [running, complete],
+            "promotion": None,
+        },
+    )
+    settings = {"enabled": True, "episodes": 100, "record_episodes": 50}
+    train_config = {
+        "metrics_schema_version": METRICS_SCHEMA_VERSION,
+        "checkpoint_eval_backend": "none",
+        "selection_rank": ["max(train/progress/bricks_destroyed/mean)"],
+        "episode_progress_fields": ["bricks_destroyed", "bricks_destroyed_normalized"],
+        "checkpoint_monitoring": settings,
+    }
+    state_keys: dict[str, str] = {}
+
+    class Control:
+        @staticmethod
+        def get_json_optional(key: str) -> dict[str, object] | None:
+            if key == f"runs/{RUN_ID}/manifest.json":
+                return {
+                    "goal_slug": "Breakout/FirstWall",
+                    "seed": 123,
+                    "wandb": {"entity": "research", "project": "Breakout"},
+                }
+            if key == state_keys["running"]:
+                return {"status": "running", "attempts": 1}
+            if key == state_keys["complete"]:
+                return {"status": "complete", "attempts": 1, "result_sha256": "a" * 64}
+            return None
+
+    class Run:
+        config = {
+            "metrics_schema_version": METRICS_SCHEMA_VERSION,
+            "checkpoint_eval_backend": "none",
+            "selection_rank": train_config["selection_rank"],
+            "seed": 123,
+        }
+
+        @staticmethod
+        def scan_history(*, keys, page_size):
+            assert page_size == 10_000
+            if "eval/monitor/progress/median" in keys:
+                return [{
+                    "eval/step": 500_000,
+                    "eval/monitor/progress/median": 0.48,
+                    "eval/episodes/count": 100,
+                    "eval/success/mean": 0.84,
+                    "eval/progress/bricks_destroyed_normalized/mean": 0.47,
+                    "eval/return/mean": 138.2,
+                }]
+            return []
+
+    class Api:
+        @staticmethod
+        def run(path):
+            assert path == f"research/Breakout/{RUN_ID}"
+            return Run()
+
+    catalog = PlayCatalog(
+        public_models_base_url="https://models.example",
+        control_bucket=Control(),
+    )
+    bind_checkpoint_recipe(catalog, monkeypatch, (running, complete), train_config)
+    contract_hash = compact_json_sha256({
+        "recipe_sha256": running["recipe_sha256"],
+        "settings": settings,
+    })
+    for label, checkpoint in (("running", running), ("complete", complete)):
+        evaluation_id = compact_json_sha256({
+            "checkpoint": checkpoint["checkpoint_id"],
+            "contract": contract_hash,
+        })
+        state_keys[label] = (
+            f"runs/{RUN_ID}/monitoring/{contract_hash}/{evaluation_id}/state.json"
+        )
+    monkeypatch.setattr(catalog, "_control_generation_scope", lambda **_kwargs: None)
+    catalog._api = Api()
+
+    first_page = catalog.checkpoints(run_id=RUN_ID, include_wandb=False)
+    assert first_page.items[0]["evaluation"]["status"] == "verified"
+    assert first_page.items[0]["metrics"]["eval/success/mean"] is None
+    assert first_page.items[1]["evaluation"]["status"] == "running"
+    assert first_page.items[1]["metrics"]["eval/success/mean"] is None
+
+    enriched = catalog.checkpoints(run_id=RUN_ID)
+    assert enriched.items[0]["evaluation"]["source"] == "monitoring"
+    assert enriched.items[0]["metrics"]["eval/success/mean"] == 0.84
+    assert enriched.items[1]["evaluation"]["status"] == "running"
+    assert enriched.items[1]["metrics"]["eval/success/mean"] is None
 
 
 def test_catalog_attaches_goal_required_eval_results_by_checkpoint(

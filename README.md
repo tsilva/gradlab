@@ -44,9 +44,9 @@ also have distinct macOS app identities and browser-tab icons. The
 pinned, SHA-256-verified runtime downloads once into `~/.cache/gradlab/neutralino`
 (or `$XDG_CACHE_HOME/gradlab/neutralino`). On macOS, GradLab creates its app bundle
 from the existing icon automatically. No Node.js, npm, compiler, or rebuild is
-needed to run the installed player. From a source checkout, `gradlab play`
-starts Vite automatically and reloads frontend changes in the open viewer.
-Use `--no-hot-reload` to serve the compiled player instead.
+needed to run the installed player. `gradlab play` serves compiled player assets
+by default. From a source checkout, pass `--hotreload` to start Vite and reload
+frontend changes in the open viewer. The header warns when hot reload is active.
 The **Stats** button opens or focuses a synchronized GradLab window.
 Closing the last Player or Stats window stops the local player cleanly; keeping
 either window open keeps the session running.
@@ -127,10 +127,10 @@ pnpm build:web
 uv run gradlab play
 ```
 
-`gradlab play` uses hot reload by default in this checkout. Changes under
+Pass `--hotreload` to use hot reload in this checkout. Changes under
 `frontend/` and `src/gradlab/web_player/` update the open viewer; Python changes
 still require restarting the command. `pnpm build:web` remains necessary for
-package builds, compiled-mode testing, and `--no-hot-reload`. Vite writes ignored
+package builds and compiled-mode testing. Vite writes ignored
 assets to `src/gradlab/web_player/dist/`; commit source and `pnpm-lock.yaml`, never
 bundles. `uv build` checks that the compiled assets match their source inputs and
 includes them in both distribution formats. Building a wheel from the published
@@ -142,11 +142,9 @@ and performance workloads are documented in
 
 ## Research results
 
-Start with [Featured Research on Hugging Face](https://huggingface.co/collections/tsilva/gradlab-featured-research-6a76017e31c4e6f8fd5593f3)
-or its [YouTube playlist](https://www.youtube.com/playlist?list=PLKUQZsKUoinA).
-
 Environment indexes:
 
+- [Breakout-Atari2600-v0 datasets and derived models](https://huggingface.co/collections/tsilva/gradlab-breakout-atari2600-v0)
 - [VizdoomDeathmatch-v1 models](https://huggingface.co/collections/tsilva/gradlab-vizdoomdeathmatch-v1-6a75be1f7f77460f66953c43)
   and [videos](https://www.youtube.com/playlist?list=PLbd2wb1agDJ0)
 - [SuperMarioBros-Nes-v0 models](https://huggingface.co/collections/tsilva/gradlab-supermariobros-nes-v0-6a5675af108d798040f3aafb)

@@ -479,7 +479,6 @@ function publicationSettings() {
     thumbnail_time: Number($("#publication-thumbnail-time").value),
     tags: $("#publication-tags").value.split(",").map((value) => value.trim()).filter(Boolean),
     operator_note: $("#publication-note").value,
-    feature: $("#publication-feature").checked,
   };
 }
 
@@ -495,7 +494,6 @@ function renderPublicationPreview(preview) {
   publicationFact("Replay", `${preview.replay?.status}: ${preview.replay?.outcome}`, "#publication-generated");
   publicationFact("Comparison", preview.comparison?.reason, "#publication-generated");
   publicationFact("Environment container", preview.containers?.environment, "#publication-generated");
-  publicationFact("Featured container", preview.feature ? preview.containers?.featured : "Not requested", "#publication-generated");
   publicationFact("Operator note", preview.operator_note || "None", "#publication-generated");
 }
 
@@ -954,7 +952,9 @@ function syncTimelineDock() {
   timeline.classList.add("game-timeline-docked");
   const actions = stage.querySelector(".game-actions");
   if (actions) {
+    const menu = actions.querySelector('[data-panel-menu="game"]');
     actions.append($("#timeline-reset"), $("#playback-settings-toggle"));
+    if (menu) actions.append(menu);
   }
 }
 
@@ -1746,7 +1746,7 @@ function initWorkspace() {
       showToast(error.message || String(error), true);
     }
   });
-  ["#publication-privacy", "#publication-thumbnail-time", "#publication-tags", "#publication-note", "#publication-feature"].forEach((selector) => {
+  ["#publication-privacy", "#publication-thumbnail-time", "#publication-tags", "#publication-note"].forEach((selector) => {
     $(selector).addEventListener("change", () => {
       void refreshPublicationPreview().catch((error) => showToast(error.message || String(error), true));
     });
