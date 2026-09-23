@@ -28,6 +28,7 @@ from gradlab.train_config import (
     env_config_allowed_keys,
     validate_train_config_fields,
 )
+from gradlab.training_success import training_success_criterion
 from gradlab.validation import (
     display_path,
     is_int as _is_int,
@@ -406,12 +407,27 @@ def validate_goal_contract_document(
         _require_key(document, "objective", label=label), label=f"{label}.objective"
     )
     _validate_objective_rank(objective, label=f"{label}.objective")
+    training_success = objective.get("training_success")
+    if training_success is not None:
+        training_success_criterion(
+            training_success, label=f"{label}.objective.training_success"
+        )
 
     train = _goal_train_section(document, label=label)
+    early_stop_success = False
     if "early_stop" in train:
-        validate_metric_early_stop_policy(
+        early_stop = validate_metric_early_stop_policy(
             train["early_stop"],
             label=f"{label}.train.early_stop",
+        )
+        early_stop_success = any(
+            condition["trigger"] == "threshold" and condition["outcome"] == "success"
+            for condition in early_stop["conditions"].values()
+        )
+    if training_success is None and not early_stop_success:
+        raise ValueError(
+            f"{label}.objective.training_success is required unless "
+            "goal.train.early_stop declares a success threshold"
         )
     environment = _goal_train_environment(document, train, label=label)
     _validate_environment_identity({"environment": environment}, label=f"{label}.train")

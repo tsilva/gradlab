@@ -2585,6 +2585,20 @@ class RunSupervisor:
             )
         return high_water
 
+    def _training_success_evidence(self) -> dict[str, Any] | None:
+        from gradlab.training_success import training_success_evidence
+
+        recipe = self.recipe_document.get("recipe") or {}
+        goal = recipe.get("goal") or {}
+        objective = goal.get("objective") or {}
+        criterion = objective.get("training_success")
+        if criterion is None:
+            return None
+        return training_success_evidence(
+            criterion,
+            self.store.metric_history(str(criterion["metric"])),
+        )
+
     def _terminal_inventory(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         checkpoints = self.store.checkpoint_publications()
         evals = []
@@ -2993,6 +3007,7 @@ class RunSupervisor:
             },
             completed_at=self.clock.utc_now(),
             early_stop=(early_stop.to_dict() if early_stop is not None else None),
+            training_success=self._training_success_evidence(),
             state_archive=self.state_archive_publication,
         )
         self._lease_heartbeat()

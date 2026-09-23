@@ -675,10 +675,15 @@ class TerminalReceipt(_CurrentContract):
     drain: Mapping[str, Any]
     completed_at: str
     early_stop: Mapping[str, Any] | None = None
+    training_success: Mapping[str, Any] | None = None
     state_archive: Mapping[str, Any] | None = None
     schema_version: int = SCHEMA_VERSION
 
     def validate(self) -> None:
+        if self.training_success is not None:
+            from gradlab.training_success import validate_training_success_evidence
+
+            validate_training_success_evidence(self.training_success)
         _require_current_schema(
             self.schema_version,
             expected=SCHEMA_VERSION,

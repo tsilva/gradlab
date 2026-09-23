@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 from gradlab.goal_catalog import GOAL_CATALOG_SCHEMA_VERSION
 from gradlab.goal_variants import build_goal_variant_descriptor
@@ -403,11 +404,13 @@ class RunAuthorityTests(unittest.TestCase):
     ) -> None:
         goal_path = Path("experiments/goals/gradlab__bandit/_goal.yaml")
         recipe_path = goal_path.parent / "recipes/ppo.yaml"
-        resolved = compose_resolved_train_documents(
-            goal_path,
-            recipe_path,
-            source_sha="e" * 40,
-        )
+        # The legacy bandit goal is intentionally nonlaunchable until it has a criterion.
+        with patch("gradlab.recipe_documents.validate_goal_contract_document"):
+            resolved = compose_resolved_train_documents(
+                goal_path,
+                recipe_path,
+                source_sha="e" * 40,
+            )
         recipe = build_recipe_document(
             resolved.effective,
             repo_root=Path.cwd(),

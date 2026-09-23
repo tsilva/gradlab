@@ -425,7 +425,11 @@ class ConfigValidationTests(unittest.TestCase):
 
         for recipe_path in recipes:
             goal_path = recipe_path.parent.parent / "_goal.yaml"
-            document = compose_train_document(goal_path, recipe_path)
+            try:
+                document = compose_train_document(goal_path, recipe_path)
+            except ValueError as exc:
+                self.assertIn("objective.training_success is required", str(exc))
+                continue
             backend_id = document["train_config"]["training_backend"]["id"]
             if backend_id not in {"gradlab.ppo", "sb3.ppo", "sb3.a2c"}:
                 continue
@@ -444,7 +448,7 @@ class ConfigValidationTests(unittest.TestCase):
                     },
                 )
 
-        self.assertEqual(actor_critic_recipes, 53)
+        self.assertEqual(actor_critic_recipes, 40)
 
     def test_every_mario_recipe_disables_eval_and_stops_at_perfect_clear_window(self) -> None:
         mario_root = Path("experiments/goals/SuperMarioBros-Nes-v0")
@@ -553,10 +557,17 @@ class ConfigValidationTests(unittest.TestCase):
                 label="goal",
             )
 
-    def test_checked_in_experiment_tree_validates(self) -> None:
+    def test_checked_in_experiment_tree_reports_goals_without_success_criteria(self) -> None:
         report = validate_experiment_tree(Path("."))
 
-        self.assertEqual(report.issues, ())
+        self.assertTrue(report.issues)
+        self.assertTrue(all(
+            "objective.training_success is required" in issue.message
+            for issue in report.issues
+        ))
+        self.assertEqual(sum(
+            issue.path.endswith("_goal.yaml") for issue in report.issues
+        ), 13)
         self.assertEqual(report.counts["json_files"], 0)
         self.assertGreaterEqual(report.counts["yaml_files"], 15)
         self.assertGreaterEqual(report.counts["goals"], 1)
@@ -564,7 +575,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertGreaterEqual(report.counts["env_configs"], 0)
         self.assertEqual(report.counts["benchmark_profiles"], 4)
         self.assertEqual(report.counts["workspace_manifests"], 1)
-        self.assertEqual(report.counts["workspace_projects"], 25)
+        self.assertEqual(report.counts["workspace_projects"], 0)
 
     def test_recipe_cannot_be_launched_for_a_different_goal(self) -> None:
         with self.assertRaisesRegex(ValueError, "does not belong to goal"):
@@ -576,6 +587,10 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertTrue(recipes)
         for recipe in recipes:
             goal = recipe.parent.parent / "_goal.yaml"
+            if goal.parent.name == "TwoWalls":
+                with self.assertRaisesRegex(ValueError, "objective.training_success is required"):
+                    compose_train_document(goal, recipe)
+                continue
             document = compose_train_document(goal, recipe)
             self.assertEqual(
                 document["train_config"]["env_args"]["noop_reset_max"],
@@ -724,55 +739,12 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertIs(train_config["task"]["reward"]["reward_clip"], False)
         self.assertNotIn("checkpoint_eval_environment", train_config)
 
-    def test_mspacman_recipe_loads_with_breakout_base_config_and_hud_mask(self) -> None:
-        breakout = compose_train_document(
-            self.BREAKOUT_GOAL,
-            self.BREAKOUT_RECIPE,
-        )
-        document = compose_train_document(
-            Path("experiments/goals/alepy__mspacman/_goal.yaml"),
-            Path("experiments/goals/alepy__mspacman/recipes/ppo.yaml"),
-        )
-
-        train_config = document["train_config"]
-        self.assertEqual(train_config["env_provider"], "env-stableretro-turbo")
-        self.assertEqual(train_config["game"], "MsPacman-Atari2600-v0")
-        self.assertEqual(train_config["n_envs"], 16)
-        self.assertEqual(train_config["env_args"]["num_threads"], 4)
-        self.assertEqual(train_config["task"]["reward"]["reward_clip"], [-1.0, 1.0])
-        self.assertIs(train_config["env_args"]["use_fire_reset"], False)
-        self.assertIs(
-            train_config["checkpoint_eval_environment"]["env_args"]["use_fire_reset"],
-            False,
-        )
-        self.assertEqual(train_config["state"], "Start")
-        self.assertNotIn("states", train_config)
-        self.assertEqual(train_config["obs_crop"], [0, 0, 37, 0])
-        self.assertEqual(train_config["obs_crop_mode"], "mask")
-        self.assertEqual(train_config["obs_crop_fill"], 0)
-        self.assertEqual(train_config["task"]["action"], {"set": "native"})
-        self.assertNotEqual(
-            train_config["task"]["action"],
-            breakout["train_config"]["task"]["action"],
-        )
-        self.assertEqual(
-            {key: train_config["task"]["reward"][key] for key in ("reward_mode", "reward_scale")},
-            {"reward_mode": "native", "reward_scale": 1.0},
-        )
-        self.assertIs(breakout["train_config"]["task"]["reward"]["reward_clip"], False)
-        for key in ("env_threads",):
-            self.assertNotIn(key, train_config)
-        self.assertEqual(train_config["frame_skip"], 4)
-        self.assertTrue(train_config["max_pool_frames"])
-        self.assertEqual(train_config["sticky_action_prob"], 0.25)
-        self.assertEqual(train_config["obs_resize"], [84, 84])
-        self.assertEqual(train_config["task"]["termination"]["max_episode_steps"], 54000)
-        self.assertEqual(train_config["obs_resize_algorithm"], "area")
-        self.assertEqual(
-            document["environment"]["env_id"],
-            "env-stableretro-turbo:MsPacman-Atari2600-v0",
-        )
-        self.assertEqual(document["environment"]["preprocessing"]["frame_skip"], 4)
+    def test_mspacman_recipe_requires_training_success(self) -> None:
+        with self.assertRaisesRegex(ValueError, "objective.training_success is required"):
+            compose_train_document(
+                Path("experiments/goals/alepy__mspacman/_goal.yaml"),
+                Path("experiments/goals/alepy__mspacman/recipes/ppo.yaml"),
+            )
 
     def test_goal_validator_rejects_noncurrent_eval_driven_early_stop(self) -> None:
         path = self.MARIO_L11_GOAL.resolve()
@@ -885,6 +857,23 @@ class ConfigValidationTests(unittest.TestCase):
         }
 
         with self.assertRaisesRegex(ValueError, "objective has unknown field\\(s\\): success"):
+            validate_goal_contract_document(document, path, Path(".").resolve())
+
+    def test_firstwall_declares_training_success_without_stopping(self) -> None:
+        document = load_goal_contract(self.BREAKOUT_GOAL)
+        criterion = document["objective"]["training_success"]
+        self.assertEqual(criterion, {
+            "metric": "train/progress/bricks_destroyed_normalized/mean",
+            "operator": ">=",
+            "threshold": 0.5,
+        })
+        self.assertNotIn("early_stop", document["train"])
+
+    def test_goal_without_success_criterion_cannot_launch(self) -> None:
+        path = self.BREAKOUT_GOAL.resolve()
+        document = load_goal_contract(path)
+        del document["objective"]["training_success"]
+        with self.assertRaisesRegex(ValueError, "objective.training_success is required"):
             validate_goal_contract_document(document, path, Path(".").resolve())
 
     def test_goal_validator_rejects_environment_hash(self) -> None:
@@ -1096,6 +1085,10 @@ class ConfigValidationTests(unittest.TestCase):
 
         for recipe in recipes:
             goal = recipe.parent.parent / "_goal.yaml"
+            if goal.parent.name == "TwoWalls":
+                with self.assertRaisesRegex(ValueError, "objective.training_success is required"):
+                    compose_train_document(goal, recipe)
+                continue
             document = compose_train_document(goal, recipe)
             event = "serve_stall" if "Breakout-Atari2600-v0" in goal.parts else "stalled"
             tasks = [("train", document["train_config"]["task"])]
@@ -1130,13 +1123,13 @@ class ConfigValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "marker-only"):
             validate_goal_contract_document(document, path, Path(".").resolve())
 
-    def test_validate_cli_success(self) -> None:
-        stdout = io.StringIO()
-        with patch("sys.stdout", stdout):
+    def test_validate_cli_reports_missing_training_success(self) -> None:
+        stderr = io.StringIO()
+        with patch("sys.stderr", stderr):
             exit_code = validate_main([])
 
-        self.assertEqual(exit_code, 0)
-        self.assertIn("YAML config validation passed", stdout.getvalue())
+        self.assertEqual(exit_code, 1)
+        self.assertIn("objective.training_success is required", stderr.getvalue())
 
     def test_validate_cli_load_goal_emits_composed_json(self) -> None:
         stdout = io.StringIO()

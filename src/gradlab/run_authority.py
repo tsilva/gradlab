@@ -389,6 +389,7 @@ class RunAuthority:
                 stop_reason=receipt.stop_reason,
                 final_step=receipt.final_step,
                 early_stop=receipt.early_stop,
+                training_success=receipt.training_success,
             ),
         )
 
@@ -517,6 +518,7 @@ class RunAuthority:
         stop_reason: str | None = None,
         final_step: int | None = None,
         early_stop: Mapping[str, Any] | None = None,
+        training_success: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         normalized_metrics = {
             str(name): float(value)
@@ -605,6 +607,13 @@ class RunAuthority:
                     and existing.get("attempt_id") == manifest.attempt_id
                     and isinstance(existing.get("early_stop"), Mapping)
                 )
+                else None
+            ),
+            "training_success": (
+                dict(training_success)
+                if training_success is not None
+                else dict(existing["training_success"])
+                if existing and isinstance(existing.get("training_success"), Mapping)
                 else None
             ),
         }
