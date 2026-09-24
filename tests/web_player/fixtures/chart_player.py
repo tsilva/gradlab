@@ -94,7 +94,9 @@ def main():
             runner._load_step(args.recorded_steps)
 
         async def serve():
-            server = asyncio.create_task(ChartPlayer(runner, args).run())
+            server = asyncio.create_task(
+                ChartPlayer(runner, args, paired_windows=True).run()
+            )
             while not runner._thread.is_alive():
                 await asyncio.sleep(0.01)
             if not args.imported:
