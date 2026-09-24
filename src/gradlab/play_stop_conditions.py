@@ -17,7 +17,7 @@ EPISODE_SYMBOLS = (
     "episode.boundary",
 )
 
-_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
+_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*")
 _NUMBER = re.compile(r"[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][+-]?\d+)?")
 
 
@@ -232,7 +232,7 @@ def _numeric(value: object) -> float | None:
 
 
 class PlaybackStopController:
-    """Own one bounded stop program and its Playback-run numeric state."""
+    """Own one bounded stop program and its Playback Session numeric state."""
 
     def __init__(
         self,
@@ -282,6 +282,7 @@ class PlaybackStopController:
         terminated: bool = False,
         truncated: bool = False,
         boundary: bool = False,
+        evaluate: bool = True,
     ) -> StopMatch | None:
         catalog_changed = False
         for raw_name in events:
@@ -308,7 +309,7 @@ class PlaybackStopController:
             self._episode_counts["episode.boundary"] += 1
         if catalog_changed:
             self._compile()
-        if self._expression is None or not self._evaluate(self._expression):
+        if not evaluate or self._expression is None or not self._evaluate(self._expression):
             return None
         values: dict[str, float | int] = {}
         self._collect_values(self._expression, values)
@@ -415,13 +416,14 @@ class PlaybackStopController:
         for name in sorted(self._event_names | self._signal_names):
             is_event = name in self._event_names
             is_signal = name in self._signal_names
-            if is_event and is_signal:
-                symbols.extend(
-                    (
-                        _SymbolRef(f"event.{name}", "event", name),
-                        _SymbolRef(f"signal.{name}", "signal", name),
-                    )
-                )
+            short_name_is_safe = _IDENTIFIER.fullmatch(name) is not None
+            if (is_event and is_signal) or not short_name_is_safe:
+                qualified: list[_SymbolRef] = []
+                if is_event and _IDENTIFIER.fullmatch(f"event.{name}"):
+                    qualified.append(_SymbolRef(f"event.{name}", "event", name))
+                if is_signal and _IDENTIFIER.fullmatch(f"signal.{name}"):
+                    qualified.append(_SymbolRef(f"signal.{name}", "signal", name))
+                symbols.extend(qualified)
             elif is_event:
                 symbols.append(_SymbolRef(name, "event", name))
             else:
@@ -446,8 +448,10 @@ def default_stop_expression(conditions: Iterable[Mapping[str, Any]]) -> str:
         if condition.get("enabled") is False:
             continue
         event = condition.get("event")
-        if isinstance(event, str) and _IDENTIFIER.fullmatch(event):
-            comparisons.append(f"{event} >= 1")
+        if isinstance(event, str):
+            identifier = event if _IDENTIFIER.fullmatch(event) else f"event.{event}"
+            if _IDENTIFIER.fullmatch(identifier):
+                comparisons.append(f"{identifier} >= 1")
         elif condition.get("id") == "limit:max_episode_steps":
             comparisons.append("episode.truncated >= 1")
     return " or ".join(dict.fromkeys(comparisons)) or "episode.boundary >= 1"
