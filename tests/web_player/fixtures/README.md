@@ -41,6 +41,12 @@ Exercise these sequences:
   "Exit fullscreen test" button for browser drivers whose Escape stays in the page.
 - Play, pause, and replace the episode. Live points must extend recorded history;
   replacement must remove the old plot and reset zoom to the full episode.
+- For stop-condition verification, start with `--recorded-steps 0
+  --episode-length 2`, enter `episode.terminated == 2` in Playback settings, and
+  press Play. The player must cross the first boundary, stop on the second, and
+  report the matching counter value. Invalid text must show an inline error and
+  disable Play; autocomplete must expose its combobox/listbox state and support
+  Arrow/Enter/Tab/Escape.
 
 The scripted session intentionally omits some Policy diagnostics. Unavailable or
 incomparable diagnostics are fixture data, not evidence of a solved Research Goal.
