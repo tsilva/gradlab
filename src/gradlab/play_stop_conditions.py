@@ -21,6 +21,14 @@ _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]+)*")
 _NUMBER = re.compile(r"[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][+-]?\d+)?")
 
 
+def _safe_short_identifier(name: str) -> bool:
+    return (
+        _IDENTIFIER.fullmatch(name) is not None
+        and name not in {"and", "or"}
+        and name not in EPISODE_SYMBOLS
+    )
+
+
 @dataclass(frozen=True)
 class StopConditionError:
     message: str
@@ -416,7 +424,7 @@ class PlaybackStopController:
         for name in sorted(self._event_names | self._signal_names):
             is_event = name in self._event_names
             is_signal = name in self._signal_names
-            short_name_is_safe = _IDENTIFIER.fullmatch(name) is not None
+            short_name_is_safe = _safe_short_identifier(name)
             if (is_event and is_signal) or not short_name_is_safe:
                 qualified: list[_SymbolRef] = []
                 if is_event and _IDENTIFIER.fullmatch(f"event.{name}"):
@@ -449,7 +457,7 @@ def default_stop_expression(conditions: Iterable[Mapping[str, Any]]) -> str:
             continue
         event = condition.get("event")
         if isinstance(event, str):
-            identifier = event if _IDENTIFIER.fullmatch(event) else f"event.{event}"
+            identifier = event if _safe_short_identifier(event) else f"event.{event}"
             if _IDENTIFIER.fullmatch(identifier):
                 comparisons.append(f"{identifier} >= 1")
         elif condition.get("id") == "limit:max_episode_steps":

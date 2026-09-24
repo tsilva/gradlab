@@ -930,6 +930,26 @@ def test_stop_condition_does_not_supersede_explicit_continue_target() -> None:
     assert runner.stop_conditions.payload()["matched"] is None
 
 
+def test_dynamic_symbol_ambiguity_does_not_shorten_explicit_step() -> None:
+    from tests.test_play_trajectory import ScriptedSession
+
+    runner = WebPlaybackRunner(
+        ScriptedSession(length=5), human_args(episodes=0), config_text=""
+    )
+    runner._publish = Mock()
+    runner.stop_conditions.set_source("signal >= 10")
+    runner.stop_conditions.observe(events=("signal",), evaluate=False)
+    assert runner.stop_conditions.valid is False
+    runner._apply(PlaybackCommand("step", "client", "step", {"count": 2}, None))
+    assert runner.responses.get_nowait().payload["ok"] is True
+
+    runner._step_once()
+    runner._step_once()
+
+    assert runner.session.sequence == 2
+    assert runner.run_state == "paused"
+
+
 def test_episode_limit_remains_a_hard_stop_before_condition_matches() -> None:
     from tests.test_play_trajectory import ScriptedSession
 
