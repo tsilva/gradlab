@@ -3,6 +3,11 @@ defaults:
 - _self_
 goal_id: TwoWalls
 title: Clear both Breakout walls
+objective:
+  training_success:
+    metric: train/progress/bricks_destroyed_normalized/mean
+    operator: '>='
+    threshold: 1.0
 train:
   environment:
     task:

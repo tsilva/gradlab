@@ -18,7 +18,11 @@ from gradlab.config_validation import (
 from gradlab.experiment_contracts import validate_goal_contract_document
 from gradlab.env_registry import resolve_env_provider, validate_provider_constructor_args
 from gradlab.main import COMMANDS
-from gradlab.recipe_documents import compose_train_document, load_goal_contract
+from gradlab.recipe_documents import (
+    _load_rendered_goal_composition,
+    compose_train_document,
+    load_goal_contract,
+)
 from gradlab.recipe_schema import validate_materialized_train_recipe
 
 
@@ -448,7 +452,7 @@ class ConfigValidationTests(unittest.TestCase):
                     },
                 )
 
-        self.assertEqual(actor_critic_recipes, 40)
+        self.assertEqual(actor_critic_recipes, 41)
 
     def test_every_mario_recipe_disables_eval_and_stops_at_perfect_clear_window(self) -> None:
         mario_root = Path("experiments/goals/SuperMarioBros-Nes-v0")
@@ -567,7 +571,7 @@ class ConfigValidationTests(unittest.TestCase):
         ))
         self.assertEqual(sum(
             issue.path.endswith("_goal.yaml") for issue in report.issues
-        ), 13)
+        ), 12)
         self.assertEqual(report.counts["json_files"], 0)
         self.assertGreaterEqual(report.counts["yaml_files"], 15)
         self.assertGreaterEqual(report.counts["goals"], 1)
@@ -587,10 +591,6 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertTrue(recipes)
         for recipe in recipes:
             goal = recipe.parent.parent / "_goal.yaml"
-            if goal.parent.name == "TwoWalls":
-                with self.assertRaisesRegex(ValueError, "objective.training_success is required"):
-                    compose_train_document(goal, recipe)
-                continue
             document = compose_train_document(goal, recipe)
             self.assertEqual(
                 document["train_config"]["env_args"]["noop_reset_max"],
@@ -869,12 +869,30 @@ class ConfigValidationTests(unittest.TestCase):
         })
         self.assertNotIn("early_stop", document["train"])
 
+    def test_twowalls_declares_full_clear_training_success(self) -> None:
+        goal = self.BREAKOUT_GOAL.parent.parent / "TwoWalls/_goal.yaml"
+        document = load_goal_contract(goal)
+        self.assertEqual(document["objective"]["training_success"], {
+            "metric": "train/progress/bricks_destroyed_normalized/mean",
+            "operator": ">=",
+            "threshold": 1.0,
+        })
+
     def test_goal_without_success_criterion_cannot_launch(self) -> None:
         path = self.BREAKOUT_GOAL.resolve()
         document = load_goal_contract(path)
         del document["objective"]["training_success"]
         with self.assertRaisesRegex(ValueError, "objective.training_success is required"):
             validate_goal_contract_document(document, path, Path(".").resolve())
+
+        composition = _load_rendered_goal_composition(path)
+        del composition.document["objective"]["training_success"]
+        with patch(
+            "gradlab.recipe_documents._load_rendered_goal_composition",
+            return_value=composition,
+        ):
+            with self.assertRaisesRegex(ValueError, "objective.training_success is required"):
+                compose_train_document(self.BREAKOUT_GOAL, self.BREAKOUT_RECIPE)
 
     def test_goal_validator_rejects_environment_hash(self) -> None:
         path = self.MARIO_L11_GOAL.resolve()
@@ -1085,10 +1103,6 @@ class ConfigValidationTests(unittest.TestCase):
 
         for recipe in recipes:
             goal = recipe.parent.parent / "_goal.yaml"
-            if goal.parent.name == "TwoWalls":
-                with self.assertRaisesRegex(ValueError, "objective.training_success is required"):
-                    compose_train_document(goal, recipe)
-                continue
             document = compose_train_document(goal, recipe)
             event = "serve_stall" if "Breakout-Atari2600-v0" in goal.parts else "stalled"
             tasks = [("train", document["train_config"]["task"])]
