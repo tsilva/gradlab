@@ -20,12 +20,12 @@ permanent errors, shared Retry, and cursor/reference independence.
 
 ## Complete player
 
-Run `uv run --frozen python -m tests.web_player.fixtures.chart_player` and open the
-printed dashboard URL. The normal player starts paused at step 140. Its first
-chart request fails with HTTP 503, then automatically recovers. `--chart-delay`
-sets response latency in seconds; `--chart-failures` sets how many requests fail.
-The terminal logs requests so cancellation and demand can be checked without
-reading application internals.
+Run `uv run --frozen python -m tests.web_player.fixtures.chart_player`. It prints
+separate Player and Stats URLs; open the view needed by the check. The Player
+starts paused at step 140. Its first chart request fails with HTTP 503, then
+automatically recovers. `--chart-delay` sets response latency in seconds;
+`--chart-failures` sets how many requests fail. The terminal logs requests so
+cancellation and demand can be checked without reading application internals.
 
 Exercise these sequences:
 
