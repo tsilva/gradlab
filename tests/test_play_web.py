@@ -833,8 +833,18 @@ def test_manual_pause_and_resume_preserve_stop_condition_counts() -> None:
     runner._publish = Mock()
     runner._begin_capture = Mock()
     runner._begin_recording = Mock()
-    runner.stop_conditions.set_source("episode.terminated == 2")
-    runner.run_state = "playing"
+    runner._apply(
+        PlaybackCommand(
+            "condition",
+            "client",
+            "set_stop_condition",
+            {"source": "episode.terminated == 2"},
+            None,
+        )
+    )
+    assert runner.responses.get_nowait().payload["ok"] is True
+    runner._apply(PlaybackCommand("play", "client", "play", {}, None))
+    assert runner.responses.get_nowait().payload["ok"] is True
 
     runner._step_once()
     runner._apply(PlaybackCommand("pause", "client", "pause", {}, None))
@@ -845,6 +855,37 @@ def test_manual_pause_and_resume_preserve_stop_condition_counts() -> None:
 
     assert runner.run_state == "paused"
     assert runner.stop_conditions.payload()["values"]["episode.terminated"] == 2
+
+
+def test_first_play_starts_a_fresh_generation_after_preflight_steps() -> None:
+    from tests.test_play_trajectory import ScriptedSession
+
+    runner = WebPlaybackRunner(
+        ScriptedSession(length=1), human_args(episodes=0), config_text=""
+    )
+    runner._publish = Mock()
+    runner._begin_capture = Mock()
+    runner._begin_recording = Mock()
+    runner._apply(
+        PlaybackCommand(
+            "condition",
+            "client",
+            "set_stop_condition",
+            {"source": "episode.terminated == 2"},
+            None,
+        )
+    )
+    assert runner.responses.get_nowait().payload["ok"] is True
+    runner._apply(PlaybackCommand("step", "client", "step", {"count": 1}, None))
+    assert runner.responses.get_nowait().payload["ok"] is True
+    runner._step_once()
+    assert runner.stop_conditions.payload()["values"]["episode.terminated"] == 1
+
+    runner._apply(PlaybackCommand("play", "client", "play", {}, None))
+
+    assert runner.responses.get_nowait().payload["ok"] is True
+    assert runner.run_state == "playing"
+    assert runner.stop_conditions.payload()["values"]["episode.terminated"] == 0
 
 
 def test_episode_limit_remains_a_hard_stop_before_condition_matches() -> None:

@@ -250,6 +250,7 @@ class PlaybackStopController:
         self._signals: dict[str, float | None] = {}
         self._episode_counts: Counter[str] = Counter()
         self.last_match: StopMatch | None = None
+        self._generation_active = False
         self.set_source(source)
 
     @property
@@ -261,11 +262,17 @@ class PlaybackStopController:
         self.reset()
         self._compile()
 
+    def start_generation(self) -> None:
+        if not self._generation_active:
+            self.reset()
+            self._generation_active = True
+
     def reset(self) -> None:
         self._event_counts = Counter({name: 0 for name in self._event_names})
         self._signals = {name: None for name in self._signal_names}
         self._episode_counts = Counter({name: 0 for name in EPISODE_SYMBOLS})
         self.last_match = None
+        self._generation_active = False
 
     def observe(
         self,
@@ -306,6 +313,7 @@ class PlaybackStopController:
         values: dict[str, float | int] = {}
         self._collect_values(self._expression, values)
         self.last_match = StopMatch(self.source, values)
+        self._generation_active = False
         return self.last_match
 
     def payload(self) -> dict[str, object]:
