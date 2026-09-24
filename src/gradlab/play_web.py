@@ -1972,11 +1972,8 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                         raise ValueError(f"episode limit reached ({self.boundaries})")
                     if self.recording_enabled:
                         raise ValueError("recorded episode complete; reset before recording again")
-                    if self.stop_conditions.last_match is not None:
-                        self.stop_conditions.reset()
                     self._prepare_next_episode()
-                elif self.stop_conditions.last_match is not None:
-                    self.stop_conditions.reset()
+                self.stop_conditions.start_generation()
                 self._set_state("playing")
             elif command.name == "step":
                 self._require_active_episode()
