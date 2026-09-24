@@ -313,6 +313,20 @@ test("stop-condition autocomplete understands expression context", () => {
     stopConditionSuggestions("x_pos >= 3000 ", 14, symbols).items.map((item) => item.value),
     ["and", "or"],
   );
+  for (const source of [
+    "episode.terminated >=",
+    "episode.terminated >= ",
+    "episode.terminated >= -",
+    "episode.terminated >= 1e",
+    "x_pos >= nope",
+    "x_pos >= 1 or episode.truncated >=",
+  ]) {
+    assert.deepEqual(
+      stopConditionSuggestions(source, source.length, symbols).items,
+      [],
+      source,
+    );
+  }
   assert.deepEqual(
     applyStopConditionSuggestion("episode.t", 9, 0, 9, "episode.terminated"),
     { source: "episode.terminated", cursor: 18 },
