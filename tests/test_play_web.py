@@ -888,6 +888,48 @@ def test_first_play_starts_a_fresh_generation_after_preflight_steps() -> None:
     assert runner.stop_conditions.payload()["values"]["episode.terminated"] == 0
 
 
+def test_stop_condition_does_not_shorten_explicit_step() -> None:
+    from tests.test_play_trajectory import ScriptedSession
+
+    runner = WebPlaybackRunner(
+        ScriptedSession(length=5), human_args(episodes=0), config_text=""
+    )
+    runner._publish = Mock()
+    runner.stop_conditions.set_source("signal >= 1")
+    runner._apply(PlaybackCommand("step", "client", "step", {"count": 3}, None))
+    assert runner.responses.get_nowait().payload["ok"] is True
+
+    runner._step_once()
+    runner._step_once()
+    runner._step_once()
+
+    assert runner.session.sequence == 3
+    assert runner.run_state == "paused"
+    assert runner.stop_conditions.payload()["matched"] is None
+
+
+def test_stop_condition_does_not_supersede_explicit_continue_target() -> None:
+    from tests.test_play_trajectory import ScriptedSession
+
+    runner = WebPlaybackRunner(
+        ScriptedSession(length=3), human_args(episodes=0), config_text=""
+    )
+    runner._publish = Mock()
+    runner.stop_conditions.set_source("signal >= 1")
+    runner._apply(
+        PlaybackCommand("continue", "client", "continue", {"target": "done"}, None)
+    )
+    assert runner.responses.get_nowait().payload["ok"] is True
+
+    runner._step_once()
+    runner._step_once()
+    runner._step_once()
+
+    assert runner.session.sequence == 3
+    assert runner.run_state == "paused"
+    assert runner.stop_conditions.payload()["matched"] is None
+
+
 def test_episode_limit_remains_a_hard_stop_before_condition_matches() -> None:
     from tests.test_play_trajectory import ScriptedSession
 
@@ -1997,6 +2039,7 @@ def test_youtube_oauth_callback_returns_to_authenticated_player(
 def test_loopback_server_requires_exact_origin_and_fragment_token() -> None:
     async def scenario() -> None:
         runner = HumanRecordingRunner(FakeHumanSession(), human_args())
+        runner.submit = Mock(wraps=runner.submit)
         server = PlaybackWebServer(runner, human_args())
         task = asyncio.create_task(server.run())
         try:
@@ -2129,6 +2172,10 @@ def test_loopback_server_requires_exact_origin_and_fragment_token() -> None:
                 assert acquired_snapshot is not None
                 assert acquired_snapshot["control"]["has_control"] is True
                 assert acquired_snapshot["control_epoch"] > observer_snapshot["control_epoch"]
+                assert any(
+                    call.args[0].name == "pause"
+                    for call in runner.submit.call_args_list
+                )
 
                 sibling = await client.ws_connect(f"{server.origin}/ws", origin=server.origin)
                 await sibling.send_json(

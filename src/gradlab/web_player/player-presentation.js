@@ -76,7 +76,7 @@ export function transportPresentation({
       : !conditionValid ? "Fix the stop condition before playing"
         : limitReached ? "The configured episode limit has been reached"
           : recording ? "The recorded episode is complete"
-            : session.awaiting_next_episode ? "Start the next run"
+            : session.awaiting_next_episode ? "Start the next episode"
               : "Play the current episode",
   };
 }

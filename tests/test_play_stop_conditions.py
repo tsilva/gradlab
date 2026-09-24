@@ -90,6 +90,23 @@ def test_ambiguous_short_name_requires_an_explicit_qualified_identifier() -> Non
     assert explicit.observe(events=("score",), signals={"score": 10}) is not None
 
 
+def test_project_safe_symbol_names_are_parseable_and_qualified_when_needed() -> None:
+    controller = PlaybackStopController(
+        event_names=("level-1.complete", "123-ready"),
+        signal_names=("123-ready",),
+        source="level-1.complete >= 1 and event.123-ready >= 1",
+    )
+
+    payload = controller.payload()
+    assert payload["valid"] is True
+    assert {symbol["name"] for symbol in payload["symbols"]} >= {
+        "level-1.complete",
+        "event.123-ready",
+        "signal.123-ready",
+    }
+    assert controller.observe(events=("level-1.complete", "123-ready")) is not None
+
+
 def test_invalid_source_is_retained_with_a_structured_error_and_cannot_match() -> None:
     controller = PlaybackStopController(
         event_names=("life_loss",),
@@ -183,4 +200,7 @@ def test_default_expression_preserves_enabled_termination_choices() -> None:
             {"id": "limit:max_episode_steps", "event": None, "enabled": True},
         )
     ) == "level_complete >= 1 or episode.truncated >= 1"
+    assert default_stop_expression(
+        ({"id": "event:123-ready", "event": "123-ready", "enabled": True},)
+    ) == "event.123-ready >= 1"
     assert default_stop_expression(()) == "episode.boundary >= 1"

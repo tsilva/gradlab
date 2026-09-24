@@ -1828,7 +1828,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
 
     def _require_active_episode(self) -> None:
         if self.awaiting_next_episode:
-            raise ValueError("episode complete; press Play to start the next run")
+            raise ValueError("episode complete; press Play to start the next episode")
 
     def _prepare_next_episode(self) -> None:
         self.session.last_transition = None
@@ -1843,6 +1843,12 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
     def _stop_match_message(values: Mapping[str, object]) -> str:
         facts = " · ".join(f"{name} = {value:g}" for name, value in values.items())
         return f"stop condition matched · {facts}" if facts else "stop condition matched"
+
+    def _pause_after_transition(self, message: str) -> None:
+        self.remaining_steps = 0
+        self.continue_target = None
+        self.run_state = "paused"
+        self._status_message = message
 
     def _apply(self, command: PlaybackCommand) -> None:
         if (
@@ -2095,41 +2101,32 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             terminated=transition.terminated,
             truncated=transition.truncated,
             boundary=transition.boundary,
+            evaluate=self.run_state == "playing",
         )
         if not self.stop_conditions.valid:
-            self.remaining_steps = 0
-            self.continue_target = None
-            self.run_state = "paused"
             detail = (
                 self.stop_conditions.error.message
                 if self.stop_conditions.error is not None
                 else "invalid expression"
             )
-            self._status_message = f"stop condition became invalid: {detail}"
+            self._pause_after_transition(f"stop condition became invalid: {detail}")
         elif transition.boundary:
             self.boundaries += 1
             self.awaiting_next_episode = True
             self.remaining_steps = 0
             self.continue_target = None
             if not self._can_start_next_episode():
-                self.run_state = "paused"
-                self._status_message = f"episode limit reached ({self.boundaries})"
+                self._pause_after_transition(f"episode limit reached ({self.boundaries})")
             elif stop_match is not None:
-                self.run_state = "paused"
-                self._status_message = self._stop_match_message(stop_match.values)
+                self._pause_after_transition(self._stop_match_message(stop_match.values))
             elif self.recording_enabled:
-                self.run_state = "paused"
-                self._status_message = "recorded episode complete"
+                self._pause_after_transition("recorded episode complete")
             elif self.run_state == "playing":
                 self._status_message = None
             else:
-                self.run_state = "paused"
-                self._status_message = "episode complete"
+                self._pause_after_transition("episode complete")
         elif stop_match is not None:
-            self.remaining_steps = 0
-            self.continue_target = None
-            self.run_state = "paused"
-            self._status_message = self._stop_match_message(stop_match.values)
+            self._pause_after_transition(self._stop_match_message(stop_match.values))
         elif self.run_state == "stepping":
             self.remaining_steps -= 1
             if self.remaining_steps <= 0:
@@ -4185,6 +4182,26 @@ class PlaybackWebServer:
                         self.control_holder != client.workspace_id
                         or self.publication_authority_client_id != client.client_id
                     ):
+                        if self.control_holder != client.workspace_id:
+                            try:
+                                await asyncio.to_thread(
+                                    self.runner.submit,
+                                    PlaybackCommand(
+                                        uuid.uuid4().hex,
+                                        client.client_id,
+                                        "pause",
+                                        {},
+                                        None,
+                                    ),
+                                )
+                            except queue.Full:
+                                client.offer_reliable(
+                                    {
+                                        "type": "error",
+                                        "error": "cannot transfer control while the command queue is full",
+                                    }
+                                )
+                                continue
                         self.control_holder = client.workspace_id
                         self.input_holder = None
                         self.control_epoch += 1

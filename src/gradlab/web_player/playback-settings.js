@@ -17,14 +17,15 @@ export function stopConditionSuggestions(source, cursor, symbols = []) {
   const text = String(source || "");
   const end = Math.max(0, Math.min(text.length, Number(cursor) || 0));
   const before = text.slice(0, end);
-  const fragment = before.match(/[A-Za-z_][A-Za-z0-9_.]*$/)?.[0] || "";
+  const fragment = before.match(/[A-Za-z_][A-Za-z0-9_.-]*$/)?.[0] || "";
   const from = end - fragment.length;
+  const suffix = text.slice(end).match(/^[A-Za-z0-9_.-]*/)?.[0] || "";
   const prefix = before.slice(0, from).trimEnd();
-  const comparison = /(?:^|\(|\band\b|\bor\b)\s*[A-Za-z_][A-Za-z0-9_.]*\s*(?:==|!=|<=|>=|<|>)\s*[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][+-]?\d+)?\s*$/;
+  const comparison = /(?:^|\(|\band\b|\bor\b)\s*[A-Za-z_][A-Za-z0-9_.-]*\s*(?:==|!=|<=|>=|<|>)\s*[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][+-]?\d+)?\s*$/;
   let candidates;
   if (comparison.test(before)) {
     candidates = ["and", "or"].map((value) => ({ value, kind: "keyword" }));
-  } else if (/(?:^|\(|\band\b|\bor\b)\s*[A-Za-z_][A-Za-z0-9_.]*\s*$/.test(before)
+  } else if (/(?:^|\(|\band\b|\bor\b)\s*[A-Za-z_][A-Za-z0-9_.-]*\s*$/.test(before)
     && !/(?:^|\(|\band\b|\bor\b)\s*$/.test(prefix)) {
     candidates = COMPARISON_OPERATORS.map((value) => ({ value, kind: "operator" }));
   } else {
@@ -40,7 +41,7 @@ export function stopConditionSuggestions(source, cursor, symbols = []) {
   const items = candidates.filter((item) => (
     !normalized || item.value.toLowerCase().startsWith(normalized)
   ));
-  return { from, to: end, items };
+  return { from, to: end + suffix.length, items };
 }
 
 export function applyStopConditionSuggestion(source, cursor, from, to, value) {

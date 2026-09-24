@@ -70,7 +70,7 @@ test("one contextual transport uses Play for every live paused state", () => {
       label: "Play",
       icon: "player-play",
       disabled: false,
-      reason: "Start the next run",
+    reason: "Start the next episode",
     },
   );
   const exhausted = transportPresentation({
@@ -310,6 +310,17 @@ test("stop-condition autocomplete understands expression context", () => {
   assert.deepEqual(
     applyStopConditionSuggestion("episode.t", 9, 0, 9, "episode.terminated"),
     { source: "episode.terminated", cursor: 18 },
+  );
+  const middle = stopConditionSuggestions("episode.terminated == 2", 9, symbols);
+  assert.deepEqual(
+    applyStopConditionSuggestion(
+      "episode.terminated == 2",
+      9,
+      middle.from,
+      middle.to,
+      "episode.terminated",
+    ),
+    { source: "episode.terminated == 2", cursor: 18 },
   );
 });
 
