@@ -1709,6 +1709,7 @@ select {
 .stop-condition-suggestions {
   position: fixed;
   z-index: 100;
+  transform: translateY(-100%);
   display: grid;
   overflow: auto;
   box-sizing: border-box;
