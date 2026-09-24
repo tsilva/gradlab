@@ -20,12 +20,12 @@ permanent errors, shared Retry, and cursor/reference independence.
 
 ## Complete player
 
-Run `uv run --frozen python -m tests.web_player.fixtures.chart_player` and open the
-printed dashboard URL. The normal player starts paused at step 140. Its first
-chart request fails with HTTP 503, then automatically recovers. `--chart-delay`
-sets response latency in seconds; `--chart-failures` sets how many requests fail.
-The terminal logs requests so cancellation and demand can be checked without
-reading application internals.
+Run `uv run --frozen python -m tests.web_player.fixtures.chart_player`. It prints
+separate Player and Stats URLs; open the view needed by the check. The Player
+starts paused at step 140. Its first chart request fails with HTTP 503, then
+automatically recovers. `--chart-delay` sets response latency in seconds;
+`--chart-failures` sets how many requests fail. The terminal logs requests so
+cancellation and demand can be checked without reading application internals.
 
 Exercise these sequences:
 
@@ -41,6 +41,12 @@ Exercise these sequences:
   "Exit fullscreen test" button for browser drivers whose Escape stays in the page.
 - Play, pause, and replace the episode. Live points must extend recorded history;
   replacement must remove the old plot and reset zoom to the full episode.
+- For stop-condition verification, start with `--recorded-steps 0
+  --episode-length 2`, enter `episode.terminated == 2` in Playback settings, and
+  press Play. The player must cross the first boundary, stop on the second, and
+  report the matching counter value. Invalid text must show an inline error and
+  disable Play; autocomplete must expose its combobox/listbox state and support
+  Arrow/Enter/Tab/Escape.
 
 The scripted session intentionally omits some Policy diagnostics. Unavailable or
 incomparable diagnostics are fixture data, not evidence of a solved Research Goal.

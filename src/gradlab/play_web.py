@@ -40,6 +40,7 @@ from gradlab.play_processing import (
     PLAYER_PROCESSING_FEATURES,
     normalize_player_processing,
 )
+from gradlab.play_stop_conditions import PlaybackStopController, default_stop_expression
 from gradlab.seeds import validate_playback_seed
 from gradlab.reward_transform import reward_transform_from_reward
 from gradlab.play_capture import EpisodeCaptureManager
@@ -57,7 +58,7 @@ from gradlab.youtube_publication import (
 )
 
 
-PROTOCOL_VERSION = 8
+PROTOCOL_VERSION = 9
 HISTORY_LIMIT = 4096
 COMMAND_QUEUE_LIMIT = 64
 CLIENT_QUEUE_LIMIT = 64
@@ -1007,6 +1008,24 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         self.continue_count = 0
         self.boundaries = 0
         self.awaiting_next_episode = False
+        termination_conditions = list(getattr(session, "termination_conditions", ()))
+        event_names = {
+            str(condition["event"])
+            for condition in termination_conditions
+            if isinstance(condition, Mapping) and condition.get("event")
+        }
+        try:
+            event_names.update(str(name) for name in session.env.runtime.kernel.event_names)
+        except AttributeError:
+            pass
+        signal_names = {
+            str(name) for name in getattr(session, "info_vars", ()) if str(name)
+        }
+        self.stop_conditions = PlaybackStopController(
+            event_names=event_names,
+            signal_names=signal_names,
+            source=default_stop_expression(termination_conditions),
+        )
         self._input_lock = threading.Lock()
         self._pressed: tuple[str, ...] = ()
         self._input_updated_at = 0.0
@@ -1660,6 +1679,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                     "training",
                 ),
                 "termination_conditions": list(getattr(self.session, "termination_conditions", ())),
+                "stop_condition": self.stop_conditions.payload(),
                 "playback_contract": dict(self.contract_details),
                 "critic_comparison": {
                     "available": not comparison_reasons,
@@ -1808,13 +1828,27 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
 
     def _require_active_episode(self) -> None:
         if self.awaiting_next_episode:
-            raise ValueError("episode complete; choose Play next episode")
+            raise ValueError("episode complete; press Play to start the next episode")
+
+    def _prepare_next_episode(self) -> None:
+        self.session.last_transition = None
+        self.clear_input()
+        self.awaiting_next_episode = False
+        self.remaining_steps = 0
+        self.continue_target = None
+        if not self.recording_enabled:
+            self._begin_recording()
 
     @staticmethod
-    def _validate_enabled_termination_conditions(enabled: object) -> list[str]:
-        if not isinstance(enabled, list) or any(not isinstance(value, str) for value in enabled):
-            raise ValueError("enabled termination conditions must be a list of ids")
-        return enabled
+    def _stop_match_message(values: Mapping[str, object]) -> str:
+        facts = " · ".join(f"{name} = {value:g}" for name, value in values.items())
+        return f"stop condition matched · {facts}" if facts else "stop condition matched"
+
+    def _pause_after_transition(self, message: str) -> None:
+        self.remaining_steps = 0
+        self.continue_target = None
+        self.run_state = "paused"
+        self._status_message = message
 
     def _apply(self, command: PlaybackCommand) -> None:
         if (
@@ -1932,7 +1966,20 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                     message=f"next action selection · {mode}",
                 )
             elif command.name == "play":
-                self._require_active_episode()
+                if not self.stop_conditions.valid:
+                    detail = (
+                        self.stop_conditions.error.message
+                        if self.stop_conditions.error is not None
+                        else "invalid expression"
+                    )
+                    raise ValueError(f"stop condition is invalid: {detail}")
+                if self.awaiting_next_episode:
+                    if not self._can_start_next_episode():
+                        raise ValueError(f"episode limit reached ({self.boundaries})")
+                    if self.recording_enabled:
+                        raise ValueError("recorded episode complete; reset before recording again")
+                    self._prepare_next_episode()
+                self.stop_conditions.start_generation()
                 self._set_state("playing")
             elif command.name == "step":
                 self._require_active_episode()
@@ -1948,43 +1995,6 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 self.continue_count = 0
                 self.remaining_steps = 0
                 self._set_state("continuing")
-            elif command.name == "next_episode":
-                if not self.awaiting_next_episode:
-                    raise ValueError("the current episode is still active")
-                if not self._can_start_next_episode():
-                    raise ValueError(f"episode limit reached ({self.boundaries})")
-                mode = str(command.payload.get("sampling_mode") or self.sampling_mode)
-                if mode not in self.supported_action_selection_modes:
-                    supported = ", ".join(self.supported_action_selection_modes) or "none"
-                    raise ValueError(
-                        f"unsupported action-selection mode {mode!r}; supported: {supported}"
-                    )
-                driver = str(command.payload.get("driver") or self.driver)
-                if driver not in {"policy", "human"}:
-                    raise ValueError(f"unsupported driver {driver!r}")
-                enabled_termination_conditions = command.payload.get(
-                    "enabled_termination_conditions"
-                )
-                if enabled_termination_conditions is not None:
-                    self.session.set_termination_conditions(
-                        self._validate_enabled_termination_conditions(
-                            enabled_termination_conditions
-                        )
-                    )
-                self.session.last_transition = None
-                self.temperature_changed = self.sampling_temperature != 1.0
-                self.sampling_mode = mode
-                self.driver = driver
-                self.clear_input()
-                self.awaiting_next_episode = False
-                self.remaining_steps = 0
-                self.continue_target = None
-                self._begin_capture()
-                self._begin_recording()
-                self._set_state(
-                    "playing",
-                    message="playing next episode",
-                )
             elif command.name == "reset_episode":
                 if self.awaiting_next_episode and not self._can_start_next_episode():
                     raise ValueError(f"episode limit reached ({self.boundaries})")
@@ -1992,21 +2002,13 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 if isinstance(seed_value, bool):
                     raise ValueError("seed must be an integer")
                 seed = None if seed_value in {None, ""} else validate_playback_seed(int(seed_value))
-                enabled_termination_conditions = command.payload.get(
-                    "enabled_termination_conditions"
-                )
-                if enabled_termination_conditions is not None:
-                    enabled_termination_conditions = self._validate_enabled_termination_conditions(
-                        enabled_termination_conditions
-                    )
                 self.temperature_changed = self.sampling_temperature != 1.0
                 self.session.reset_episode(seed)
-                if enabled_termination_conditions is not None:
-                    self.session.set_termination_conditions(enabled_termination_conditions)
                 self.clear_input()
                 self.awaiting_next_episode = False
                 self.remaining_steps = 0
                 self.continue_target = None
+                self.stop_conditions.reset()
                 self._begin_capture()
                 self._begin_recording()
                 self._set_state(
@@ -2023,33 +2025,14 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 )
                 self.revision += 1
                 self._publish(self.session.last_transition)
-            elif command.name == "set_termination_conditions":
-                if self.session.step_index != 0 and not self.awaiting_next_episode:
-                    raise ValueError(
-                        "termination conditions can change before the first step "
-                        "or between episodes"
-                    )
-                enabled = self._validate_enabled_termination_conditions(
-                    command.payload.get("enabled")
-                )
-                was_awaiting_next_episode = self.awaiting_next_episode
-                self.session.set_termination_conditions(enabled)
-                self.session.last_transition = None
-                self.awaiting_next_episode = was_awaiting_next_episode
-                self.remaining_steps = 0
-                self.continue_target = None
-                self.clear_input()
-                self.capture.abort("custom episode termination conditions are not publishable")
-                if not self.awaiting_next_episode:
-                    self._begin_recording()
-                self._set_state(
-                    "paused",
-                    message=(
-                        "termination conditions applied · choose Play next episode"
-                        if self.awaiting_next_episode
-                        else "termination conditions applied · episode ready"
-                    ),
-                )
+            elif command.name == "set_stop_condition":
+                if self.run_state != "paused":
+                    raise ValueError("pause playback before editing the stop condition")
+                source = command.payload.get("source")
+                if not isinstance(source, str):
+                    raise ValueError("stop condition source must be text")
+                self.stop_conditions.set_source(source)
+                self._set_state("paused")
             elif command.name == "stop":
                 self._response(command, ok=True)
                 self._stop.set()
@@ -2112,16 +2095,38 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             return None
         self.revision += 1
         self.capture.record_transition(transition)
-        if transition.boundary:
+        stop_match = self.stop_conditions.observe(
+            events=transition.events,
+            signals=transition.info,
+            terminated=transition.terminated,
+            truncated=transition.truncated,
+            boundary=transition.boundary,
+            evaluate=self.run_state == "playing",
+        )
+        if not self.stop_conditions.valid and self.run_state == "playing":
+            detail = (
+                self.stop_conditions.error.message
+                if self.stop_conditions.error is not None
+                else "invalid expression"
+            )
+            self._pause_after_transition(f"stop condition became invalid: {detail}")
+        elif transition.boundary:
             self.boundaries += 1
             self.awaiting_next_episode = True
             self.remaining_steps = 0
             self.continue_target = None
-            self.run_state = "paused"
-            if self._can_start_next_episode():
-                self._status_message = "episode complete · choose Play next episode"
+            if not self._can_start_next_episode():
+                self._pause_after_transition(f"episode limit reached ({self.boundaries})")
+            elif stop_match is not None:
+                self._pause_after_transition(self._stop_match_message(stop_match.values))
+            elif self.recording_enabled:
+                self._pause_after_transition("recorded episode complete")
+            elif self.run_state == "playing":
+                self._status_message = None
             else:
-                self._status_message = f"episode limit reached ({self.boundaries})"
+                self._pause_after_transition("episode complete")
+        elif stop_match is not None:
+            self._pause_after_transition(self._stop_match_message(stop_match.values))
         elif self.run_state == "stepping":
             self.remaining_steps -= 1
             if self.remaining_steps <= 0:
@@ -2145,6 +2150,10 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             current=current,
             paced=self.run_state in {"playing", "stepping", "continuing"},
         )
+        if transition.boundary and self.run_state == "playing":
+            self._prepare_next_episode()
+            self.revision += 1
+            self._publish(None, paced=False)
         return transition
 
     def _run(self) -> None:
@@ -4173,6 +4182,26 @@ class PlaybackWebServer:
                         self.control_holder != client.workspace_id
                         or self.publication_authority_client_id != client.client_id
                     ):
+                        if self.control_holder != client.workspace_id:
+                            try:
+                                await asyncio.to_thread(
+                                    self.runner.submit,
+                                    PlaybackCommand(
+                                        uuid.uuid4().hex,
+                                        client.client_id,
+                                        "pause",
+                                        {},
+                                        None,
+                                    ),
+                                )
+                            except queue.Full:
+                                client.offer_reliable(
+                                    {
+                                        "type": "error",
+                                        "error": "cannot transfer control while the command queue is full",
+                                    }
+                                )
+                                continue
                         self.control_holder = client.workspace_id
                         self.input_holder = None
                         self.control_epoch += 1

@@ -58,16 +58,27 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--assets-root", type=Path)
     parser.add_argument("--recorded-steps", type=int, default=140)
+    parser.add_argument(
+        "--episode-length",
+        type=int,
+        help="Override the synthetic episode length for stop-condition verification",
+    )
     parser.add_argument("--chart-delay", type=float, default=0.3)
     parser.add_argument("--chart-failures", type=int, default=1)
     parser.add_argument("--imported", action="store_true", help="Inspect an exported data-only recording")
     args = parser.parse_args()
+    if args.episode_length is not None and args.episode_length < 1:
+        parser.error("--episode-length must be at least 1")
     args.port, args.no_open, args.episodes, args.fps = 0, True, 0, 20
     with TemporaryDirectory(prefix="gradlab-chart-player-") as temporary:
         root = Path(temporary)
         write_bundle(root)
         runner = WebPlaybackRunner(
-            BrowserSession(length=max(1000, args.recorded_steps + 1000)), args, config_text="game: Game-v0",
+            BrowserSession(
+                length=args.episode_length or max(1000, args.recorded_steps + 1000)
+            ),
+            args,
+            config_text="game: Game-v0",
             trajectory_bundle=load_policy_bundle(root),
         )
         if args.imported:
@@ -83,7 +94,9 @@ def main():
             runner._load_step(args.recorded_steps)
 
         async def serve():
-            server = asyncio.create_task(ChartPlayer(runner, args).run())
+            server = asyncio.create_task(
+                ChartPlayer(runner, args, paired_windows=True).run()
+            )
             while not runner._thread.is_alive():
                 await asyncio.sleep(0.01)
             if not args.imported:
