@@ -31,11 +31,21 @@ class ScriptedSession:
         self.total_reward = 0.0
         self.max_x_pos = 0
         self.action_names = ("noop", "right")
+        self.info_vars = ("signal",)
         self.interactive = False
         self.last_transition = None
         self.current_frame = np.zeros((2, 3, 3), dtype=np.uint8)
         self.frames = ()
         self.model = Namespace(gamma=0.9)
+
+    def reset_episode(self, seed=None):
+        if seed is not None:
+            self.active_seed = seed
+        self.step_index = 0
+        self.total_reward = 0.0
+        self.max_x_pos = 0
+        self.last_transition = None
+        self.current_frame = np.zeros((2, 3, 3), dtype=np.uint8)
 
     def step(self, *, deterministic):
         self.sequence += 1
@@ -284,7 +294,7 @@ def test_unfinished_download_survives_replacement_and_opens_in_isolated_worker(t
         frozen = runner.freeze_trajectory()
         command(runner, "step", count=2)
         wait_step(runner, 4)
-        command(runner, "next_episode")
+        command(runner, "reset_episode", seed="")
         runner.stop()
         archive = export_trajectory(frozen, tmp_path / "prefix.trj")
         host.start()
@@ -835,29 +845,25 @@ def test_evaluation_reproduction_requires_the_recorded_evaluation_seed(
             imported.stop()
 
 
-def test_pre_episode_boundary_edits_are_recorded_and_one_transition_can_replay(tmp_path):
+def test_stop_condition_edits_do_not_rewrite_recorded_environment(tmp_path):
     from gradlab.play_trajectory import export_trajectory
     from gradlab.play_trajectory_runner import TrajectoryPlaybackRunner
 
     runner = live_runner(tmp_path, length=1)
-    session = runner.session
-    session.termination_base_config = dict(session.config)
-
-    def change_conditions(enabled):
-        session.config = {**session.config, "task": {"termination": enabled}}
-
-    session.set_termination_conditions = change_conditions
+    original_config = dict(runner.session.config)
     imported = None
     try:
-        command(runner, "set_termination_conditions", enabled=["custom_boundary"])
+        command(runner, "set_stop_condition", source="episode.boundary >= 1")
         command(runner, "step", count=1)
         wait_step(runner, 1)
         archive = export_trajectory(runner.freeze_trajectory(), tmp_path / "boundary.trj")
         imported = TrajectoryPlaybackRunner(archive, runner.args)
-        assert imported.metadata["resolved_environment"]["task"]["termination"] == [
-            "custom_boundary"
-        ]
-        assert imported.metadata["classification"] == "counterfactual"
+        assert imported.metadata["resolved_environment"] == original_config
+        assert imported.metadata["classification"] == "faithful"
+        assert (
+            imported.metadata["initial_snapshot"]["session"]["stop_condition"]["source"]
+            == "episode.boundary >= 1"
+        )
         imported.start()
         command(imported, "seek", step=1)
         command(imported, "replay")

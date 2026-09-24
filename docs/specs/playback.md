@@ -2,6 +2,12 @@
 
 This specification applies to the public checkpoint browser and interactive web player.
 
+## Stop-condition reference
+
+![Reference design for expression-based Stop conditions in Playback settings](https://github.com/user-attachments/assets/ef32bfe2-1571-442d-8215-08ba8221c984)
+
+The stop-condition editor belongs as the final section of the existing Playback settings modal, using one multiline expression field with contextual suggestions rather than a separate dialog or Run-until workflow.
+
 ## Discovery
 
 - `gradlab play --latest` must open the highest-step published Checkpoint from the newest Run by creation time that has a published Checkpoint directly in the player, paused; skip Runs without published Checkpoints and report when none are available.
@@ -33,7 +39,8 @@ This specification applies to the public checkpoint browser and interactive web 
 - Users must be able to change the active Policy’s supported action-selection mode at any point, taking effect on the next Policy decision without resetting or otherwise altering the existing trajectory.
 - History charts must show the full recorded episode by default. Dragging with the primary mouse button selects a shared step window across history panels; the playbar must show the selected window offsets, and users must be able to reset to the full episode. Seeking must preserve the selected chart window.
 - Inspection must not alter the active trajectory or Policy randomness.
-- Pause must stop both Playback and Policy inference. Play must advance recorded Playback from the selected cursor and resume unfinished Policy inference from the live head, even when the cursor is behind it; scrubbing while paused must not run either. Episode boundaries, storage limits, execution errors, and human-control safety must still stop execution when required.
+- Pause must stop both Playback and Policy inference. Play must advance recorded Playback from the selected cursor and resume unfinished Policy inference from the live head, even when the cursor is behind it; scrubbing while paused must not run either.
+- Live Playback settings must expose one safely parsed stop-condition expression with context-aware autocomplete over event counters, episode counters, and numeric signals, supporting comparisons, `and`, `or`, and parentheses. Play must continue across episode boundaries until that expression matches; storage limits, execution errors, configured episode limits, and human-control safety must still stop execution. Pause must suspend Playback and Policy inference without clearing the active stop-condition counters.
 - Recorded episodes must remain seekable from their first captured step as they grow, with bounded memory, synchronized recorded frames and diagnostics, and step navigation through the playbar. Reaching the episode storage limit must pause Playback and preserve captured steps until the user replaces the episode.
 - Full episode recording must be off by default and start only when the user chooses Record; ordinary Playback must retain a smaller temporary step store for seeking and inspection.
 - Leaving Player through Back or closing its window must remove that session's temporary step store, recording, and prepared downloads from disk.

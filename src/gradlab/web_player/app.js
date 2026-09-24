@@ -816,7 +816,8 @@ function updateTimelinePlaybackControl() {
     hasControl: state.hasControl,
     canReplay: inspection.view.canReplay || Boolean(inspection.view.liveSnapshot?.trajectory?.imported && session.awaiting_next_episode),
     session,
-    recording: (inspection.view.liveSnapshot?.mode || inspection.view.snapshot?.mode) === "recording",
+    recording: (inspection.view.liveSnapshot?.mode || inspection.view.snapshot?.mode) === "recording"
+      || Boolean(inspection.view.liveSnapshot?.trajectory?.enabled && session.awaiting_next_episode),
   });
   Object.assign(shellState.transport, presentation);
   const mode = inspection.view.liveSnapshot?.mode || inspection.view.snapshot?.mode;
@@ -1587,13 +1588,6 @@ function bindTimeline() {
     const action = event.currentTarget.dataset.action;
     if (action === "pause") {
       inspection.pause();
-    } else if (action === "next_episode") {
-      const options = playbackSettings?.episodeOptions() || {};
-      command("next_episode", {
-        sampling_mode: options.sampling_mode,
-        driver: "policy",
-        enabled_termination_conditions: options.enabled_termination_conditions,
-      });
     } else {
       inspection.play();
     }
@@ -1602,7 +1596,6 @@ function bindTimeline() {
     const options = playbackSettings?.episodeOptions() || {};
     command("reset_episode", {
       seed: options.seed,
-      enabled_termination_conditions: options.enabled_termination_conditions,
     });
   });
   $("#playback-settings-toggle").addEventListener("click", (event) => {

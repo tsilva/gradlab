@@ -165,7 +165,7 @@ def test_web_playback_retains_step_zero_snapshot_and_frame() -> None:
 
     snapshot, frames = runner.episode_start_payload()
     assert snapshot["sequence"] == 0
-    assert snapshot["protocol"] == 8
+    assert snapshot["protocol"] == 9
     assert snapshot["session"]["step"] == 0
     assert snapshot["session"]["default_seed"] == 42
     assert snapshot["session"]["value_discount"] is None
@@ -456,71 +456,6 @@ def test_invalid_cnn_command_does_not_pause_playback() -> None:
     assert response["error"] == "no actor CNN"
 
 
-def test_next_episode_dispatches_sampling_and_driver_without_restarting() -> None:
-    transition = argparse.Namespace(boundary=False, events=())
-    session = argparse.Namespace(
-        config={"game": "Game-v0"},
-        episode=2,
-        last_transition=None,
-        step=Mock(return_value=transition),
-    )
-    runner = WebPlaybackRunner(session, human_args(episodes=0), config_text="")
-    runner._publish = Mock()
-    runner.awaiting_next_episode = True
-    runner.boundaries = 1
-    runner.driver = "human"
-
-    runner._apply(
-        PlaybackCommand(
-            "next",
-            "client",
-            "next_episode",
-            {
-                "sampling_mode": "deterministic",
-                "driver": "policy",
-            },
-            None,
-        )
-    )
-
-    assert runner.awaiting_next_episode is False
-    assert runner.sampling_mode == "deterministic"
-    assert runner.driver == "policy"
-    assert runner.run_state == "playing"
-
-    runner._step_once()
-
-    session.step.assert_called_once_with(deterministic=True)
-
-
-def test_next_episode_applies_selected_termination_conditions() -> None:
-    session = argparse.Namespace(
-        config={"game": "Game-v0"},
-        episode=2,
-        last_transition=None,
-        set_termination_conditions=Mock(),
-    )
-    runner = WebPlaybackRunner(session, human_args(episodes=0), config_text="")
-    runner._publish = Mock()
-    runner.awaiting_next_episode = True
-
-    runner._apply(
-        PlaybackCommand(
-            "next",
-            "client",
-            "next_episode",
-            {
-                "enabled_termination_conditions": ["event:life_loss"],
-            },
-            None,
-        )
-    )
-
-    session.set_termination_conditions.assert_called_once_with(["event:life_loss"])
-    assert runner.awaiting_next_episode is False
-    assert runner.run_state == "playing"
-
-
 def test_reset_episode_uses_visible_seed_and_pauses_at_step_zero() -> None:
     session = argparse.Namespace(
         config={"game": "Game-v0"},
@@ -552,7 +487,7 @@ def test_reset_episode_uses_visible_seed_and_pauses_at_step_zero() -> None:
     assert runner._status_message == "episode reset · seed 77"
 
 
-def test_reset_episode_applies_selected_termination_conditions() -> None:
+def test_reset_episode_resets_stop_condition_counters_without_rewriting_environment() -> None:
     session = argparse.Namespace(
         config={"game": "Game-v0"},
         active_seed=42,
@@ -568,16 +503,14 @@ def test_reset_episode_applies_selected_termination_conditions() -> None:
             "reset",
             "client",
             "reset_episode",
-            {
-                "seed": "77",
-                "enabled_termination_conditions": ["event:life_loss"],
-            },
+            {"seed": "77"},
             None,
         )
     )
 
     session.reset_episode.assert_called_once_with(77)
-    session.set_termination_conditions.assert_called_once_with(["event:life_loss"])
+    session.set_termination_conditions.assert_not_called()
+    assert runner.stop_conditions.payload()["values"]["episode.boundary"] == 0
     assert runner.awaiting_next_episode is False
     assert runner.run_state == "paused"
 
@@ -747,7 +680,7 @@ def test_action_selection_mode_rejects_unsupported_mode() -> None:
     assert "unsupported action-selection mode" in response["error"]
 
 
-def test_termination_conditions_can_change_before_first_step() -> None:
+def test_legacy_termination_condition_command_cannot_rewrite_environment() -> None:
     session = argparse.Namespace(
         config={"game": "Game-v0"},
         step_index=0,
@@ -767,63 +700,168 @@ def test_termination_conditions_can_change_before_first_step() -> None:
         )
     )
 
-    session.set_termination_conditions.assert_called_once_with(["event:life_loss"])
+    session.set_termination_conditions.assert_not_called()
+    response = runner.responses.get_nowait().payload
+    assert response["ok"] is False
+    assert response["error"] == "unknown playback command 'set_termination_conditions'"
+
+
+def test_web_playback_crosses_boundaries_until_stop_condition_matches() -> None:
+    from tests.test_play_trajectory import ScriptedSession
+
+    session = ScriptedSession(length=1)
+    runner = WebPlaybackRunner(session, human_args(episodes=0), config_text="")
+    runner._publish = Mock()
+    runner._begin_capture = Mock()
+    runner._begin_recording = Mock()
+
+    runner._apply(
+        PlaybackCommand(
+            "condition",
+            "client",
+            "set_stop_condition",
+            {"source": "episode.terminated == 2"},
+            None,
+        )
+    )
+    assert runner.responses.get_nowait().payload["ok"] is True
+    runner._apply(PlaybackCommand("play", "client", "play", {}, None))
+    assert runner.responses.get_nowait().payload["ok"] is True
+
+    runner._step_once()
+
+    assert runner.run_state == "playing"
     assert runner.awaiting_next_episode is False
+    assert runner.stop_conditions.payload()["values"]["episode.terminated"] == 1
+    # A completed publication capture remains available instead of being
+    # discarded when live playback crosses into the next episode.
+    runner._begin_capture.assert_not_called()
+    runner._begin_recording.assert_called_once_with()
+
+    runner._step_once()
+
     assert runner.run_state == "paused"
+    assert runner.awaiting_next_episode is True
+    assert runner.stop_conditions.payload()["values"]["episode.terminated"] == 2
+    assert runner.stop_conditions.payload()["matched"] == {
+        "source": "episode.terminated == 2",
+        "values": {"episode.terminated": 2},
+    }
+    snapshot = runner._snapshot_payload(session.last_transition)
+    assert snapshot["session"]["stop_condition"] == runner.stop_conditions.payload()
+    assert runner._status_message == "stop condition matched · episode.terminated = 2"
 
 
-def test_termination_conditions_cannot_change_mid_episode() -> None:
+def test_invalid_stop_condition_blocks_play_without_using_the_previous_program() -> None:
     session = argparse.Namespace(
         config={"game": "Game-v0"},
-        step_index=12,
         last_transition=None,
-        set_termination_conditions=Mock(),
     )
     runner = WebPlaybackRunner(session, human_args(episodes=0), config_text="")
     runner._publish = Mock()
 
     runner._apply(
         PlaybackCommand(
-            "termination",
+            "condition",
             "client",
-            "set_termination_conditions",
-            {"enabled": []},
+            "set_stop_condition",
+            {"source": "episode.boundary >="},
             None,
         )
     )
 
-    session.set_termination_conditions.assert_not_called()
-    response = runner.responses.get_nowait().payload
-    assert response["ok"] is False
-    assert "before the first step or between episodes" in response["error"]
+    configured = runner.responses.get_nowait().payload
+    assert configured["ok"] is True
+    assert runner.stop_conditions.payload()["valid"] is False
+
+    runner._apply(PlaybackCommand("play", "client", "play", {}, None))
+
+    blocked = runner.responses.get_nowait().payload
+    assert blocked["ok"] is False
+    assert blocked["error"] == "stop condition is invalid: expected a finite number"
+    assert runner.run_state == "paused"
 
 
-def test_web_playback_requires_explicit_command_after_episode_boundary() -> None:
-    from tests.test_play_trajectory import ScriptedSession
-
-    session = ScriptedSession(length=1)
+def test_stop_condition_cannot_change_while_playback_is_running() -> None:
+    session = argparse.Namespace(config={"game": "Game-v0"}, last_transition=None)
     runner = WebPlaybackRunner(session, human_args(episodes=0), config_text="")
     runner._publish = Mock()
+    original = runner.stop_conditions.source
+    runner.run_state = "playing"
+
+    runner._apply(
+        PlaybackCommand(
+            "condition",
+            "client",
+            "set_stop_condition",
+            {"source": "episode.boundary >= 2"},
+            None,
+        )
+    )
+
+    assert runner.responses.get_nowait().payload["ok"] is False
+    assert runner.stop_conditions.source == original
+    assert runner.run_state == "paused"
+
+
+def test_web_playback_stops_on_the_first_matching_signal_transition() -> None:
+    from tests.test_play_trajectory import ScriptedSession
+
+    runner = WebPlaybackRunner(
+        ScriptedSession(length=5), human_args(episodes=0), config_text=""
+    )
+    runner._publish = Mock()
+    runner.stop_conditions.set_source("signal >= 2")
+    runner.run_state = "playing"
+
+    runner._step_once()
+    assert runner.run_state == "playing"
+    runner._step_once()
+
+    assert runner.run_state == "paused"
+    assert runner.awaiting_next_episode is False
+    assert runner.session.step_index == 2
+    assert runner._status_message == "stop condition matched · signal = 2"
+
+
+def test_manual_pause_and_resume_preserve_stop_condition_counts() -> None:
+    from tests.test_play_trajectory import ScriptedSession
+
+    runner = WebPlaybackRunner(
+        ScriptedSession(length=1), human_args(episodes=0), config_text=""
+    )
+    runner._publish = Mock()
+    runner._begin_capture = Mock()
+    runner._begin_recording = Mock()
+    runner.stop_conditions.set_source("episode.terminated == 2")
+    runner.run_state = "playing"
+
+    runner._step_once()
+    runner._apply(PlaybackCommand("pause", "client", "pause", {}, None))
+    assert runner.responses.get_nowait().payload["ok"] is True
+    runner._apply(PlaybackCommand("play", "client", "play", {}, None))
+    assert runner.responses.get_nowait().payload["ok"] is True
+    runner._step_once()
+
+    assert runner.run_state == "paused"
+    assert runner.stop_conditions.payload()["values"]["episode.terminated"] == 2
+
+
+def test_episode_limit_remains_a_hard_stop_before_condition_matches() -> None:
+    from tests.test_play_trajectory import ScriptedSession
+
+    runner = WebPlaybackRunner(
+        ScriptedSession(length=1), human_args(episodes=1), config_text=""
+    )
+    runner._publish = Mock()
+    runner.stop_conditions.set_source("episode.terminated == 2")
     runner.run_state = "playing"
 
     runner._step_once()
 
     assert runner.run_state == "paused"
     assert runner.awaiting_next_episode is True
-    assert runner._can_start_next_episode() is True
-    assert runner.remaining_steps == 0
-
-    runner._apply(PlaybackCommand("play", "client", "play", {}, None))
-    blocked = runner.responses.get_nowait().payload
-    assert blocked["ok"] is False
-    assert blocked["error"] == "episode complete; choose Play next episode"
-    assert runner.awaiting_next_episode is True
-
-    runner._apply(PlaybackCommand("next", "client", "next_episode", {}, runner.revision))
-    accepted = runner.responses.get_nowait().payload
-    assert accepted["ok"] is True
-    assert runner.awaiting_next_episode is False
-    assert runner.run_state == "playing"
+    assert runner._status_message == "episode limit reached (1)"
 
 
 def test_web_playback_episode_limit_disables_next_episode() -> None:

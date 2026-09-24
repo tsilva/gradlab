@@ -11,9 +11,9 @@ import {
 } from "../../src/gradlab/web_player/player-presentation.js";
 import { setSvgUseHref } from "../../src/gradlab/web_player/panels/shared.js";
 import {
+  applyStopConditionSuggestion,
   frameSkipPresentation,
-  orderedTerminationConditions,
-  terminationOutcomeClass,
+  stopConditionSuggestions,
 } from "../../src/gradlab/web_player/playback-settings.js";
 
 const settings = readFileSync(
@@ -37,7 +37,7 @@ const icons = readFileSync(
   "utf8",
 );
 
-test("one contextual transport covers play, pause, replay, and next episode", () => {
+test("one contextual transport uses Play for every live paused state", () => {
   assert.deepEqual(
     transportPresentation({ hasControl: true }),
     {
@@ -59,14 +59,18 @@ test("one contextual transport covers play, pause, replay, and next episode", ()
   assert.deepEqual(
     transportPresentation({
       hasControl: true,
-      session: { awaiting_next_episode: true, can_start_next_episode: true },
+      session: {
+        awaiting_next_episode: true,
+        can_start_next_episode: true,
+        stop_condition: { valid: true },
+      },
     }),
     {
-      action: "next_episode",
-      label: "Next episode",
-      icon: "player-skip-forward",
+      action: "play",
+      label: "Play",
+      icon: "player-play",
       disabled: false,
-      reason: "Start the prepared next episode",
+      reason: "Start the next run",
     },
   );
   const exhausted = transportPresentation({
@@ -87,6 +91,10 @@ test("episode completion uses the player controls instead of a toast", () => {
     status_message: "episode complete · choose Play next episode",
     session: { awaiting_next_episode: true },
   }), false);
+  assert.equal(statusMessageShouldToast({
+    status_message: "stop condition matched · episode.terminated = 2",
+    session: { awaiting_next_episode: true },
+  }), true);
   assert.equal(statusMessageShouldToast({
     status_message: "Checkpoint expired before the next episode",
     session: { awaiting_next_episode: true },
@@ -196,8 +204,8 @@ test("timeline controls use accessible icons and distinct action colors", () => 
     assert.match(page, new RegExp(`id="${id}"[^>]*class="[^"]*icon-only[^"]*"[^>]*aria-label="${label}"`));
   }
   assert.equal(page.includes("timeline-playback-label"), false);
-  assert.match(icons, /id="ti-player-skip-forward"/);
-  assert.match(styles, /#timeline-playback-toggle\[data-action="next_episode"\][^{]*\{[^}]*var\(--color-series-teal\)/);
+  assert.doesNotMatch(styles, /data-action="next_episode"/);
+  assert.match(styles, /#timeline-playback-toggle\[data-action="play"\][^{]*\{[^}]*var\(--color-interaction\)/);
   assert.match(styles, /#timeline-playback-toggle\[data-action="pause"\][^{]*\{[^}]*var\(--color-series-amber\)/);
   assert.match(styles, /#timeline-reset:not\(:disabled\)[^{]*\{[^}]*var\(--color-series-coral\)/);
   assert.match(styles, /#playback-settings-toggle:not\(:disabled\)[^{]*\{[^}]*var\(--color-series-aqua\)/);
@@ -277,41 +285,31 @@ test("playback settings distinguish training and active frame skip", () => {
 });
 
 test("playback settings apply on change", () => {
-  assert.match(
-    app,
-    /command\("next_episode", \{[\s\S]*enabled_termination_conditions: options\.enabled_termination_conditions/,
-  );
-  assert.match(
-    app,
-    /command\("reset_episode", \{[\s\S]*seed: options\.seed,[\s\S]*enabled_termination_conditions: options\.enabled_termination_conditions/,
-  );
+  assert.doesNotMatch(app, /command\("next_episode"/);
+  assert.match(app, /command\("reset_episode", \{[\s\S]*seed: options\.seed/);
+  assert.doesNotMatch(app, /enabled_termination_conditions/);
 });
 
-test("episode termination settings prioritize and color semantic outcomes", () => {
-  const failure = { id: "event:life_loss", outcome: "failure" };
-  const success = { id: "event:level_change", outcome: "success" };
-  const firstTimeout = { id: "event:stalled", outcome: "timeout" };
-  const secondTimeout = { id: "limit:max_episode_steps", outcome: "timeout" };
-
+test("stop-condition autocomplete understands expression context", () => {
+  const symbols = [
+    { name: "episode.terminated", kind: "episode", value: 1 },
+    { name: "x_pos", kind: "signal", value: 2940 },
+  ];
   assert.deepEqual(
-    orderedTerminationConditions([failure, firstTimeout, success, secondTimeout]),
-    [success, failure, firstTimeout, secondTimeout],
+    stopConditionSuggestions("episode.t", 9, symbols).items.map((item) => item.value),
+    ["episode.terminated"],
   );
-  assert.equal(terminationOutcomeClass("success"), "outcome-success");
-  assert.equal(terminationOutcomeClass("failure"), "outcome-failure");
-  assert.equal(terminationOutcomeClass("timeout"), "outcome-timeout");
-  assert.equal(terminationOutcomeClass("neutral"), "");
-  assert.match(
-    styles,
-    /\.game-frame-detail\.outcome-success,[\s\S]*\.termination-outcome\.outcome-success \{[^}]*var\(--color-evaluation-text\)/,
+  assert.deepEqual(
+    stopConditionSuggestions("x_pos ", 6, symbols).items.map((item) => item.value),
+    ["==", "!=", "<", "<=", ">", ">="],
   );
-  assert.match(
-    styles,
-    /\.game-frame-detail\.outcome-failure,[\s\S]*\.termination-outcome\.outcome-failure \{[^}]*var\(--color-error-text\)/,
+  assert.deepEqual(
+    stopConditionSuggestions("x_pos >= 3000 ", 14, symbols).items.map((item) => item.value),
+    ["and", "or"],
   );
-  assert.match(
-    styles,
-    /\.game-frame-detail\.outcome-timeout,[\s\S]*\.termination-outcome\.outcome-timeout \{[^}]*var\(--color-series-amber\)/,
+  assert.deepEqual(
+    applyStopConditionSuggestion("episode.t", 9, 0, 9, "episode.terminated"),
+    { source: "episode.terminated", cursor: 18 },
   );
 });
 
@@ -323,7 +321,7 @@ test("playback setting values share the compact field layout", () => {
   );
   assert.match(
     styles,
-    /\.termination-settings \{[^}]*border: 0;[^}]*\}/,
+    /\.stop-condition-editor \{[^}]*position: relative;[^}]*\}/,
   );
 });
 
