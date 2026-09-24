@@ -1616,10 +1616,6 @@ select {
 .next-episode-settings-body { display: grid; gap: .42rem; }
 .next-episode-settings-body [data-next-episode] { width: 100%; margin-top: .12rem; }
 .control-components { display: grid; gap: .4rem; margin-top: .5rem; }
-.playback-glance { display: grid; gap: .14rem; padding: .55rem .62rem; border: 1px solid var(--color-border); border-radius: .42rem; background: var(--color-surface-primary); }
-.playback-glance strong { color: var(--color-text); font-size: var(--font-size-sm); }
-.playback-glance span { color: var(--color-text-muted); font-family: var(--font-family-mono); font-size: var(--font-size-xs); }
-.playback-glance [data-playback-frame-skip].contract-mismatch { color: var(--color-series-amber); }
 .advanced-playback-settings { margin-top: .2rem; padding-top: .48rem; border-top: 1px solid var(--color-border); }
 .advanced-playback-settings > summary { color: var(--color-text); font-weight: var(--font-weight-bold); }
 .advanced-playback-body { display: grid; gap: .4rem; margin-top: .55rem; }

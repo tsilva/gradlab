@@ -1,7 +1,6 @@
 <script lang="ts">
   import {
     applyStopConditionSuggestion,
-    frameSkipPresentation,
     stopConditionHighlightSegments,
     stopConditionPopoverPlacement,
     stopConditionSuggestions,
@@ -81,17 +80,6 @@
       !recording &&
       !dataset &&
       snapshot?.run_state === "paused",
-  );
-  let frameSkip = $derived(frameSkipPresentation(contract));
-  let contractLabel = $derived(
-    session.temperature_changed ||
-      Number(session.sampling_temperature ?? 1) !== 1
-      ? "Counterfactual — not evidence"
-      : {
-          training: "Training contract",
-          evaluation: "Published evaluation",
-          counterfactual: "Counterfactual — not evidence",
-        }[String(contract.mode || "training")] || selectionLabel(contract.mode),
   );
   let contractHint = $derived.by(() => {
     const messages = [];
@@ -257,23 +245,6 @@
 </script>
 
 <div class="control-components playback-settings-form">
-  <div class="playback-glance" aria-live="polite">
-    <strong data-playback-glance-contract>{contractLabel}</strong>
-    <span data-playback-glance-detail
-      >{selectionLabel(sampling || session.sampling_mode)} · seed {text(
-        snapshot?.transition?.seed,
-        text(session.seed, defaultSeed),
-      )}</span
-    >
-    <span
-      data-playback-frame-skip
-      hidden={!frameSkip}
-      class:contract-mismatch={frameSkip?.differs}
-      title={frameSkip
-        ? `Training repeated each selected action for ${frameSkip.training} environment frame${frameSkip.training === 1 ? "" : "s"}. This playback repeats each selected action for ${frameSkip.playback} environment frame${frameSkip.playback === 1 ? "" : "s"}.`
-        : ""}>{frameSkip?.label || ""}</span
-    >
-  </div>
   <div class="advanced-playback-body">
     <div class="playback-field playback-fps">
       <label for={`${idPrefix}-fps`}>Play FPS</label>
