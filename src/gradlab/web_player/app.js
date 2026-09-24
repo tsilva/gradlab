@@ -1472,7 +1472,11 @@ function bindWorkspaceMenus() {
       $("#panel-shelf").hidden = true;
       $("#panels-toggle").setAttribute("aria-expanded", "false");
     }
-    if (!$("#playback-settings-menu").contains(event.target) && !event.target.closest("#playback-settings-toggle")) {
+    if (
+      !$("#playback-settings-menu").contains(event.target)
+      && !event.target.closest("#playback-settings-toggle")
+      && !event.target.closest("[data-playback-settings-popover]")
+    ) {
       $("#playback-settings-menu").hidden = true;
       $("#playback-settings-toggle").setAttribute("aria-expanded", "false");
     }

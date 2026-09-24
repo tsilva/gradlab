@@ -2,6 +2,8 @@
   import {
     applyStopConditionSuggestion,
     frameSkipPresentation,
+    stopConditionHighlightSegments,
+    stopConditionPopoverPlacement,
     stopConditionSuggestions,
   } from "../../src/gradlab/web_player/playback-settings.js";
   import { text } from "../../src/gradlab/web_player/panels/shared.js";
@@ -19,12 +21,16 @@
   let stopSuggestions = $state<any[]>([]);
   let suggestionRange = $state({ from: 0, to: 0 });
   let activeSuggestion = $state(0);
+  let stopSuggestionStyle = $state("");
+  let interactingWithSuggestions = false;
+  let stopPositionFrame: number | null = null;
   let stopTimer: ReturnType<typeof setTimeout> | null = null;
   let fpsInput: HTMLInputElement,
     seedInput: HTMLInputElement,
     temperatureInput: HTMLInputElement,
     contractInput: HTMLSelectElement,
-    stopInput: HTMLTextAreaElement;
+    stopInput: HTMLTextAreaElement,
+    stopHighlight: HTMLPreElement;
   let defaultSeed = $state("");
   let stopSourceKey = "",
     wasAwaiting = false;
@@ -53,10 +59,22 @@
       : ["training"],
   );
   let stopCondition = $derived(session.stop_condition || {});
+  let activeStopError = $derived(
+    String(stopCondition.source || "") === stopSource
+      ? stopCondition.error || null
+      : null,
+  );
   let stopError = $derived(
-    stopCondition.error
-      ? `${stopCondition.error.message} · column ${Number(stopCondition.error.offset || 0) + 1}`
+    activeStopError
+      ? `${activeStopError.message} · column ${Number(activeStopError.offset || 0) + 1}`
       : "",
+  );
+  let stopHighlights = $derived(
+    stopConditionHighlightSegments(
+      stopSource,
+      activeStopError,
+      stopCondition.symbols,
+    ),
   );
   let canEditStop = $derived(
     hasControl &&
@@ -144,6 +162,36 @@
     suggestionRange = { from: result.from, to: result.to };
     stopSuggestions = result.items;
     activeSuggestion = 0;
+    positionStopSuggestions();
+  };
+  const positionStopSuggestions = () => {
+    if (!stopInput) return;
+    const placement = stopConditionPopoverPlacement(
+      stopInput.getBoundingClientRect(),
+      { width: window.innerWidth, height: window.innerHeight },
+    );
+    stopSuggestionStyle = [
+      `left:${placement.left}px`,
+      `top:${placement.top}px`,
+      `width:${placement.width}px`,
+      `max-height:${placement.maxHeight}px`,
+    ].join(";");
+  };
+  const scheduleStopSuggestionPosition = () => {
+    if (stopPositionFrame != null) cancelAnimationFrame(stopPositionFrame);
+    stopPositionFrame = requestAnimationFrame(() => {
+      stopPositionFrame = null;
+      positionStopSuggestions();
+    });
+  };
+  const syncStopHighlightScroll = () => {
+    if (!stopInput || !stopHighlight) return;
+    stopHighlight.scrollTop = stopInput.scrollTop;
+    stopHighlight.scrollLeft = stopInput.scrollLeft;
+  };
+  const portalToBody = (node: HTMLElement) => {
+    document.body.append(node);
+    return { destroy: () => node.remove() };
   };
   const sendStopSource = () => {
     if (stopTimer) clearTimeout(stopTimer);
@@ -176,8 +224,35 @@
       stopInput.setSelectionRange(result.cursor, result.cursor);
     });
   };
+  const leaveStopInput = () => {
+    requestAnimationFrame(() => {
+      if (interactingWithSuggestions) {
+        stopInput?.focus({ preventScroll: true });
+        return;
+      }
+      stopSuggestions = [];
+      flushStopSource();
+    });
+  };
+  $effect(() => {
+    if (!stopSuggestions.length) return;
+    scheduleStopSuggestionPosition();
+    const reposition = () => scheduleStopSuggestionPosition();
+    const finishInteraction = () => {
+      interactingWithSuggestions = false;
+    };
+    window.addEventListener("resize", reposition);
+    window.addEventListener("pointerup", finishInteraction);
+    document.addEventListener("scroll", reposition, true);
+    return () => {
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("pointerup", finishInteraction);
+      document.removeEventListener("scroll", reposition, true);
+    };
+  });
   $effect(() => () => {
     if (stopTimer) clearTimeout(stopTimer);
+    if (stopPositionFrame != null) cancelAnimationFrame(stopPositionFrame);
   });
 </script>
 
@@ -337,66 +412,93 @@
     </p>
     <div class="playback-field stop-condition-editor" hidden={recording || dataset}>
       <label for={`${idPrefix}-stop-condition`}>Stop conditions</label>
-      <textarea
-        id={`${idPrefix}-stop-condition`}
-        data-stop-condition
-        rows="4"
-        spellcheck="false"
-        role="combobox"
-        aria-autocomplete="list"
-        aria-controls={`${idPrefix}-stop-suggestions`}
-        aria-expanded={stopSuggestions.length > 0}
-        aria-activedescendant={stopSuggestions.length
-          ? `${idPrefix}-stop-suggestion-${activeSuggestion}`
-          : undefined}
-        aria-invalid={stopCondition.valid === false}
-        aria-describedby={`${idPrefix}-stop-condition-hint`}
-        bind:this={stopInput}
-        bind:value={stopSource}
-        disabled={!canEditStop}
-        onfocus={refreshSuggestions}
-        onblur={() => {
-          stopSuggestions = [];
-          flushStopSource();
-        }}
-        onclick={refreshSuggestions}
-        oninput={() => {
-          refreshSuggestions();
-          sendStopSource();
-        }}
-        onkeydown={(event) => {
-          if (!stopSuggestions.length) return;
-          if (event.key === "ArrowDown") {
-            event.preventDefault();
-            activeSuggestion = (activeSuggestion + 1) % stopSuggestions.length;
-          } else if (event.key === "ArrowUp") {
-            event.preventDefault();
-            activeSuggestion =
-              (activeSuggestion - 1 + stopSuggestions.length) % stopSuggestions.length;
-          } else if (event.key === "Enter" || event.key === "Tab") {
-            event.preventDefault();
-            chooseSuggestion(activeSuggestion);
-          } else if (event.key === "Escape") {
-            event.stopPropagation();
-            stopSuggestions = [];
-          }
-        }}
-      ></textarea>
+      <div
+        class="stop-condition-input-shell"
+        class:invalid={activeStopError != null}
+      >
+        <pre
+          class="stop-condition-highlight"
+          aria-hidden="true"
+          bind:this={stopHighlight}
+        >{#each stopHighlights as segment}<span
+              class={`stop-condition-token ${segment.kind}`}
+              class:syntax-error={segment.error}
+              data-token-kind={segment.kind}
+            >{segment.text}</span>{/each}</pre
+        >
+        <textarea
+          id={`${idPrefix}-stop-condition`}
+          data-stop-condition
+          rows="4"
+          spellcheck="false"
+          role="combobox"
+          aria-autocomplete="list"
+          aria-controls={`${idPrefix}-stop-suggestions`}
+          aria-expanded={stopSuggestions.length > 0}
+          aria-activedescendant={stopSuggestions.length
+            ? `${idPrefix}-stop-suggestion-${activeSuggestion}`
+            : undefined}
+          aria-invalid={activeStopError != null}
+          aria-describedby={`${idPrefix}-stop-condition-hint`}
+          bind:this={stopInput}
+          bind:value={stopSource}
+          disabled={!canEditStop}
+          onfocus={refreshSuggestions}
+          onblur={leaveStopInput}
+          onclick={refreshSuggestions}
+          onscroll={syncStopHighlightScroll}
+          oninput={() => {
+            refreshSuggestions();
+            syncStopHighlightScroll();
+            sendStopSource();
+          }}
+          onkeydown={(event) => {
+            if (!stopSuggestions.length) return;
+            if (event.key === "ArrowDown") {
+              event.preventDefault();
+              activeSuggestion = (activeSuggestion + 1) % stopSuggestions.length;
+            } else if (event.key === "ArrowUp") {
+              event.preventDefault();
+              activeSuggestion =
+                (activeSuggestion - 1 + stopSuggestions.length) % stopSuggestions.length;
+            } else if (event.key === "Enter" || event.key === "Tab") {
+              event.preventDefault();
+              chooseSuggestion(activeSuggestion);
+            } else if (event.key === "Escape") {
+              event.stopPropagation();
+              stopSuggestions = [];
+            }
+          }}
+        ></textarea>
+      </div>
       {#if stopSuggestions.length}
         <div
           id={`${idPrefix}-stop-suggestions`}
           class="stop-condition-suggestions"
+          data-playback-settings-popover
           role="listbox"
+          tabindex="-1"
+          style={stopSuggestionStyle}
+          use:portalToBody
+          onpointerdown={(event) => {
+            event.stopPropagation();
+            interactingWithSuggestions = true;
+          }}
         >
           {#each stopSuggestions as suggestion, index (suggestion.value)}
             <button
               id={`${idPrefix}-stop-suggestion-${index}`}
               type="button"
               role="option"
+              tabindex="-1"
               aria-selected={index === activeSuggestion}
               class:active={index === activeSuggestion}
               onmousedown={(event) => event.preventDefault()}
-              onclick={() => chooseSuggestion(index)}
+              onmouseenter={() => (activeSuggestion = index)}
+              onclick={(event) => {
+                event.stopPropagation();
+                chooseSuggestion(index);
+              }}
             >
               <code>{suggestion.value}</code>
               <span>{suggestion.kind}{suggestion.detail == null
@@ -408,7 +510,7 @@
       {/if}
       <p
         id={`${idPrefix}-stop-condition-hint`}
-        class:control-error={stopCondition.valid === false}
+        class:control-error={activeStopError != null}
         class="control-hint"
         data-stop-condition-status
       >

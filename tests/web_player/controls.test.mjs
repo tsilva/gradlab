@@ -13,6 +13,8 @@ import { setSvgUseHref } from "../../src/gradlab/web_player/panels/shared.js";
 import {
   applyStopConditionSuggestion,
   frameSkipPresentation,
+  stopConditionHighlightSegments,
+  stopConditionPopoverPlacement,
   stopConditionSuggestions,
 } from "../../src/gradlab/web_player/playback-settings.js";
 
@@ -28,6 +30,10 @@ const page = readFileSync(
   new URL("../../frontend/components/Shell.svelte", import.meta.url),
   "utf8",
 ).replace(/\s+/g, " ").replaceAll(" >", ">");
+const playbackSettingsComponent = readFileSync(
+  new URL("../../frontend/components/PlaybackSettings.svelte", import.meta.url),
+  "utf8",
+);
 const styles = readFileSync(
   new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
   "utf8",
@@ -322,6 +328,57 @@ test("stop-condition autocomplete understands expression context", () => {
     ),
     { source: "episode.terminated == 2", cursor: 18 },
   );
+});
+
+test("stop-condition highlighting preserves source text and marks exact parse errors", () => {
+  const source = "episode.terminated >= 2 or x_pos >=";
+  const error = { offset: source.length, length: 0 };
+  const segments = stopConditionHighlightSegments(source, error, [
+    { name: "episode.terminated", kind: "episode" },
+    { name: "x_pos", kind: "signal" },
+  ]);
+  assert.equal(segments.map((segment) => segment.text).join(""), source);
+  assert.ok(segments.some((segment) => segment.kind === "symbol-episode"));
+  assert.ok(segments.some((segment) => segment.kind === "symbol-signal"));
+  assert.ok(segments.some((segment) => segment.kind === "keyword"));
+  assert.equal(segments.some((segment) => segment.kind === "invalid"), false);
+  assert.ok(segments.some((segment) => segment.text === ">="));
+  assert.deepEqual(segments.at(-1), {
+    text: "",
+    kind: "error-marker",
+    error: true,
+    from: source.length,
+    to: source.length,
+  });
+
+  const ranged = stopConditionHighlightSegments("life_loss >> 1", {
+    offset: 11,
+    length: 1,
+  });
+  assert.deepEqual(
+    ranged.filter((segment) => segment.error).map((segment) => segment.text),
+    [">"],
+  );
+});
+
+test("stop-condition suggestions are positioned in the viewport, outside modal overflow", () => {
+  assert.deepEqual(
+    stopConditionPopoverPlacement(
+      { left: 100, top: 100, bottom: 180, width: 300 },
+      { width: 800, height: 600 },
+    ),
+    { left: 100, top: 186, width: 300, maxHeight: 240, placement: "below" },
+  );
+  assert.deepEqual(
+    stopConditionPopoverPlacement(
+      { left: 620, top: 500, bottom: 580, width: 300 },
+      { width: 800, height: 600 },
+    ),
+    { left: 492, top: 254, width: 300, maxHeight: 240, placement: "above" },
+  );
+  assert.match(playbackSettingsComponent, /use:portalToBody/);
+  assert.match(playbackSettingsComponent, /data-playback-settings-popover/);
+  assert.match(app, /closest\("\[data-playback-settings-popover\]"\)/);
 });
 
 
