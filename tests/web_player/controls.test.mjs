@@ -12,7 +12,6 @@ import {
 import { setSvgUseHref } from "../../src/gradlab/web_player/panels/shared.js";
 import {
   applyStopConditionSuggestion,
-  frameSkipPresentation,
   stopConditionHighlightSegments,
   stopConditionPopoverPlacement,
   stopConditionSuggestions,
@@ -271,23 +270,7 @@ test("playback tuning is one reusable on-demand settings form", () => {
   ]) {
   }
   assert.match(styles, /\.playback-settings-menu \{/);
-});
-
-test("playback settings distinguish training and active frame skip", () => {
-  assert.deepEqual(
-    frameSkipPresentation({ frame_skip: { training: 4, playback: 2 } }),
-    {
-      training: 4,
-      playback: 2,
-      differs: true,
-      label: "Frame skip · training 4 · playback 2",
-    },
-  );
-  assert.equal(frameSkipPresentation({ frame_skip: { training: 4 } }), null);
-  assert.match(
-    styles,
-    /\[data-playback-frame-skip\]\.contract-mismatch \{[^}]*var\(--color-series-amber\)/,
-  );
+  assert.doesNotMatch(playbackSettingsComponent, /playback-glance|data-playback-frame-skip/);
 });
 
 test("playback settings apply on change", () => {

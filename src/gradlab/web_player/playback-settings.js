@@ -172,22 +172,3 @@ export function stopConditionPopoverPlacement(rect, viewport = {}) {
     : Math.max(gutter, rect.top - gap - maxHeight);
   return { left, top, width, maxHeight, placement };
 }
-
-export function frameSkipPresentation(playbackContract) {
-  const values = playbackContract?.frame_skip;
-  if (!values || typeof values !== "object") return null;
-  const training = Number(values.training);
-  const playback = Number(values.playback);
-  if (
-    !Number.isInteger(training)
-    || training < 1
-    || !Number.isInteger(playback)
-    || playback < 1
-  ) return null;
-  return {
-    training,
-    playback,
-    differs: training !== playback,
-    label: `Frame skip · training ${training} · playback ${playback}`,
-  };
-}
