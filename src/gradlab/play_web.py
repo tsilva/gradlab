@@ -2103,7 +2103,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             boundary=transition.boundary,
             evaluate=self.run_state == "playing",
         )
-        if not self.stop_conditions.valid:
+        if not self.stop_conditions.valid and self.run_state == "playing":
             detail = (
                 self.stop_conditions.error.message
                 if self.stop_conditions.error is not None

@@ -107,6 +107,28 @@ def test_project_safe_symbol_names_are_parseable_and_qualified_when_needed() -> 
     assert controller.observe(events=("level-1.complete", "123-ready")) is not None
 
 
+def test_reserved_runtime_names_receive_explicit_qualifiers() -> None:
+    controller = PlaybackStopController(
+        event_names=("and", "episode.boundary"),
+        signal_names=("or", "episode.boundary"),
+        source=(
+            "event.and >= 1 and signal.or >= 2 and "
+            "event.episode.boundary >= 1 and signal.episode.boundary >= 3"
+        ),
+    )
+
+    assert {symbol["name"] for symbol in controller.payload()["symbols"]} >= {
+        "event.and",
+        "signal.or",
+        "event.episode.boundary",
+        "signal.episode.boundary",
+    }
+    assert controller.observe(
+        events=("and", "episode.boundary"),
+        signals={"or": 2, "episode.boundary": 3},
+    ) is not None
+
+
 def test_invalid_source_is_retained_with_a_structured_error_and_cannot_match() -> None:
     controller = PlaybackStopController(
         event_names=("life_loss",),
@@ -203,4 +225,7 @@ def test_default_expression_preserves_enabled_termination_choices() -> None:
     assert default_stop_expression(
         ({"id": "event:123-ready", "event": "123-ready", "enabled": True},)
     ) == "event.123-ready >= 1"
+    assert default_stop_expression(
+        ({"id": "event:and", "event": "and", "enabled": True},)
+    ) == "event.and >= 1"
     assert default_stop_expression(()) == "episode.boundary >= 1"
