@@ -81,21 +81,6 @@
       !dataset &&
       snapshot?.run_state === "paused",
   );
-  let contractHint = $derived.by(() => {
-    const messages = [];
-    if (session.critic_comparison?.reasons?.length)
-      messages.push(
-        `Critic comparison unavailable: ${session.critic_comparison.reasons.join("; ")}.`,
-      );
-    if (contract.evaluation_matches_training === false)
-      messages.push(
-        `Published evaluation semantics differ from training${contract.mismatch_paths?.length ? ` at ${contract.mismatch_paths.join(", ")}` : ""}.`,
-      );
-    return (
-      messages.join(" ") ||
-      "Training-compatible critic comparison is available after a terminal episode."
-    );
-  });
   export function updateControl() {
     const state = services.getState();
     hasControl = Boolean(state.hasControl);
@@ -329,11 +314,6 @@
             });
         }}
       />
-      <p class="control-hint">
-        1 uses the original distribution. Lower values favor likely actions;
-        higher values add randomness. Changes apply to the next stochastic
-        decision and make playback counterfactual.
-      </p>
     </div>
     <p
       id={`${idPrefix}-sampling-hint`}
@@ -354,7 +334,6 @@
       <select
         id={`${idPrefix}-contract-mode`}
         data-contract-mode
-        aria-describedby={`${idPrefix}-contract-hint`}
         bind:value={contractMode}
         bind:this={contractInput}
         disabled={!hasControl || recording || dataset}
@@ -378,9 +357,6 @@
         >
       </select>
     </div>
-    <p id={`${idPrefix}-contract-hint`} class="control-hint" data-contract-hint>
-      {contractHint}
-    </p>
     <div class="playback-field stop-condition-editor" hidden={recording || dataset}>
       <label for={`${idPrefix}-stop-condition`}>Stop conditions</label>
       <div
@@ -410,7 +386,9 @@
             ? `${idPrefix}-stop-suggestion-${activeSuggestion}`
             : undefined}
           aria-invalid={activeStopError != null}
-          aria-describedby={`${idPrefix}-stop-condition-hint`}
+          aria-describedby={stopError
+            ? `${idPrefix}-stop-condition-error`
+            : undefined}
           bind:this={stopInput}
           bind:value={stopSource}
           disabled={!canEditStop}
@@ -479,15 +457,15 @@
           {/each}
         </div>
       {/if}
-      <p
-        id={`${idPrefix}-stop-condition-hint`}
-        class:control-error={activeStopError != null}
-        class="control-hint"
-        data-stop-condition-status
-      >
-        {stopError ||
-          "Use event counts, numeric signals, and episode counters with and/or."}
-      </p>
+      {#if stopError}
+        <p
+          id={`${idPrefix}-stop-condition-error`}
+          class="control-hint control-error"
+          data-stop-condition-status
+        >
+          {stopError}
+        </p>
+      {/if}
     </div>
   </div>
 </div>

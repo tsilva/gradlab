@@ -1676,12 +1676,15 @@ select {
   -webkit-text-fill-color: transparent;
 }
 .stop-condition-editor textarea:disabled { opacity: 1; }
-.stop-condition-input-shell.invalid textarea,
-.stop-condition-input-shell.invalid textarea:focus-visible {
-  border-color: var(--color-error-text);
-  outline: 2px solid var(--color-error-text);
-  outline-offset: 2px;
+.stop-condition-input-shell.invalid {
+  outline: 3px solid var(--color-error-text);
+  outline-offset: 1px;
 }
+.stop-condition-input-shell.invalid .stop-condition-highlight,
+.stop-condition-input-shell.invalid textarea {
+  border-color: var(--color-error-text);
+}
+.stop-condition-input-shell.invalid textarea:focus-visible { outline: 0; }
 .stop-condition-token.keyword { color: var(--color-series-violet); font-weight: var(--font-weight-semibold); }
 .stop-condition-token.operator { color: var(--color-series-aqua); font-weight: var(--font-weight-semibold); }
 .stop-condition-token.number { color: var(--color-series-amber); }

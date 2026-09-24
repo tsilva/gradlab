@@ -271,6 +271,10 @@ test("playback tuning is one reusable on-demand settings form", () => {
   }
   assert.match(styles, /\.playback-settings-menu \{/);
   assert.doesNotMatch(playbackSettingsComponent, /playback-glance|data-playback-frame-skip/);
+  assert.doesNotMatch(
+    playbackSettingsComponent,
+    /1 uses the original distribution|Training-compatible critic comparison|Use event counts/,
+  );
 });
 
 test("playback settings apply on change", () => {
@@ -355,6 +359,14 @@ test("stop-condition highlighting preserves source text and marks exact parse er
   assert.deepEqual(
     ranged.filter((segment) => segment.error).map((segment) => segment.text),
     [">"],
+  );
+});
+
+test("stop-condition parse errors retain a visible message and strong red editor outline", () => {
+  assert.match(playbackSettingsComponent, /\{#if stopError\}[\s\S]*data-stop-condition-status/);
+  assert.match(
+    styles,
+    /\.stop-condition-input-shell\.invalid \{[^}]*outline: 3px solid var\(--color-error-text\);/,
   );
 });
 
