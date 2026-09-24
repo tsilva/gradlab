@@ -25,9 +25,12 @@ export function stopConditionSuggestions(source, cursor, symbols = []) {
   const suffix = text.slice(end).match(/^[A-Za-z0-9_.-]*/)?.[0] || "";
   const prefix = before.slice(0, from).trimEnd();
   const comparison = /(?:^|\(|\band\b|\bor\b)\s*[A-Za-z_][A-Za-z0-9_.-]*\s*(?:==|!=|<=|>=|<|>)\s*[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][+-]?\d+)?\s*$/;
+  const awaitingNumber = /(?:^|\(|\band\b|\bor\b)\s*[A-Za-z_][A-Za-z0-9_.-]*\s*(?:==|!=|<=|>=|<|>)\s*[^\s()]*\s*$/;
   let candidates;
   if (comparison.test(before)) {
     candidates = ["and", "or"].map((value) => ({ value, kind: "keyword" }));
+  } else if (awaitingNumber.test(before)) {
+    candidates = [];
   } else if (/(?:^|\(|\band\b|\bor\b)\s*[A-Za-z_][A-Za-z0-9_.-]*\s*$/.test(before)
     && !/(?:^|\(|\band\b|\bor\b)\s*$/.test(prefix)) {
     candidates = COMPARISON_OPERATORS.map((value) => ({ value, kind: "operator" }));
