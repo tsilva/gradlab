@@ -150,15 +150,11 @@ export function stopConditionHighlightSegments(source, error = null, symbols = [
 
 export function stopConditionPopoverPlacement(rect, viewport = {}) {
   const viewportWidth = Math.max(1, Number(viewport.width) || 1);
-  const viewportHeight = Math.max(1, Number(viewport.height) || 1);
   const gutter = 8;
   const gap = 6;
   const preferredHeight = 240;
-  const below = Math.max(0, viewportHeight - rect.bottom - gap - gutter);
   const above = Math.max(0, rect.top - gap - gutter);
-  const placement = below >= Math.min(preferredHeight, above) ? "below" : "above";
-  const available = placement === "below" ? below : above;
-  const maxHeight = Math.max(64, Math.min(preferredHeight, available));
+  const maxHeight = Math.max(64, Math.min(preferredHeight, above));
   const width = Math.max(
     1,
     Math.min(Number(rect.width) || 1, viewportWidth - gutter * 2),
@@ -167,8 +163,6 @@ export function stopConditionPopoverPlacement(rect, viewport = {}) {
     Math.max(gutter, Number(rect.left) || 0),
     viewportWidth - gutter - width,
   );
-  const top = placement === "below"
-    ? Math.min(viewportHeight - gutter - maxHeight, rect.bottom + gap)
-    : Math.max(gutter, rect.top - gap - maxHeight);
-  return { left, top, width, maxHeight, placement };
+  const top = Number(rect.top) - gap;
+  return { left, top, width, maxHeight, placement: "above" };
 }

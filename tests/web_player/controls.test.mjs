@@ -358,21 +358,22 @@ test("stop-condition highlighting preserves source text and marks exact parse er
   );
 });
 
-test("stop-condition suggestions are positioned in the viewport, outside modal overflow", () => {
+test("stop-condition suggestions stay anchored above the editor outside modal overflow", () => {
   assert.deepEqual(
     stopConditionPopoverPlacement(
       { left: 100, top: 100, bottom: 180, width: 300 },
       { width: 800, height: 600 },
     ),
-    { left: 100, top: 186, width: 300, maxHeight: 240, placement: "below" },
+    { left: 100, top: 94, width: 300, maxHeight: 86, placement: "above" },
   );
   assert.deepEqual(
     stopConditionPopoverPlacement(
       { left: 620, top: 500, bottom: 580, width: 300 },
       { width: 800, height: 600 },
     ),
-    { left: 492, top: 254, width: 300, maxHeight: 240, placement: "above" },
+    { left: 492, top: 494, width: 300, maxHeight: 240, placement: "above" },
   );
+  assert.match(styles, /\.stop-condition-suggestions \{[^}]*transform: translateY\(-100%\);/);
   assert.match(playbackSettingsComponent, /use:portalToBody/);
   assert.match(playbackSettingsComponent, /data-playback-settings-popover/);
   assert.match(app, /closest\("\[data-playback-settings-popover\]"\)/);
