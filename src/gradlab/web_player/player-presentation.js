@@ -32,7 +32,7 @@ export function statusMessageShouldToast({ status_message: statusMessage = "", s
   if (!message) return false;
   if (/^playing next episode$/i.test(message)) return false;
   if (!session.awaiting_next_episode) return true;
-  return /error|expired|unsupported|no configured/i.test(message);
+  return /error|expired|unsupported|no configured|stop condition matched/i.test(message);
 }
 
 export function transportPresentation({
@@ -64,25 +64,19 @@ export function transportPresentation({
       reason: hasControl ? "Replay from the selected step" : "Another window has control",
     };
   }
-  if (session.awaiting_next_episode) {
-    const available = Boolean(session.can_start_next_episode) && !recording;
-    return {
-      action: "next_episode",
-      label: "Next episode",
-      icon: "player-skip-forward",
-      disabled: !hasControl || !available,
-      reason: !hasControl
-        ? "Another window has control"
-        : available
-          ? "Start the prepared next episode"
-          : "The configured episode limit has been reached",
-    };
-  }
+  const conditionValid = session.stop_condition?.valid !== false;
+  const limitReached = session.awaiting_next_episode && !session.can_start_next_episode;
+  const disabled = !hasControl || !conditionValid || limitReached || recording;
   return {
     action: "play",
     label: "Play",
     icon: "player-play",
-    disabled: !hasControl,
-    reason: hasControl ? "Play the current episode" : "Another window has control",
+    disabled,
+    reason: !hasControl ? "Another window has control"
+      : !conditionValid ? "Fix the stop condition before playing"
+        : limitReached ? "The configured episode limit has been reached"
+          : recording ? "The recorded episode is complete"
+            : session.awaiting_next_episode ? "Start the next episode"
+              : "Play the current episode",
   };
 }

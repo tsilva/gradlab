@@ -1,8 +1,9 @@
 <script lang="ts">
   import {
-    orderedTerminationConditions,
-    terminationOutcomeClass,
-    frameSkipPresentation,
+    applyStopConditionSuggestion,
+    stopConditionHighlightSegments,
+    stopConditionPopoverPlacement,
+    stopConditionSuggestions,
   } from "../../src/gradlab/web_player/playback-settings.js";
   import { text } from "../../src/gradlab/web_player/panels/shared.js";
   // Wire snapshots are owned and validated by the existing Playback controller.
@@ -15,13 +16,22 @@
     sampling = $state("stochastic"),
     temperature = $state(1),
     contractMode = $state("training");
-  let enabledConditions = $state<string[]>([]);
+  let stopSource = $state("");
+  let stopSuggestions = $state<any[]>([]);
+  let suggestionRange = $state({ from: 0, to: 0 });
+  let activeSuggestion = $state(0);
+  let stopSuggestionStyle = $state("");
+  let interactingWithSuggestions = false;
+  let stopPositionFrame: number | null = null;
+  let stopTimer: ReturnType<typeof setTimeout> | null = null;
   let fpsInput: HTMLInputElement,
     seedInput: HTMLInputElement,
     temperatureInput: HTMLInputElement,
-    contractInput: HTMLSelectElement;
+    contractInput: HTMLSelectElement,
+    stopInput: HTMLTextAreaElement,
+    stopHighlight: HTMLPreElement;
   let defaultSeed = $state("");
-  let terminationKey = "",
+  let stopSourceKey = "",
     wasAwaiting = false;
   const selectionLabel = (mode: string) =>
     ({
@@ -47,42 +57,30 @@
       ? contract.available_modes
       : ["training"],
   );
-  let conditions = $derived(
-    orderedTerminationConditions(session.termination_conditions),
+  let stopCondition = $derived(session.stop_condition || {});
+  let activeStopError = $derived(
+    String(stopCondition.source || "") === stopSource
+      ? stopCondition.error || null
+      : null,
   );
-  let canTerminate = $derived(
+  let stopError = $derived(
+    activeStopError
+      ? `${activeStopError.message} · column ${Number(activeStopError.offset || 0) + 1}`
+      : "",
+  );
+  let stopHighlights = $derived(
+    stopConditionHighlightSegments(
+      stopSource,
+      activeStopError,
+      stopCondition.symbols,
+    ),
+  );
+  let canEditStop = $derived(
     hasControl &&
       !recording &&
       !dataset &&
-      (Number(session.step || 0) === 0 ||
-        Boolean(session.awaiting_next_episode)),
+      snapshot?.run_state === "paused",
   );
-  let frameSkip = $derived(frameSkipPresentation(contract));
-  let contractLabel = $derived(
-    session.temperature_changed ||
-      Number(session.sampling_temperature ?? 1) !== 1
-      ? "Counterfactual — not evidence"
-      : {
-          training: "Training contract",
-          evaluation: "Published evaluation",
-          counterfactual: "Counterfactual — not evidence",
-        }[String(contract.mode || "training")] || selectionLabel(contract.mode),
-  );
-  let contractHint = $derived.by(() => {
-    const messages = [];
-    if (session.critic_comparison?.reasons?.length)
-      messages.push(
-        `Critic comparison unavailable: ${session.critic_comparison.reasons.join("; ")}.`,
-      );
-    if (contract.evaluation_matches_training === false)
-      messages.push(
-        `Published evaluation semantics differ from training${contract.mismatch_paths?.length ? ` at ${contract.mismatch_paths.join(", ")}` : ""}.`,
-      );
-    return (
-      messages.join(" ") ||
-      "Training-compatible critic comparison is available after a terminal episode."
-    );
-  });
   export function updateControl() {
     const state = services.getState();
     hasControl = Boolean(state.hasControl);
@@ -117,43 +115,121 @@
     wasAwaiting = Boolean(nextSession.awaiting_next_episode);
     if (document.activeElement !== contractInput)
       contractMode = nextSession.playback_contract?.mode || "training";
-    const key = JSON.stringify(
-      orderedTerminationConditions(nextSession.termination_conditions),
-    );
-    if (key !== terminationKey) {
-      terminationKey = key;
-      enabledConditions = (nextSession.termination_conditions || [])
-        .filter((condition: any) => condition.enabled)
-        .map((condition: any) => condition.id);
+    const nextStopSource = String(nextSession.stop_condition?.source || "");
+    if (document.activeElement !== stopInput && nextStopSource !== stopSourceKey) {
+      stopSource = nextStopSource;
+      stopSourceKey = nextStopSource;
     }
   }
   export const episodeOptions = () => ({
     seed,
     sampling_mode: sampling,
-    enabled_termination_conditions: conditions.length
-      ? [...enabledConditions]
-      : null,
+  });
+  const refreshSuggestions = () => {
+    if (!stopInput) return;
+    const result = stopConditionSuggestions(
+      stopSource,
+      stopInput.selectionStart,
+      stopCondition.symbols,
+    );
+    suggestionRange = { from: result.from, to: result.to };
+    stopSuggestions = result.items;
+    activeSuggestion = 0;
+    positionStopSuggestions();
+  };
+  const positionStopSuggestions = () => {
+    if (!stopInput) return;
+    const placement = stopConditionPopoverPlacement(
+      stopInput.getBoundingClientRect(),
+      { width: window.innerWidth, height: window.innerHeight },
+    );
+    stopSuggestionStyle = [
+      `left:${placement.left}px`,
+      `top:${placement.top}px`,
+      `width:${placement.width}px`,
+      `max-height:${placement.maxHeight}px`,
+    ].join(";");
+  };
+  const scheduleStopSuggestionPosition = () => {
+    if (stopPositionFrame != null) cancelAnimationFrame(stopPositionFrame);
+    stopPositionFrame = requestAnimationFrame(() => {
+      stopPositionFrame = null;
+      positionStopSuggestions();
+    });
+  };
+  const syncStopHighlightScroll = () => {
+    if (!stopInput || !stopHighlight) return;
+    stopHighlight.scrollTop = stopInput.scrollTop;
+    stopHighlight.scrollLeft = stopInput.scrollLeft;
+  };
+  const portalToBody = (node: HTMLElement) => {
+    document.body.append(node);
+    return { destroy: () => node.remove() };
+  };
+  const sendStopSource = () => {
+    if (stopTimer) clearTimeout(stopTimer);
+    stopTimer = setTimeout(() => {
+      services.command("set_stop_condition", { source: stopSource });
+      stopTimer = null;
+    }, 250);
+  };
+  const flushStopSource = () => {
+    if (!stopTimer) return;
+    clearTimeout(stopTimer);
+    stopTimer = null;
+    services.command("set_stop_condition", { source: stopSource });
+  };
+  const chooseSuggestion = (index: number) => {
+    const item = stopSuggestions[index];
+    if (!item) return;
+    const result = applyStopConditionSuggestion(
+      stopSource,
+      stopInput.selectionStart,
+      suggestionRange.from,
+      suggestionRange.to,
+      item.value,
+    );
+    stopSource = result.source;
+    stopSuggestions = [];
+    sendStopSource();
+    requestAnimationFrame(() => {
+      stopInput.focus();
+      stopInput.setSelectionRange(result.cursor, result.cursor);
+    });
+  };
+  const leaveStopInput = () => {
+    requestAnimationFrame(() => {
+      if (interactingWithSuggestions) {
+        stopInput?.focus({ preventScroll: true });
+        return;
+      }
+      stopSuggestions = [];
+      flushStopSource();
+    });
+  };
+  $effect(() => {
+    if (!stopSuggestions.length) return;
+    scheduleStopSuggestionPosition();
+    const reposition = () => scheduleStopSuggestionPosition();
+    const finishInteraction = () => {
+      interactingWithSuggestions = false;
+    };
+    window.addEventListener("resize", reposition);
+    window.addEventListener("pointerup", finishInteraction);
+    document.addEventListener("scroll", reposition, true);
+    return () => {
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("pointerup", finishInteraction);
+      document.removeEventListener("scroll", reposition, true);
+    };
+  });
+  $effect(() => () => {
+    if (stopTimer) clearTimeout(stopTimer);
+    if (stopPositionFrame != null) cancelAnimationFrame(stopPositionFrame);
   });
 </script>
 
 <div class="control-components playback-settings-form">
-  <div class="playback-glance" aria-live="polite">
-    <strong data-playback-glance-contract>{contractLabel}</strong>
-    <span data-playback-glance-detail
-      >{selectionLabel(sampling || session.sampling_mode)} · seed {text(
-        snapshot?.transition?.seed,
-        text(session.seed, defaultSeed),
-      )}</span
-    >
-    <span
-      data-playback-frame-skip
-      hidden={!frameSkip}
-      class:contract-mismatch={frameSkip?.differs}
-      title={frameSkip
-        ? `Training repeated each selected action for ${frameSkip.training} environment frame${frameSkip.training === 1 ? "" : "s"}. This playback repeats each selected action for ${frameSkip.playback} environment frame${frameSkip.playback === 1 ? "" : "s"}.`
-        : ""}>{frameSkip?.label || ""}</span
-    >
-  </div>
   <div class="advanced-playback-body">
     <div class="playback-field playback-fps">
       <label for={`${idPrefix}-fps`}>Play FPS</label>
@@ -238,11 +314,6 @@
             });
         }}
       />
-      <p class="control-hint">
-        1 uses the original distribution. Lower values favor likely actions;
-        higher values add randomness. Changes apply to the next stochastic
-        decision and make playback counterfactual.
-      </p>
     </div>
     <p
       id={`${idPrefix}-sampling-hint`}
@@ -263,7 +334,6 @@
       <select
         id={`${idPrefix}-contract-mode`}
         data-contract-mode
-        aria-describedby={`${idPrefix}-contract-hint`}
         bind:value={contractMode}
         bind:this={contractInput}
         disabled={!hasControl || recording || dataset}
@@ -287,44 +357,115 @@
         >
       </select>
     </div>
-    <p id={`${idPrefix}-contract-hint`} class="control-hint" data-contract-hint>
-      {contractHint}
-    </p>
-    <fieldset
-      class="termination-settings"
-      data-termination-settings
-      hidden={recording || dataset || !conditions.length}
-    >
-      <legend>Episode termination</legend>
-      <p class="control-hint" data-termination-source>
-        Defaults: {session.termination_source || "training"}
-      </p>
-      <div class="termination-options" data-termination-options>
-        {#each conditions as condition (condition.id)}
-          <label class="termination-option"
-            ><input
-              type="checkbox"
-              value={condition.id}
-              bind:group={enabledConditions}
-              disabled={!canTerminate}
-              onchange={(event) => {
-                const enabled = new Set(enabledConditions);
-                if (event.currentTarget.checked) enabled.add(condition.id);
-                else enabled.delete(condition.id);
-                services.command("set_termination_conditions", {
-                  enabled: [...enabled],
-                });
-              }}
-            /><span>{condition.label}</span><small
-              class={`termination-outcome ${terminationOutcomeClass(condition.outcome)}`}
-              >{condition.outcome}</small
-            ></label
-          >
-        {/each}
+    <div class="playback-field stop-condition-editor" hidden={recording || dataset}>
+      <label for={`${idPrefix}-stop-condition`}>Stop conditions</label>
+      <div
+        class="stop-condition-input-shell"
+        class:invalid={activeStopError != null}
+      >
+        <pre
+          class="stop-condition-highlight"
+          aria-hidden="true"
+          bind:this={stopHighlight}
+        >{#each stopHighlights as segment}<span
+              class={`stop-condition-token ${segment.kind}`}
+              class:syntax-error={segment.error}
+              data-token-kind={segment.kind}
+            >{segment.text}</span>{/each}</pre
+        >
+        <textarea
+          id={`${idPrefix}-stop-condition`}
+          data-stop-condition
+          rows="4"
+          spellcheck="false"
+          role="combobox"
+          aria-autocomplete="list"
+          aria-controls={`${idPrefix}-stop-suggestions`}
+          aria-expanded={stopSuggestions.length > 0}
+          aria-activedescendant={stopSuggestions.length
+            ? `${idPrefix}-stop-suggestion-${activeSuggestion}`
+            : undefined}
+          aria-invalid={activeStopError != null}
+          aria-describedby={stopError
+            ? `${idPrefix}-stop-condition-error`
+            : undefined}
+          bind:this={stopInput}
+          bind:value={stopSource}
+          disabled={!canEditStop}
+          onfocus={refreshSuggestions}
+          onblur={leaveStopInput}
+          onclick={refreshSuggestions}
+          onscroll={syncStopHighlightScroll}
+          oninput={() => {
+            refreshSuggestions();
+            syncStopHighlightScroll();
+            sendStopSource();
+          }}
+          onkeydown={(event) => {
+            if (!stopSuggestions.length) return;
+            if (event.key === "ArrowDown") {
+              event.preventDefault();
+              activeSuggestion = (activeSuggestion + 1) % stopSuggestions.length;
+            } else if (event.key === "ArrowUp") {
+              event.preventDefault();
+              activeSuggestion =
+                (activeSuggestion - 1 + stopSuggestions.length) % stopSuggestions.length;
+            } else if (event.key === "Enter" || event.key === "Tab") {
+              event.preventDefault();
+              chooseSuggestion(activeSuggestion);
+            } else if (event.key === "Escape") {
+              event.stopPropagation();
+              stopSuggestions = [];
+            }
+          }}
+        ></textarea>
       </div>
-      <p class="control-hint">
-        Changes apply immediately before an episode starts.
-      </p>
-    </fieldset>
+      {#if stopSuggestions.length}
+        <div
+          id={`${idPrefix}-stop-suggestions`}
+          class="stop-condition-suggestions"
+          data-playback-settings-popover
+          role="listbox"
+          tabindex="-1"
+          style={stopSuggestionStyle}
+          use:portalToBody
+          onpointerdown={(event) => {
+            event.stopPropagation();
+            interactingWithSuggestions = true;
+          }}
+        >
+          {#each stopSuggestions as suggestion, index (suggestion.value)}
+            <button
+              id={`${idPrefix}-stop-suggestion-${index}`}
+              type="button"
+              role="option"
+              tabindex="-1"
+              aria-selected={index === activeSuggestion}
+              class:active={index === activeSuggestion}
+              onmousedown={(event) => event.preventDefault()}
+              onmouseenter={() => (activeSuggestion = index)}
+              onclick={(event) => {
+                event.stopPropagation();
+                chooseSuggestion(index);
+              }}
+            >
+              <code>{suggestion.value}</code>
+              <span>{suggestion.kind}{suggestion.detail == null
+                  ? ""
+                  : ` · ${suggestion.detail}`}</span>
+            </button>
+          {/each}
+        </div>
+      {/if}
+      {#if stopError}
+        <p
+          id={`${idPrefix}-stop-condition-error`}
+          class="control-hint control-error"
+          data-stop-condition-status
+        >
+          {stopError}
+        </p>
+      {/if}
+    </div>
   </div>
 </div>

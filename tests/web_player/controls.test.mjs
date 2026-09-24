@@ -11,9 +11,10 @@ import {
 } from "../../src/gradlab/web_player/player-presentation.js";
 import { setSvgUseHref } from "../../src/gradlab/web_player/panels/shared.js";
 import {
-  frameSkipPresentation,
-  orderedTerminationConditions,
-  terminationOutcomeClass,
+  applyStopConditionSuggestion,
+  stopConditionHighlightSegments,
+  stopConditionPopoverPlacement,
+  stopConditionSuggestions,
 } from "../../src/gradlab/web_player/playback-settings.js";
 
 const settings = readFileSync(
@@ -28,6 +29,10 @@ const page = readFileSync(
   new URL("../../frontend/components/Shell.svelte", import.meta.url),
   "utf8",
 ).replace(/\s+/g, " ").replaceAll(" >", ">");
+const playbackSettingsComponent = readFileSync(
+  new URL("../../frontend/components/PlaybackSettings.svelte", import.meta.url),
+  "utf8",
+);
 const styles = readFileSync(
   new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
   "utf8",
@@ -37,7 +42,7 @@ const icons = readFileSync(
   "utf8",
 );
 
-test("one contextual transport covers play, pause, replay, and next episode", () => {
+test("one contextual transport uses Play for every live paused state", () => {
   assert.deepEqual(
     transportPresentation({ hasControl: true }),
     {
@@ -59,14 +64,18 @@ test("one contextual transport covers play, pause, replay, and next episode", ()
   assert.deepEqual(
     transportPresentation({
       hasControl: true,
-      session: { awaiting_next_episode: true, can_start_next_episode: true },
+      session: {
+        awaiting_next_episode: true,
+        can_start_next_episode: true,
+        stop_condition: { valid: true },
+      },
     }),
     {
-      action: "next_episode",
-      label: "Next episode",
-      icon: "player-skip-forward",
+      action: "play",
+      label: "Play",
+      icon: "player-play",
       disabled: false,
-      reason: "Start the prepared next episode",
+    reason: "Start the next episode",
     },
   );
   const exhausted = transportPresentation({
@@ -87,6 +96,10 @@ test("episode completion uses the player controls instead of a toast", () => {
     status_message: "episode complete · choose Play next episode",
     session: { awaiting_next_episode: true },
   }), false);
+  assert.equal(statusMessageShouldToast({
+    status_message: "stop condition matched · episode.terminated = 2",
+    session: { awaiting_next_episode: true },
+  }), true);
   assert.equal(statusMessageShouldToast({
     status_message: "Checkpoint expired before the next episode",
     session: { awaiting_next_episode: true },
@@ -196,8 +209,8 @@ test("timeline controls use accessible icons and distinct action colors", () => 
     assert.match(page, new RegExp(`id="${id}"[^>]*class="[^"]*icon-only[^"]*"[^>]*aria-label="${label}"`));
   }
   assert.equal(page.includes("timeline-playback-label"), false);
-  assert.match(icons, /id="ti-player-skip-forward"/);
-  assert.match(styles, /#timeline-playback-toggle\[data-action="next_episode"\][^{]*\{[^}]*var\(--color-series-teal\)/);
+  assert.doesNotMatch(styles, /data-action="next_episode"/);
+  assert.match(styles, /#timeline-playback-toggle\[data-action="play"\][^{]*\{[^}]*var\(--color-interaction\)/);
   assert.match(styles, /#timeline-playback-toggle\[data-action="pause"\][^{]*\{[^}]*var\(--color-series-amber\)/);
   assert.match(styles, /#timeline-reset:not\(:disabled\)[^{]*\{[^}]*var\(--color-series-coral\)/);
   assert.match(styles, /#playback-settings-toggle:not\(:disabled\)[^{]*\{[^}]*var\(--color-series-aqua\)/);
@@ -257,62 +270,125 @@ test("playback tuning is one reusable on-demand settings form", () => {
   ]) {
   }
   assert.match(styles, /\.playback-settings-menu \{/);
-});
-
-test("playback settings distinguish training and active frame skip", () => {
-  assert.deepEqual(
-    frameSkipPresentation({ frame_skip: { training: 4, playback: 2 } }),
-    {
-      training: 4,
-      playback: 2,
-      differs: true,
-      label: "Frame skip · training 4 · playback 2",
-    },
-  );
-  assert.equal(frameSkipPresentation({ frame_skip: { training: 4 } }), null);
-  assert.match(
-    styles,
-    /\[data-playback-frame-skip\]\.contract-mismatch \{[^}]*var\(--color-series-amber\)/,
+  assert.doesNotMatch(playbackSettingsComponent, /playback-glance|data-playback-frame-skip/);
+  assert.doesNotMatch(
+    playbackSettingsComponent,
+    /1 uses the original distribution|Training-compatible critic comparison|Use event counts/,
   );
 });
 
 test("playback settings apply on change", () => {
-  assert.match(
-    app,
-    /command\("next_episode", \{[\s\S]*enabled_termination_conditions: options\.enabled_termination_conditions/,
+  assert.doesNotMatch(app, /command\("next_episode"/);
+  assert.match(app, /command\("reset_episode", \{[\s\S]*seed: options\.seed/);
+  assert.doesNotMatch(app, /enabled_termination_conditions/);
+});
+
+test("stop-condition autocomplete understands expression context", () => {
+  const symbols = [
+    { name: "episode.terminated", kind: "episode", value: 1 },
+    { name: "x_pos", kind: "signal", value: 2940 },
+  ];
+  assert.deepEqual(
+    stopConditionSuggestions("episode.t", 9, symbols).items.map((item) => item.value),
+    ["episode.terminated"],
   );
-  assert.match(
-    app,
-    /command\("reset_episode", \{[\s\S]*seed: options\.seed,[\s\S]*enabled_termination_conditions: options\.enabled_termination_conditions/,
+  assert.deepEqual(
+    stopConditionSuggestions("x_pos ", 6, symbols).items.map((item) => item.value),
+    ["==", "!=", "<", "<=", ">", ">="],
+  );
+  assert.deepEqual(
+    stopConditionSuggestions("x_pos >= 3000 ", 14, symbols).items.map((item) => item.value),
+    ["and", "or"],
+  );
+  for (const source of [
+    "episode.terminated >=",
+    "episode.terminated >= ",
+    "episode.terminated >= -",
+    "episode.terminated >= 1e",
+    "x_pos >= nope",
+    "x_pos >= 1 or episode.truncated >=",
+  ]) {
+    assert.deepEqual(
+      stopConditionSuggestions(source, source.length, symbols).items,
+      [],
+      source,
+    );
+  }
+  assert.deepEqual(
+    applyStopConditionSuggestion("episode.t", 9, 0, 9, "episode.terminated"),
+    { source: "episode.terminated", cursor: 18 },
+  );
+  const middle = stopConditionSuggestions("episode.terminated == 2", 9, symbols);
+  assert.deepEqual(
+    applyStopConditionSuggestion(
+      "episode.terminated == 2",
+      9,
+      middle.from,
+      middle.to,
+      "episode.terminated",
+    ),
+    { source: "episode.terminated == 2", cursor: 18 },
   );
 });
 
-test("episode termination settings prioritize and color semantic outcomes", () => {
-  const failure = { id: "event:life_loss", outcome: "failure" };
-  const success = { id: "event:level_change", outcome: "success" };
-  const firstTimeout = { id: "event:stalled", outcome: "timeout" };
-  const secondTimeout = { id: "limit:max_episode_steps", outcome: "timeout" };
+test("stop-condition highlighting preserves source text and marks exact parse errors", () => {
+  const source = "episode.terminated >= 2 or x_pos >=";
+  const error = { offset: source.length, length: 0 };
+  const segments = stopConditionHighlightSegments(source, error, [
+    { name: "episode.terminated", kind: "episode" },
+    { name: "x_pos", kind: "signal" },
+  ]);
+  assert.equal(segments.map((segment) => segment.text).join(""), source);
+  assert.ok(segments.some((segment) => segment.kind === "symbol-episode"));
+  assert.ok(segments.some((segment) => segment.kind === "symbol-signal"));
+  assert.ok(segments.some((segment) => segment.kind === "keyword"));
+  assert.equal(segments.some((segment) => segment.kind === "invalid"), false);
+  assert.ok(segments.some((segment) => segment.text === ">="));
+  assert.deepEqual(segments.at(-1), {
+    text: "",
+    kind: "error-marker",
+    error: true,
+    from: source.length,
+    to: source.length,
+  });
 
+  const ranged = stopConditionHighlightSegments("life_loss >> 1", {
+    offset: 11,
+    length: 1,
+  });
   assert.deepEqual(
-    orderedTerminationConditions([failure, firstTimeout, success, secondTimeout]),
-    [success, failure, firstTimeout, secondTimeout],
+    ranged.filter((segment) => segment.error).map((segment) => segment.text),
+    [">"],
   );
-  assert.equal(terminationOutcomeClass("success"), "outcome-success");
-  assert.equal(terminationOutcomeClass("failure"), "outcome-failure");
-  assert.equal(terminationOutcomeClass("timeout"), "outcome-timeout");
-  assert.equal(terminationOutcomeClass("neutral"), "");
+});
+
+test("stop-condition parse errors retain a visible message and strong red editor outline", () => {
+  assert.match(playbackSettingsComponent, /\{#if stopError\}[\s\S]*data-stop-condition-status/);
   assert.match(
     styles,
-    /\.game-frame-detail\.outcome-success,[\s\S]*\.termination-outcome\.outcome-success \{[^}]*var\(--color-evaluation-text\)/,
+    /\.stop-condition-input-shell\.invalid \{[^}]*outline: 3px solid var\(--color-error-text\);/,
   );
-  assert.match(
-    styles,
-    /\.game-frame-detail\.outcome-failure,[\s\S]*\.termination-outcome\.outcome-failure \{[^}]*var\(--color-error-text\)/,
+});
+
+test("stop-condition suggestions stay anchored above the editor outside modal overflow", () => {
+  assert.deepEqual(
+    stopConditionPopoverPlacement(
+      { left: 100, top: 100, bottom: 180, width: 300 },
+      { width: 800, height: 600 },
+    ),
+    { left: 100, top: 94, width: 300, maxHeight: 86, placement: "above" },
   );
-  assert.match(
-    styles,
-    /\.game-frame-detail\.outcome-timeout,[\s\S]*\.termination-outcome\.outcome-timeout \{[^}]*var\(--color-series-amber\)/,
+  assert.deepEqual(
+    stopConditionPopoverPlacement(
+      { left: 620, top: 500, bottom: 580, width: 300 },
+      { width: 800, height: 600 },
+    ),
+    { left: 492, top: 494, width: 300, maxHeight: 240, placement: "above" },
   );
+  assert.match(styles, /\.stop-condition-suggestions \{[^}]*transform: translateY\(-100%\);/);
+  assert.match(playbackSettingsComponent, /use:portalToBody/);
+  assert.match(playbackSettingsComponent, /data-playback-settings-popover/);
+  assert.match(app, /closest\("\[data-playback-settings-popover\]"\)/);
 });
 
 
@@ -323,7 +399,7 @@ test("playback setting values share the compact field layout", () => {
   );
   assert.match(
     styles,
-    /\.termination-settings \{[^}]*border: 0;[^}]*\}/,
+    /\.stop-condition-editor \{[^}]*position: relative;[^}]*\}/,
   );
 });
 
