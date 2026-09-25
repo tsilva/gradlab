@@ -267,6 +267,40 @@ class EvalMetricTests(unittest.TestCase):
         self.assertEqual(summary["eval/progress/kills/mean"], 10.0)
         self.assertEqual(summary["eval/progress/kills/max"], 12)
 
+    def test_breakout_preserves_fractional_brick_progress_and_requires_evidence(self) -> None:
+        semantics = environment_spec(
+            "env-breakoutatari2600-turbo-native",
+            "Breakout-Atari2600-v0",
+        ).eval_semantics
+        record = EpisodeRecord(
+            lane=0,
+            episode_index=0,
+            start_id="Start",
+            episode_return=10.0,
+            episode_length=200,
+            terminated=False,
+            truncated=True,
+            outcome=Outcome.TIMEOUT,
+            events=(),
+            metrics={},
+        )
+
+        with self.assertRaisesRegex(ValueError, "required evaluation progress is missing"):
+            episode_result_from_record(record, semantics=semantics)
+
+        result = episode_result_from_record(
+            record,
+            semantics=semantics,
+            terminal_info={"bricks_destroyed_normalized": 0.5},
+        )
+        summary = summarize_episode_results(
+            [result],
+            deterministic=False,
+            semantics=semantics,
+        )
+        self.assertEqual(result["bricks_destroyed_normalized"], 0.5)
+        self.assertEqual(summary["eval/progress/bricks_destroyed_normalized/max"], 0.5)
+
     def test_model_eval_rejects_deterministic_sampling(self) -> None:
         with self.assertRaisesRegex(ValueError, "deterministic policy evaluation is unsupported"):
             evaluate_model_episodes(
