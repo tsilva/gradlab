@@ -293,9 +293,13 @@ resuming as its cause without a matched uninterrupted continuation.
   that means 100 consecutive genuine target-origin clears; for multiple starts, every configured
   start's latest 100 attempts must all clear. This training stop is not acceptance or promotion;
   explicitly evaluated Mario checkpoints rank by earliest `leader/step`, then highest
-  `eval/return/mean`. Breakout is training-only and ranks individual current-contract runs using `train/progress/bricks_destroyed_normalized/mean`, which
-  excludes archive-curriculum origins and non-episode control boundaries; ties prefer higher
-  rolling maximum target-origin bricks, then lower rolling mean episode length across all origins.
+  `eval/return/mean`. Training-Only Breakout goals rank runs using
+  `train/progress/bricks_destroyed_normalized/mean`, which excludes archive-curriculum origins and
+  non-episode control boundaries; ties prefer higher rolling maximum target-origin bricks, then
+  lower rolling mean episode length across all origins. The evaluated TwoWalls goal uses the matching
+  `eval/progress/bricks_destroyed_normalized/mean` measure for Acceptance at 1.0 over all 100
+  declared episodes. It ranks evaluated checkpoints by that mean, then the matching progress maximum,
+  then lower `eval/episode_steps/mean`.
 - Recent training `train/success/min` and `train/success/mean` reduce success fractions across
   configured starts only after every start fills its window. For one start, publish the minimum
   and cumulative successful episode count; suppress duplicate mean and per-start recent fraction
@@ -810,7 +814,8 @@ and target-progress fields are not registry metrics and cannot enter the publish
 | `eval/monitor/success/ci95/lower` | Monitoring success lower 95% | Lower endpoint of the two-sided 95% Wilson interval. | fraction | complete monitoring evaluation | history | last | eval/step | monitoring | - | - |
 | `eval/monitor/success/ci95/upper` | Monitoring success upper 95% | Upper endpoint of the two-sided 95% Wilson interval. | fraction | complete monitoring evaluation | history | last | eval/step | monitoring | - | - |
 | `eval/monitor/progress/median` | Monitoring normalized brick median | Median native brick progress with denominator 216. | fraction | complete monitoring evaluation | history | last | eval/step | monitoring | - | - |
-| `eval/episode_steps/mean` | Monitoring episode length | Mean complete episode length at the contracted action cadence. | steps | complete monitoring evaluation | history | last | eval/step | monitoring | - | train/episode_steps/mean |
+| `eval/episode_steps/mean` | Evaluation episode length | Mean complete episode length at the contracted action cadence, from a complete Acceptance evaluation or monitoring manifest. | steps | evaluation | history | last | eval/step | evaluation | leader/episode_steps/mean | train/episode_steps/mean |
+| `leader/episode_steps/mean` | Leader episode length | Selected-checkpoint mean evaluation episode length. | steps | selection | summary | none | - | selection | - | - |
 | `eval/monitor/video` | Monitoring representative episode | Full original-frame video from the recorded subset nearest the full evaluation-set median normalized brick progress; ties use manifest ordinal. Omitted when zero episodes are recorded. | video | complete monitoring evaluation | history | last | eval/step | monitoring | - | - |
 <!-- METRIC_REGISTRY_END -->
 

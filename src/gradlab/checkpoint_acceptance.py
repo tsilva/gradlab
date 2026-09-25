@@ -446,6 +446,17 @@ def acceptance_aggregates(
                 raise ValueError("acceptance episode returns must be finite")
             result[EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN] = sum(returns) / len(returns)
             result[EVAL_FULL_EPISODE_RETURN_SHAPED_MAX] = max(returns)
+        steps = [row.get("steps") for row in rows]
+        if any(value is not None for value in steps):
+            if any(
+                isinstance(value, bool)
+                or not isinstance(value, int | float)
+                or not math.isfinite(float(value))
+                or float(value) < 0
+                for value in steps
+            ):
+                raise ValueError("acceptance episode lengths must be finite and non-negative")
+            result["eval/episode_steps/mean"] = sum(float(value) for value in steps) / len(steps)
         environment = contract.get("environment")
         if isinstance(environment, Mapping):
             provider_id = environment.get("env_provider")

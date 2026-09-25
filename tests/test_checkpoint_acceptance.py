@@ -117,6 +117,17 @@ def test_full_evaluation_provides_return_max_without_partial_rank_inputs() -> No
     assert complete["eval/return/mean"] == 3.0
 
 
+def test_full_evaluation_projects_episode_length_only_from_complete_evidence() -> None:
+    value = contract(episodes=3, n_envs=1)
+    rows = [
+        {**row(entry), "steps": steps}
+        for entry, steps in zip(value["manifest"]["episodes"], (10, 20, 30), strict=True)
+    ]
+
+    assert "eval/episode_steps/mean" not in acceptance_aggregates(rows[:2], contract=value)
+    assert acceptance_aggregates(rows, contract=value)["eval/episode_steps/mean"] == 20.0
+
+
 def test_rejection_is_valid_partial_evidence_only_through_first_failure() -> None:
     value = contract(episodes=4, n_envs=2)
     entries = value["manifest"]["episodes"]
