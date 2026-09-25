@@ -128,6 +128,41 @@ def test_full_evaluation_projects_episode_length_only_from_complete_evidence() -
     assert acceptance_aggregates(rows, contract=value)["eval/episode_steps/mean"] == 20.0
 
 
+def test_two_walls_acceptance_uses_complete_normalized_brick_progress() -> None:
+    value = build_checkpoint_eval_contract(
+        environment={
+            "game": "Breakout-Atari2600-v0",
+            "env_provider": "env-breakoutatari2600-turbo-native",
+            "state": "Start",
+        },
+        episodes=2,
+        n_envs=1,
+        watchdog_steps=54_000,
+        seed=10_000,
+        seed_protocol="vector-lane-v1",
+        acceptance=[
+            {
+                "metric": "eval/progress/bricks_destroyed_normalized/mean",
+                "operator": ">=",
+                "threshold": 1.0,
+            }
+        ],
+    )
+    assert value["evidence_policy"]["fail_fast"] == "disabled"
+    rows = [
+        {**row(entry), "steps": 100, "bricks_destroyed_normalized": progress}
+        for entry, progress in zip(value["manifest"]["episodes"], (1.0, 0.5), strict=True)
+    ]
+
+    aggregates = acceptance_aggregates(rows, contract=value)
+    assert aggregates["eval/progress/bricks_destroyed_normalized/mean"] == 0.75
+    assert aggregates["eval/progress/bricks_destroyed_normalized/max"] == 1.0
+    assert aggregates["eval/episode_steps/mean"] == 100.0
+    assert evaluate_acceptance(aggregates, contract=value)[0] is False
+    rows[1]["bricks_destroyed_normalized"] = 1.0
+    assert evaluate_acceptance(acceptance_aggregates(rows, contract=value), contract=value)[0]
+
+
 def test_rejection_is_valid_partial_evidence_only_through_first_failure() -> None:
     value = contract(episodes=4, n_envs=2)
     entries = value["manifest"]["episodes"]

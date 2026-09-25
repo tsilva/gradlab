@@ -142,6 +142,8 @@ def episode_result_from_record(
         value = metrics.get(field.result_key, info.get(field.info_key))
         if value is None and field.result_key == "max_level_x_pos":
             value = metrics.get("max_x_pos", 0)
+        if value is None and field.required:
+            raise ValueError(f"required evaluation progress is missing: {field.result_key}")
         result[field.result_key] = float(value or 0)
 
     if semantics.death_flag_key:
@@ -331,10 +333,10 @@ def summarize_episode_results(
         )
         mean_key, max_key = progress_summary_fields(field.result_key)
         progress_metrics[mean_key] = float(values.mean())
-        progress_metrics[max_key] = int(values.max())
+        progress_metrics[max_key] = float(values.max())
         progress_name = progress_metric_name(field.result_key)
         progress_metrics[eval_full_progress_metric(progress_name, "mean")] = float(values.mean())
-        progress_metrics[eval_full_progress_metric(progress_name, "max")] = int(values.max())
+        progress_metrics[eval_full_progress_metric(progress_name, "max")] = float(values.max())
     death_x_positions = [
         int(episode["death_x_pos"])
         for episode in episode_results

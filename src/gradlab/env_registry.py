@@ -101,6 +101,7 @@ class EvalProgressField:
     info_key: str
     result_key: str
     rank: bool = False
+    required: bool = False
 
 
 @dataclass(frozen=True)
@@ -147,6 +148,18 @@ MARIO_EVAL_SEMANTICS = EvalSemantics(
 VIZDOOM_DEATHMATCH_EVAL_SEMANTICS = EvalSemantics(
     progress_fields=(EvalProgressField("killcount", "kills", rank=True),),
     best_episode_rank=("progress", "reward"),
+)
+
+BREAKOUT_EVAL_SEMANTICS = EvalSemantics(
+    progress_fields=(
+        EvalProgressField(
+            "bricks_destroyed_normalized",
+            "bricks_destroyed_normalized",
+            rank=True,
+            required=True,
+        ),
+    ),
+    best_episode_rank=("completion", "progress", "reward"),
 )
 
 ENVIRONMENT_SPECS: Mapping[str, EnvironmentSpec] = MappingProxyType(
@@ -196,6 +209,7 @@ ENVIRONMENT_SPECS: Mapping[str, EnvironmentSpec] = MappingProxyType(
             "Breakout-Atari2600-v0",
             "Atari2600-Breakout",
             "Breakout-Atari2600-v0",
+            eval_semantics=BREAKOUT_EVAL_SEMANTICS,
         ),
         "MsPacman-Atari2600-v0": EnvironmentSpec(
             "MsPacman-Atari2600-v0",
