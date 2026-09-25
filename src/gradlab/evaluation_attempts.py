@@ -118,6 +118,24 @@ def build_modal_eval_payload(
             expires_seconds=timeout + int(expiry_margin_seconds),
         ),
     }
+    if intent.execution_contract.get("record_episode") is True:
+        video_key = (
+            f"runs/{manifest.run_id}/evals/{intent.idempotency_key}/"
+            f"video/{payload['attempt_id']}.mp4"
+        )
+        payload["video"] = {
+            "episode_id": "lane-00-episode-000",
+            "object_uri": evaluation_store.uri(video_key),
+            "put_url": evaluation_store.presign_put(
+                video_key,
+                expires_seconds=timeout + int(expiry_margin_seconds),
+            ),
+            "content_type": "video/mp4",
+            "cache_control": "private, max-age=0",
+            "upload_timeout_seconds": 120,
+            "fps": 30,
+            "max_bytes": 256 * 1024**2,
+        }
     asset = manifest.modal.get("rom_asset_manifest")
     if isinstance(asset, Mapping):
         rom_key = evaluation_store.key_from_uri(str(asset["object_uri"]))
@@ -170,6 +188,7 @@ def verify_eval_result(
         evidence_sha256=normalized["evidence_sha256"],
         completed_at=observed_at,
         error=normalized["error"],
+        video=normalized["video"],
     )
 
 

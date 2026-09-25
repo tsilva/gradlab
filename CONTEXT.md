@@ -91,7 +91,7 @@ The provisional classification that a run meets goal-defined criteria calculated
 _Avoid_: Acceptance, solved goal
 
 **Checkpoint Monitoring**:
-Observational evaluation of an immutable checkpoint on a fixed episode manifest, producing complete trajectories, metrics and a representative video without Acceptance, Promotion or score-driven training stops.
+An opt-in transition-dataset campaign that evaluates immutable checkpoints on a fixed episode manifest, producing complete trajectories, metrics and a representative video without Acceptance, Promotion or score-driven training stops. Ordinary Checkpoint evaluation follows the Goal's Acceptance contract and records one declared episode for visual environments by default.
 _Avoid_: Acceptance evaluation, training-transition capture
 
 **Acceptance**:

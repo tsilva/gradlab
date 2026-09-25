@@ -239,7 +239,7 @@ sections:
     - id: monitor_video
       kind: media
       x: eval/step
-      y: [eval/monitor/video]
+      y: [eval/video, eval/monitor/video]
 
 profiles:
   training:

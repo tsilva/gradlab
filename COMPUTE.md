@@ -106,7 +106,10 @@ real hostnames, SSH users, identity paths, or fleet names.
 
 ## Modal evaluation
 
-Modal is the v1 evaluation backend for short CPU acceptance jobs. It receives
+Modal is the default evaluation backend for short CPU acceptance jobs. An
+explicit training-container option runs the same frozen evaluation contract
+in bounded CPU work alongside training; evaluation may also be disabled.
+Modal receives
 no W&B or control-private credentials and writes only evaluation-private
 results/evidence. The lease-holding training supervisor projects accepted
 evaluation metrics into W&B.

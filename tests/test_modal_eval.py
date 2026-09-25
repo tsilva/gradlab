@@ -266,5 +266,65 @@ def test_modal_child_wire_result_omits_metrics_and_claimed_aggregates(
         "episode_results": [{"episode_id": "episode-1"}],
         "evaluation_evidence": {"manifest": "verified"},
         "preview": None,
+        "video": None,
         "verdict": "accepted",
     }
+
+
+def test_modal_child_video_uses_one_declared_evaluation_episode(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    contract = {
+        "environment": {"env_provider": "gradlab", "game": "Bandit-v0", "task": {}},
+        "episodes": 1,
+        "n_envs": 1,
+        "watchdog_steps": 10,
+        "seed": 10_000,
+        "asset": None,
+        "acceptance": [{"metric": "eval/return/mean"}],
+        "record_episode": True,
+    }
+    request = {
+        "contract": contract,
+        "bundle_root": str(tmp_path / "bundle"),
+        "rom_path": None,
+        "rom_asset_manifest": None,
+        "execution_id": "execution-1",
+        "video": {"episode_id": "lane-00-episode-000", "fps": 30, "max_bytes": 1024},
+    }
+    input_path = tmp_path / "input.json"
+    output_path = tmp_path / "output.json"
+    input_path.write_text(json.dumps(request), encoding="utf-8")
+    monkeypatch.setattr(
+        "gradlab.modal_eval_worker.load_policy_bundle",
+        lambda _root: SimpleNamespace(recipe={}),
+    )
+    monkeypatch.setattr(
+        "gradlab.modal_eval_worker.evaluation_contract",
+        lambda _recipe: {
+            "environment": contract["environment"],
+            "seed": contract["seed"],
+            "watchdog_steps": contract["watchdog_steps"],
+        },
+    )
+
+    def evaluate(_bundle, **kwargs):
+        recorder = kwargs["episode_video_capture"]
+        recorder.output.write_bytes(b"complete-video")
+        recorder.frames = 2
+        recorder.complete = True
+        return (
+            {
+                "episode_results": [{"episode_id": "lane-00-episode-000"}],
+                "evaluation_evidence": {"manifest": "verified"},
+                "acceptance_verdict": "accepted",
+            },
+            None,
+        )
+
+    monkeypatch.setattr("gradlab.eval_runner.evaluate_policy_bundle", evaluate)
+    assert run_child(input_path, output_path) == 0
+    result = json.loads(output_path.read_text(encoding="utf-8"))
+    assert result["video"]["episode_id"] == result["episode_results"][0]["episode_id"]
+    assert result["video"]["bytes"] == len(b"complete-video")

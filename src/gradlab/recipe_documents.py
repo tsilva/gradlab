@@ -1082,17 +1082,17 @@ def prepare_checkpoint_eval_mode(
         if checkpoint_eval_backend is not None
         else config.get("checkpoint_eval_backend") or "modal"
     ).strip()
-    if mode not in {"modal", "none"}:
+    if mode not in {"modal", "training-container", "none"}:
         raise ValueError(f"unsupported checkpoint eval backend: {mode}")
     goal = document.get("goal")
     if not isinstance(goal, Mapping):
         raise ValueError("materialized recipe goal must be an object")
     evaluation_mode = goal_evaluation_mode(goal, label="recipe.goal")
-    if mode == "modal" and evaluation_mode != "evaluated":
-        raise ValueError("checkpoint_eval_backend=modal requires an evaluated goal")
+    if mode != "none" and evaluation_mode != "evaluated":
+        raise ValueError(f"checkpoint_eval_backend={mode} requires an evaluated goal")
     from gradlab.training_backend import accepts_first_training_success
 
-    if mode == "modal" and accepts_first_training_success(config):
+    if mode != "none" and accepts_first_training_success(config):
         raise ValueError("first-training-success backend requires checkpoint_eval_backend=none")
     config["checkpoint_eval_backend"] = mode
     document["train_config"] = config

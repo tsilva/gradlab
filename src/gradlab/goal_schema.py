@@ -50,7 +50,7 @@ def goal_evaluation_mode(
     *,
     label: str,
 ) -> str:
-    value = document.get("evaluation_mode")
+    value = document.get("evaluation_mode", "evaluated")
     if not isinstance(value, str) or value not in GOAL_EVALUATION_MODES:
         choices = ", ".join(sorted(GOAL_EVALUATION_MODES))
         raise ValueError(f"{label}.evaluation_mode must be one of: {choices}")

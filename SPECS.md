@@ -8,6 +8,7 @@ GradLab is a public, reproducible, general-purpose reinforcement-learning resear
 
 - Every Research Goal must have a stable identity and declare its environment, goal type, and Training Success criteria.
 - Every Evaluated Goal must define its Acceptance criteria, ranking rules, evaluation method, and Release requirements.
+- New Research Goals must default to Evaluated, require explicitly authored Acceptance criteria, and allow Training-Only only as an explicit choice.
 - A Training-Only Goal may publish Checkpoints but must remain ineligible for Acceptance, Promotion, or Release.
 - Every change to a Research Goal contract must produce an immutable Goal Revision, and one Goal Revision must be the current default.
 - Every Goal Variant must identify a normalized change to the scientific meaning of its Goal Revision.
@@ -29,6 +30,7 @@ GradLab is a public, reproducible, general-purpose reinforcement-learning resear
 - Counterfactual Playback must remain visible and ineligible as Acceptance or Promotion evidence.
 - Acceptance must stop training at the next safe update boundary and close admission of new automatic Acceptance evaluations.
 - Acceptance evaluations submitted before Acceptance must be allowed to finish, and Checkpoints without Acceptance evaluation must be preserved for future explicit evaluation.
+- Every enabled Checkpoint evaluation of a visual environment must record one of its declared episodes by default and provide a playable video without adding an episode to Acceptance; nonvisual environments may omit video.
 
 ### Provenance, Security, and Compatibility
 
@@ -52,6 +54,8 @@ GradLab is a public, reproducible, general-purpose reinforcement-learning resear
 - Every Run must declare its reward transforms and their order, and providers must not apply undeclared or duplicate transforms.
 - Every supported environment must work through common training, evaluation, Publication, and Playback workflows.
 - Equivalent Run contracts must work on local and cost-limited cloud compute without provider-specific research code.
+- Checkpoint evaluation must default to Modal, allow an explicitly selected training-container backend, and allow an explicit disabled mode.
+- A Run with Checkpoint evaluation disabled must not establish Acceptance or Promotion.
 - Every supported execution system must provide the common lifecycle for each execution mode that it declares.
 - The common lifecycle must cover progress, outcome measures, Checkpoints, graceful stopping, and final artifacts.
 - Algorithm-specific measures may extend but must not replace the common lifecycle and scientific record.

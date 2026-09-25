@@ -1,14 +1,19 @@
 # Checkpoint Monitoring and datasets
 
-This specification governs issue #52's opt-in Checkpoint Monitoring and explicit
+This specification governs issue #52's opt-in transition-dataset Checkpoint Monitoring and explicit
 dataset Publication, replacing issue #50's active training-transition capture.
 Historical immutable datasets retain their meaning; the isolated collector is
 unchanged. No silent legacy execution fallback is permitted.
 
+The ordinary Checkpoint evaluation path is governed by the Goal's Acceptance
+contract and records one declared episode by default for visual environments.
+The opt-in monitoring described below is a separate, larger transition-dataset
+campaign; enabling it does not replace or relax Acceptance.
+
 ## Scientific contract
 
 - Initially support verified native Breakout Checkpoints produced by GradLab PPO and SB3 PPO/A2C, including Training-Only Goals without inventing Acceptance criteria.
-- Monitoring must never feed the learner, grant Acceptance, trigger Promotion or Release, or stop training because of its scores; existing Modal Acceptance authority remains unchanged.
+- Monitoring must never feed the learner, grant Acceptance, trigger Promotion or Release, or stop training because of its scores; ordinary Checkpoint Acceptance authority remains unchanged for either selected evaluation backend.
 - Freeze the Run/Attempt/Checkpoint hash and training step, Goal/Revision/Variant, environment/provider/source/runtime, starts, actions, rewards, termination, limits, episode manifest, metric schema, resources and representative-video rule.
 - Allow separate configured counts for complete evaluation episodes and recorded episodes per unique saved Checkpoint, including final; default to 400 evaluations with all recorded, and freeze the full manifest, recording subset and cadence during training, retain older queued Checkpoints, and deduplicate immutable identities.
 - Give every episode immutable identity and distinct environment and stochastic Policy-sampling seeds, independent of lane, worker, vector width, retries or active/finalization scheduling; keep monitoring seeds separate from training and untouched Acceptance seeds under centralized ownership.

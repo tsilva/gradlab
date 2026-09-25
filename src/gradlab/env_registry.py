@@ -130,6 +130,7 @@ class EnvironmentSpec:
 class EnvRegistration:
     spec_id: str
     policy_compatibility_id: str | None = None
+    supports_episode_video: bool = True
 
 
 MARIO_EVAL_SEMANTICS = EvalSemantics(
@@ -605,7 +606,7 @@ GRADLAB_PROVIDER = EnvProvider(
     provider_id="gradlab",
     import_name="gradlab",
     distribution_name="gradlab",
-    environments={"Bandit-v0": EnvRegistration("Bandit-v0")},
+    environments={"Bandit-v0": EnvRegistration("Bandit-v0", supports_episode_video=False)},
     supports_states=False,
     constructor_contract=ProviderConstructorContract(
         canonical_args=frozenset({"game", "num_envs"}),
@@ -666,6 +667,17 @@ def environment_spec(provider_id: object, env_id: object) -> EnvironmentSpec:
         game_family=_fallback_game_family(environment, fallback="environment"),
         wandb_project=environment or "environment",
     )
+
+
+def supports_evaluation_video(provider_id: object, env_id: object) -> bool:
+    """Whether this exact registered environment supports native episode frames."""
+
+    provider, environment = _environment_identity(provider_id, env_id)
+    resolved = resolve_env_provider(provider)
+    registration = resolved.environments.get(environment)
+    if registration is None and not resolved.allows_unregistered_env_ids:
+        raise ValueError(f"environment {environment!r} is not registered for provider {provider!r}")
+    return registration.supports_episode_video if registration is not None else False
 
 
 def policy_environment_compatibility_id(provider_id: object, env_id: object) -> str | None:
