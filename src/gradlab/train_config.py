@@ -40,7 +40,7 @@ def checkpoint_eval_requires_acceptance(train_config: Mapping[str, Any]) -> bool
     """Derive acceptance behavior from the evaluation backend and contract."""
 
     return (
-        str(train_config.get("checkpoint_eval_backend") or "none") == "modal"
+        str(train_config.get("checkpoint_eval_backend") or "none") in {"modal", "training-container"}
         and train_config.get("checkpoint_eval_acceptance") is not None
     )
 
@@ -624,7 +624,7 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
     _field(
         "checkpoint_eval_backend",
         default="modal",
-        choices=("modal", "none"),
+        choices=("modal", "training-container", "none"),
         non_empty=True,
         source_section="train",
     ),

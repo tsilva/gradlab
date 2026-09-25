@@ -342,9 +342,43 @@ def test_modal_protocol_normalizes_failed_attempt_identity() -> None:
         "duration_seconds": 3.5,
         "evidence_sha256": [],
         "error": "deadline reached",
+        "video": None,
     }
     with pytest.raises(ValueError, match="attempt id mismatch"):
         normalize_attempt_result(result, contract=value, attempt_id="different-attempt")
+
+
+def test_recorded_episode_video_must_belong_to_evaluation_manifest() -> None:
+    value = modal_contract(episodes=2, n_envs=1)
+    value["record_episode"] = True
+    attempt_id = "attempt-video"
+    rows = [row(entry, success=True, episode_return=1.0) for entry in value["manifest"]["episodes"]]
+    video = {
+        "episode_id": "lane-00-episode-000",
+        "frames": 2,
+        "bytes": 1024,
+        "content_type": "video/mp4",
+        "source": "native_rgb",
+        "object_uri": "s3://evaluation/runs/example/video.mp4",
+        "sha256": "a" * 64,
+    }
+    result = {
+        **result_identity(value, attempt_id=attempt_id),
+        "status": "succeeded",
+        "verdict": "accepted",
+        "episode_results": rows,
+        "duration_seconds": 1.0,
+        "video": video,
+    }
+    assert validate_attempt_result(result, contract=value, attempt_id=attempt_id)["verdict"] == "accepted"
+    with pytest.raises(ValueError, match="selected manifest episode"):
+        validate_attempt_result(
+            {**result, "video": {**video, "episode_id": "lane-00-episode-001"}},
+            contract=value,
+            attempt_id=attempt_id,
+        )
+    with pytest.raises(ValueError, match="missing its required episode video"):
+        validate_attempt_result({**result, "video": None}, contract=value, attempt_id=attempt_id)
 
 
 def test_complete_evidence_requires_every_identity_once() -> None:

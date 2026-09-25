@@ -33,7 +33,7 @@ from gradlab.dstack_backend import (
     TaskRequest,
     DstackTask,
 )
-from gradlab.env_registry import resolve_env_provider
+from gradlab.env_registry import resolve_env_provider, supports_evaluation_video
 from gradlab.file_utils import file_sha256
 from gradlab.goal_variants import (
     GOAL_VARIANT_SCHEMA_VERSION,
@@ -76,6 +76,7 @@ from gradlab.run_contracts import (
     default_liveness_policy,
     new_attempt_id,
     new_run_id,
+    run_checkpoint_eval_backend,
     utc_now,
 )
 from gradlab.runtime_refs import (
@@ -866,6 +867,11 @@ def cmd_launch(args: argparse.Namespace) -> int:
     )
     fault_fixture = str(getattr(args, "supervision_fault_fixture", "") or "").strip()
     manifest_compute = {
+        "checkpoint_eval_backend": checkpoint_eval_backend,
+        "record_checkpoint_episode": (
+            checkpoint_eval_backend != "none"
+            and supports_evaluation_video(env_provider, str(config["game"]))
+        ),
         "request": compute.as_manifest(),
         "selected": selected_compute.as_manifest(),
         "selected_offer": selected_offer,
@@ -1175,7 +1181,7 @@ def _record_pre_submit_failure(
             run_id=manifest.run_id,
             attempt_id=manifest.attempt_id,
             state="resumable_failure",
-            acceptance_required=bool(manifest.modal["enabled"]),
+            acceptance_required=run_checkpoint_eval_backend(manifest) != "none",
             stop_reason="pre_submit_failure",
             final_step=0,
             checkpoint_inventory=(),
@@ -1216,7 +1222,7 @@ def _record_terminal_task_without_receipt(
         run_id=manifest.run_id,
         attempt_id=manifest.attempt_id,
         state="resumable_failure",
-        acceptance_required=bool(manifest.modal["enabled"]),
+        acceptance_required=run_checkpoint_eval_backend(manifest) != "none",
         stop_reason=stop_reason,
         final_step=int(final_step),
         checkpoint_inventory=tuple(dict(row) for row in checkpoint_inventory),
@@ -1684,7 +1690,7 @@ def cmd_resume_submit(args: argparse.Namespace) -> int:
     root = repository_root()
     storage, authority = _storage(root)
     manifest = _manifest_only_submission(authority, args.run_id)
-    checkpoint_eval_backend = "modal" if bool(manifest.modal["enabled"]) else "none"
+    checkpoint_eval_backend = run_checkpoint_eval_backend(manifest)
     required = _required_operator_environment(checkpoint_eval_backend)
     missing = [name for name in required if not str(os.environ.get(name) or "").strip()]
     if missing:
@@ -1838,7 +1844,7 @@ def cmd_retry(args: argparse.Namespace) -> int:
         compute=compute,
     )
     if bool(getattr(args, "repair_runtime", False)):
-        checkpoint_eval_backend = "modal" if bool(previous_manifest.modal["enabled"]) else "none"
+        checkpoint_eval_backend = run_checkpoint_eval_backend(previous_manifest)
         source_sha = clean_git_source_sha(root)
         branch = current_git_branch(root)
         release = runtime_release_from_args(
@@ -2065,12 +2071,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     launch.add_argument(
         "--checkpoint-eval-backend",
-        choices=("modal", "none"),
+        choices=("modal", "training-container", "none"),
         default=None,
         help=(
             "Override the recipe's checkpoint-evaluation mode. Modal establishes "
-            "acceptance; none publishes training-only evidence without promotion or "
-            "goal acceptance."
+            "acceptance; training-container evaluates in the training task; none "
+            "publishes training-only evidence without promotion or goal acceptance."
         ),
     )
     launch.add_argument(
@@ -2135,7 +2141,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     operator_preflight.add_argument(
         "--checkpoint-eval-backend",
-        choices=("modal", "none"),
+        choices=("modal", "training-container", "none"),
         default="modal",
     )
     operator_preflight.add_argument(

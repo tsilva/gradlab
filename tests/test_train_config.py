@@ -148,13 +148,17 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
         self.assertEqual(field.dest, "task")
         self.assertTrue(field.environment)
 
-    def test_checkpoint_eval_backend_supports_only_modal_and_none(self) -> None:
+    def test_checkpoint_eval_backend_supports_modal_container_and_none(self) -> None:
         normalized = validate_and_normalize_train_config({"checkpoint_eval_backend": "none"})
         self.assertEqual(
             normalized["checkpoint_eval_backend"],
             "none",
         )
-        with self.assertRaisesRegex(ValueError, "must be one of modal, none"):
+        container = validate_and_normalize_train_config(
+            {"checkpoint_eval_backend": "training-container"}
+        )
+        self.assertEqual(container["checkpoint_eval_backend"], "training-container")
+        with self.assertRaisesRegex(ValueError, "must be one of modal, training-container, none"):
             validate_and_normalize_train_config({"checkpoint_eval_backend": "local"})
 
     def test_metrics_schema_version_accepts_only_active_v24(self) -> None:

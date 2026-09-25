@@ -164,7 +164,7 @@ class CatalogPage:
 @dataclass(frozen=True)
 class CheckpointMetricContract:
     metrics_schema_version: int
-    evaluation_backend: Literal["modal", "none"]
+    evaluation_backend: Literal["modal", "training-container", "none"]
     rank: tuple[RankCriterion, ...]
     acceptance: tuple[Mapping[str, Any], ...]
     columns: tuple[Mapping[str, Any], ...]
@@ -514,7 +514,9 @@ def checkpoint_metric_contract(
     schema_version = require_current_metrics_schema(train_config.get("metrics_schema_version"))
     raw_evaluation_backend = str(train_config.get("checkpoint_eval_backend") or "").strip()
     if raw_evaluation_backend == "modal":
-        evaluation_backend: Literal["modal", "none"] = "modal"
+        evaluation_backend: Literal["modal", "training-container", "none"] = "modal"
+    elif raw_evaluation_backend == "training-container":
+        evaluation_backend = "training-container"
     elif raw_evaluation_backend == "none":
         evaluation_backend = "none"
     else:

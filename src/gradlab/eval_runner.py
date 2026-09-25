@@ -27,6 +27,7 @@ from gradlab.checkpoint_acceptance import (
     manifest_index,
 )
 from gradlab.eval_metrics import episode_is_complete
+from gradlab.video import SingleEpisodeVideoRecorder
 from gradlab.policy_bundle import (
     PolicyBundle,
     PolicyDocumentError,
@@ -91,6 +92,7 @@ def _evaluate_model_episodes_vector(
     semantics: EvalSemantics,
     progress_bar: Any | None = None,
     preview_capture: PolicyObservationPreview | None = None,
+    episode_video_capture: SingleEpisodeVideoRecorder | None = None,
     acceptance_contract: dict[str, Any] | None = None,
     rom_binding: RomRuntimeBinding | None = None,
     policy_runtime: PolicyRuntime | None = None,
@@ -119,6 +121,9 @@ def _evaluate_model_episodes_vector(
     planned = manifest_index(acceptance_contract) if acceptance_contract is not None else None
     rejected = False
     try:
+        if episode_video_capture is not None:
+            episode_video_capture.runtime = eval_env.runtime
+            eval_env.runtime.recording = episode_video_capture
         runtime_action_contract = getattr(
             getattr(eval_env, "runtime", None),
             "action_contract",
@@ -142,7 +147,10 @@ def _evaluate_model_episodes_vector(
         np.random.seed(seed)
         obs = eval_env.reset()
         lane_watchdog_steps = np.zeros(n_envs, dtype=np.int64)
-        while len(episode_results) < episodes and not rejected:
+        while len(episode_results) < episodes and (
+            not rejected
+            or (episode_video_capture is not None and not episode_video_capture.complete)
+        ):
             if policy_runtime is None:
                 action, _ = model.predict(obs, deterministic=deterministic)
             else:
@@ -200,10 +208,13 @@ def _evaluate_model_episodes_vector(
                     best_episode_result = result
                 if fail_fast and not episode_is_complete(result):
                     rejected = True
-                    break
+                    if episode_video_capture is None:
+                        break
                 if len(episode_results) >= episodes:
                     break
-            if len(episode_results) >= episodes or rejected:
+            if len(episode_results) >= episodes or (
+                rejected and (episode_video_capture is None or episode_video_capture.complete)
+            ):
                 break
             expired = np.flatnonzero(lane_watchdog_steps >= watchdog_steps)
             if expired.size:
@@ -234,6 +245,7 @@ def evaluate_model_episodes(
     progress: bool = False,
     progress_description: str = "eval episodes",
     preview_capture: PolicyObservationPreview | None = None,
+    episode_video_capture: SingleEpisodeVideoRecorder | None = None,
     acceptance_contract: dict[str, Any] | None = None,
     rom_binding: RomRuntimeBinding | None = None,
     action_selection_mode: str | None = None,
@@ -279,6 +291,9 @@ def evaluate_model_episodes(
                 rom_binding=rom_binding,
             )
             try:
+                if episode_video_capture is not None:
+                    episode_video_capture.runtime = eval_env.runtime
+                    eval_env.runtime.recording = episode_video_capture
                 runtime_action_contract = getattr(
                     getattr(eval_env, "runtime", None),
                     "action_contract",
@@ -366,6 +381,7 @@ def evaluate_model_episodes(
                 progress_bar=progress_bar,
                 semantics=semantics,
                 preview_capture=preview_capture,
+                episode_video_capture=episode_video_capture,
                 acceptance_contract=acceptance_contract,
                 rom_binding=rom_binding,
                 policy_runtime=policy_runtime,
@@ -452,6 +468,7 @@ def evaluate_policy_bundle(
     video_path: Path | None = None,
     semantic_overrides: dict[str, Any] | None = None,
     preview_capture: PolicyObservationPreview | None = None,
+    episode_video_capture: SingleEpisodeVideoRecorder | None = None,
     acceptance_contract: dict[str, Any] | None = None,
     rom_binding: RomRuntimeBinding | None = None,
     approval_hash: str | None = None,
@@ -581,6 +598,7 @@ def evaluate_policy_bundle(
         acceptance_contract=effective_acceptance_contract,
         extra=evidence,
         preview_capture=preview_capture,
+        episode_video_capture=episode_video_capture,
         rom_binding=rom_binding,
         action_selection_mode=str(contract["action_sampling"]),
         expected_action_contract=expected_action_contract,

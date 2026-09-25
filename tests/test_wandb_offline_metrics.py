@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from unittest.mock import patch
+import hashlib
 from pathlib import Path
 
 import wandb
@@ -21,6 +23,7 @@ from gradlab.metric_names import (
     TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MEAN,
 )
 from gradlab.metric_store import MetricStore
+from gradlab.r2_store import BucketConfig, R2Bucket
 from gradlab.run_contracts import (
     EarlyStopReceipt,
     TerminalReceipt,
@@ -449,6 +452,59 @@ class WandbOfflineMetricIntegrationTests(unittest.TestCase):
             )
             self.assertEqual(store.metric_outbox_stats()["frames"], 0)
             run.finish()
+
+
+def test_checkpoint_evaluation_video_delivery_reads_verified_private_bytes() -> None:
+    class FakeRun:
+        def __init__(self, directory: Path) -> None:
+            self.dir = str(directory)
+            self.events: list[tuple[dict, int]] = []
+
+        def define_metric(self, *_args, **_kwargs) -> None:
+            return
+
+        def log(self, payload, *, step: int) -> None:
+            self.events.append((dict(payload), step))
+
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        bucket = R2Bucket(BucketConfig(uri=(root / "eval-r2").as_uri()))
+        video = b"verified-video-bytes"
+        key = "runs/test/evals/checkpoint/video/episode.mp4"
+        bucket.put_bytes(key, video, content_type="video/mp4")
+        store = MetricStore(root / "outbox.sqlite")
+        store.init()
+        store.enqueue_event(
+            kind="evaluation_video",
+            payload={
+                "bucket_uri": bucket.config.uri,
+                "key": key,
+                "bytes": len(video),
+                "sha256": hashlib.sha256(video).hexdigest(),
+                "scratch_headroom_bytes": 0,
+            },
+            step=10,
+            source="eval:test:video",
+        )
+        row = store.pending_metric_frames(limit=1)[0]
+        run = FakeRun(root)
+        token = object()
+
+        def video_factory(path: str, *, format: str):
+            assert format == "mp4"
+            assert Path(path).read_bytes() == video
+            return token
+
+        with patch("wandb.Video", side_effect=video_factory):
+            _publish_frame(run, row)
+        assert run.events == [(
+            {
+                EVAL_CHECKPOINT_STEP: 10,
+                ORCHESTRATION_EVENT_SEQUENCE: row["id"],
+                "eval/video": token,
+            },
+            row["id"],
+        )]
 
 
 if __name__ == "__main__":

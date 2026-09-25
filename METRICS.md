@@ -109,8 +109,10 @@ authority for that decision.
 - `ops/state` and `ops/reason` are W&B summary-only
   catalog projections, not history metrics; the private-R2 `TerminalReceipt` remains authoritative.
 - Model bytes, replay archives, episode rows and recovery payloads remain in R2.
-  The sole monitoring media exception is one representative full-episode video
-  per Checkpoint at `eval/monitor/video`, with canonical R2 bytes and provenance.
+  Enabled Checkpoint evaluation of a visual environment delivers one declared
+  episode as playable `eval/video`, with canonical R2 bytes and provenance;
+  nonvisual environments may omit it. An explicit transition-dataset Monitoring
+  campaign separately delivers its representative video at `eval/monitor/video`.
 - Interactive playback uses local descriptor keys such as `reward/shaped`, `policy/value`, and
   `action/executed` to configure live panels. They are typed projections of one streamed transition
   or its bounded in-browser history, are not emitted metrics, and must not be interpreted as aliases
@@ -817,6 +819,7 @@ and target-progress fields are not registry metrics and cannot enter the publish
 | `eval/episode_steps/mean` | Evaluation episode length | Mean complete episode length at the contracted action cadence, from a complete Acceptance evaluation or monitoring manifest. | steps | evaluation | history | last | eval/step | evaluation | leader/episode_steps/mean | train/episode_steps/mean |
 | `leader/episode_steps/mean` | Leader episode length | Selected-checkpoint mean evaluation episode length. | steps | selection | summary | none | - | selection | - | - |
 | `eval/monitor/video` | Monitoring representative episode | Full original-frame video from the recorded subset nearest the full evaluation-set median normalized brick progress; ties use manifest ordinal. Omitted when zero episodes are recorded. | video | complete monitoring evaluation | history | last | eval/step | monitoring | - | - |
+| `eval/video` | Checkpoint evaluation episode | Full native-frame video of the first declared lane-0 episode, recorded during the same evaluation and counted once in its episode manifest. | video | complete checkpoint evaluation | history | last | eval/step | evaluation | - | - |
 <!-- METRIC_REGISTRY_END -->
 
 ## Registry relationships and dashboard applicability

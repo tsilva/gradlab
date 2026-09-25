@@ -84,7 +84,9 @@ from gradlab.run_contracts import (
     RunManifest,
     TerminalReceipt,
     document_sha256,
+    run_checkpoint_eval_backend,
 )
+from gradlab.training_container_eval import TrainingContainerEvalBackend
 from gradlab.supervisor_ledger import SupervisorLedger
 from gradlab.supervisor_runtime import (
     LearnerProcess,
@@ -343,14 +345,20 @@ class RunSupervisor:
         self.recovery_mode = str(self.manifest.compute.get("recovery_mode") or "resume-training")
         if self.recovery_mode not in {"resume-training", "drain-only"}:
             raise ValueError(f"unsupported recovery mode: {self.recovery_mode}")
-        self.evaluation_required = bool(self.manifest.modal["enabled"])
+        self.checkpoint_eval_backend = run_checkpoint_eval_backend(self.manifest)
+        self.evaluation_required = self.checkpoint_eval_backend != "none"
         self.eval_backend = eval_backend
         if self.eval_backend is None and self.evaluation_required:
-            self.eval_backend = ModalEvalBackend(
-                app_name=str(self.manifest.modal["app_name"]),
-                function_name=str(self.manifest.modal["function_name"]),
-                environment_name=str(self.manifest.modal["environment_name"]),
-            )
+            if self.checkpoint_eval_backend == "modal":
+                self.eval_backend = ModalEvalBackend(
+                    app_name=str(self.manifest.modal["app_name"]),
+                    function_name=str(self.manifest.modal["function_name"]),
+                    environment_name=str(self.manifest.modal["environment_name"]),
+                )
+            else:
+                self.eval_backend = TrainingContainerEvalBackend(
+                    self.output_root / ".checkpoint-eval"
+                )
         self.store = SupervisorLedger(metric_store_path(self.run_dir), clock=self.clock)
         self.train_config: dict[str, Any] = {}
         self.recipe_document: dict[str, Any] = {}
@@ -779,7 +787,7 @@ class RunSupervisor:
             recipe_overrides=self.manifest.recipe_overrides,
             prepare_materialized=partial(
                 prepare_checkpoint_eval_mode,
-                checkpoint_eval_backend=("modal" if self.evaluation_required else "none"),
+                checkpoint_eval_backend=self.checkpoint_eval_backend,
             ),
             source_sha=self.manifest.source_sha,
         )
@@ -928,7 +936,7 @@ class RunSupervisor:
                         "orchestrator:dstack",
                     ]
                 ),
-                "checkpoint_eval_backend": ("modal" if self.evaluation_required else "none"),
+                "checkpoint_eval_backend": self.checkpoint_eval_backend,
                 "metrics_schema_version": METRICS_SCHEMA_VERSION,
             }
         )
@@ -1422,6 +1430,7 @@ class RunSupervisor:
         if document is None:
             return False
         result = EvalResult.from_dict(document)
+        self._enqueue_eval_video(row, result)
         self.store.mark_eval_terminal(
             idempotency_key=result.idempotency_key,
             status=result.status,
@@ -1437,9 +1446,9 @@ class RunSupervisor:
             if call_id:
                 try:
                     assert self.eval_backend is not None
-                    self.eval_backend.cancel(EvalHandle(provider="modal", call_id=call_id))
+                    self.eval_backend.cancel(EvalHandle(provider=self.checkpoint_eval_backend, call_id=call_id))
                 except Exception as exc:
-                    print(f"Modal cancel failed call={call_id}: {exc}", flush=True)
+                    print(f"{self.checkpoint_eval_backend} cancel failed call={call_id}: {exc}", flush=True)
             result = EvalResult(
                 run_id=self.manifest.run_id,
                 checkpoint_id=str(row["checkpoint_id"]),
@@ -1671,6 +1680,11 @@ class RunSupervisor:
             checkpoint=checkpoint,
             recipe_format_version=int(self.recipe_document["format_version"]),
             evaluation_contract_sha256=checkpoint.evaluation_contract_sha256,
+            transform=(
+                (lambda contract: {**contract, "record_episode": True})
+                if self.manifest.compute.get("record_checkpoint_episode") is True
+                else None
+            ),
         )
 
     def _ensure_eval(
@@ -1687,7 +1701,11 @@ class RunSupervisor:
             checkpoint=checkpoint,
             execution_contract=contract,
             evaluation_contract_sha256=checkpoint.evaluation_contract_sha256,
-            protocol=AUTOMATIC_EVAL_PROTOCOL,
+            protocol=(
+                AUTOMATIC_EVAL_PROTOCOL
+                if self.checkpoint_eval_backend == "modal"
+                else "training-container-acceptance-v1"
+            ),
             timeout_seconds=timeout,
             created_at=parse_utc_datetime(checkpoint.created_at),
         )
@@ -1795,7 +1813,7 @@ class RunSupervisor:
                     error=f"ambiguous submit: {exc!r}",
                 )
                 print(
-                    f"Modal spawn ambiguous key={row['idempotency_key']}: {exc}",
+                    f"{self.checkpoint_eval_backend} dispatch ambiguous key={row['idempotency_key']}: {exc}",
                     flush=True,
                 )
                 continue
@@ -1819,7 +1837,7 @@ class RunSupervisor:
                 call_id=handle.call_id,
             )
             print(
-                f"Modal eval submitted checkpoint={row['checkpoint_id']} "
+                f"{self.checkpoint_eval_backend} eval submitted checkpoint={row['checkpoint_id']} "
                 f"call={handle.call_id} attempt={attempt}",
                 flush=True,
             )
@@ -1886,7 +1904,7 @@ class RunSupervisor:
         intent_document = dict(row["intent"])
         intent_document.pop("checkpoint")
         intent_document.pop("checkpoint_step")
-        return verify_eval_result(
+        result = verify_eval_result(
             run_id=self.manifest.run_id,
             checkpoint_id=str(row["checkpoint_id"]),
             intent=EvalIntent.from_dict(intent_document),
@@ -1894,6 +1912,41 @@ class RunSupervisor:
             attempt=int(row["attempt"]),
             modal_call_id=str(row["modal_call_id"] or "not-recorded"),
             clock=self.clock,
+        )
+        if result.video is not None:
+            video = result.video
+            key = self.authority.evaluation.key_from_uri(str(video["object_uri"]))
+            expected_prefix = f"runs/{self.manifest.run_id}/evals/{intent_document['idempotency_key']}/video/"
+            if not key.startswith(expected_prefix):
+                raise ValueError("evaluation video object is outside its frozen evaluation")
+            with tempfile.TemporaryDirectory(prefix="gradlab-eval-video-", dir=self.output_root) as temporary:
+                self.authority.evaluation.download_verified(
+                    key,
+                    Path(temporary) / "episode.mp4",
+                    size=int(video["bytes"]),
+                    sha256=str(video["sha256"]),
+                )
+        return result
+
+    def _enqueue_eval_video(self, row: Mapping[str, Any], result: EvalResult) -> None:
+        if result.video is None:
+            return
+        video = result.video
+        key = self.authority.evaluation.key_from_uri(str(video["object_uri"]))
+        self.store.enqueue_event(
+            kind="evaluation_video",
+            payload={
+                "bucket_uri": self.authority.evaluation.config.uri,
+                "key": key,
+                "bytes": int(video["bytes"]),
+                "sha256": str(video["sha256"]),
+                "episode_id": str(video["episode_id"]),
+                "media_spool_bytes": 512 * 1024**2,
+                "scratch_headroom_bytes": 1024**3,
+            },
+            step=int(row["checkpoint_step"]),
+            source=f"eval:{result.idempotency_key}:video",
+            event_id=f"eval-video:{result.idempotency_key}",
         )
 
     def _record_eval_metrics(
@@ -1938,9 +1991,10 @@ class RunSupervisor:
                 idempotency_key=str(row["idempotency_key"]),
                 error=f"invalid result: {exc!r}",
             )
-            print(f"invalid Modal result ignored key={row['idempotency_key']}: {exc}", flush=True)
+            print(f"invalid {self.checkpoint_eval_backend} result ignored key={row['idempotency_key']}: {exc}", flush=True)
             return False
         self.authority.put_verified_eval_result(result)
+        self._enqueue_eval_video(row, result)
         self.store.mark_eval_terminal(
             idempotency_key=result.idempotency_key,
             status=result.status,
@@ -1964,7 +2018,7 @@ class RunSupervisor:
                 raise RuntimeError("accepted eval did not issue stop within ten seconds")
         self._record_eval_metrics(row, result)
         print(
-            f"Modal eval terminal checkpoint={result.checkpoint_id} status={result.status}",
+            f"{self.checkpoint_eval_backend} eval terminal checkpoint={result.checkpoint_id} status={result.status}",
             flush=True,
         )
         return True
@@ -2002,7 +2056,7 @@ class RunSupervisor:
                 continue
             call_id = str(row["modal_call_id"] or "")
             if call_id:
-                handle = EvalHandle(provider="modal", call_id=call_id)
+                handle = EvalHandle(provider=self.checkpoint_eval_backend, call_id=call_id)
                 assert self.eval_backend is not None
                 poll = self.eval_backend.poll(handle)
                 if poll.status == "failed" and poll.error:
@@ -2615,6 +2669,7 @@ class RunSupervisor:
                     "modal_call_id": str(row.get("modal_call_id") or ""),
                     "attempt": int(row.get("attempt") or 0),
                     "episode_count": len(result.get("episode_results") or []),
+                    "video": dict(result["video"]) if isinstance(result.get("video"), Mapping) else None,
                     "result_sha256": document_sha256(result) if result else None,
                     "reason": (
                         str(row.get("last_error") or "")
@@ -2991,6 +3046,7 @@ class RunSupervisor:
             wandb_high_water_mark=wandb_high_water,
             drain={
                 "complete": failure is None,
+                "record_checkpoint_episode": self.manifest.compute.get("record_checkpoint_episode") is True,
                 "metric_segment_high_water": self.store.metric_segment_high_water(),
                 "eval_terminal_count": self.store.terminal_eval_count(),
                 "eval_deferred_count": self.store.deferred_eval_count(),

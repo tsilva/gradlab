@@ -329,6 +329,13 @@ class RunManifest(_CurrentContract):
         modal_enabled = self.modal.get("enabled")
         if not isinstance(modal_enabled, bool):
             raise ValueError("modal.enabled must be a boolean")
+        evaluation_backend = run_checkpoint_eval_backend(self)
+        if evaluation_backend == "modal" and not modal_enabled:
+            raise ValueError("Modal checkpoint evaluation requires modal.enabled")
+        if evaluation_backend != "modal" and modal_enabled:
+            raise ValueError("modal.enabled requires the Modal checkpoint evaluation backend")
+        if local_process and evaluation_backend != "none":
+            raise ValueError("local-process runs cannot enable checkpoint evaluation")
         if modal_enabled:
             _require_text(self.modal.get("environment_name"), "modal.environment_name")
             _require_text(self.modal.get("app_name"), "modal.app_name")
@@ -361,6 +368,17 @@ class RunManifest(_CurrentContract):
     def to_dict(self) -> dict[str, Any]:
         self.validate()
         return asdict(self)
+
+
+def run_checkpoint_eval_backend(manifest: RunManifest) -> str:
+    """Resolve the frozen backend, including manifests created before this field existed."""
+
+    value = manifest.compute.get("checkpoint_eval_backend")
+    if value is None:
+        return "modal" if manifest.modal.get("enabled") is True else "none"
+    if not isinstance(value, str) or value not in {"modal", "training-container", "none"}:
+        raise ValueError("compute.checkpoint_eval_backend is invalid")
+    return value
 
 
 @dataclass(frozen=True)
@@ -534,6 +552,7 @@ class EvalResult(_CurrentContract):
     evidence_sha256: Sequence[str]
     completed_at: str
     error: str | None = None
+    video: Mapping[str, Any] | None = None
     schema_version: int = SCHEMA_VERSION
 
     def validate(self) -> None:
@@ -552,11 +571,16 @@ class EvalResult(_CurrentContract):
             raise ValueError("accepted evaluation must contain episode results")
         for index, digest in enumerate(self.evidence_sha256):
             _require_sha256(digest, f"evidence_sha256[{index}]")
+        if self.video is not None and not isinstance(self.video, Mapping):
+            raise ValueError("evaluation video must be an object or null")
         _require_text(self.completed_at, "completed_at")
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
-        return asdict(self)
+        document = asdict(self)
+        if self.video is None:
+            document.pop("video")
+        return document
 
 
 @dataclass(frozen=True)
@@ -764,6 +788,13 @@ class TerminalReceipt(_CurrentContract):
             status = str(row.get("status") or "")
             if status not in EVAL_INVENTORY_SETTLED_STATUSES:
                 raise ValueError(f"eval inventory contains unsettled status: {status}")
+            if (
+                isinstance(self.drain, Mapping)
+                and self.drain.get("record_checkpoint_episode") is True
+                and status in {"accepted", "rejected"}
+                and not isinstance(row.get("video"), Mapping)
+            ):
+                raise ValueError("completed checkpoint evaluation lacks its required video")
         if self.state == "canceled":
             drain = self.drain
             if not isinstance(drain, Mapping) or drain.get("complete") is not True:

@@ -295,6 +295,40 @@ def _publish_frame(
     step = int(row["step"] or 0)
     source = str(row.get("source") or "")
 
+    if kind == "evaluation_video":
+        import shutil
+        import tempfile
+        import wandb
+        from gradlab.r2_store import BucketConfig, R2Bucket
+
+        config = (
+            BucketConfig(uri=payload["bucket_uri"])
+            if str(payload["bucket_uri"]).startswith("file://")
+            else BucketConfig.from_env("GRADLAB_EVAL_R2")
+        )
+        if config.uri != payload["bucket_uri"]:
+            raise ValueError("evaluation video bucket differs from configured evidence storage")
+        size = int(payload["bytes"])
+        media_root = Path(run.dir)
+        if size < 1 or size > 256 * 1024**2:
+            raise ValueError("evaluation video size is outside the declared bound")
+        if shutil.disk_usage(media_root).free < int(payload["scratch_headroom_bytes"]) + 2 * size:
+            raise OSError("evaluation video delivery lacks scratch headroom")
+        with tempfile.TemporaryDirectory(prefix="eval-video-", dir=media_root) as temporary:
+            path = Path(temporary) / "episode.mp4"
+            R2Bucket(config).download_verified(
+                str(payload["key"]), path, size=size, sha256=str(payload["sha256"])
+            )
+            metrics = {
+                EVAL_CHECKPOINT_STEP: step,
+                ORCHESTRATION_EVENT_SEQUENCE: event_seq,
+                "eval/video": wandb.Video(str(path), format="mp4"),
+            }
+            validate_metric_payload(metrics)
+            configure_wandb_metric_axes(run, metrics, metrics_schema_version=metrics_schema_version)
+            run.log(metrics, step=event_seq)
+        return
+
     if kind == "monitoring":
         import tempfile
         import wandb

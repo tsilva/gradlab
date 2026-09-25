@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 import subprocess
 from itertools import chain
+import os
 import cv2
 import numpy as np
 
@@ -96,6 +97,113 @@ class PolicyObservationPreview:
             self.error = f"preview capture failed: {type(exc).__name__}"
             self._disabled = True
             return False
+
+
+class SingleEpisodeVideoRecorder:
+    """Stream the first declared lane-0 evaluation episode from native RGB frames."""
+
+    def __init__(self, output: Path, *, episode_id: str, fps: int = 30, max_bytes: int = 256 * 1024**2) -> None:
+        self.output = Path(output)
+        self.episode_id = str(episode_id)
+        self.fps = int(fps)
+        self.max_bytes = int(max_bytes)
+        self.runtime = None
+        self.process: subprocess.Popen[bytes] | None = None
+        self.shape: tuple[int, int, int] | None = None
+        self.frames = 0
+        self.complete = False
+        self.error: str | None = None
+
+    def _frame(self) -> np.ndarray:
+        if self.runtime is None:
+            raise RuntimeError("video recorder is not bound to the evaluation runtime")
+        image = np.asarray(self.runtime.provider.render_lane(0))
+        if image.dtype != np.uint8 or image.ndim != 3 or image.shape[2] != 3:
+            raise ValueError("evaluation provider did not render native HWC uint8 RGB")
+        if self.shape is not None and image.shape != self.shape:
+            raise ValueError("evaluation video frame shape changed during an episode")
+        return np.ascontiguousarray(image)
+
+    def _write_frame(self) -> None:
+        image = self._frame()
+        if self.process is None:
+            ffmpeg = shutil.which("ffmpeg")
+            if ffmpeg is None:
+                raise RuntimeError("ffmpeg is required for checkpoint episode video")
+            self.shape = tuple(image.shape)
+            height, width, _channels = self.shape
+            self.output.parent.mkdir(parents=True, exist_ok=True)
+            self.process = subprocess.Popen(
+                [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "rawvideo",
+                 "-pix_fmt", "rgb24", "-s", f"{width}x{height}", "-r", str(self.fps),
+                 "-i", "pipe:0", "-an", "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+                 "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+                 "-movflags", "+faststart", str(self.output)],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+            )
+        assert self.process.stdin is not None
+        self.process.stdin.write(image.tobytes())
+        self.frames += 1
+
+    def reset(self, _mask: object, *, after_step: bool = False) -> None:
+        if not after_step and self.frames == 0:
+            self._write_frame()
+
+    def before_step(self, _requested: object, _submitted: object) -> None:
+        return
+
+    def transition(
+        self, _infos: object, _provider_rewards: object, _provider_terminated: object,
+        _provider_truncated: object, _rewards: object, terminated: object,
+        truncated: object, _task_step: object, forced: object,
+    ) -> None:
+        if self.complete:
+            return
+        if bool(np.asarray(forced)[0]):
+            raise ValueError("recorded evaluation episode was interrupted")
+        self._write_frame()
+        self.complete = bool(np.asarray(terminated)[0] or np.asarray(truncated)[0])
+
+    def close(self) -> None:
+        process = self.process
+        if process is None:
+            return
+        if process.stdin is not None and not process.stdin.closed:
+            process.stdin.close()
+        try:
+            _stdout, stderr = process.communicate(timeout=60)
+        except ValueError:
+            # communicate cannot flush a stdin that was already closed.
+            try:
+                process.wait(timeout=60)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait()
+                self.error = "video encoder exceeded its close deadline"
+            else:
+                stderr = process.stderr.read() if process.stderr is not None else b""
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+            self.error = "video encoder exceeded its close deadline"
+            return
+        if process.returncode != 0:
+            self.error = f"video encoder failed: {stderr.decode(errors='replace')[:1000]}"
+        elif self.output.is_file() and self.output.stat().st_size > self.max_bytes:
+            self.error = "episode video exceeded its declared size limit"
+
+    def require_complete(self) -> dict[str, object]:
+        if not self.complete or self.error or not self.output.is_file():
+            raise RuntimeError(self.error or "evaluation episode video is incomplete")
+        return {
+            "episode_id": self.episode_id,
+            "frames": self.frames,
+            "bytes": os.stat(self.output).st_size,
+            "content_type": "video/mp4",
+            "source": "native_rgb",
+        }
 
 
 def write_preview_video(

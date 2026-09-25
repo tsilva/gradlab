@@ -15,6 +15,7 @@ from gradlab.env_registry import (
     resolve_env_id,
     resolve_native_episode_horizon,
     resolve_env_provider,
+    supports_evaluation_video,
 )
 
 
@@ -29,6 +30,11 @@ def test_environment_spec_owns_identity_defaults_task_and_eval_semantics() -> No
     assert stable.default_state == "Level1-1"
     assert stable.default_obs_crop == (32, 0, 0, 0)
     assert stable.eval_semantics.completion_reason == "level_change"
+
+
+def test_checkpoint_video_capability_is_registered_per_environment() -> None:
+    assert supports_evaluation_video("env-stableretro-turbo", "SuperMarioBros-Nes-v0")
+    assert not supports_evaluation_video("gradlab", "Bandit-v0")
 
 
 def test_resolves_registered_stable_retro_turbo_env_id() -> None:
