@@ -129,6 +129,7 @@ def build_modal_eval_payload(
             "put_url": evaluation_store.presign_put(
                 video_key,
                 expires_seconds=timeout + int(expiry_margin_seconds),
+                content_type="video/mp4",
             ),
             "content_type": "video/mp4",
             "cache_control": "private, max-age=0",
