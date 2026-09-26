@@ -198,7 +198,10 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(train["checkpoint_eval_backend"], "none")
         self.assertNotIn("eval", document["goal"])
         self.assertNotIn("release", document["goal"])
-        self.assertEqual(train["task"]["termination"]["success"], ["one_wall_cleared"])
+        self.assertEqual(
+            train["task"]["termination"]["success"],
+            [{"event": "wall_cleared", "count": 1}],
+        )
         self.assertEqual(train["task"]["termination"]["timeout"], ["serve_stall"])
 
     def test_vizdoom_basic_ppo_recipe_has_evaluated_first_shot_contract(self) -> None:

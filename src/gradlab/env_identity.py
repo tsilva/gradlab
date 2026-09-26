@@ -297,13 +297,36 @@ def validate_task_config(task: Mapping[str, Any], *, label: str = "task") -> Non
         names = termination[outcome]
         if not isinstance(names, list | tuple):
             raise ValueError(f"{label}.termination.{outcome} must be a list")
-        missing = sorted({str(name) for name in names} - set(events))
+        event_names: list[str] = []
+        for condition in names:
+            if isinstance(condition, Mapping):
+                if task_id != "identity" or set(condition) != {"event", "count"}:
+                    raise ValueError(
+                        f"{label}.termination.{outcome} counted conditions require "
+                        "identity task, event, and count"
+                    )
+                count = condition["count"]
+                if not isinstance(count, int) or isinstance(count, bool) or count < 1:
+                    raise ValueError(
+                        f"{label}.termination.{outcome} count must be a positive integer"
+                    )
+                event_name = str(condition["event"])
+                if count > 1 and events.get(event_name, {}).get("operation") not in {
+                    "increase", "decrease", "equals_for",
+                }:
+                    raise ValueError(
+                        f"{label}.termination.{outcome} counted event {event_name!r} "
+                        "must fire on a transition"
+                    )
+            else:
+                event_name = str(condition)
+            event_names.append(event_name)
+        missing = sorted(set(event_names) - set(events))
         if missing:
             raise ValueError(
                 f"{label}.termination.{outcome} references unknown events: {', '.join(missing)}"
             )
-        for name in names:
-            event_name = str(name)
+        for event_name in event_names:
             previous = event_outcomes.get(event_name)
             if previous is not None:
                 raise ValueError(

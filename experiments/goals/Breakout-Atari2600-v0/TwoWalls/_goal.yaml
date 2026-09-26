@@ -18,12 +18,13 @@ train:
   environment:
     task:
       events:
-        two_walls_cleared:
+        wall_cleared:
           signal: walls_cleared
-          operation: equals
-          value: 2
+          operation: increase
       termination:
-        success: [two_walls_cleared]
+        success:
+        - event: wall_cleared
+          count: 2
 
 eval:
   episodes: 100
@@ -134,10 +135,9 @@ eval:
           operation: equals_for
           value: 0
           steps: 256
-        two_walls_cleared:
+        wall_cleared:
           signal: walls_cleared
-          operation: equals
-          value: 2
+          operation: increase
         life_loss:
           signal: lives
           operation: decrease
@@ -149,7 +149,8 @@ eval:
         - serve_stall
         max_episode_steps: 54000
         success:
-        - two_walls_cleared
+        - event: wall_cleared
+          count: 2
       reward:
         reward_mode: events
         reward_scale: 1.0
@@ -157,7 +158,7 @@ eval:
         event_rewards:
           serve_stall: -5.0
           life_loss: -0.1
-          two_walls_cleared: 20.0
+          wall_cleared: 20.0
         event_delta_rewards:
           brick_destroyed: 1.0
       model_inputs:

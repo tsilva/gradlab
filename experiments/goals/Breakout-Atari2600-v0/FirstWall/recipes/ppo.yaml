@@ -97,4 +97,4 @@ train:
         event_delta_rewards:
           brick_destroyed: 1.0
         event_rewards:
-          one_wall_cleared: 20.0
+          wall_cleared: 20.0

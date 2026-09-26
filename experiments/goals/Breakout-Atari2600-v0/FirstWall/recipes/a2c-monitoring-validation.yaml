@@ -75,7 +75,7 @@ train:
       reward:
         event_rewards:
           life_loss: -0.1
-          one_wall_cleared: 20.0
+          wall_cleared: 20.0
         reward_mode: events
         event_delta_rewards:
           brick_destroyed: 1.0

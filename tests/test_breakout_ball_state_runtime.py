@@ -58,7 +58,7 @@ def test_brick_reward_recipe_matches_provider_deltas_without_native_score() -> N
     assert train["training_backend"]["config"]["gamma"] == 0.999
     assert train["training_backend"]["config"]["gae_lambda"] == 0.95
     assert train["frame_skip"] == 2
-    assert train["task"]["reward"]["event_rewards"] == {"life_loss": -0.1, "serve_stall": -5.0, "one_wall_cleared": 20.0}
+    assert train["task"]["reward"]["event_rewards"] == {"life_loss": -0.1, "serve_stall": -5.0, "wall_cleared": 20.0}
     config = resolve_env_config(env_config_from_mapping(train))
     env = make_eval_vec_env(config, n_envs=2, seed=10000)
     try:

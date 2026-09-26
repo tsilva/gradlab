@@ -99,7 +99,7 @@ def test_breakout_base_recipe_penalizes_life_loss_and_serve_stall() -> None:
     assert config["task"]["reward"]["event_rewards"] == {
         "life_loss": -0.1,
         "serve_stall": -5.0,
-        "one_wall_cleared": 20.0,
+        "wall_cleared": 20.0,
     }
 
 
