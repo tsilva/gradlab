@@ -233,6 +233,35 @@ def _identity_apply_event_outcome(
 
 
 @njit(cache=True, nogil=True)
+def _identity_counted_event_outcome_kernel(
+    event_bits,
+    event_bit,
+    event_counts,
+    required_count,
+    event_outcome,
+    event_bootstrap,
+    outcome_priorities,
+    terminated,
+    truncated,
+    outcomes,
+):
+    for lane in range(event_bits.shape[0]):
+        if not event_bits[lane] & event_bit:
+            continue
+        event_counts[lane] += 1
+        if event_counts[lane] == required_count:
+            _identity_apply_event_outcome(
+                event_outcome,
+                event_bootstrap,
+                outcome_priorities,
+                lane,
+                terminated,
+                truncated,
+                outcomes,
+            )
+
+
+@njit(cache=True, nogil=True)
 def _identity_equals_event_kernel(
     values,
     expected_value,
@@ -1999,6 +2028,7 @@ class IdentityEvent:
     bootstrap: bool = False
     value: int | float | None = None
     steps: int = 0
+    outcome_count: int = 1
 
 
 class IdentityTaskDefinition:
@@ -2031,6 +2061,7 @@ class IdentityTaskDefinition:
         if len(raw_events) > 64:
             raise ValueError("identity task supports at most 64 events")
         event_outcomes: dict[str, Outcome] = {}
+        event_outcome_counts: dict[str, int] = {}
         termination = dict(termination or {})
         raw_bootstrap_events = termination.get("bootstrap", ())
         if not isinstance(raw_bootstrap_events, list | tuple):
@@ -2045,11 +2076,21 @@ class IdentityTaskDefinition:
             ("timeout", Outcome.TIMEOUT),
             ("neutral", Outcome.NEUTRAL),
         ):
-            for name in termination.get(outcome_name, ()):
-                event_name = str(name)
+            for condition in termination.get(outcome_name, ()):
+                if isinstance(condition, Mapping):
+                    if set(condition) != {"event", "count"}:
+                        raise ValueError("identity counted termination requires event and count")
+                    event_name = str(condition["event"])
+                    count = condition["count"]
+                    if not isinstance(count, int) or isinstance(count, bool) or count < 1:
+                        raise ValueError("identity termination count must be a positive integer")
+                else:
+                    event_name = str(condition)
+                    count = 1
                 if event_name in event_outcomes:
                     raise ValueError(f"identity event {event_name!r} has multiple outcomes")
                 event_outcomes[event_name] = outcome
+                event_outcome_counts[event_name] = count
         unknown_bootstrap_events = sorted(bootstrap_events - set(raw_events))
         if unknown_bootstrap_events:
             raise ValueError(
@@ -2088,6 +2129,12 @@ class IdentityTaskDefinition:
                 steps = rule.get("steps")
                 if not isinstance(steps, int) or isinstance(steps, bool) or steps <= 0:
                     raise ValueError(f"identity equals_for event {name!r} requires positive steps")
+            if event_outcome_counts.get(str(name), 1) > 1 and operation not in {
+                "increase", "decrease", "equals_for",
+            }:
+                raise ValueError(
+                    f"identity counted event {name!r} must fire on a transition"
+                )
             compiled_events.append(
                 IdentityEvent(
                     name=str(name),
@@ -2097,6 +2144,7 @@ class IdentityTaskDefinition:
                     bootstrap=str(name) in bootstrap_events,
                     value=rule.get("value"),
                     steps=int(rule.get("steps", 0)),
+                    outcome_count=event_outcome_counts.get(str(name), 1),
                 )
             )
         self.events = tuple(compiled_events)
@@ -2223,6 +2271,9 @@ class IdentityTaskKernel:
         self._event_consecutive_steps = tuple(
             np.zeros(self.num_envs, dtype=np.int64) for _event in self._event_configs
         )
+        self._event_firing_counts = tuple(
+            np.zeros(self.num_envs, dtype=np.int64) for _event in self._event_configs
+        )
         event_dtypes = tuple(
             self._signal_bindings.scalar_dtype(event.signal) for event in self._event_configs
         )
@@ -2334,6 +2385,8 @@ class IdentityTaskKernel:
         )
         if self._event_configs:
             for index, event in enumerate(self._event_configs):
+                event_bit = np.uint64(1 << index)
+                detection_outcome = int(event.outcome) if event.outcome_count == 1 else 0
                 runtime_source = self._event_runtime_sources[index]
                 if runtime_source == PROVIDER_TERMINATED_SIGNAL:
                     values = provider_terminated
@@ -2347,8 +2400,8 @@ class IdentityTaskKernel:
                         event.value,
                         event.steps,
                         self._event_consecutive_steps[index],
-                        np.uint64(1 << index),
-                        int(event.outcome),
+                        event_bit,
+                        detection_outcome,
                         bool(event.bootstrap),
                         self._outcome_priorities,
                         self._terminated,
@@ -2360,8 +2413,8 @@ class IdentityTaskKernel:
                     _identity_equals_event_kernel(
                         values,
                         event.value,
-                        np.uint64(1 << index),
-                        int(event.outcome),
+                        event_bit,
+                        detection_outcome,
                         bool(event.bootstrap),
                         self._outcome_priorities,
                         self._terminated,
@@ -2377,8 +2430,8 @@ class IdentityTaskKernel:
                         self._event_previous_valid[index],
                         self._event_transition_sources[index],
                         self._event_transition_targets[index],
-                        np.uint64(1 << index),
-                        int(event.outcome),
+                        event_bit,
+                        detection_outcome,
                         bool(event.bootstrap),
                         self._outcome_priorities,
                         self._terminated,
@@ -2393,8 +2446,8 @@ class IdentityTaskKernel:
                         self._event_previous_valid[index],
                         self._event_transition_sources[index],
                         self._event_transition_targets[index],
-                        np.uint64(1 << index),
-                        int(event.outcome),
+                        event_bit,
+                        detection_outcome,
                         bool(event.bootstrap),
                         self._outcome_priorities,
                         self._terminated,
@@ -2409,14 +2462,27 @@ class IdentityTaskKernel:
                         self._event_previous_valid[index],
                         self._event_transition_sources[index],
                         self._event_transition_targets[index],
-                        np.uint64(1 << index),
-                        int(event.outcome),
+                        event_bit,
+                        detection_outcome,
                         bool(event.bootstrap),
                         self._outcome_priorities,
                         self._terminated,
                         self._truncated,
                         self._outcomes,
                         self._events,
+                    )
+                if event.outcome_count > 1:
+                    _identity_counted_event_outcome_kernel(
+                        self._events,
+                        event_bit,
+                        self._event_firing_counts[index],
+                        event.outcome_count,
+                        int(event.outcome),
+                        bool(event.bootstrap),
+                        self._outcome_priorities,
+                        self._terminated,
+                        self._truncated,
+                        self._outcomes,
                     )
         return TaskStep(
             self._rewards,
@@ -2452,6 +2518,7 @@ class IdentityTaskKernel:
                     else None
                 )
                 consecutive_steps[mask] = 0
+                self._event_firing_counts[index][mask] = 0
                 if event.operation in {"decrease", "increase", "previous_equals"}:
                     if reset_values is None:
                         self._event_previous_valid[index][mask] = False
@@ -2494,11 +2561,14 @@ class IdentityTaskKernel:
                 continue
             states.append(
                 TaskLaneState(
-                    schema_id="gradlab.identity-task-lane-v2",
+                    schema_id="gradlab.identity-task-lane-v3",
                     values={
                         "episode_steps": int(self._episode_steps[lane]),
                         "event_consecutive_steps": [
                             int(values[lane]) for values in self._event_consecutive_steps
+                        ],
+                        "event_firing_counts": [
+                            int(values[lane]) for values in self._event_firing_counts
                         ],
                         "event_previous_values": [
                             values[lane].item()
@@ -2525,9 +2595,17 @@ class IdentityTaskKernel:
         for lane in np.flatnonzero(selected):
             lane_index = int(lane)
             state = states[lane_index]
-            if state is None or state.schema_id != "gradlab.identity-task-lane-v2":
+            if state is None or state.schema_id not in {
+                "gradlab.identity-task-lane-v2", "gradlab.identity-task-lane-v3",
+            }:
                 raise ValueError(f"archive lane {lane_index} has incompatible identity task state")
             values = state.values
+            counts = list(values.get("event_firing_counts", ()))
+            if state.schema_id == "gradlab.identity-task-lane-v3":
+                if len(counts) != len(self._event_configs):
+                    raise ValueError(f"archive lane {lane_index} identity event counts do not match task")
+            elif any(event.outcome_count > 1 for event in self._event_configs):
+                raise ValueError(f"archive lane {lane_index} is missing identity event counts")
             consecutive = list(values.get("event_consecutive_steps", ()))
             previous = list(values.get("event_previous_values", ()))
             valid = list(values.get("event_previous_valid", ()))
@@ -2538,6 +2616,9 @@ class IdentityTaskKernel:
             self._episode_steps[lane_index] = int(values["episode_steps"])
             for index in range(len(self._event_configs)):
                 self._event_consecutive_steps[index][lane_index] = int(consecutive[index])
+                self._event_firing_counts[index][lane_index] = (
+                    int(counts[index]) if counts else 0
+                )
                 self._event_previous_values[index][lane_index] = previous[index]
                 self._event_previous_valid[index][lane_index] = bool(valid[index])
 

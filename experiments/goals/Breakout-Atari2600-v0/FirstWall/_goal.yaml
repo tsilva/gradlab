@@ -13,9 +13,10 @@ train:
   environment:
     task:
       events:
-        one_wall_cleared:
+        wall_cleared:
           signal: walls_cleared
-          operation: equals
-          value: 1
+          operation: increase
       termination:
-        success: [one_wall_cleared]
+        success:
+        - event: wall_cleared
+          count: 1

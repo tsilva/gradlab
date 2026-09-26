@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from copy import deepcopy
 from dataclasses import replace
 from typing import Any
@@ -16,15 +16,20 @@ def configured_termination_conditions(config: EnvConfig) -> tuple[dict[str, Any]
     termination = task_termination(config)
     conditions: list[dict[str, Any]] = []
     for outcome in TERMINATION_OUTCOMES:
-        for event_name in termination.get(outcome, ()):
-            name = str(event_name)
+        for condition in termination.get(outcome, ()):
+            name = str(condition["event"] if isinstance(condition, Mapping) else condition)
+            count = int(condition["count"]) if isinstance(condition, Mapping) else 1
             conditions.append(
                 {
                     "id": f"event:{name}",
                     "kind": "event",
                     "event": name,
                     "outcome": outcome,
-                    "label": name.replace("_", " "),
+                    "label": (
+                        f"{name.replace('_', ' ')} ({count} fires)"
+                        if count > 1 else name.replace("_", " ")
+                    ),
+                    "count": count,
                 }
             )
     max_episode_steps = int(termination.get("max_episode_steps", 0))
@@ -72,9 +77,10 @@ def with_enabled_termination_conditions(
         if outcome not in termination:
             continue
         termination[outcome] = [
-            str(event_name)
-            for event_name in termination.get(outcome, ())
-            if f"event:{event_name}" in enabled
+            condition
+            for condition in termination.get(outcome, ())
+            if f"event:{condition['event'] if isinstance(condition, Mapping) else condition}"
+            in enabled
         ]
     if "max_episode_steps" in termination:
         termination["max_episode_steps"] = (

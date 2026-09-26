@@ -421,8 +421,8 @@ resuming as its cause without a matched uninterrupted continuation.
   The default recipe enables four occupancy buckets for quarters of the first
   wall, using provider-signal edges `0`, `0.125`, `0.25`, `0.375`, and `0.5`.
   The `TwoWalls` goal ends at `1.0`; its `ppo-two-walls` recipe uses eight quarter-wall occupancy
-  buckets across both walls. Its `two_walls_cleared` reward event pays +20 only
-  at the second wall; the first wall has no completion bonus.
+  buckets across both walls. Its `wall_cleared` reward event pays +20 when each
+  wall is cleared; success terminates after the second event fire.
   Bucket percentages describe collected pre-action policy transitions; the
   terminal wall-clear state is not an additional collected transition.
   All three statistics
