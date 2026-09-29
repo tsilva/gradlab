@@ -7,11 +7,13 @@ import os
 import tempfile
 import threading
 import time
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
 from gradlab.local_wandb import sync_local_run
+from gradlab.clock import parse_utc_datetime
 from gradlab.metric_journal import read_control_journal
 from gradlab.metric_names import (
     LEADER_CHECKPOINT_ARTIFACT_REF,
@@ -104,6 +106,7 @@ def _project_queued_outcome(
     receipt: TerminalReceipt,
     config: dict,
     service_run_id: str,
+    check_lease: Callable[[], None],
 ) -> None:
     prefix = authority.run_prefix(manifest.run_id)
     promotion = authority.control.get_json_optional(f"{prefix}/promotion.json")
@@ -140,6 +143,7 @@ def _project_queued_outcome(
             datetime.fromisoformat(manifest.created_at.replace("Z", "+00:00")).timestamp()
             * 1000
         )
+        check_lease()
         service = MlflowDelivery.open(
             tracking_uri=str(os.environ["MLFLOW_TRACKING_URI"]),
             experiment_name=f"gradlab-{config.get('game_family') or config['game']}",
@@ -149,10 +153,13 @@ def _project_queued_outcome(
         if service.run_id != service_run_id:
             raise RuntimeError("queued MLflow outcome changed the service binding")
         if projection is not None:
+            check_lease()
             service.publish_promotion(**projection)
+        check_lease()
         service.publish_terminal(state=receipt.state, reason=receipt.stop_reason)
         deadline = time.monotonic() + 60
         while True:
+            check_lease()
             summary = service.remote_summary()
             if (
                 summary.get(ORCHESTRATION_RUN_TERMINAL_STATE) == receipt.state
@@ -179,6 +186,7 @@ def _project_queued_outcome(
         promotion_summary_matches,
     )
 
+    check_lease()
     projector = WandbProjector.resume(
         {**config, "tracking": {"backend": "wandb", "delivery": "online"}},
         update_finish_state=True,
@@ -186,16 +194,21 @@ def _project_queued_outcome(
     try:
         if str(projector.run.id) != service_run_id:
             raise RuntimeError("queued W&B outcome changed the service binding")
-        run_path = str(projector.run.path)
+        path = projector.run.path
+        run_path = "/".join(path) if isinstance(path, (list, tuple)) else str(path)
         if projection is not None:
+            check_lease()
             publish_promotion_summary(projector.run, **projection)
+        check_lease()
         publish_terminal_summary(projector.run, receipt)
     finally:
+        check_lease()
         projector.close(timeout_seconds=60, exit_code=0)
     import wandb
 
     deadline = time.monotonic() + 60
     while True:
+        check_lease()
         summary = dict(wandb.Api(timeout=10).run(run_path).summary)
         visible = (
             summary.get(ORCHESTRATION_RUN_TERMINAL_STATE) == receipt.state
@@ -227,11 +240,6 @@ def sync_queued_run(authority: RunAuthority, run_id: str) -> dict:
     if (manifest.tracking or {}).get("delivery") != "local_only":
         raise ValueError("queued tracker sync requires frozen local_only delivery")
     receipt = _terminal(authority, manifest)
-    events = read_control_journal(authority.control, run_id)
-    high_water = int(events[-1]["event_seq"]) if events else 0
-    if high_water < int(receipt.drain.get("metric_segment_high_water") or 0):
-        raise ValueError("retained journal is shorter than the terminal receipt")
-    recipe = authority.recipe_document(manifest.recipe_sha256)
     lease = authority.acquire_lease(
         run_id=run_id,
         attempt_id=receipt.attempt_id,
@@ -239,29 +247,44 @@ def sync_queued_run(authority: RunAuthority, run_id: str) -> dict:
     )
     stop = threading.Event()
     errors: list[BaseException] = []
+    lock = threading.Lock()
+
+    def check_lease() -> None:
+        with lock:
+            if errors:
+                raise LeaseUnavailable("queued tracker sync lost its writer lease") from errors[0]
+            if authority.clock.utc_datetime() >= parse_utc_datetime(lease.expires_at):
+                raise LeaseUnavailable("queued tracker sync writer lease expired")
 
     def renew() -> None:
         nonlocal lease
         while not stop.wait(15):
             try:
-                lease = authority.renew_lease(lease)
+                with lock:
+                    lease = authority.renew_lease(lease)
             except BaseException as exc:
-                errors.append(exc)
+                with lock:
+                    errors.append(exc)
                 return
 
     worker = threading.Thread(target=renew, name="queued-tracker-sync-lease", daemon=True)
     worker.start()
     try:
+        check_lease()
+        events = read_control_journal(authority.control, run_id)
+        high_water = int(events[-1]["event_seq"]) if events else 0
+        if high_water < int(receipt.drain.get("metric_segment_high_water") or 0):
+            raise ValueError("retained journal is shorter than the terminal receipt")
+        recipe = authority.recipe_document(manifest.recipe_sha256)
         with tempfile.TemporaryDirectory(prefix="gradlab-queued-sync-") as temporary:
             directory = Path(temporary)
             _prepare_replay(
                 directory, manifest=manifest, recipe=recipe, receipt=receipt, events=events
             )
-            url = sync_local_run(directory)
+            url = sync_local_run(directory, heartbeat=check_lease)
             evidence = json.loads((directory / "tracker-sync.json").read_text())
             config = json.loads((directory / "train-config.json").read_text())
-        if errors:
-            raise LeaseUnavailable("queued tracker sync lost its writer lease") from errors[0]
+        check_lease()
         if (
             evidence.get("run_id") != run_id
             or evidence.get("backend") != manifest.tracking["backend"]
@@ -276,7 +299,9 @@ def sync_queued_run(authority: RunAuthority, run_id: str) -> dict:
             receipt=receipt,
             config=config,
             service_run_id=str(evidence["service_run_id"]),
+            check_lease=check_lease,
         )
+        check_lease()
         prefix = authority.run_prefix(run_id)
         binding_key = f"{prefix}/metrics-binding.json"
         binding = authority.control.get_json_optional(binding_key)
@@ -287,6 +312,7 @@ def sync_queued_run(authority: RunAuthority, run_id: str) -> dict:
         ):
             raise RuntimeError("queued tracker sync would change the frozen service binding")
         if binding is None:
+            check_lease()
             authority.control.put_json(
                 binding_key,
                 {
@@ -307,6 +333,7 @@ def sync_queued_run(authority: RunAuthority, run_id: str) -> dict:
             ),
             "completed_at": authority.clock.utc_now(),
         }
+        check_lease()
         authority.control.put_json(
             f"{prefix}/tracker-sync/evidence/{uuid4().hex}.json",
             result,
@@ -314,6 +341,7 @@ def sync_queued_run(authority: RunAuthority, run_id: str) -> dict:
         )
         latest_key = f"{prefix}/tracker-sync/latest.json"
         existing_latest = authority.control.get_json_optional(latest_key)
+        check_lease()
         authority.control.put_json(
             latest_key,
             result,
@@ -325,12 +353,17 @@ def sync_queued_run(authority: RunAuthority, run_id: str) -> dict:
             ),
         )
         if authority.models.get_json_optional(f"{prefix}/index.json") is not None:
+            check_lease()
             authority.publish_run_telemetry(run_id, tracker_sync_status="delivered")
         return result
     finally:
         stop.set()
         worker.join()
-        authority.release_lease(lease)
+        try:
+            authority.release_lease(lease)
+        except LeaseUnavailable:
+            if not errors:
+                raise
 
 
 def main(argv: list[str] | None = None) -> int:
