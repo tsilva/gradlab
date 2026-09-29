@@ -31,11 +31,9 @@ def validate_tracking(value: object, *, label: str) -> dict[str, str]:
     return result
 
 
-def _layer(path: Path, *, goal: bool) -> dict[str, str]:
+def _layer(path: Path) -> dict[str, str]:
     document = load_mapping_document(path, label=f"tracking source {path}")
-    if goal and "tracking" not in document:
-        return {}
-    if not goal and "tracking" not in document:
+    if "tracking" not in document:
         return {}
     return validate_tracking(document["tracking"], label=f"{path}.tracking")
 
@@ -59,9 +57,9 @@ def resolve_tracking(
         document = load_mapping_document(project, label=f"tracking source {project}")
         layers.append((source_name(project), validate_tracking(document, label=str(project))))
     for path in goal_sources:
-        layers.append((source_name(path), _layer(path, goal=True)))
+        layers.append((source_name(path), _layer(path)))
     for path in recipe_sources:
-        layers.append((source_name(path), _layer(path, goal=False)))
+        layers.append((source_name(path), _layer(path)))
     for label, layer in layers:
         for key, value in layer.items():
             values[key] = value

@@ -164,7 +164,8 @@ def _preflight_mlflow_service_uri(uri: str) -> str:
             "queued MLflow delivery requires a private authenticated HTTPS service URI"
         )
     return str(uri).strip()
-COMMON_SECRET_ENV = (*WANDB_SERVICE_ENV, *STORAGE_SECRET_ENV)
+
+
 OPERATOR_MODAL_ENV = (
     "MODAL_TOKEN_ID",
     "MODAL_TOKEN_SECRET",
@@ -860,7 +861,8 @@ def cmd_launch(args: argparse.Namespace) -> int:
     metrics_profile = (
         _preflight_mlflow_compute_route(selected_compute)
         if config["tracking"]["backend"] == "mlflow"
-        else "wandb-default"
+        and config["tracking"]["delivery"] == "online"
+        else ("wandb-default" if config["tracking"]["backend"] == "wandb" else None)
     )
     release = runtime_release_from_args(
         args,

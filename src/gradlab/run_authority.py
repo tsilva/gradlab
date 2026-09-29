@@ -1390,6 +1390,14 @@ class RunAuthority:
         events = read_control_journal(self.control, run_id)
         if not events:
             raise ValueError("public telemetry requires a nonempty verified journal")
+        if complete_run:
+            terminal_high_water = max(
+                int((row.get("drain") or {}).get("metric_segment_high_water") or 0)
+                for row in terminals
+                if row.get("state") in {"succeeded", "complete_local"}
+            )
+            if int(events[-1]["event_seq"]) < terminal_high_water:
+                raise ValueError("public telemetry journal is shorter than the terminal receipt")
         rows = JournalHistory(events).rows
         document = {
             "schema_version": 1,

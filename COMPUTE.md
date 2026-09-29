@@ -107,7 +107,7 @@ real hostnames, SSH users, identity paths, or fleet names.
 Online MLflow Runs require an operator-declared private HTTPS route and an exact
 `MLFLOW_ALLOWED_FLEETS` allowlist. The selected fleet must be enrolled in the
 operator-local inventory and must pass service authentication preflight before
-runtime preparation or dstack submission. The Beast-3 pilot procedure is in
+runtime preparation or dstack submission. The private-service pilot procedure is in
 `ops/mlflow/README.md`.
 
 ## Modal evaluation

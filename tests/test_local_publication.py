@@ -131,6 +131,24 @@ def test_complete_local_publication_uploads_journal_without_tracker(local_run):
     assert json.loads((directory / "local-run.json").read_text())["status"] == "complete_local"
 
 
+@pytest.mark.parametrize("local_run", [{"delivery": "local_only"}], indirect=True)
+def test_public_telemetry_rejects_a_missing_terminal_journal_tail(local_run):
+    directory, config, store, authority, env = local_run
+    with LocalRunPublication(directory, config, store, env, authority=authority) as publication:
+        publication.publish()
+        store.append_metrics({"train/return/mean": 0.75}, step=1001, source="training")
+        publication.finish()
+    segment_keys = sorted(
+        key for key in authority.control.iter_keys(f"runs/{config['wandb_run_id']}/attempts/")
+        if "/metric-segments/" in key
+    )
+    assert len(segment_keys) == 2
+    tail = segment_keys[-1]
+    authority.control.delete(tail, if_match=str(authority.control.head(tail)["etag"]))
+    with pytest.raises(ValueError, match="shorter than the terminal receipt"):
+        authority.publish_run_telemetry(config["wandb_run_id"])
+
+
 def test_local_writer_obeys_remote_lease(local_run):
     directory, config, store, authority, env = local_run
     authority.acquire_lease(
