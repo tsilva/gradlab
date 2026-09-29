@@ -25,6 +25,7 @@ RUNTIME_INPUT_PATHS = (
     "experiments/goals",
     "experiments/modal_eval.yaml",
     "experiments/recipes",
+    "experiments/tracking.yaml",
     "frontend",
     "hatch_build.py",
     "package.json",
