@@ -133,6 +133,7 @@ MLFLOW_SERVICE_ENV = (
     "MLFLOW_OPERATOR_PROFILE",
     "MLFLOW_ALLOWED_FLEETS",
 )
+MLFLOW_PRIVATE_CA_ENV = "GRADLAB_MLFLOW_TLS_CA_B64"
 
 
 def _preflight_mlflow_compute_route(selected_compute: ComputeRequest) -> str:
@@ -277,9 +278,17 @@ def _required_operator_environment(
         if selected["backend"] == "wandb"
         else MLFLOW_SERVICE_ENV
     ) if selected["delivery"] == "online" else ()
+    private_ca = (
+        (MLFLOW_PRIVATE_CA_ENV,)
+        if selected["backend"] == "mlflow"
+        and selected["delivery"] == "online"
+        and selected.get("private_tls_ca") is True
+        else ()
+    )
     return (
         *STORAGE_SECRET_ENV,
         *service,
+        *private_ca,
         *(OPERATOR_MODAL_ENV if str(checkpoint_eval_backend) == "modal" else ()),
     )
 
@@ -324,6 +333,10 @@ def _operator_preflight(
         )
     selected_tracking = tracking or {"backend": "wandb", "delivery": "online"}
     if selected_tracking["delivery"] == "online":
+        if selected_tracking["backend"] == "mlflow" and os.environ.get(MLFLOW_PRIVATE_CA_ENV):
+            from gradlab.mlflow_tls import validate_private_mlflow_ca_b64
+
+            validate_private_mlflow_ca_b64(os.environ[MLFLOW_PRIVATE_CA_ENV])
         mlflow_uri = (
             _preflight_mlflow_service_uri(os.environ["MLFLOW_TRACKING_URI"])
             if selected_tracking["backend"] == "mlflow"
@@ -1001,7 +1014,16 @@ def cmd_launch(args: argparse.Namespace) -> int:
         run_description=run_description,
         compute=manifest_compute,
         wandb=wandb,
-        tracking={**config["tracking"], "operator_profile": metrics_profile},
+        tracking={
+            **config["tracking"],
+            "operator_profile": metrics_profile,
+            "private_tls_ca": (
+                bool(str(os.environ.get(MLFLOW_PRIVATE_CA_ENV) or "").strip())
+                if config["tracking"]["backend"] == "mlflow"
+                and config["tracking"]["delivery"] == "online"
+                else False
+            ),
+        },
         modal={
             "enabled": checkpoint_eval_backend == "modal",
             "environment_name": modal_config.deployment.environment_name,

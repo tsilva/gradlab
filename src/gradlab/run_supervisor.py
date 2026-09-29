@@ -3190,6 +3190,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    from gradlab.mlflow_tls import configure_private_mlflow_ca
+
+    configure_private_mlflow_ca()
     return RunSupervisor(manifest_uri=args.manifest_uri).run()
 
 
