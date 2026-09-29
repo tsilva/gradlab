@@ -275,6 +275,12 @@ class RunManifest(_CurrentContract):
         if set(selected_tracking) != {"backend", "delivery"}:
             raise ValueError("run manifest must freeze tracking backend and delivery")
         if self.tracking is not None:
+            private_tls_ca = self.tracking.get("private_tls_ca", False)
+            if not isinstance(private_tls_ca, bool) or (
+                private_tls_ca
+                and selected_tracking != {"backend": "mlflow", "delivery": "online"}
+            ):
+                raise ValueError("run manifest tracking private_tls_ca is invalid")
             sources = self.tracking.get("sources")
             if not isinstance(sources, Mapping) or set(sources) != {"backend", "delivery"}:
                 raise ValueError("run manifest tracking sources are incomplete")

@@ -11,6 +11,8 @@ MLFLOW_TRACKING_URI = "https://<private-mlflow-host>"
 MLFLOW_OPERATOR_PROFILE = "<private-mlflow-profile>"
 # Exact configured dstack fleet IDs permitted to reach the private service.
 MLFLOW_ALLOWED_FLEETS = "<approved-fleet-id>"
+# Optional for a private CA: base64 of its single PEM certificate.
+# GRADLAB_MLFLOW_TLS_CA_B64 = "<base64-pem-ca-certificate>"
 GRADLAB_CONTROL_R2_URI = "s3://<control-bucket>"
 GRADLAB_CONTROL_R2_ENDPOINT_URL = "https://<account-id>.r2.cloudflarestorage.com"
 GRADLAB_CONTROL_R2_REGION = "auto"

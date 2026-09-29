@@ -1223,6 +1223,50 @@ def test_local_only_mlflow_launch_requires_storage_but_no_service_credentials() 
     assert "WANDB_API_KEY" not in required
 
 
+def test_private_mlflow_ca_is_frozen_as_required_task_secret() -> None:
+    tracking = {
+        "backend": "mlflow",
+        "delivery": "online",
+        "private_tls_ca": True,
+    }
+    required = _required_operator_environment("none", tracking)
+    assert "GRADLAB_MLFLOW_TLS_CA_B64" in required
+    assert "GRADLAB_MLFLOW_TLS_CA_B64" not in _required_operator_environment(
+        "none", {"backend": "mlflow", "delivery": "online"}
+    )
+    assert "GRADLAB_MLFLOW_TLS_CA_B64" not in _required_operator_environment(
+        "none", {"backend": "wandb", "delivery": "online"}
+    )
+
+    manifest = SimpleNamespace(
+        run_id=new_run_id(),
+        image_digest="docker:example/gradlab@sha256:" + "a" * 64,
+        compute={
+            "selected": {
+                "kind": "local", "target": "private-gpu", "max_price": None,
+                "max_cost_usd": None, "allow_on_demand": False,
+                "max_duration_seconds": 3600,
+            },
+            "dstack_task": "private-mlflow-ca",
+        },
+        modal={"enabled": False, "environment_name": "gradlab-eval"},
+        tracking=tracking,
+    )
+    task = _task_request(manifest, manifest_uri="s3://control/run/manifest.json")
+    assert "GRADLAB_MLFLOW_TLS_CA_B64" in task.secret_env
+
+    run = _manifest_only_run()
+    tracking = {
+        **tracking,
+        "sources": {"backend": "launch override", "delivery": "launch override"},
+        "operator_profile": "pilot",
+    }
+    private_run = replace(run, tracking=tracking, wandb={})
+    private_run.validate()
+    with pytest.raises(ValueError, match="private_tls_ca"):
+        replace(private_run, tracking={**tracking, "private_tls_ca": "yes"}).validate()
+
+
 @pytest.mark.parametrize("invalid", ["activity", "binding_hash", "missing_binding"])
 def test_pre_submit_failure_rejects_activity_or_invalid_binding(
     tmp_path: Path, invalid: str
