@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import threading
 import time
+from collections.abc import Callable
 
 from gradlab.env import resolve_env_config
 from gradlab.env_config import env_config_from_mapping
@@ -136,7 +137,9 @@ def local_mlflow_writer(run_dir: Path, config: dict):
                     raise
 
 
-def sync_local_mlflow(run_dir: Path, config: dict) -> str:
+def sync_local_mlflow(
+    run_dir: Path, config: dict, *, heartbeat: Callable[[], None] | None = None
+) -> str:
     """Append service-delivery evidence for a completed frozen local-only Run."""
     receipt = json.loads((run_dir / "local-run.json").read_text())
     if receipt.get("status") != "complete_local":
@@ -162,6 +165,8 @@ def sync_local_mlflow(run_dir: Path, config: dict) -> str:
             datetime.fromisoformat(started_at.replace("Z", "+00:00")).timestamp() * 1000
         )
         environment = resolve_env_config(env_config_from_mapping(config))
+        if heartbeat is not None:
+            heartbeat()
         delivery = MlflowDelivery.open(
             tracking_uri=uri,
             experiment_name=f"gradlab-{config.get('game_family') or environment.game}",
@@ -170,7 +175,9 @@ def sync_local_mlflow(run_dir: Path, config: dict) -> str:
         )
         deadline = time.monotonic() + 120
         while store.pending_metric_frames(limit=1):
-            count = publish_pending_frames(store, delivery, limit=100)
+            if heartbeat is not None:
+                heartbeat()
+            count = publish_pending_frames(store, delivery, limit=100, heartbeat=heartbeat)
             if time.monotonic() >= deadline:
                 raise TimeoutError("local MLflow sync did not drain within 120 seconds")
             if count == 0:
@@ -179,10 +186,16 @@ def sync_local_mlflow(run_dir: Path, config: dict) -> str:
             high_water = int(connection.execute(
                 "SELECT COALESCE(MAX(id), 0) FROM metric_frames WHERE status = 'published'"
             ).fetchone()[0])
-        while delivery.remote_high_water() < high_water:
+        while True:
+            if heartbeat is not None:
+                heartbeat()
+            if delivery.remote_high_water() >= high_water:
+                break
             if time.monotonic() >= deadline:
                 raise TimeoutError("MLflow sync did not become remotely visible")
             time.sleep(2)
+        if heartbeat is not None:
+            heartbeat()
         write_canonical_json(run_dir / "tracker-sync.json", {
             "backend": "mlflow", "run_id": config["wandb_run_id"],
             "service_run_id": delivery.run_id, "high_water": high_water,

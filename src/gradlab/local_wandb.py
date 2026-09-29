@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import threading
 import time
+from collections.abc import Callable
 
 from gradlab.env import resolve_env_config
 from gradlab.env_config import env_config_from_mapping
@@ -24,7 +25,10 @@ from gradlab.wandb_publisher import (
 
 
 @contextmanager
-def local_wandb_writer(run_dir: Path, config: dict, *, backfill: bool = False):
+def local_wandb_writer(
+    run_dir: Path, config: dict, *, backfill: bool = False,
+    heartbeat: Callable[[], None] | None = None,
+):
     """Own the local writer lease until the SDK and remote metric drain finish."""
     if not backfill and not wandb_publication_enabled(config):
         yield None
@@ -54,12 +58,20 @@ def local_wandb_writer(run_dir: Path, config: dict, *, backfill: bool = False):
         publication = stack.enter_context(
             nullcontext(None) if backfill else local_publication(run_dir, config, store, environment)
         )
+
+        def check_writer() -> None:
+            if publication is not None:
+                publication.check_lease()
+            if heartbeat is not None:
+                heartbeat()
+
         if publication is not None:
             config = {
                 **config,
                 "attempt_id": publication.manifest.attempt_id,
                 "public_run_index_url": publication.public_index_url,
             }
+        check_writer()
         projector = WandbProjector.start_live(
             config,
             run_dir=str(run_dir),
@@ -91,11 +103,12 @@ def local_wandb_writer(run_dir: Path, config: dict, *, backfill: bool = False):
                 while not finished.is_set():
                     if publication is not None:
                         publication.publish()
+                    check_writer()
                     publish_pending_frames(
                         store,
                         run,
                         limit=100,
-                        heartbeat=publication.check_lease if publication else None,
+                        heartbeat=check_writer,
                     )
                     finished.wait(0.5)
             except BaseException as exc:
@@ -121,13 +134,12 @@ def local_wandb_writer(run_dir: Path, config: dict, *, backfill: bool = False):
                 if publication is not None:
                     publication.publish()
                 while store.pending_metric_frames(limit=1):
-                    if publication is not None:
-                        publication.check_lease()
+                    check_writer()
                     count = publish_pending_frames(
                         store,
                         run,
                         limit=100,
-                        heartbeat=publication.check_lease if publication else None,
+                        heartbeat=check_writer,
                     )
                     if time.monotonic() >= deadline:
                         raise TimeoutError("local W&B outbox did not drain within 60 seconds")
@@ -136,8 +148,8 @@ def local_wandb_writer(run_dir: Path, config: dict, *, backfill: bool = False):
                 result_file = run_dir / "training-result.json"
                 if result_file.is_file():
                     result = json.loads(result_file.read_text())
+                    check_writer()
                     if publication is not None:
-                        publication.check_lease()
                         state, reason = publication.terminal_summary(result)
                     else:
                         state, reason = result["status"], result["terminal_reason"]
@@ -150,9 +162,10 @@ def local_wandb_writer(run_dir: Path, config: dict, *, backfill: bool = False):
                         ).fetchone()[0]
                     )
                 close_started = True
+                check_writer()
                 projector.close(timeout_seconds=60, exit_code=1 if learner_failed else 0)
                 if config.get("wandb_mode", "online") == "online":
-                    _verify_remote_delivery(run.path, high_water)
+                    _verify_remote_delivery(run.path, high_water, heartbeat=check_writer)
                 if publication is not None:
                     publication.finish(wandb_high_water=high_water)
                 write_canonical_json(
@@ -177,6 +190,7 @@ def local_wandb_writer(run_dir: Path, config: dict, *, backfill: bool = False):
             except BaseException:
                 if not close_started:
                     try:
+                        check_writer()
                         projector.close(timeout_seconds=60, exit_code=1)
                     except Exception:
                         pass
@@ -189,11 +203,15 @@ def local_wandb_writer(run_dir: Path, config: dict, *, backfill: bool = False):
                 )
 
 
-def _verify_remote_delivery(path: str, high_water: int) -> None:
+def _verify_remote_delivery(
+    path: str, high_water: int, *, heartbeat: Callable[[], None] | None = None
+) -> None:
     import wandb
 
     deadline = time.monotonic() + 60
     while True:
+        if heartbeat is not None:
+            heartbeat()
         if wandb_delivery_high_water(dict(wandb.Api(timeout=10).run(path).summary)) >= high_water:
             return
         if time.monotonic() >= deadline:
@@ -219,7 +237,9 @@ def _backfill_config(run_dir: Path, original: dict) -> dict:
     return config
 
 
-def sync_local_run(run_dir: Path) -> str:
+def sync_local_run(
+    run_dir: Path, *, heartbeat: Callable[[], None] | None = None
+) -> str:
     """Project a completed local Run to its frozen service without changing its receipt."""
     receipt = json.loads((run_dir / "local-run.json").read_text())
     if receipt.get("status") != "complete_local":
@@ -230,8 +250,8 @@ def sync_local_run(run_dir: Path) -> str:
     if (config.get("tracking") or {}).get("backend") == "mlflow":
         from gradlab.local_mlflow import sync_local_mlflow
 
-        return sync_local_mlflow(run_dir, config)
-    with local_wandb_writer(run_dir, config, backfill=True) as url:
+        return sync_local_mlflow(run_dir, config, heartbeat=heartbeat)
+    with local_wandb_writer(run_dir, config, backfill=True, heartbeat=heartbeat) as url:
         return str(url)
 
 

@@ -178,7 +178,6 @@ class MlflowDelivery:
             if not set(metrics).issubset(MONITORING_SCALAR_METRICS):
                 raise ValueError("monitoring cannot project Acceptance metrics")
             metrics[EVAL_CHECKPOINT_STEP] = float(step)
-            self._metric_batch(metrics, sequence=sequence, step=step)
             video = payload.get("video")
             if video is not None:
                 self._r2_artifact(
@@ -186,19 +185,20 @@ class MlflowDelivery:
                     video={**video, "bucket_uri": payload["bucket_uri"]},
                     name="representative.mp4",
                 )
+            self._metric_batch(metrics, sequence=sequence, step=step)
             return
         if kind == "evaluation_video":
-            self._metric_batch({EVAL_CHECKPOINT_STEP: float(step)}, sequence=sequence, step=step)
             self._r2_artifact(sequence=sequence, video=payload, name="episode.mp4")
+            self._metric_batch({EVAL_CHECKPOINT_STEP: float(step)}, sequence=sequence, step=step)
             return
         if kind in {"curriculum_distribution", "occupancy", "eval_by_start"}:
             axis = EVAL_CHECKPOINT_STEP if kind == "eval_by_start" else "train/step"
-            self._metric_batch({axis: float(step)}, sequence=sequence, step=step)
             self._artifact(
                 sequence=sequence,
                 name=f"{kind}.json",
                 content=json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(),
             )
+            self._metric_batch({axis: float(step)}, sequence=sequence, step=step)
             return
         raise ValueError(f"unsupported supervisor telemetry frame kind: {kind}")
 

@@ -65,7 +65,9 @@ def test_local_writer_publishes_real_outbox_and_confirms_terminal_delivery(tmp_p
     ]
     assert store.pending_metric_frames() == []
     projector.close.assert_called_once_with(timeout_seconds=60, exit_code=0)
-    verify.assert_called_once_with(projector.run.path, 1)
+    verify.assert_called_once()
+    assert verify.call_args.args == (projector.run.path, 1)
+    assert callable(verify.call_args.kwargs["heartbeat"])
     assert json.loads((tmp_path / "wandb-delivery.json").read_text())["status"] == "delivered"
     assert projector.run.summary["ops/reason"] == "early_stop_neutral"
 
