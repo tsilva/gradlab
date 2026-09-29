@@ -22,6 +22,7 @@ def backup(source: Path, destination: Path) -> dict[str, object]:
         raise ValueError("partial snapshot already exists")
     destination.parent.mkdir(parents=True, exist_ok=True)
     try:
+        os.close(os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))
         with sqlite3.connect(f"file:{source}?mode=ro", uri=True) as input_db:
             with sqlite3.connect(temporary) as output_db:
                 input_db.backup(output_db)
@@ -37,9 +38,10 @@ def backup(source: Path, destination: Path) -> dict[str, object]:
             "sha256": digest,
             "size_bytes": size,
         }
-        destination.with_suffix(destination.suffix + ".json").write_text(
-            json.dumps(receipt, sort_keys=True, indent=2) + "\n"
-        )
+        receipt_path = destination.with_suffix(destination.suffix + ".json")
+        receipt_fd = os.open(receipt_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(receipt_fd, "w") as receipt_file:
+            receipt_file.write(json.dumps(receipt, sort_keys=True, indent=2) + "\n")
         return receipt
     except BaseException:
         temporary.unlink(missing_ok=True)
