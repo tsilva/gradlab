@@ -61,9 +61,10 @@ SOURCE_RECIPE_FIELDS = frozenset(
         "seeds",
         TEMPLATE_VARS_KEY,
         "train",
+        "tracking",
     }
 )
-SOURCE_PRESET_FIELDS = frozenset({"defaults", "logging", TEMPLATE_VARS_KEY, "train"})
+SOURCE_PRESET_FIELDS = frozenset({"defaults", "logging", TEMPLATE_VARS_KEY, "train", "tracking"})
 RECIPE_DEFERRED_TEMPLATE_FIELDS: dict[tuple[str, ...], frozenset[str]] = {
     ("description",): RECIPE_TEMPLATE_FIELDS,
     ("goal", "description"): RECIPE_TEMPLATE_FIELDS,
@@ -95,7 +96,11 @@ _PHASE_EXECUTION_ENV_PATHS = frozenset(
 def goal_contract_sha256(document: Mapping[str, Any]) -> str:
     """Hash the fully composed semantic goal contract, excluding source formatting."""
 
-    return canonical_json_sha256(document, default=str, ensure_ascii=True)
+    return canonical_json_sha256(
+        {key: value for key, value in document.items() if key != "tracking"},
+        default=str,
+        ensure_ascii=True,
+    )
 
 
 def _override_parts(value: str, *, label: str) -> tuple[str, str, Any]:
@@ -600,6 +605,13 @@ def validate_source_recipe_shape(
         raise ValueError(
             f"{label} uses goal-owned or unsupported {kind} field(s): {', '.join(unknown)}"
         )
+    for section_name in ("logging", "train"):
+        section = document.get(section_name)
+        if isinstance(section, Mapping) and "wandb_mode" in section:
+            raise ValueError(
+                f"{label}.{section_name}.wandb_mode is obsolete; use "
+                "tracking.backend and tracking.delivery"
+            )
     train = document.get("train")
     if train is not None:
         if not isinstance(train, Mapping):
@@ -682,6 +694,10 @@ def compose_train_document(
         goal_path,
         env_provider=env_provider,
     )
+    from gradlab.tracking_config import resolve_tracking
+
+    # Tracking is operational configuration and must not enter Goal identity.
+    goal_composition.document.pop("tracking", None)
     authored_goal_document = goal_composition.document
     if goal_composition.sources:
         validate_goal_contract_document(
@@ -733,6 +749,21 @@ def compose_train_document(
         label=f"composed recipe file {recipe_path} after overrides",
         allow_goal_train_fields=True,
     )
+    launch_tracking_keys = tuple(
+        item.split("=", 1)[0].removeprefix("tracking.")
+        for item in recipe_override_list
+        if item.split("=", 1)[0].startswith("tracking.")
+    )
+    tracking = resolve_tracking(
+        experiments_root=next(
+            parent for parent in goal_path.resolve().parents if parent.name == "experiments"
+        ),
+        goal_sources=goal_composition.sources,
+        recipe_sources=recipe_composition.sources,
+        launch_tracking=source_document.get("tracking"),
+        overridden_keys=launch_tracking_keys,
+    )
+    source_document.pop("tracking", None)
     action_selector_value = source_document.pop("action_profile", None)
     action_selector = None
     if action_selector_value is not None:
@@ -912,6 +943,7 @@ def compose_train_document(
         path=goal_path,
         goal_composition=goal_composition,
     )
+    document["train_config"]["tracking"] = tracking
     effective_goal = copy.deepcopy(goal_composition.document)
     from gradlab.occupancy import resolve_cell_spaces
     from gradlab.state_archive import normalize_state_archive_config
@@ -1137,7 +1169,15 @@ def recipe_tags(document: Mapping[str, Any]) -> list[str]:
 
 
 def load_goal_contract_document(path: Path, *, label: str | None = None) -> dict[str, Any]:
-    return _load_rendered_goal_composition(path, label=label).document
+    composition = _load_rendered_goal_composition(path, label=label)
+    from gradlab.tracking_config import validate_tracking
+
+    for source in composition.sources:
+        document = load_mapping_document(source, label=f"goal source {source}")
+        if "tracking" in document:
+            validate_tracking(document["tracking"], label=f"{source}.tracking")
+    composition.document.pop("tracking", None)
+    return composition.document
 
 
 def load_goal_contract(

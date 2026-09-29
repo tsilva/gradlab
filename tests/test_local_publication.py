@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from gradlab.local_publication import LocalRunPublication
+from gradlab.local_publication import LocalRunPublication, publish_local_run
 from gradlab.recipe_documents import compose_resolved_train_documents
 from gradlab.policy_bundle import build_recipe_document, model_document_path, recipe_document_path
 from gradlab.r2_store import BucketConfig, RunStorageConfig
@@ -21,7 +21,10 @@ def local_run(tmp_path, request):
         goal,
         goal.parent / "recipes/ppo.yaml",
         source_sha="e" * 40,
-        recipe_overrides=parameters.get("overrides", ()),
+        recipe_overrides=(
+            f"tracking.delivery={parameters.get('delivery', 'online')}",
+            *parameters.get("overrides", ()),
+        ),
     )
     recipe = build_recipe_document(
         resolved.effective,
@@ -101,6 +104,31 @@ def test_local_run_publishes_catalog_checkpoints_and_metric_journal_idempotently
     assert len(terminal["checkpoint_inventory"]) == 1
     assert authority.control.get_json_optional(f"runs/{manifest['run_id']}/terminal.json") is None
     assert authority.control.get_json_optional(f"runs/{manifest['run_id']}/promotion.json") is None
+
+
+@pytest.mark.parametrize("local_run", [{"delivery": "local_only"}], indirect=True)
+def test_complete_local_publication_uploads_journal_without_tracker(local_run):
+    directory, config, store, authority, _env = local_run
+    (directory / "train-config.json").write_text(json.dumps(config))
+    receipt = json.loads((directory / "local-run.json").read_text())
+    (directory / "local-run.json").write_text(json.dumps({**receipt, "status": "complete_local"}))
+
+    url = publish_local_run(directory, authority=authority)
+    assert url.endswith(f"/runs/{config['wandb_run_id']}/index.json")
+    terminal = authority.control.get_json(
+        f"runs/{config['wandb_run_id']}/attempts/{config['attempt_id']}/terminal.json"
+    )
+    assert terminal["state"] == "complete_local"
+    assert terminal["service_high_water_mark"] == 0
+    assert terminal["drain"]["metric_segment_high_water"] == 1
+    assert terminal["drain"]["journal_archive"]["retention"] == "durable"
+    index = authority.models.get_json(f"runs/{config['wandb_run_id']}/index.json")
+    assert len(index["checkpoints"]) == 1
+    assert index["telemetry"]["run_id"] == config["wandb_run_id"]
+    assert index["telemetry"]["history_count"] == 1
+    assert index["telemetry"]["tracking"]["tracker_sync_status"] == "pending"
+    assert store.checkpoints()[0]["upload_status"] == "uploaded"
+    assert json.loads((directory / "local-run.json").read_text())["status"] == "complete_local"
 
 
 def test_local_writer_obeys_remote_lease(local_run):
@@ -196,10 +224,12 @@ def test_remote_metric_confirmation_is_required_before_terminal(local_run, monke
     assert store.pending_metric_frames() == []
 
 
-def test_offline_publication_never_initializes_r2(tmp_path):
+def test_local_only_training_never_initializes_r2(tmp_path):
     from gradlab.local_publication import local_publication
 
-    with local_publication(tmp_path, {"wandb_mode": "offline"}, None, None) as publication:
+    with local_publication(
+        tmp_path, {"tracking": {"backend": "wandb", "delivery": "local_only"}}, None, None
+    ) as publication:
         assert publication is None
 
 

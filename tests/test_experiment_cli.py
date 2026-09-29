@@ -10,7 +10,7 @@ from unittest import mock
 
 import pytest
 
-from gradlab.dstack_backend import DstackResources, DstackTask
+from gradlab.dstack_backend import ComputeRequest, DstackResources, DstackTask
 from gradlab.metric_names import METRICS_SCHEMA_VERSION
 from gradlab.experiment_cli import (
     _bind_launch_contract,
@@ -27,6 +27,8 @@ from gradlab.experiment_cli import (
     _manifest_rom_asset,
     _manifest_vizdoom_iwad,
     _operator_preflight,
+    _preflight_mlflow_compute_route,
+    _preflight_mlflow_service_uri,
     _poll_status,
     _project_reconciled_terminal,
     _public_dstack_state,
@@ -616,7 +618,9 @@ def test_operator_preflight_reports_resolved_project_fleet_and_sources(
             "gradlab.experiment_cli.wandb_entity_from_env",
             return_value="example-entity",
         ),
+        mock.patch("wandb.Api") as wandb_api,
     ):
+        wandb_api.return_value.projects.return_value = []
         _storage, _authority, backend, report = _operator_preflight(
             tmp_path,
             checkpoint_eval_backend="none",
@@ -694,6 +698,7 @@ def test_launch_operator_preflight_runs_before_runtime_readiness(
                     "train_config": {
                         "checkpoint_eval_backend": "modal",
                         "env_provider": "gradlab",
+                        "tracking": {"backend": "wandb", "delivery": "online"},
                     }
                 },
             ),
@@ -1159,7 +1164,7 @@ def _pre_submit_authority(tmp_path: Path):
 def test_pre_submit_failure_records_typed_attempt_evidence(tmp_path: Path) -> None:
     manifest = _manifest_only_run()
     authority = _pre_submit_authority(tmp_path)
-    authority.create_attempt_manifest(manifest)
+    authority.create_manifest(manifest)
 
     _record_pre_submit_failure(authority, manifest)
 
@@ -1172,13 +1177,50 @@ def test_pre_submit_failure_records_typed_attempt_evidence(tmp_path: Path) -> No
     assert receipt["drain"]["complete"] is False
 
 
+def test_retry_cannot_change_frozen_tracking_or_service_identity(tmp_path: Path) -> None:
+    manifest = _manifest_only_run()
+    authority = _pre_submit_authority(tmp_path)
+    authority.create_manifest(manifest)
+    attempt_id = new_attempt_id()
+    tracking = {
+        "backend": "mlflow",
+        "delivery": "online",
+        "sources": {"backend": "launch override", "delivery": "built-in default"},
+    }
+    with pytest.raises(ValueError, match="tracking selection"):
+        authority.create_attempt_manifest(replace(manifest, attempt_id=attempt_id, tracking=tracking, wandb={}))
+    with pytest.raises(ValueError, match="service identity"):
+        authority.create_attempt_manifest(
+            replace(manifest, attempt_id=attempt_id, wandb={**manifest.wandb, "entity": "other"})
+        )
+
+
+def test_mlflow_private_route_rejects_unapproved_fleet(monkeypatch) -> None:
+    monkeypatch.setenv("MLFLOW_OPERATOR_PROFILE", "beast3-pilot")
+    monkeypatch.setenv("MLFLOW_ALLOWED_FLEETS", "beast3-gpu")
+    local = ComputeRequest(
+        kind="local", target="beast3-gpu", max_price=None, max_cost_usd=None,
+        allow_on_demand=False, max_duration_seconds=3600,
+    )
+    assert _preflight_mlflow_compute_route(local) == "beast3-pilot"
+    with pytest.raises(RuntimeError, match="approved private route"):
+        _preflight_mlflow_compute_route(replace(local, target="other-gpu"))
+    with pytest.raises(RuntimeError, match="approved private route"):
+        _preflight_mlflow_compute_route(replace(local, kind="spot"))
+    assert _preflight_mlflow_service_uri("https://private.example.test/mlflow") == (
+        "https://private.example.test/mlflow"
+    )
+    with pytest.raises(RuntimeError, match="HTTPS service URI"):
+        _preflight_mlflow_service_uri("http://private.example.test/mlflow")
+
+
 @pytest.mark.parametrize("invalid", ["activity", "binding_hash", "missing_binding"])
 def test_pre_submit_failure_rejects_activity_or_invalid_binding(
     tmp_path: Path, invalid: str
 ) -> None:
     manifest = _manifest_only_run()
     authority = _pre_submit_authority(tmp_path)
-    authority.create_attempt_manifest(manifest)
+    authority.create_manifest(manifest)
     prefix = f"runs/{manifest.run_id}/attempts/{manifest.attempt_id}"
     if invalid == "activity":
         authority.control.put_json(f"{prefix}/activity.json", {"started": True})

@@ -31,8 +31,11 @@ SourceSection = Literal["runtime", "train", "goal_train"]
 
 
 def wandb_publication_enabled(train_config: Mapping[str, Any]) -> bool:
-    """Return whether the canonical W&B mode enables metric publication."""
+    """Return whether the Run owes delivery to its selected metrics service."""
 
+    tracking = train_config.get("tracking")
+    if isinstance(tracking, Mapping):
+        return tracking.get("delivery") == "online"
     return str(train_config.get("wandb_mode") or "online") != "disabled"
 
 
@@ -678,6 +681,8 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
     _field("wandb_display_name", default=None),
     _field("wandb_group", default=None),
     _field("wandb_tags", default=""),
+    _field("tracking", mapping_value=True, default=None),
+    _field("tracking_created_at", default=""),
     _field(
         "wandb_mode",
         default="online",

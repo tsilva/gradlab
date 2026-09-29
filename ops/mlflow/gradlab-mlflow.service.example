@@ -1,0 +1,23 @@
+[Unit]
+Description=Private GradLab MLflow tracking pilot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gradlab-mlflow
+Group=gradlab-mlflow
+WorkingDirectory=/var/lib/gradlab/mlflow
+EnvironmentFile=/etc/gradlab/mlflow/server.env
+ExecStart=/opt/gradlab/mlflow/.venv/bin/mlflow server --app-name basic-auth --backend-store-uri sqlite:////var/lib/gradlab/mlflow/tracking.db --artifacts-destination ${GRADLAB_MLFLOW_ARTIFACTS_DESTINATION} --host 127.0.0.1 --port 5001 --workers 1
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/gradlab/mlflow
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

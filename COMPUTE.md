@@ -104,15 +104,21 @@ Portable examples live under `ops/dstack/`. Copy and specialize them outside
 the repository, for example beneath `~/.config/gradlab/dstack/`. Never check in
 real hostnames, SSH users, identity paths, or fleet names.
 
+Online MLflow Runs require an operator-declared private HTTPS route and an exact
+`MLFLOW_ALLOWED_FLEETS` allowlist. The selected fleet must be enrolled in the
+operator-local inventory and must pass service authentication preflight before
+runtime preparation or dstack submission. The Beast-3 pilot procedure is in
+`ops/mlflow/README.md`.
+
 ## Modal evaluation
 
 Modal is the default evaluation backend for short CPU acceptance jobs. An
 explicit training-container option runs the same frozen evaluation contract
 in bounded CPU work alongside training; evaluation may also be disabled.
 Modal receives
-no W&B or control-private credentials and writes only evaluation-private
-results/evidence. The lease-holding training supervisor projects accepted
-evaluation metrics into W&B.
+no metrics-service or control-private credentials and writes only evaluation-private
+results/evidence. The lease-holding training supervisor projects evaluation
+metrics into the Run's selected online service and retains them in its journal.
 
 A native Modal hard budget must be configured before a final acceptance launch.
 Per-run forecasts or alerts are not distributed reservations.

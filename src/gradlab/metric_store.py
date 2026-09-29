@@ -313,7 +313,17 @@ class MetricStore(SqliteStore):
                 "SELECT status FROM metric_frames WHERE event_id=? AND kind='monitoring'",
                 ("monitoring:" + evaluation_id,),
             ).fetchone()
-        return row is not None and row[0] == "published"
+        return row is not None and row[0] in {"published", "local_only"}
+
+    def mark_pending_frames_local_only(self) -> int:
+        """Fulfill local-only delivery after frames have entered the durable journal."""
+
+        with self.connection() as connection:
+            cursor = connection.execute(
+                "UPDATE metric_frames SET status = 'local_only' "
+                "WHERE status IN ('pending', 'failed_retryable')"
+            )
+        return int(cursor.rowcount)
 
     def enqueue_event(
         self,

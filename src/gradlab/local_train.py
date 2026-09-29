@@ -18,6 +18,7 @@ from urllib.parse import unquote, urlparse
 from gradlab.cli_parser import ExactArgumentParser
 from gradlab.local_paths import default_runs_dir
 from gradlab.local_wandb import local_wandb_writer
+from gradlab.local_mlflow import local_mlflow_writer
 from gradlab.clock import utc_now as _utc_now
 from gradlab.config_loader import RECIPE_TEMPLATE_VALUES, render_template_vars
 from gradlab.env import task_termination
@@ -264,7 +265,7 @@ def main(argv: list[str] | None = None) -> int:
     source = resolve_recipe_source(args.recipe)
     overrides = list(args.recipe_overrides)
     if not args.wandb:
-        overrides.append("logging.wandb_mode=disabled")
+        overrides.append("tracking.delivery=local_only")
 
     source_commit = repo_git_commit(source.repository_root) or _installed_source_commit()
 
@@ -370,11 +371,7 @@ def main(argv: list[str] | None = None) -> int:
     config_path = run_dir / "train-config.json"
     write_canonical_json(config_path, config)
 
-    execution_mode = (
-        TrainingExecutionMode.LOCAL_TRAINING
-        if config.get("wandb_mode", "online") == "online"
-        else TrainingExecutionMode.LOCAL_DEMO
-    )
+    execution_mode = TrainingExecutionMode.LOCAL_TRAINING
     started_at = _utc_now()
     receipt = {
         "document_type": "gradlab.local-run",
@@ -420,7 +417,19 @@ def main(argv: list[str] | None = None) -> int:
                 kwargs = {"runtime_rom_binding": runtime_rom_binding}
                 if runtime_control is not None:
                     kwargs["runtime_control"] = runtime_control
-                with local_wandb_writer(run_dir, config) as wandb_url:
+                from contextlib import nullcontext
+
+                tracking = config["tracking"]
+                writer = (
+                    nullcontext(None)
+                    if tracking["delivery"] == "local_only"
+                    else (
+                        local_mlflow_writer(run_dir, config)
+                        if tracking["backend"] == "mlflow"
+                        else local_wandb_writer(run_dir, config)
+                    )
+                )
+                with writer as wandb_url:
                     if wandb_url:
                         receipt["wandb_url"] = wandb_url
                         _write_receipt(run_dir, receipt)
@@ -539,7 +548,12 @@ def main(argv: list[str] | None = None) -> int:
         raise RuntimeError("local learner reported a non-playable terminal result")
     receipt.update(
         {
-            "status": terminal_status,
+            "status": (
+                "complete_local"
+                if terminal_status == "completed" and config["tracking"]["delivery"] == "local_only"
+                else terminal_status
+            ),
+            "tracking": config["tracking"],
             f"{terminal_status}_at": _utc_now(),
             "terminal_reason": terminal_reason,
             "first_completion_step": first_completion_step,

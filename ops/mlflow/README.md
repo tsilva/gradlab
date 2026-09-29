@@ -1,0 +1,19 @@
+# Private MLflow pilot
+
+This template prepares a single-host, version-pinned MLflow 3.16.1 service. It does not enroll a compute fleet or authorize a live training campaign. Hostnames, credentials, endpoints, capacity, and enrollment evidence belong in the operator-local inventory.
+
+## Installation and route
+
+Install the checked-in `mlflow-server` dependency group from a pinned source revision with `uv sync --frozen --only-group mlflow-server --no-install-project`. Place that environment under `/opt/gradlab/mlflow/.venv` and install the sample systemd unit after adapting its paths. Give the service user exclusive access to `/var/lib/gradlab/mlflow`. The service binds only to host loopback; expose it to approved operators and training containers through a private authenticated TLS route. Keep the route inaccessible from the public Internet. Do not put its credentials in a recipe, Run manifest, image, or Modal worker.
+
+Use MLflow's `basic-auth` app with a private server environment file (`0600`). It needs `MLFLOW_FLASK_SERVER_SECRET_KEY`, a one-time `MLFLOW_AUTH_ADMIN_PASSWORD` of at least 12 characters for initial setup, `GRADLAB_MLFLOW_ARTIFACTS_DESTINATION=s3://<separate-private-bucket>/gradlab`, `MLFLOW_S3_ENDPOINT_URL`, and server-side `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`. Remove the bootstrap admin password after the first start and issue a dedicated writer account with only the necessary experiment permissions. Keep the auth SQLite database and tracking SQLite database on persistent host storage and back up both. MLflow's proxied artifact mode keeps R2 credentials on the server; clients need only `MLFLOW_TRACKING_URI`, `MLFLOW_TRACKING_USERNAME`, and `MLFLOW_TRACKING_PASSWORD`.
+
+Before enabling a compute fleet, verify its private route and exact credentials from inside that fleet's training image. Set `MLFLOW_OPERATOR_PROFILE` to one logical destination name and `MLFLOW_ALLOWED_FLEETS` to the comma-separated exact dstack fleet IDs verified for that route. Launch preflight rejects other compute targets and records the profile in the immutable Run manifest. An unreachable or unauthenticated selected service also fails preflight. Keep the MLflow artifact bucket distinct from GradLab's control, evaluation, and public-model buckets. The GradLab journal remains the scientific authority if MLflow disagrees.
+
+## Backup and recovery
+
+Back up both SQLite files using `python ops/mlflow/sqlite_snapshot.py backup <database> <snapshot>` while the service is running. The script uses SQLite's online backup API, verifies integrity, and writes a SHA-256 receipt beside the snapshot. Copy snapshots and receipts to an operator-controlled durable location, along with a versioned inventory of the artifact bucket. Test restoration into an isolated private service and verify Run IDs, metric histories, media, and permissions before replacing a failed service. Stop the service before replacing a live database; preserve the failed bytes and receipts. Do not rewrite GradLab terminal receipts. If restoration is impossible, point private operator configuration at the replacement service and run `gradlab rebind-mlflow <run-id> --operator <name> --reason <incident> --confirm-irrecoverable`. It replays the verified journal and media, confirms remote visibility, and appends an audit record before atomically replacing the mutable service binding. Preserve incident evidence alongside backup receipts.
+
+## Pilot gate
+
+The bounded live pilot requires separate compute authorization. Compare matched W&B and MLflow Runs, measure metric ingest rate, remote-visibility latency, database and artifact growth, representative-video access, server CPU/memory, and learner throughput. Verify GradLab public views, private-R2 journal integrity, restore, and resource release. Keep MLflow unavailable as a selectable production target on other fleets until private route and capacity checks pass there.

@@ -14,6 +14,7 @@ This specification applies to GradLab's current publication providers and public
 - Checkpoint Publication must remain independent of evaluation status and must not imply Acceptance, Promotion, or Release.
 - A Release for a visual or interactive Policy must include its representative replay as root `replay.mp4` when the publication provider supports that preview.
 - Public model, video, source, and telemetry surfaces for one result must link to each other and use the same stable result identity.
+- New-schema public telemetry must come from the verified GradLab journal and remain readable without private metrics-service access. Before a direct local-only Run is published, its required journal and Checkpoint artifacts must be uploaded durably; tracker sync is optional and cannot change the original `complete_local` receipt.
 - Dataset Publication remains an explicit durable local operation on finalized verified Run inventories; training requires no HF target or credentials.
 - Checkpoint-evaluation dataset Publication must filter lightweight indexes before image transfer, preserve complete multi-chunk episodes and Run/training-seed/Checkpoint/evaluation/episode grouping, and leave split assignment to consumers unless they explicitly request a derived split view.
 - Publication must append immutable contributions with expected-parent protection, idempotence, conflict rejection and bounded temporary space; it must preserve R2 sources and historical dataset meaning.

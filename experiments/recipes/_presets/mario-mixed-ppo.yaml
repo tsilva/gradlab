@@ -35,5 +35,3 @@ train:
       advantage_normalization:
         mode: grouped
         context: task_id
-logging:
-  wandb_mode: online
