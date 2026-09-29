@@ -961,6 +961,7 @@ dev = [
     { name = "ruff" },
 ]
 mlflow-server = [
+    { name = "boto3" },
     { name = "mlflow", extra = ["auth"] },
 ]
 modal-deploy = [
@@ -1058,7 +1059,10 @@ dev = [
     { name = "pytest", specifier = ">=9.0.3,<10" },
     { name = "ruff", specifier = ">=0.15,<0.16" },
 ]
-mlflow-server = [{ name = "mlflow", extras = ["auth"], specifier = "==3.16.1" }]
+mlflow-server = [
+    { name = "boto3", specifier = ">=1.34,<2" },
+    { name = "mlflow", extras = ["auth"], specifier = "==3.16.1" },
+]
 modal-deploy = [
     { name = "jinja2", specifier = ">=3.1,<4" },
     { name = "modal", specifier = ">=1.3,<2" },

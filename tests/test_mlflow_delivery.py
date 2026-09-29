@@ -269,6 +269,8 @@ def test_mlflow_sqlite_snapshot_restores_run_identity_and_history(tmp_path: Path
     subprocess.run([sys.executable, str(script), "backup", str(database), str(snapshot)], check=True)
     receipt = json.loads((tmp_path / "restored.db.json").read_text())
     assert receipt["size_bytes"] == snapshot.stat().st_size
+    assert snapshot.stat().st_mode & 0o777 == 0o600
+    assert (tmp_path / "restored.db.json").stat().st_mode & 0o777 == 0o600
     restored = MlflowDelivery.open(
         tracking_uri=f"sqlite:///{snapshot}", experiment_name="gradlab-test",
         gradlab_run_id=run_id, created_at_ms=1_800_000_000_000,

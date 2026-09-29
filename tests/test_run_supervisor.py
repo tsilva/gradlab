@@ -56,6 +56,21 @@ from gradlab.run_supervisor import (
 )
 
 
+def test_forced_terminal_delivery_seals_metric_tail_before_publishing(tmp_path: Path) -> None:
+    from gradlab.lifecycle_certification import CertificationFixture
+
+    prepared = CertificationFixture(tmp_path).prepare(run_number=91)
+    supervisor = prepared.supervisor
+    supervisor.store.append_metrics({"train/return/mean": 1.0}, step=1, source="train")
+    supervisor.last_segment = supervisor.clock.monotonic()
+
+    supervisor._service_delivery(force=True)
+
+    assert supervisor.store.next_metric_events(limit=1) == []
+    assert supervisor.store.metric_segment_high_water() == 1
+    assert supervisor._wandb_high_water() == 1
+
+
 SOURCE_SHA = "a" * 40
 BUILD_SOURCE_SHA = "f" * 40
 RUNTIME_INPUT_SHA256 = "e" * 64

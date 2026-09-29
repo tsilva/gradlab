@@ -138,6 +138,7 @@ testpaths = ["tests"]
 [dependency-groups]
 mlflow-server = [
     "mlflow[auth]==3.16.1",
+    "boto3>=1.34,<2",
 ]
 dev = [
     "pytest>=9.0.3,<10",

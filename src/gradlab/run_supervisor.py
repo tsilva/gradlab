@@ -1642,7 +1642,7 @@ class RunSupervisor:
         self._servicing_delivery = True
         self.last_delivery_service = now
         try:
-            activity = self._seal_metrics(now)
+            activity = self._seal_metrics(now, force=force)
             return activity + self._publish_wandb()
         finally:
             self._servicing_delivery = False
@@ -2418,6 +2418,7 @@ class RunSupervisor:
             and self._all_ready_checkpoints_published()
             and self.store.all_evals_settled()
             and pending_frames == 0
+            and not self.store.next_metric_events(limit=1)
         )
         return activity, converged
 
