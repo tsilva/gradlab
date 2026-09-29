@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime
 import shutil
 import signal
 import subprocess
@@ -14,6 +15,7 @@ from typing import Any, Protocol
 from gradlab.clock import Clock, SystemClock
 from gradlab.metric_names import METRICS_SCHEMA_VERSION
 from gradlab.metric_store import MetricStore
+from gradlab.mlflow_delivery import MlflowDelivery, publish_pending_frames as publish_mlflow_frames
 from gradlab.run_contracts import TerminalReceipt
 from gradlab.runtime_contract import runtime_contract
 from gradlab.wandb_publisher import (
@@ -94,6 +96,23 @@ class SupervisorRuntime:
             goal_variant=goal_variant,
         )
 
+    def start_mlflow(
+        self,
+        train_config: Mapping[str, Any],
+        *,
+        created_at: str,
+    ) -> MlflowDelivery:
+        uri = str(os.environ.get("MLFLOW_TRACKING_URI") or "").strip()
+        if not uri:
+            raise RuntimeError("selected MLflow service has no private tracking URI")
+        created_at_ms = int(datetime.fromisoformat(created_at.replace("Z", "+00:00")).timestamp() * 1000)
+        return MlflowDelivery.open(
+            tracking_uri=uri,
+            experiment_name=f"gradlab-{train_config['game_family']}",
+            gradlab_run_id=str(train_config["wandb_run_id"]),
+            created_at_ms=created_at_ms,
+        )
+
     def resume_wandb(
         self,
         train_config: Mapping[str, Any],
@@ -110,13 +129,18 @@ class SupervisorRuntime:
     def publish_frames(
         self,
         store: MetricStore,
-        projector: WandbProjector,
+        projector: WandbProjector | MlflowDelivery,
         *,
         limit: int,
         event_seq_offset: int = 0,
         heartbeat: Callable[[], None] | None = None,
         should_continue: Callable[[], bool] | None = None,
     ) -> int:
+        if isinstance(projector, MlflowDelivery):
+            return publish_mlflow_frames(
+                store, projector, limit=limit, event_seq_offset=event_seq_offset,
+                heartbeat=heartbeat, should_continue=should_continue,
+            )
         return publish_pending_frames(
             store,
             projector.run,
@@ -129,7 +153,7 @@ class SupervisorRuntime:
 
     def publish_promotion(
         self,
-        projector: WandbProjector,
+        projector: WandbProjector | MlflowDelivery,
         *,
         checkpoint_step: int,
         checkpoint_url: str,
@@ -139,6 +163,13 @@ class SupervisorRuntime:
         evaluation_source: str,
         metrics_schema_version: int = METRICS_SCHEMA_VERSION,
     ) -> None:
+        if isinstance(projector, MlflowDelivery):
+            projector.publish_promotion(
+                checkpoint_step=checkpoint_step, checkpoint_url=checkpoint_url,
+                metrics=metrics, updated_at=updated_at,
+                selection_rank=list(selection_rank), evaluation_source=evaluation_source,
+            )
+            return
         publish_promotion_summary(
             projector.run,
             checkpoint_step=checkpoint_step,
@@ -157,6 +188,13 @@ class SupervisorRuntime:
         *,
         timeout_seconds: float,
     ) -> None:
+        tracking = train_config.get("tracking") or {}
+        if tracking.get("backend") == "mlflow":
+            projector = self.start_mlflow(
+                train_config, created_at=str(train_config["tracking_created_at"])
+            )
+            projector.publish_terminal(state=receipt.state, reason=receipt.stop_reason)
+            return
         projector = WandbProjector.resume(
             train_config,
             update_finish_state=True,
@@ -170,6 +208,21 @@ class SupervisorRuntime:
             )
 
     def remote_summary(self, run_path: str) -> dict[str, Any]:
+        if run_path.startswith("mlflow:"):
+            uri = str(os.environ.get("MLFLOW_TRACKING_URI") or "").strip()
+            if not uri:
+                raise RuntimeError("selected MLflow service has no private tracking URI")
+            from mlflow.tracking import MlflowClient
+
+            client = MlflowClient(tracking_uri=uri)
+            run = client.get_run(run_path.removeprefix("mlflow:"))
+            delivery = MlflowDelivery(
+                client,
+                run_id=run.info.run_id,
+                gradlab_run_id=str(run.data.tags["gradlab.run_id"]),
+                created_at_ms=0,
+            )
+            return delivery.remote_summary()
         import wandb
 
         api = wandb.Api(timeout=10)
@@ -180,10 +233,12 @@ class SupervisorRuntime:
 
     def close_wandb(
         self,
-        projector: WandbProjector,
+        projector: WandbProjector | MlflowDelivery,
         *,
         timeout_seconds: float,
     ) -> None:
+        if isinstance(projector, MlflowDelivery):
+            return
         projector.close(timeout_seconds=timeout_seconds)
 
     def start_learner(

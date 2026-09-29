@@ -423,8 +423,10 @@ class ConfigValidationTests(unittest.TestCase):
                 )
         self.assertEqual(ppo["train_config"]["timesteps"], 50000000)
         self.assertEqual(a2c["train_config"]["timesteps"], 50000000)
-        self.assertEqual(ppo["train_config"]["wandb_mode"], "online")
-        self.assertEqual(a2c["train_config"]["wandb_mode"], "online")
+        self.assertEqual(ppo["train_config"]["tracking"]["backend"], "wandb")
+        self.assertEqual(ppo["train_config"]["tracking"]["delivery"], "online")
+        self.assertEqual(a2c["train_config"]["tracking"]["backend"], "wandb")
+        self.assertEqual(a2c["train_config"]["tracking"]["delivery"], "online")
 
     def test_every_actor_critic_recipe_declares_explicit_policy_model(self) -> None:
         recipes = sorted(Path("experiments/goals").glob("**/recipes/*.yaml"))
@@ -455,7 +457,7 @@ class ConfigValidationTests(unittest.TestCase):
                     },
                 )
 
-        self.assertEqual(actor_critic_recipes, 41)
+        self.assertEqual(actor_critic_recipes, 42)
 
     def test_every_mario_recipe_disables_eval_and_stops_at_perfect_clear_window(self) -> None:
         mario_root = Path("experiments/goals/SuperMarioBros-Nes-v0")
@@ -574,7 +576,7 @@ class ConfigValidationTests(unittest.TestCase):
         ))
         self.assertEqual(sum(
             issue.path.endswith("_goal.yaml") for issue in report.issues
-        ), 12)
+        ), 11)
         self.assertEqual(report.counts["json_files"], 0)
         self.assertGreaterEqual(report.counts["yaml_files"], 15)
         self.assertGreaterEqual(report.counts["goals"], 1)

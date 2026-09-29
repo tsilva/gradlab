@@ -80,6 +80,9 @@ def _start_wandb(
 
     if not wandb_publication_enabled(train_config):
         raise ValueError("supervised training requires W&B metric publication")
+    tracking = train_config.get("tracking")
+    if isinstance(tracking, Mapping) and tracking.get("backend") != "wandb":
+        raise ValueError("W&B projector cannot deliver an MLflow Run")
     load_wandb_env()
     wandb_dir = os.path.abspath(run_dir)
     for env_name, path in {
@@ -139,7 +142,7 @@ def _start_wandb(
             dir=wandb_dir,
             sync_tensorboard=False,
             save_code=False,
-            mode=str(train_config["wandb_mode"]),
+            mode="online",
             id=str(train_config["wandb_run_id"]),
             resume="allow",
             settings=wandb.Settings(
@@ -223,7 +226,7 @@ class WandbProjector:
                 project=project,
                 id=run_id,
                 resume="allow" if allow_create else "must",
-                mode=str(train_config.get("wandb_mode") or "online"),
+                mode="online",
                 name=display_name,
                 group=str(train_config.get("wandb_group") or "") or None,
                 tags=tags,

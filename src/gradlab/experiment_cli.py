@@ -15,7 +15,7 @@ from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from gradlab.cli_parser import ExactArgumentParser
 from gradlab.clock import parse_utc_datetime
@@ -107,9 +107,7 @@ LAUNCH_FOLLOW_DRAIN_GRACE_SECONDS = 12 * 60 * 60
 DEFAULT_LAUNCH_SEED = 12
 DEFAULT_ROM_MOUNT = "/var/lib/gradlab/rom-cache:/rom-cache"
 QUIESCENCE_SECONDS = 30.0
-COMMON_SECRET_ENV = (
-    "WANDB_API_KEY",
-    "WANDB_ENTITY",
+STORAGE_SECRET_ENV = (
     "GRADLAB_CONTROL_R2_URI",
     "GRADLAB_CONTROL_R2_ENDPOINT_URL",
     "GRADLAB_CONTROL_R2_REGION",
@@ -127,6 +125,46 @@ COMMON_SECRET_ENV = (
     "GRADLAB_MODELS_R2_SECRET_ACCESS_KEY",
     "GRADLAB_MODELS_R2_PUBLIC_BASE_URL",
 )
+WANDB_SERVICE_ENV = ("WANDB_API_KEY", "WANDB_ENTITY")
+MLFLOW_SERVICE_ENV = (
+    "MLFLOW_TRACKING_URI",
+    "MLFLOW_TRACKING_USERNAME",
+    "MLFLOW_TRACKING_PASSWORD",
+    "MLFLOW_OPERATOR_PROFILE",
+    "MLFLOW_ALLOWED_FLEETS",
+)
+
+
+def _preflight_mlflow_compute_route(selected_compute: ComputeRequest) -> str:
+    """Require an operator-declared private fleet route before an MLflow task starts."""
+    profile = str(os.environ.get("MLFLOW_OPERATOR_PROFILE") or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", profile):
+        raise OperatorConfigurationError("MLFLOW_OPERATOR_PROFILE must name one logical profile")
+    fleets = {
+        name.strip()
+        for name in str(os.environ.get("MLFLOW_ALLOWED_FLEETS") or "").split(",")
+        if name.strip()
+    }
+    if not fleets or selected_compute.kind != "local" or selected_compute.target not in fleets:
+        raise OperatorConfigurationError(
+            "selected MLflow service has no approved private route for this compute target"
+        )
+    return profile
+
+
+def _preflight_mlflow_service_uri(uri: str) -> str:
+    parsed = urlparse(str(uri).strip())
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise OperatorConfigurationError(
+            "queued MLflow delivery requires a private authenticated HTTPS service URI"
+        )
+    return str(uri).strip()
+COMMON_SECRET_ENV = (*WANDB_SERVICE_ENV, *STORAGE_SECRET_ENV)
 OPERATOR_MODAL_ENV = (
     "MODAL_TOKEN_ID",
     "MODAL_TOKEN_SECRET",
@@ -228,9 +266,19 @@ def _storage(root: Path) -> tuple[RunStorageConfig, RunAuthority]:
     return storage, RunAuthority(storage)
 
 
-def _required_operator_environment(checkpoint_eval_backend: str) -> tuple[str, ...]:
+def _required_operator_environment(
+    checkpoint_eval_backend: str,
+    tracking: Mapping[str, Any] | None = None,
+) -> tuple[str, ...]:
+    selected = tracking or {"backend": "wandb", "delivery": "online"}
+    service = (
+        WANDB_SERVICE_ENV
+        if selected["backend"] == "wandb"
+        else MLFLOW_SERVICE_ENV
+    ) if selected["delivery"] == "online" else ()
     return (
-        *COMMON_SECRET_ENV,
+        *STORAGE_SECRET_ENV,
+        *service,
         *(OPERATOR_MODAL_ENV if str(checkpoint_eval_backend) == "modal" else ()),
     )
 
@@ -250,6 +298,7 @@ def _operator_preflight(
     checkpoint_eval_backend: str,
     local_target: str | None = None,
     coordinator_id: str | None = None,
+    tracking: Mapping[str, Any] | None = None,
 ) -> tuple[
     RunStorageConfig,
     RunAuthority,
@@ -257,7 +306,7 @@ def _operator_preflight(
     dict[str, Any],
 ]:
     environment_report = _load_environment(root)
-    required = _required_operator_environment(checkpoint_eval_backend)
+    required = _required_operator_environment(checkpoint_eval_backend, tracking)
     missing = [name for name in required if not str(os.environ.get(name) or "").strip()]
     if missing:
         raise OperatorConfigurationError(
@@ -272,6 +321,28 @@ def _operator_preflight(
             f"{sorted(truncated)[0]} is visibly truncated; use the exact "
             "machine-readable value, not human-formatted command output"
         )
+    selected_tracking = tracking or {"backend": "wandb", "delivery": "online"}
+    if selected_tracking["delivery"] == "online":
+        mlflow_uri = (
+            _preflight_mlflow_service_uri(os.environ["MLFLOW_TRACKING_URI"])
+            if selected_tracking["backend"] == "mlflow"
+            else ""
+        )
+        try:
+            if selected_tracking["backend"] == "mlflow":
+                from mlflow.tracking import MlflowClient
+
+                MlflowClient(
+                    tracking_uri=mlflow_uri
+                ).get_experiment_by_name("gradlab-preflight")
+            else:
+                import wandb
+
+                next(iter(wandb.Api(timeout=10).projects(entity=wandb_entity_from_env(), per_page=1)), None)
+        except Exception as exc:
+            raise OperatorConfigurationError(
+                f"selected {selected_tracking['backend']} service is unreachable or unauthenticated"
+            ) from exc
     try:
         storage = RunStorageConfig.from_env()
     except ValueError as exc:
@@ -343,7 +414,7 @@ def _operator_preflight(
             "resources": local_resources.as_manifest(),
             "resources_source": "operator-config",
         },
-        "wandb": {"entity": wandb_entity_from_env()},
+        "tracking": dict(tracking or {"backend": "wandb", "delivery": "online"}),
         "modal": {
             "credentials": ("resolved" if checkpoint_eval_backend == "modal" else "not-required")
         },
@@ -557,14 +628,9 @@ def _task_request(manifest: RunManifest, *, manifest_uri: str) -> TaskRequest:
         resources=DstackResources.from_manifest(manifest.compute.get("resources")),
         plain_env=plain_env,
         secret_env=(
-            *COMMON_SECRET_ENV,
-            *(
-                (
-                    "MODAL_TOKEN_ID",
-                    "MODAL_TOKEN_SECRET",
-                )
-                if bool(manifest.modal["enabled"])
-                else ()
+            *_required_operator_environment(
+                run_checkpoint_eval_backend(manifest),
+                getattr(manifest, "tracking", None),
             ),
         ),
         rom_mount=(
@@ -780,6 +846,7 @@ def cmd_launch(args: argparse.Namespace) -> int:
         root,
         checkpoint_eval_backend=checkpoint_eval_backend,
         local_target=(args.target if str(args.compute) in {"auto", "local"} else None),
+        tracking=config["tracking"],
     )
     compute = _compute(
         args,
@@ -789,6 +856,11 @@ def cmd_launch(args: argparse.Namespace) -> int:
     selected_compute, selected_offer = dstack_backend.select_compute(
         compute,
         resources=resources,
+    )
+    metrics_profile = (
+        _preflight_mlflow_compute_route(selected_compute)
+        if config["tracking"]["backend"] == "mlflow"
+        else "wandb-default"
     )
     release = runtime_release_from_args(
         args,
@@ -826,13 +898,14 @@ def cmd_launch(args: argparse.Namespace) -> int:
         source_sha=source_sha,
         recipe_overrides=recipe_overrides,
     )
-    wandb = _wandb_identity(
-        document,
-        run_id,
-        goal_slug=goal_slug,
-        recipe_slug=recipe_slug,
-        recipe_variant=variant_id,
-        seed=seed,
+    wandb = (
+        _wandb_identity(
+            document, run_id, goal_slug=goal_slug, recipe_slug=recipe_slug,
+            recipe_variant=variant_id, seed=seed,
+        )
+        if config["tracking"]["backend"] == "wandb"
+        and config["tracking"]["delivery"] == "online"
+        else {}
     )
     modal_app = str(release.modal_app_name or "").strip()
     if checkpoint_eval_backend == "modal" and not modal_app:
@@ -922,6 +995,7 @@ def cmd_launch(args: argparse.Namespace) -> int:
         run_description=run_description,
         compute=manifest_compute,
         wandb=wandb,
+        tracking={**config["tracking"], "operator_profile": metrics_profile},
         modal={
             "enabled": checkpoint_eval_backend == "modal",
             "environment_name": modal_config.deployment.environment_name,
@@ -981,7 +1055,9 @@ def cmd_launch(args: argparse.Namespace) -> int:
             }
         ),
         "checkpoint_eval_backend": checkpoint_eval_backend,
-        "wandb_url": wandb["url"],
+        "tracking": config["tracking"],
+        "metrics_url": wandb.get("url"),
+        "wandb_url": wandb.get("url"),
         "public_run_index_url": authority.models.public_url(f"runs/{run_id}/index.json"),
     }
     return _finish_launch_command(
@@ -990,7 +1066,11 @@ def cmd_launch(args: argparse.Namespace) -> int:
         output=output,
         human_output=(
             f"run={run_id} task={task.name} compute={selected_compute.kind} "
-            f"image={release.runtime_image_ref} wandb={wandb['url']} "
+            f"image={release.runtime_image_ref} "
+            f"tracking={config['tracking']['backend']}/{config['tracking']['delivery']} "
+            f"tracking_sources={config['tracking']['sources']['backend']},"
+            f"{config['tracking']['sources']['delivery']} "
+            f"metrics={wandb.get('url') or 'local-only or pending binding'} "
             f"index={output['public_run_index_url']}"
         ),
         follow_timeout=(
@@ -1691,7 +1771,7 @@ def cmd_resume_submit(args: argparse.Namespace) -> int:
     storage, authority = _storage(root)
     manifest = _manifest_only_submission(authority, args.run_id)
     checkpoint_eval_backend = run_checkpoint_eval_backend(manifest)
-    required = _required_operator_environment(checkpoint_eval_backend)
+    required = _required_operator_environment(checkpoint_eval_backend, manifest.tracking)
     missing = [name for name in required if not str(os.environ.get(name) or "").strip()]
     if missing:
         raise OperatorConfigurationError(
@@ -1730,7 +1810,9 @@ def cmd_resume_submit(args: argparse.Namespace) -> int:
         "image_digest": manifest.image_digest,
         "runtime_input_sha256": manifest.compute["runtime_input_sha256"],
         "runtime_build_source_sha": manifest.compute["runtime_build_source_sha"],
-        "wandb_url": manifest.wandb["url"],
+        "tracking": manifest.tracking,
+        "metrics_url": manifest.wandb.get("url"),
+        "wandb_url": manifest.wandb.get("url"),
         "public_run_index_url": authority.models.public_url(f"runs/{manifest.run_id}/index.json"),
         "resumed_submission": True,
     }
@@ -1740,7 +1822,11 @@ def cmd_resume_submit(args: argparse.Namespace) -> int:
         else (
             f"run={manifest.run_id} task={task.name} "
             f"compute={manifest.compute['selected']['kind']} "
-            f"image={manifest.image_digest} wandb={manifest.wandb['url']} "
+            f"image={manifest.image_digest} "
+            f"tracking={(manifest.tracking or {}).get('backend', 'wandb')}/"
+            f"{(manifest.tracking or {}).get('delivery', 'online')} "
+            f"tracking_sources={((manifest.tracking or {}).get('sources') or {}).get('backend', 'legacy')},"
+            f"{((manifest.tracking or {}).get('sources') or {}).get('delivery', 'legacy')} "
             f"index={output['public_run_index_url']}"
         )
     )

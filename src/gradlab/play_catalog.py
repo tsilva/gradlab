@@ -61,6 +61,7 @@ from gradlab.metric_names import (
     require_current_metrics_schema,
 )
 from gradlab.model_sources import DEFAULT_PUBLIC_MODELS_BASE_URL, _public_json
+from gradlab.metric_journal import JournalHistory, PublicJournalHistory, read_control_journal
 from gradlab.policy_bundle import canonical_json_sha256, validate_recipe_document
 from gradlab.ranking import (
     RankCriterion,
@@ -3283,6 +3284,8 @@ class PlayCatalog:
         monitoring_states: Mapping[str, Mapping[str, Any]] | None = None,
         monitoring_episodes: int | None = None,
         on_training_metric: Callable[[str, tuple[tuple[int, float], ...]], None] | None = None,
+        public_telemetry: Mapping[str, Any] | None = None,
+        public_recipe_config: Mapping[str, Any] | None = None,
     ) -> _CheckpointEvaluationData:
         def validate_wandb_config(config: Mapping[str, Any]) -> None:
             schema_version = require_current_metrics_schema(config.get("metrics_schema_version"))
@@ -3436,6 +3439,52 @@ class PlayCatalog:
             training_metric_history = {}
             warning = None
             training_seed = _safe_int(manifest.get("seed"))
+            if manifest.get("tracking") is not None:
+                try:
+                    recipe_document = self._control_recipe_document(str(manifest["recipe_sha256"]))
+                    if recipe_document is None:
+                        raise ValueError("frozen Run recipe is unavailable")
+                    config = dict(recipe_document["recipe"]["train_config"])
+                    validate_wandb_config(config)
+                    history_run = JournalHistory(
+                        read_control_journal(self.control_bucket, run_id)
+                    )
+                    training_metric_history = _checkpoint_training_metric_history(
+                        history_run, metric_contract.columns, on_training_metric
+                    )
+                    if not metric_contract.acceptance and monitoring_states:
+                        history = self._monitoring_history(
+                            history_run, metric_contract,
+                            expected_episodes=monitoring_episodes,
+                        )
+                        complete_steps = [
+                            int(state["step"])
+                            for state in monitoring_states.values()
+                            if state["status"] == "complete"
+                        ]
+                        for checkpoint_id, checkpoint_state in monitoring_states.items():
+                            step = int(checkpoint_state["step"])
+                            if (
+                                checkpoint_state["status"] == "complete"
+                                and complete_steps.count(step) == 1
+                                and step in history
+                            ):
+                                evaluations[checkpoint_id] = history[step]
+                except Exception as exc:
+                    warning = {
+                        "code": "journal_contract_mismatch" if isinstance(exc, ValueError)
+                                else "journal_unavailable",
+                        "message": f"GradLab metric journal is unavailable: {exc}",
+                        "retryable": isinstance(exc, (TimeoutError, OSError)),
+                        "source": "gradlab-journal",
+                    }
+                return _CheckpointEvaluationData(
+                    evaluations=evaluations,
+                    training_seed=training_seed,
+                    evaluation_seed=evaluation_seed,
+                    training_metric_history=training_metric_history,
+                    warning=warning,
+                )
             wandb = manifest.get("wandb")
             entity = str(wandb.get("entity") or "").strip() if isinstance(wandb, Mapping) else ""
             project = str(wandb.get("project") or "").strip() if isinstance(wandb, Mapping) else ""
@@ -3491,12 +3540,30 @@ class PlayCatalog:
         wandb_location = self._wandb_run_locations.get(run_id)
         entity = str(wandb_location.entity or "").strip() if wandb_location else ""
         project = str(wandb_location.project or "").strip() if wandb_location else ""
-        if not include_wandb or not entity or not project:
+        use_public = isinstance(public_telemetry, Mapping)
+        if not use_public and (not include_wandb or not entity or not project):
             return _CheckpointEvaluationData({}, None, None, {})
         run = None
         try:
-            run = self._wandb_api().run(f"{entity}/{project}/{run_id}")
-            config = dict(getattr(run, "config", {}) or {})
+            if use_public:
+                reference = dict(public_telemetry)
+                digest = str(reference.get("sha256") or "")
+                url = str(reference.get("url") or "")
+                expected_prefix = f"{self.public_models_base_url}/runs/{run_id}/telemetry/"
+                if (
+                    SHA256_PATTERN.fullmatch(digest) is None
+                    or url != f"{expected_prefix}{digest}.json"
+                    or reference.get("run_id") != run_id
+                ):
+                    raise ValueError("public telemetry reference is invalid")
+                document = _public_json(url, max_bytes=64 * 1024 * 1024)
+                run = PublicJournalHistory(document, run_id=run_id, digest=digest)
+                if len(run.rows) != int(reference.get("history_count") or 0):
+                    raise ValueError("public telemetry history count mismatch")
+                config = dict(public_recipe_config or {})
+            else:
+                run = self._wandb_api().run(f"{entity}/{project}/{run_id}")
+                config = dict(getattr(run, "config", {}) or {})
             validate_wandb_config(config)
             require_current_metrics_schema(metric_contract.metrics_schema_version)
             training_seed = _safe_int(config.get("seed"))
@@ -3605,15 +3672,16 @@ class PlayCatalog:
             training_seed = None
             evaluation_seed = None
             training_metric_history = {}
+            source = "public-telemetry" if use_public else "wandb"
             warning = {
                 "code": (
                     "wandb_contract_mismatch"
                     if isinstance(exc, ValueError)
                     else "wandb_enrichment_unavailable"
                 ),
-                "message": f"W&B enrichment is unavailable: {exc}",
+                "message": f"{source} enrichment is unavailable: {exc}",
                 "retryable": isinstance(exc, (TimeoutError, OSError)),
-                "source": "wandb",
+                "source": source,
             }
         else:
             warning = None
@@ -3664,6 +3732,22 @@ class PlayCatalog:
             checkpoints=[manifest.to_dict() for manifest in manifests],
         )
         warnings: list[Mapping[str, Any]] = []
+        telemetry_tracking = (
+            (index.get("telemetry") or {}).get("tracking")
+            if isinstance(index.get("telemetry"), Mapping)
+            else None
+        )
+        if (
+            isinstance(telemetry_tracking, Mapping)
+            and telemetry_tracking.get("delivery") == "local_only"
+            and telemetry_tracking.get("tracker_sync_status") == "pending"
+        ):
+            warnings.append({
+                "code": "tracker_sync_pending",
+                "message": "This completed local Run has durable public telemetry; optional tracker sync is pending.",
+                "retryable": False,
+                "source": "public-telemetry",
+            })
         try:
             run_status = run_status_future.result()
         except Exception as exc:
@@ -3810,6 +3894,10 @@ class PlayCatalog:
                 monitoring_states=monitoring_states,
                 monitoring_episodes=monitoring_episodes,
                 on_training_metric=training_progress if on_training_progress else None,
+                public_telemetry=(
+                    index.get("telemetry") if isinstance(index.get("telemetry"), Mapping) else None
+                ),
+                public_recipe_config=train_config,
             )
             if metric_contract is not None
             else _CheckpointEvaluationData({}, None, None, {})

@@ -191,6 +191,32 @@ def test_local_train_rejects_non_main_thread_before_recipe_resolution() -> None:
     resolve.assert_not_called()
 
 
+def test_bundled_smoke_uses_local_only_tracking_without_service(
+    tmp_path: Path,
+) -> None:
+    def fake_learner(argv: list[str], *, runtime_rom_binding=None) -> int:
+        assert argv[argv.index("--execution-mode") + 1] == "local-training"
+        config_path = Path(argv[argv.index("--train-config-json") + 1])
+        config = json.loads(config_path.read_text())
+        assert config["tracking"]["backend"] == "wandb"
+        assert config["tracking"]["delivery"] == "local_only"
+        run_dir = Path(config["runs_dir"]) / config["run_name"]
+        (run_dir / "final_model.zip").write_bytes(b"model")
+        _write_training_result(run_dir)
+        return 0
+
+    with (
+        mock.patch("gradlab.train.main", side_effect=fake_learner),
+        mock.patch("gradlab.local_train.local_wandb_writer", side_effect=AssertionError("service called")),
+    ):
+        assert main(["gradlab__bandit/ppo", "--runs-dir", str(tmp_path), "--no-tui"]) == 0
+    receipts = list(tmp_path.rglob(LOCAL_RUN_RECEIPT))
+    assert len(receipts) == 1
+    receipt = json.loads(receipts[0].read_text())
+    assert receipt["status"] == "complete_local"
+    assert receipt["run_id"].startswith("gradlab-")
+
+
 @pytest.mark.parametrize("wandb_enabled", [True, False])
 def test_local_train_materializes_playable_run_with_explicit_logging_mode(
     tmp_path: Path,
@@ -206,9 +232,7 @@ def test_local_train_materializes_playable_run_with_explicit_logging_mode(
     ) -> int:
         assert runtime_rom_binding is None
         observed_internal_values.append(os.environ.get(INTERNAL_LEARNER_ENV))
-        assert argv[argv.index("--execution-mode") + 1] == (
-            "local-training" if wandb_enabled else "local-demo"
-        )
+        assert argv[argv.index("--execution-mode") + 1] == "local-training"
         config_path = Path(argv[argv.index("--train-config-json") + 1])
         config = json.loads(config_path.read_text(encoding="utf-8"))
         run_dir = Path(config["runs_dir"]) / config["run_name"]
@@ -229,7 +253,7 @@ def test_local_train_materializes_playable_run_with_explicit_logging_mode(
                     "--set",
                     "train.timesteps=64",
                     "--no-tui",
-                    *([] if wandb_enabled else ["--no-wandb"]),
+                    *(["--set", "tracking.delivery=online"] if wandb_enabled else ["--no-wandb"]),
                 ]
             )
             == 0
@@ -245,7 +269,8 @@ def test_local_train_materializes_playable_run_with_explicit_logging_mode(
     assert config["checkpoint_eval_backend"] == "none"
     assert "stop_on_acceptance" not in config
     assert "wandb" not in config
-    assert config["wandb_mode"] == ("online" if wandb_enabled else "disabled")
+    assert config["tracking"]["backend"] == "wandb"
+    assert config["tracking"]["delivery"] == ("online" if wandb_enabled else "local_only")
     assert config["wandb_run_id"].startswith("gradlab-")
     assert config["wandb_group"] == config["wandb_run_id"]
     assert config["timesteps"] == 64
@@ -255,11 +280,9 @@ def test_local_train_materializes_playable_run_with_explicit_logging_mode(
     assert "image_ref" not in recipe["provenance"]["runtime"]
     assert recipe["provenance"]["runtime"]["packages"]
     assert recipe["provenance"]["source_distribution"]["name"].lower() == "gradlab"
-    assert receipt["status"] == "completed"
+    assert receipt["status"] == ("completed" if wandb_enabled else "complete_local")
     assert receipt["model"] == "final_model.zip"
-    assert receipt["training_execution"]["mode"] == (
-        "local-training" if wandb_enabled else "local-demo"
-    )
+    assert receipt["training_execution"]["mode"] == "local-training"
     assert receipt["final_step"] == 64
     assert receipt["requested_limit"] == 64
     assert receipt["execution_limit"] == 64

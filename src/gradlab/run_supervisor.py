@@ -10,7 +10,6 @@ import sys
 import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import timedelta
 from functools import partial
 from pathlib import Path
 from threading import RLock
@@ -111,6 +110,7 @@ from gradlab.wandb_publisher import (
     promotion_summary_matches,
     wandb_delivery_high_water,
 )
+from gradlab.mlflow_delivery import MlflowDelivery
 from gradlab.vizdoom_assets import (
     bind_vizdoom_iwad_to_document,
     install_vizdoom_iwad_file,
@@ -307,7 +307,7 @@ class RunSupervisor:
         self.lease_lost = False
         self.stop_reason = ""
         self.learner: LearnerProcess | None = None
-        self.projector: WandbProjector | None = None
+        self.projector: WandbProjector | MlflowDelivery | None = None
         self.wandb_run_path = ""
         self.lease: Lease | None = None
         self.last_lease_renewal = 0.0
@@ -877,6 +877,10 @@ class RunSupervisor:
         )
         if canonical_json_sha256(self.recipe_document) != self.manifest.recipe_sha256:
             raise RuntimeError("portable recipe hash does not match the run manifest")
+        if dict(config.get("tracking") or {}) != dict(
+            self.manifest.tracking or {"backend": "wandb", "delivery": "online"}
+        ):
+            raise RuntimeError("attempt tracking selection differs from the frozen Run")
         variant_id = recipe_variant_id(
             recipe_slug=self.manifest.recipe_slug,
             source_sha=self.manifest.source_sha,
@@ -914,7 +918,8 @@ class RunSupervisor:
                 "dstack_project": str(self.manifest.compute.get("dstack_project") or ""),
                 "attempt_id": self.manifest.attempt_id,
                 "dstack_task": str(self.manifest.compute.get("dstack_task") or ""),
-                "wandb_mode": "online",
+                "tracking": dict(self.manifest.tracking or {"backend": "wandb", "delivery": "online"}),
+                "tracking_created_at": self.manifest.created_at,
                 "wandb_run_id": str(self.manifest.wandb.get("run_id") or self.manifest.run_id),
                 "wandb_entity": str(self.manifest.wandb.get("entity") or ""),
                 "wandb_project": str(self.manifest.wandb.get("project") or ""),
@@ -940,6 +945,11 @@ class RunSupervisor:
                 "metrics_schema_version": METRICS_SCHEMA_VERSION,
             }
         )
+        from gradlab.wandb_utils import canonical_wandb_environment
+
+        config["game_family"] = canonical_wandb_environment(
+            config.get("env_provider"), config.get("game")
+        )[1]
         materialized["train_config"] = config
         write_canonical_json(self.recipe_path, self.recipe_document)
         self.eval_contract = _bind_evaluation_contract(
@@ -960,6 +970,36 @@ class RunSupervisor:
 
     def _start_wandb(self) -> None:
         train_config = load_materialized_train_config(self.config_path)
+        tracking = self.manifest.tracking or {"backend": "wandb", "delivery": "online"}
+        if tracking["delivery"] == "local_only":
+            self.projector = None
+            self.wandb_run_path = ""
+            return
+        if tracking["backend"] == "mlflow":
+            receipt_key = f"runs/{self.manifest.run_id}/metrics-binding.json"
+            existing = self.authority.control.get_json_optional(receipt_key)
+            self._lease_heartbeat()
+            projector = self.runtime.start_mlflow(
+                train_config, created_at=self.manifest.created_at
+            )
+            self.projector = projector
+            if existing is None:
+                self.authority.control.put_json(
+                    receipt_key,
+                    {
+                        "schema_version": 1,
+                        "run_id": self.manifest.run_id,
+                        "backend": "mlflow",
+                        "service_run_id": projector.run_id,
+                        "service_url": projector.service_url,
+                        "created_at": self.clock.utc_now(),
+                    },
+                    create_only=True,
+                )
+            elif existing.get("service_run_id") != projector.run_id:
+                raise RuntimeError("MLflow binding changed during Attempt recovery")
+            self.wandb_run_path = f"mlflow:{projector.run_id}"
+            return
         config = resolve_env_config(env_config_from_mapping(train_config))
         receipt_key = f"runs/{self.manifest.run_id}/wandb.json"
         existing = self.authority.control.get_json_optional(receipt_key)
@@ -1556,6 +1596,8 @@ class RunSupervisor:
 
     def _publish_wandb(self) -> int:
         self._lease_heartbeat()
+        if (self.manifest.tracking or {}).get("delivery") == "local_only":
+            return self.store.mark_pending_frames_local_only()
         if self.projector is None:
             return 0
         started = self.clock.monotonic()
@@ -2560,6 +2602,8 @@ class RunSupervisor:
         if checkpoint is None:
             raise RuntimeError("promoted checkpoint is absent from the public inventory")
         metrics = dict(verified_result.aggregates)
+        if (self.manifest.tracking or {}).get("delivery") == "local_only":
+            return
         assert self.projector is not None
         self.runtime.publish_promotion(
             self.projector,
@@ -2573,6 +2617,8 @@ class RunSupervisor:
         )
 
     def _wait_for_remote_promotion(self, receipt: PromotionReceipt) -> None:
+        if (self.manifest.tracking or {}).get("delivery") == "local_only":
+            return
         if not self.wandb_run_path:
             raise RuntimeError("W&B run path is unavailable")
         checkpoint = self.store.checkpoint_publication_by_id(receipt.checkpoint_id)
@@ -2604,6 +2650,8 @@ class RunSupervisor:
             self.clock.sleep(WANDB_DRAIN_REMOTE_PROBE_SECONDS)
 
     def _wait_for_remote_delivery(self, local_high_water: int) -> None:
+        if (self.manifest.tracking or {}).get("delivery") == "local_only":
+            return
         deadline = self.clock.monotonic() + WANDB_DRAIN_TIMEOUT_SECONDS
         while True:
             self._lease_heartbeat()
@@ -2981,15 +3029,21 @@ class RunSupervisor:
             self.projector = None
             print("run stopped after writer lease loss; no further state was mutated", flush=True)
             return 1
+        tracking = dict(self.manifest.tracking or {"backend": "wandb", "delivery": "online"})
         media_drain_started = self.clock.monotonic()
         try:
-            wandb_high_water = self._finish_wandb()
+            service_high_water = self._finish_wandb() if tracking["delivery"] == "online" else 0
         except Exception as exc:
             failure = failure or exc
-            wandb_high_water = self._wandb_high_water()
+            service_high_water = self._wandb_high_water()
+        wandb_high_water = (
+            service_high_water
+            if tracking["backend"] == "wandb" and tracking["delivery"] == "online"
+            else 0
+        )
         if failure is None:
             try:
-                self._wait_for_remote_delivery(wandb_high_water)
+                self._wait_for_remote_delivery(service_high_water)
                 if promotion is not None:
                     self._wait_for_remote_promotion(promotion)
                 self.store.set_state("wandb_final_drain_seconds", self.clock.monotonic() - media_drain_started)
@@ -2999,14 +3053,9 @@ class RunSupervisor:
         journal_expires_at: str | None = None
         if failure is None:
             try:
-                journal_archive = self.authority.archive_metric_journals(
+                journal_archive = self.authority.retain_metric_journals(
                     run_id=self.manifest.run_id,
                     heartbeat=self._lease_heartbeat,
-                )
-                journal_expires_at = (
-                    (self.clock.utc_datetime() + timedelta(days=METRIC_JOURNAL_RETENTION_DAYS))
-                    .isoformat()
-                    .replace("+00:00", "Z")
                 )
             except Exception as exc:
                 failure = exc
@@ -3024,6 +3073,8 @@ class RunSupervisor:
             promotion=promotion,
             early_stop=early_stop,
         )
+        if tracking["delivery"] == "local_only" and state == "succeeded":
+            state = "complete_local"
         stop_reason = (
             default_stop_reason
             if failure is not None or self.cancel_requested
@@ -3044,6 +3095,8 @@ class RunSupervisor:
             checkpoint_inventory=checkpoints,
             eval_inventory=evals,
             wandb_high_water_mark=wandb_high_water,
+            tracking=tracking,
+            service_high_water_mark=service_high_water,
             drain={
                 "complete": failure is None,
                 "record_checkpoint_episode": self.manifest.compute.get("record_checkpoint_episode") is True,
@@ -3053,6 +3106,9 @@ class RunSupervisor:
                 "journal_archive": journal_archive,
                 "journal_expires_at": journal_expires_at,
                 "wandb_remote_high_water_mark": self.wandb_remote_high_water,
+                "service_remote_high_water_mark": (
+                    self.wandb_remote_high_water if tracking["delivery"] == "online" else 0
+                ),
                 "failure": (_bounded_exception_document(failure) if failure is not None else None),
                 "learner_terminal": self.learner_terminal_document,
                 "learner_teardown": self.learner_teardown_evidence or None,
@@ -3079,17 +3135,18 @@ class RunSupervisor:
         )
         try:
             self._lease_heartbeat()
-            self.runtime.publish_terminal(
-                self.train_config,
-                receipt,
-                timeout_seconds=WANDB_DRAIN_TIMEOUT_SECONDS,
-            )
+            if tracking["delivery"] == "online":
+                self.runtime.publish_terminal(
+                    self.train_config,
+                    receipt,
+                    timeout_seconds=WANDB_DRAIN_TIMEOUT_SECONDS,
+                )
         except Exception as exc:
             print(f"W&B terminal summary projection failed: {exc!r}", flush=True)
         if failure is not None:
             print(f"run failed: {failure!r}", flush=True)
             return 1
-        if self.evaluation_required and state == "succeeded":
+        if self.evaluation_required and state in {"succeeded", "complete_local"}:
             self._lease_heartbeat()
             self.authority.create_terminal(receipt)
         if state == "failed":

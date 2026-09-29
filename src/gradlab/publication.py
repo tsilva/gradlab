@@ -30,6 +30,7 @@ from gradlab.metric_names import (
     EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MIN,
     EVAL_FULL_PROGRESS_X_MAX,
 )
+from gradlab.model_sources import DEFAULT_PUBLIC_MODELS_BASE_URL
 from gradlab.env_registry import environment_spec
 from gradlab.policy_bundle import (
     PolicyBundle,
@@ -713,9 +714,15 @@ def publication_source_from_policy_bundle(
         "run_name": _required_text(
             provenance.get("run_name"), label="model.json provenance.run_name"
         ),
-        "wandb_project": _required_text(
-            provenance.get("wandb_project"),
-            label="model.json provenance.wandb_project",
+        "wandb_project": (
+            _required_text(
+                provenance.get("wandb_project"),
+                label="model.json provenance.wandb_project",
+            )
+            if (
+                (bundle.recipe.get("recipe") or {}).get("train_config") or {}
+            ).get("tracking", {}).get("backend", "wandb") == "wandb"
+            else str(provenance.get("wandb_project") or "")
         ),
         "recipe": _required_text(
             provenance.get("recipe_slug"), label="model.json provenance.recipe_slug"
@@ -937,7 +944,11 @@ def render_model_card(
         ]
     quick_start = "\n".join(quick_start_lines)
     run_name = _required_text(source.get("run_name"), label="manifest source.run_name")
-    run_value = f"[{_markdown_value(run_name)}]({wandb_url})" if wandb_url else run_name
+    run_url = wandb_url or (
+        f"{DEFAULT_PUBLIC_MODELS_BASE_URL.rstrip('/')}/runs/{run_id}/index.json"
+        if run_id else ""
+    )
+    run_value = f"[{_markdown_value(run_name)}]({run_url})" if run_url else run_name
     replay_value = manifest.get("replay")
     replay = replay_value if isinstance(replay_value, Mapping) else None
     replay_execution = (

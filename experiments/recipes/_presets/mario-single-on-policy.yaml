@@ -22,5 +22,3 @@ train:
       gae_lambda: 1.0
       vf_coef: 1.0
       normalize_advantage: false
-logging:
-  wandb_mode: online

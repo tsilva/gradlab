@@ -32,6 +32,7 @@ GOAL_CATALOG_SUCCESS_BADGES = (
 GOAL_CATALOG_TERMINAL_STATES = frozenset(
     {
         "succeeded",
+        "complete_local",
         "failed",
         "stopped",
         "canceled",

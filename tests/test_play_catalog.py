@@ -1366,6 +1366,49 @@ def test_checkpoint_base_inventory_never_waits_for_wandb(
     assert page.warnings == ()
 
 
+def test_public_checkpoint_history_uses_verified_telemetry_without_private_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint = checkpoint_row(step=250_000, digest="2" * 64, purpose="final")
+    config = mario_checkpoint_train_config()
+    config["checkpoint_eval_contract"] = {
+        "seed": 42_000, "episodes": 100,
+        "acceptance": config["checkpoint_eval_acceptance"],
+    }
+    telemetry = {
+        "schema_version": 1, "run_id": RUN_ID, "event_high_water": 2,
+        "histories": [
+            {"train/step": 250_000.0, "train/return/mean": 0.75},
+            {"eval/step": 250_000.0, "eval/pass": 1.0, "eval/success/min": 1.0},
+        ],
+    }
+    digest = compact_json_sha256(telemetry)
+    url = f"https://models.example/runs/{RUN_ID}/telemetry/{digest}.json"
+    index = {
+        "schema_version": 1, "run_id": RUN_ID, "checkpoints": [checkpoint],
+        "promotion": None,
+        "telemetry": {
+            "run_id": RUN_ID, "url": url, "sha256": digest,
+            "history_count": 2, "event_high_water": 2,
+        },
+    }
+
+    def public_json(request_url: str, **_kwargs):
+        return telemetry if request_url == url else index
+
+    monkeypatch.setattr("gradlab.play_catalog._public_json", public_json)
+    catalog = PlayCatalog(public_models_base_url="https://models.example")
+    bind_checkpoint_recipe(catalog, monkeypatch, (checkpoint,), config)
+    page = catalog.checkpoints(run_id=RUN_ID, include_wandb=False)
+    assert page.items[0]["metrics"]["train/return/mean"] == 0.75
+    assert page.items[0]["evaluation"]["status"] == "accepted"
+    assert not page.warnings
+    telemetry["histories"][0]["train/return/mean"] = 0.99
+    tampered = catalog.checkpoints(run_id=RUN_ID, include_wandb=False)
+    assert tampered.items[0]["metrics"]["train/return/mean"] is None
+    assert tampered.warnings[-1]["source"] == "public-telemetry"
+
+
 def test_deathmatch_checkpoint_metric_contract_prioritizes_frag_evidence() -> None:
     repo_root = Path.cwd()
     goal_root = repo_root / "experiments/goals/VizdoomDeathmatch-v1"
