@@ -15,15 +15,11 @@ from typing import Any, Protocol
 from gradlab.clock import Clock, SystemClock
 from gradlab.metric_names import METRICS_SCHEMA_VERSION
 from gradlab.metric_store import MetricStore
-from gradlab.mlflow_delivery import MlflowDelivery, publish_pending_frames as publish_mlflow_frames
+from gradlab.mlflow_delivery import MlflowDelivery
 from gradlab.run_contracts import TerminalReceipt
 from gradlab.runtime_contract import runtime_contract
-from gradlab.wandb_publisher import (
-    WandbProjector,
-    publish_pending_frames,
-    publish_promotion_summary,
-    publish_terminal_summary,
-)
+from gradlab.selected_delivery import DeliveryAdapter, publish_outbox
+from gradlab.wandb_publisher import WandbProjector
 
 
 class LearnerProcess(Protocol):
@@ -129,31 +125,21 @@ class SupervisorRuntime:
     def publish_frames(
         self,
         store: MetricStore,
-        projector: WandbProjector | MlflowDelivery,
+        projector: DeliveryAdapter,
         *,
         limit: int,
         event_seq_offset: int = 0,
         heartbeat: Callable[[], None] | None = None,
         should_continue: Callable[[], bool] | None = None,
     ) -> int:
-        if isinstance(projector, MlflowDelivery):
-            return publish_mlflow_frames(
-                store, projector, limit=limit, event_seq_offset=event_seq_offset,
-                heartbeat=heartbeat, should_continue=should_continue,
-            )
-        return publish_pending_frames(
-            store,
-            projector.run,
-            limit=limit,
-            event_seq_offset=event_seq_offset,
-            metrics_schema_version=projector.metrics_schema_version,
-            heartbeat=heartbeat,
-            should_continue=should_continue,
+        return publish_outbox(
+            store, projector, limit=limit, event_seq_offset=event_seq_offset,
+            heartbeat=heartbeat, should_continue=should_continue,
         )
 
     def publish_promotion(
         self,
-        projector: WandbProjector | MlflowDelivery,
+        projector: DeliveryAdapter,
         *,
         checkpoint_step: int,
         checkpoint_url: str,
@@ -163,15 +149,7 @@ class SupervisorRuntime:
         evaluation_source: str,
         metrics_schema_version: int = METRICS_SCHEMA_VERSION,
     ) -> None:
-        if isinstance(projector, MlflowDelivery):
-            projector.publish_promotion(
-                checkpoint_step=checkpoint_step, checkpoint_url=checkpoint_url,
-                metrics=metrics, updated_at=updated_at,
-                selection_rank=list(selection_rank), evaluation_source=evaluation_source,
-            )
-            return
-        publish_promotion_summary(
-            projector.run,
+        projector.publish_promotion(
             checkpoint_step=checkpoint_step,
             checkpoint_url=checkpoint_url,
             metrics=metrics,
@@ -188,24 +166,20 @@ class SupervisorRuntime:
         *,
         timeout_seconds: float,
     ) -> None:
+        receipt.validate()
         tracking = train_config.get("tracking") or {}
-        if tracking.get("backend") == "mlflow":
-            projector = self.start_mlflow(
+        projector: DeliveryAdapter = (
+            self.start_mlflow(
                 train_config, created_at=str(train_config["tracking_created_at"])
             )
-            projector.publish_terminal(state=receipt.state, reason=receipt.stop_reason)
-            return
-        projector = WandbProjector.resume(
-            train_config,
-            update_finish_state=True,
+            if tracking.get("backend") == "mlflow"
+            else WandbProjector.resume(train_config, update_finish_state=True)
         )
-        try:
-            publish_terminal_summary(projector.run, receipt)
-        finally:
-            projector.close(
-                timeout_seconds=timeout_seconds,
-                exit_code=0 if receipt.state in {"succeeded", "stopped"} else 1,
-            )
+        projector.publish_terminal(
+            state=receipt.state,
+            reason=receipt.stop_reason,
+            timeout_seconds=timeout_seconds,
+        )
 
     def remote_summary(self, run_path: str) -> dict[str, Any]:
         if run_path.startswith("mlflow:"):
@@ -233,13 +207,11 @@ class SupervisorRuntime:
 
     def close_wandb(
         self,
-        projector: WandbProjector | MlflowDelivery,
+        projector: DeliveryAdapter,
         *,
         timeout_seconds: float,
     ) -> None:
-        if isinstance(projector, MlflowDelivery):
-            return
-        projector.close(timeout_seconds=timeout_seconds)
+        projector.finish_projection(timeout_seconds=timeout_seconds)
 
     def start_learner(
         self,

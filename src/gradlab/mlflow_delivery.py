@@ -11,7 +11,7 @@ import hashlib
 import json
 import re
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +31,7 @@ from gradlab.metric_names import (
     ORCHESTRATION_RUN_TERMINAL_REASON,
     ORCHESTRATION_RUN_TERMINAL_STATE,
     leader_metric_for_rank_metric,
+    require_current_metrics_schema,
     validate_metric_payload,
 )
 from gradlab.ranking import require_objective_rank
@@ -147,7 +148,14 @@ class MlflowDelivery:
             if hashlib.sha256(remote.read_bytes()).digest() != hashlib.sha256(content).digest():
                 raise RuntimeError("MLflow media read-back disagrees with the journal")
 
-    def publish_frame(self, row: Mapping[str, Any], *, event_seq_offset: int = 0) -> None:
+    def publish_frame(
+        self,
+        row: Mapping[str, Any],
+        *,
+        event_seq_offset: int = 0,
+        occupancy_page: Any = None,
+    ) -> None:
+        del occupancy_page
         sequence = int(row["id"]) + int(event_seq_offset)
         step = int(row.get("step") or 0)
         kind = str(row["kind"])
@@ -230,9 +238,11 @@ class MlflowDelivery:
         checkpoint_url: str,
         metrics: Mapping[str, Any],
         updated_at: str,
-        selection_rank: list[str] | tuple[str, ...],
+        selection_rank: Sequence[str],
         evaluation_source: str,
+        metrics_schema_version: int = METRICS_SCHEMA_VERSION,
     ) -> None:
+        require_current_metrics_schema(metrics_schema_version)
         criteria = require_objective_rank(
             selection_rank, metrics_schema_version=METRICS_SCHEMA_VERSION
         )
@@ -272,7 +282,10 @@ class MlflowDelivery:
                     pass
         return summary
 
-    def publish_terminal(self, *, state: str, reason: str) -> None:
+    def publish_terminal(
+        self, *, state: str, reason: str, timeout_seconds: float | None = None
+    ) -> None:
+        del timeout_seconds
         self.client.set_tag(self.run_id, ORCHESTRATION_RUN_TERMINAL_STATE, state)
         self.client.set_tag(self.run_id, ORCHESTRATION_RUN_TERMINAL_REASON, reason)
         self.close(success=state in {"succeeded", "stopped", "complete_local"})
@@ -281,6 +294,9 @@ class MlflowDelivery:
         self.client.set_terminated(
             self.run_id, status="FINISHED" if success else "FAILED"
         )
+
+    def finish_projection(self, *, timeout_seconds: float) -> None:
+        del timeout_seconds
 
 
 def publish_pending_frames(
@@ -292,24 +308,9 @@ def publish_pending_frames(
     heartbeat=None,
     should_continue=None,
 ) -> int:
-    published = 0
-    for row in store.pending_metric_frames(limit=limit):
-        if should_continue is not None and not should_continue():
-            break
-        if heartbeat is not None:
-            heartbeat()
-        frame_id = int(row["id"])
-        if not store.claim_metric_frame(frame_id):
-            continue
-        try:
-            delivery.publish_frame(row, event_seq_offset=event_seq_offset)
-        except Exception as exc:
-            store.mark_metric_frame_failed(frame_id, repr(exc))
-            break
-        store.mark_metric_frame_published(
-            frame_id, step=int(row["step"]) if row.get("step") is not None else None
-        )
-        published += 1
-        if heartbeat is not None:
-            heartbeat()
-    return published
+    from gradlab.selected_delivery import publish_outbox
+
+    return publish_outbox(
+        store, delivery, limit=limit, event_seq_offset=event_seq_offset,
+        heartbeat=heartbeat, should_continue=should_continue,
+    )

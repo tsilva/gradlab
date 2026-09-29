@@ -877,10 +877,13 @@ class RunSupervisor:
         )
         if canonical_json_sha256(self.recipe_document) != self.manifest.recipe_sha256:
             raise RuntimeError("portable recipe hash does not match the run manifest")
-        if dict(config.get("tracking") or {}) != dict(
-            self.manifest.tracking or {"backend": "wandb", "delivery": "online"}
-        ):
-            raise RuntimeError("attempt tracking selection differs from the frozen Run")
+        if self.manifest.tracking is not None:
+            selected = dict(config.get("tracking") or {})
+            if any(
+                selected.get(key) != self.manifest.tracking.get(key)
+                for key in ("backend", "delivery", "sources")
+            ):
+                raise RuntimeError("attempt tracking selection differs from the frozen Run")
         variant_id = recipe_variant_id(
             recipe_slug=self.manifest.recipe_slug,
             source_sha=self.manifest.source_sha,
