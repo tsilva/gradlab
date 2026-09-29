@@ -704,6 +704,9 @@ def publication_source_from_policy_bundle(
     checkpoint_step = _required_int(checkpoint.get("step"), label="model.json checkpoint.step")
     if checkpoint_step != evaluation.checkpoint_step:
         raise ValueError("model.json checkpoint_step disagrees with evaluation")
+    tracking = ((bundle.recipe.get("recipe") or {}).get("train_config") or {}).get(
+        "tracking", {}
+    )
     return {
         "repository": "https://github.com/tsilva/gradlab",
         "commit": commit,
@@ -719,9 +722,8 @@ def publication_source_from_policy_bundle(
                 provenance.get("wandb_project"),
                 label="model.json provenance.wandb_project",
             )
-            if (
-                (bundle.recipe.get("recipe") or {}).get("train_config") or {}
-            ).get("tracking", {}).get("backend", "wandb") == "wandb"
+            if tracking.get("backend", "wandb") == "wandb"
+            and tracking.get("delivery", "online") == "online"
             else str(provenance.get("wandb_project") or "")
         ),
         "recipe": _required_text(

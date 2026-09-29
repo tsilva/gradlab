@@ -1196,13 +1196,13 @@ def test_retry_cannot_change_frozen_tracking_or_service_identity(tmp_path: Path)
 
 
 def test_mlflow_private_route_rejects_unapproved_fleet(monkeypatch) -> None:
-    monkeypatch.setenv("MLFLOW_OPERATOR_PROFILE", "beast3-pilot")
-    monkeypatch.setenv("MLFLOW_ALLOWED_FLEETS", "beast3-gpu")
+    monkeypatch.setenv("MLFLOW_OPERATOR_PROFILE", "pilot-profile")
+    monkeypatch.setenv("MLFLOW_ALLOWED_FLEETS", "private-gpu")
     local = ComputeRequest(
-        kind="local", target="beast3-gpu", max_price=None, max_cost_usd=None,
+        kind="local", target="private-gpu", max_price=None, max_cost_usd=None,
         allow_on_demand=False, max_duration_seconds=3600,
     )
-    assert _preflight_mlflow_compute_route(local) == "beast3-pilot"
+    assert _preflight_mlflow_compute_route(local) == "pilot-profile"
     with pytest.raises(RuntimeError, match="approved private route"):
         _preflight_mlflow_compute_route(replace(local, target="other-gpu"))
     with pytest.raises(RuntimeError, match="approved private route"):
@@ -1212,6 +1212,15 @@ def test_mlflow_private_route_rejects_unapproved_fleet(monkeypatch) -> None:
     )
     with pytest.raises(RuntimeError, match="HTTPS service URI"):
         _preflight_mlflow_service_uri("http://private.example.test/mlflow")
+
+
+def test_local_only_mlflow_launch_requires_storage_but_no_service_credentials() -> None:
+    required = _required_operator_environment(
+        "training-container", {"backend": "mlflow", "delivery": "local_only"}
+    )
+    assert "GRADLAB_CONTROL_R2_URI" in required
+    assert not any(name.startswith("MLFLOW_") for name in required)
+    assert "WANDB_API_KEY" not in required
 
 
 @pytest.mark.parametrize("invalid", ["activity", "binding_hash", "missing_binding"])
