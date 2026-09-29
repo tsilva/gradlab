@@ -557,7 +557,7 @@ def _workflow_runs(
         "--limit",
         str(limit),
         "--json",
-        "databaseId,headSha,displayTitle,createdAt,updatedAt,status,conclusion,url",
+        "databaseId,headSha,displayTitle,createdAt,updatedAt,status,conclusion,url,event",
     ]
     if branch:
         command[5:5] = ["--branch", branch]
@@ -576,6 +576,7 @@ def _matching_runs(
         row
         for row in _workflow_runs(workflow=workflow, branch=branch)
         if str(row.get("headSha") or "") == source_sha
+        and str(row.get("event") or "") != "pull_request"
     ]
 
 

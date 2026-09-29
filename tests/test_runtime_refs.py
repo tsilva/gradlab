@@ -166,6 +166,28 @@ class RuntimeRefsTests(unittest.TestCase):
         self.assertEqual(release.runtime_image_ref, RUNTIME_IMAGE_REF)
         dispatch.assert_not_called()
 
+    def test_pull_request_image_check_is_not_a_publishable_release(self) -> None:
+        runs = [
+            {
+                "databaseId": 11,
+                "headSha": SOURCE_SHA,
+                "event": "pull_request",
+                "status": "completed",
+                "conclusion": "success",
+            },
+            {
+                "databaseId": 12,
+                "headSha": SOURCE_SHA,
+                "event": "workflow_dispatch",
+                "status": "in_progress",
+                "conclusion": "",
+            },
+        ]
+        with mock.patch.object(runtime_refs, "_workflow_runs", return_value=runs):
+            assert runtime_refs._matching_runs(
+                source_sha=SOURCE_SHA, workflow=runtime_refs.DEFAULT_IMAGE_WORKFLOW
+            ) == [runs[1]]
+
     def test_missing_workflow_dispatches_exact_source_once(self) -> None:
         active = {
             "databaseId": 12,
