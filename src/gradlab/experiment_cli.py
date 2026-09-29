@@ -1610,6 +1610,11 @@ def _project_reconciled_terminal(
     manifest: RunManifest,
     receipt: TerminalReceipt,
 ) -> None:
+    startup_without_run = (
+        receipt.stop_reason == "supervisor_startup_failure"
+        and receipt.final_step == 0
+        and not receipt.checkpoint_inventory
+    )
     projector = WandbProjector.resume(
         {
             "wandb_run_id": manifest.run_id,
@@ -1620,6 +1625,7 @@ def _project_reconciled_terminal(
             "wandb_group": manifest.wandb.get("group"),
             "metrics_schema_version": METRICS_SCHEMA_VERSION,
         },
+        allow_create=startup_without_run,
         update_finish_state=True,
     )
     try:

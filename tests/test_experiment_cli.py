@@ -1407,7 +1407,10 @@ def test_reconcile_acquires_lease_writes_r2_before_wandb_and_releases(
 def test_reconciled_failure_closes_wandb_with_nonzero_exit() -> None:
     manifest = _manifest_only_run()
     projector = mock.MagicMock()
-    receipt = SimpleNamespace(state="resumable_failure")
+    receipt = SimpleNamespace(
+        state="resumable_failure", stop_reason="supervisor_startup_failure",
+        final_step=0, checkpoint_inventory=(),
+    )
 
     with (
         mock.patch(
@@ -1428,6 +1431,7 @@ def test_reconciled_failure_closes_wandb_with_nonzero_exit() -> None:
             "wandb_group": manifest.wandb.get("group"),
             "metrics_schema_version": METRICS_SCHEMA_VERSION,
         },
+        allow_create=True,
         update_finish_state=True,
     )
     publish.assert_called_once_with(projector.run, receipt)
@@ -1437,18 +1441,22 @@ def test_reconciled_failure_closes_wandb_with_nonzero_exit() -> None:
 def test_reconciled_stopped_run_closes_wandb_with_zero_exit() -> None:
     manifest = _manifest_only_run()
     projector = mock.MagicMock()
-    receipt = SimpleNamespace(state="stopped")
+    receipt = SimpleNamespace(
+        state="stopped", stop_reason="training_plateau", final_step=17,
+        checkpoint_inventory=({"step": 17},),
+    )
 
     with (
         mock.patch(
             "gradlab.experiment_cli.WandbProjector.resume",
             return_value=projector,
-        ),
+        ) as resume,
         mock.patch("gradlab.experiment_cli.publish_terminal_summary"),
     ):
         _project_reconciled_terminal(manifest, receipt)
 
     projector.close.assert_called_once_with(timeout_seconds=300, exit_code=0)
+    assert resume.call_args.kwargs["allow_create"] is False
 
 
 def test_resume_submit_recovers_only_the_original_manifest(
