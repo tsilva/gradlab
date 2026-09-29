@@ -1057,6 +1057,91 @@ class EvalMetricTests(unittest.TestCase):
         self.assertEqual(metrics["episode_results"][1]["start_state"], "Level1-1")
         self.assertEqual(metrics["episode_results"][1]["return"], 4.0)
 
+    def test_vector_fail_fast_video_does_not_extend_acceptance_evidence(self) -> None:
+        class FakeModel:
+            def predict(self, obs, deterministic):
+                return np.zeros(obs.shape[0], dtype=np.int64), None
+
+        class Recorder:
+            complete = False
+            runtime = None
+
+        class FakeVecEnv:
+            def __init__(self) -> None:
+                self.step_count = 0
+                self.records = []
+                self.runtime = type("Runtime", (), {"recording": None})()
+
+            def reset(self):
+                return np.zeros((2, 4, 84, 84), dtype=np.uint8)
+
+            def step(self, action):
+                self.step_count += 1
+                lanes = (1,) if self.step_count == 1 else (0, 1)
+                self.records = [
+                    EpisodeRecord(
+                        lane=lane,
+                        episode_index=self.step_count - 1,
+                        start_id="Level1-1",
+                        episode_return=-1.0,
+                        episode_length=self.step_count,
+                        terminated=True,
+                        truncated=False,
+                        outcome=Outcome.FAILURE,
+                        events=("life_loss",),
+                        metrics={"max_x_pos": 20, "died": True},
+                    )
+                    for lane in lanes
+                ]
+                if self.step_count == 2:
+                    self.runtime.recording.complete = True
+                return (
+                    np.zeros((2, 4, 84, 84), dtype=np.uint8),
+                    np.zeros(2, dtype=np.float32),
+                    np.array([0 in lanes, 1 in lanes]),
+                    [{"died": True}, {"died": True}],
+                )
+
+            def drain_records(self):
+                records, self.records = self.records, []
+                return records
+
+            def close(self) -> None:
+                pass
+
+        contract = build_checkpoint_eval_contract(
+            environment={"game": "SuperMarioBros-Nes-v0", "state": "Level1-1"},
+            episodes=2,
+            n_envs=2,
+            watchdog_steps=10,
+            seed=7,
+            seed_protocol=SEED_PROTOCOL,
+            acceptance=[{"metric": "eval/success/min", "operator": ">=", "threshold": 1.0}],
+        )
+        self.assertEqual(contract["evidence_policy"]["fail_fast"], "first_failed_episode")
+        fake_env = FakeVecEnv()
+        recorder = Recorder()
+        with patch("gradlab.eval_runner.make_eval_vec_env", return_value=fake_env):
+            metrics, _ = evaluate_model_episodes(
+                model=FakeModel(),
+                config=EnvConfig(
+                    game="SuperMarioBros-Nes-v0", task=default_task_document("mario")
+                ),
+                episodes=2,
+                seed=7,
+                watchdog_steps=10,
+                deterministic=False,
+                n_envs=2,
+                episode_video_capture=recorder,
+                acceptance_contract=contract,
+            )
+
+        self.assertEqual(fake_env.step_count, 2)
+        self.assertTrue(recorder.complete)
+        self.assertEqual(metrics["acceptance_verdict"], "rejected")
+        self.assertEqual(len(metrics["episode_results"]), 1)
+        self.assertEqual(metrics["episode_results"][0]["seed_lane"], 1)
+
     def test_vector_eval_uses_canonical_episode_records(self) -> None:
         class FakeModel:
             def predict(self, obs, deterministic):

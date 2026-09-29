@@ -8,6 +8,7 @@ from gradlab.checkpoint_acceptance import (
     SEED_PROTOCOL,
     acceptance_aggregates,
     evaluate_acceptance,
+    manifest_index,
     validate_episode_rows,
 )
 from gradlab.json_utils import canonical_json_sha256
@@ -230,8 +231,10 @@ def validate_attempt_result(
             raise ValueError("evaluation result is missing its required episode video")
         if str(video.get("episode_id") or "") != "lane-00-episode-000":
             raise ValueError("evaluation video is not the selected manifest episode")
-        if not any(str(row.get("episode_id") or "") == video["episode_id"] for row in validated_rows):
-            raise ValueError("evaluation video episode is absent from scientific results")
+        if str(manifest_index(contract).get((0, 0), {}).get("episode_id") or "") != video[
+            "episode_id"
+        ]:
+            raise ValueError("evaluation video is not declared in the manifest")
         if video.get("content_type") != "video/mp4" or video.get("source") != "native_rgb":
             raise ValueError("evaluation video format or source is invalid")
         if not isinstance(video.get("bytes"), int) or not 0 < video["bytes"] <= 256 * 1024**2:
