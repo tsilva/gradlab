@@ -862,7 +862,11 @@ def cmd_launch(args: argparse.Namespace) -> int:
         _preflight_mlflow_compute_route(selected_compute)
         if config["tracking"]["backend"] == "mlflow"
         and config["tracking"]["delivery"] == "online"
-        else ("wandb-default" if config["tracking"]["backend"] == "wandb" else None)
+        else (
+            "wandb-default"
+            if config["tracking"]["backend"] == "wandb"
+            else str(os.environ.get("MLFLOW_OPERATOR_PROFILE") or "mlflow-default").strip()
+        )
     )
     release = runtime_release_from_args(
         args,

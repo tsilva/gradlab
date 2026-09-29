@@ -41,7 +41,7 @@ def local_mlflow_writer(run_dir: Path, config: dict):
         created_at_ms = int(datetime.fromisoformat(started_at.replace("Z", "+00:00")).timestamp() * 1000)
         delivery = MlflowDelivery.open(
             tracking_uri=uri,
-            experiment_name=f"gradlab-{environment.game}",
+            experiment_name=f"gradlab-{config.get('game_family') or environment.game}",
             gradlab_run_id=config["wandb_run_id"],
             created_at_ms=created_at_ms,
         )
@@ -164,7 +164,7 @@ def sync_local_mlflow(run_dir: Path, config: dict) -> str:
         environment = resolve_env_config(env_config_from_mapping(config))
         delivery = MlflowDelivery.open(
             tracking_uri=uri,
-            experiment_name=f"gradlab-{environment.game}",
+            experiment_name=f"gradlab-{config.get('game_family') or environment.game}",
             gradlab_run_id=str(config["wandb_run_id"]),
             created_at_ms=created_at_ms,
         )

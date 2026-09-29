@@ -58,7 +58,7 @@ class LocalRunPublication:
         tracking = {
             **selected,
             "operator_profile": (
-                "mlflow-private" if selected["backend"] == "mlflow" else "wandb-default"
+                "mlflow-default" if selected["backend"] == "mlflow" else "wandb-default"
             ),
         }
         wandb = {}

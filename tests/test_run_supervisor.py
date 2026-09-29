@@ -375,9 +375,9 @@ class RunSupervisorTests(unittest.TestCase):
         ):
             supervisor.validate_runtime()
 
-    def test_manifest_v5_requires_bounded_liveness_policy(self) -> None:
+    def test_manifest_v6_requires_bounded_liveness_policy(self) -> None:
         self.manifest.validate()
-        self.assertEqual(self.manifest.schema_version, 5)
+        self.assertEqual(self.manifest.schema_version, 6)
         self.assertEqual(self.manifest.liveness["poll_interval_seconds"], 0.25)
 
         missing = RunManifest(**{**self.manifest.to_dict(), "liveness": None})

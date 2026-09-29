@@ -143,16 +143,17 @@ while True:
         learner._gradlab_log.close()
 
 
-def test_failed_terminal_projection_closes_wandb_with_nonzero_exit() -> None:
+def test_failed_terminal_projection_uses_selected_adapter() -> None:
     projector = MagicMock()
-    receipt = SimpleNamespace(state="resumable_failure")
+    receipt = SimpleNamespace(
+        state="resumable_failure", stop_reason="delivery_timeout", validate=lambda: None
+    )
 
     with (
         patch(
             "gradlab.supervisor_runtime.WandbProjector.resume",
             return_value=projector,
         ) as resume,
-        patch("gradlab.supervisor_runtime.publish_terminal_summary") as publish,
     ):
         SupervisorRuntime().publish_terminal(
             {"wandb_run_id": "gradlab-" + "0" * 32},
@@ -164,20 +165,20 @@ def test_failed_terminal_projection_closes_wandb_with_nonzero_exit() -> None:
         {"wandb_run_id": "gradlab-" + "0" * 32},
         update_finish_state=True,
     )
-    publish.assert_called_once_with(projector.run, receipt)
-    projector.close.assert_called_once_with(timeout_seconds=12, exit_code=1)
+    projector.publish_terminal.assert_called_once_with(
+        state="resumable_failure", reason="delivery_timeout", timeout_seconds=12
+    )
 
 
-def test_stopped_terminal_projection_closes_wandb_with_zero_exit() -> None:
+def test_stopped_terminal_projection_uses_selected_adapter() -> None:
     projector = MagicMock()
-    receipt = SimpleNamespace(state="stopped")
+    receipt = SimpleNamespace(state="stopped", stop_reason="operator_stop", validate=lambda: None)
 
     with (
         patch(
             "gradlab.supervisor_runtime.WandbProjector.resume",
             return_value=projector,
         ),
-        patch("gradlab.supervisor_runtime.publish_terminal_summary"),
     ):
         SupervisorRuntime().publish_terminal(
             {"wandb_run_id": "gradlab-" + "0" * 32},
@@ -185,7 +186,9 @@ def test_stopped_terminal_projection_closes_wandb_with_zero_exit() -> None:
             timeout_seconds=12,
         )
 
-    projector.close.assert_called_once_with(timeout_seconds=12, exit_code=0)
+    projector.publish_terminal.assert_called_once_with(
+        state="stopped", reason="operator_stop", timeout_seconds=12
+    )
 
 
 def test_publisher_yields_between_frames_and_preserves_unclaimed_tail(tmp_path):

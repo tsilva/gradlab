@@ -74,6 +74,11 @@ def local_wandb_writer(run_dir: Path, config: dict, *, backfill: bool = False):
                 "UPDATE metric_frames SET status = 'pending' WHERE status = 'published' AND id > ?",
                 (remote_high_water,),
             )
+            if backfill:
+                connection.execute(
+                    "UPDATE metric_frames SET status = 'published' WHERE id <= ?",
+                    (remote_high_water,),
+                )
         url = str(run.url or "")
         (run_dir / "wandb_url.txt").write_text(url + "\n")
         (run_dir / "wandb_run_id.txt").write_text(str(run.id) + "\n")

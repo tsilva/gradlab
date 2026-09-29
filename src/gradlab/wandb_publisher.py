@@ -167,6 +167,76 @@ class WandbProjector:
         self.run_dir = run_dir
         self.metrics_schema_version = require_current_metrics_schema(metrics_schema_version)
 
+    @property
+    def run_id(self) -> str:
+        return str(self.run.id)
+
+    def publish_frame(
+        self,
+        row: Mapping[str, Any],
+        *,
+        event_seq_offset: int = 0,
+        occupancy_page=None,
+    ) -> None:
+        _publish_frame(
+            self.run, row, event_seq_offset=event_seq_offset,
+            metrics_schema_version=self.metrics_schema_version,
+            occupancy_page=occupancy_page,
+        )
+
+    def publish_promotion(
+        self,
+        *,
+        checkpoint_step: int,
+        checkpoint_url: str,
+        metrics: Mapping[str, Any],
+        updated_at: str,
+        selection_rank: Sequence[str],
+        evaluation_source: str,
+        metrics_schema_version: int = METRICS_SCHEMA_VERSION,
+    ) -> None:
+        if require_current_metrics_schema(metrics_schema_version) != self.metrics_schema_version:
+            raise ValueError("W&B promotion metrics schema differs from the selected Run")
+        publish_promotion_summary(
+            self.run,
+            checkpoint_step=checkpoint_step,
+            checkpoint_url=checkpoint_url,
+            metrics=metrics,
+            updated_at=updated_at,
+            selection_rank=selection_rank,
+            evaluation_source=evaluation_source,
+            metrics_schema_version=self.metrics_schema_version,
+        )
+
+    def publish_terminal(
+        self, *, state: str, reason: str, timeout_seconds: float | None = None
+    ) -> None:
+        projection = {
+            ORCHESTRATION_RUN_TERMINAL_STATE: state,
+            ORCHESTRATION_RUN_TERMINAL_REASON: reason,
+        }
+        validate_metric_payload(projection, placement="summary")
+        self.run.summary.update(projection)
+        self.close(
+            timeout_seconds=timeout_seconds,
+            exit_code=0 if state in {"succeeded", "stopped", "complete_local"} else 1,
+        )
+
+    def remote_summary(self) -> dict[str, Any]:
+        import wandb
+
+        api = wandb.Api(timeout=10)
+        flush = getattr(api, "flush", None)
+        if callable(flush):
+            flush()
+        return dict(getattr(api.run(self.run.path), "summary", {}) or {})
+
+    def remote_high_water(self) -> int:
+        return wandb_delivery_high_water(self.remote_summary())
+
+    def finish_projection(self, *, timeout_seconds: float) -> None:
+        self.close(timeout_seconds=timeout_seconds)
+
     @classmethod
     def start_live(
         cls,

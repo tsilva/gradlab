@@ -214,6 +214,9 @@ explicitly authorized. See [COMPUTE.md](COMPUTE.md) and the
   evaluation remains disabled for local training.
   They can establish Training Success but cannot establish Acceptance or
   Promotion.
+- Queued `complete_local` Runs seal the journal to private R2. An operator can
+  later run `gradlab sync-run <run-id>` to project that journal to the Run's
+  frozen backend without changing its terminal receipt.
 - `gradlab.ppo` is the opt-in tensor-native PPO backend. It accepts the
   `sb3.ppo` configuration surface plus `precision` (`fp32`, `amp-fp16`, or
   `amp-bf16`) and an `execution_profile`. `sb3-parity` preserves SB3's eager,
