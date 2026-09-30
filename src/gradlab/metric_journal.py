@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass
 from typing import Any
 
+from gradlab.evaluation_projection import validate_evaluation_metric_payload
 from gradlab.metric_names import (
     EVAL_CHECKPOINT_STEP,
     METRICS_SCHEMA_VERSION,
@@ -14,7 +16,6 @@ from gradlab.metric_names import (
     TRAIN_GLOBAL_STEP,
     validate_metric_payload,
 )
-from gradlab.evaluation_projection import validate_evaluation_metric_payload
 from gradlab.run_contracts import RUN_ID_PATTERN
 
 
@@ -49,8 +50,15 @@ def read_control_journal(control: Any, run_id: str) -> list[dict[str, Any]]:
     return ordered
 
 
-class JournalHistory:
-    """Small scan_history-compatible view used by Playback's metric reducers."""
+class MetricHistory:
+    rows: list[dict[str, Any]]
+
+    def read(self, keys: list[str]) -> Iterable[Mapping[str, Any]]:
+        return ({key: row[key] for key in keys if key in row} for row in self.rows)
+
+
+class JournalHistory(MetricHistory):
+    """Validated scientific histories from a private Run journal."""
 
     def __init__(self, events: list[Mapping[str, Any]]):
         self.rows: list[dict[str, Any]] = []
@@ -73,12 +81,9 @@ class JournalHistory:
                     raise ValueError("journal monitoring contains an unregistered measure")
                 self.rows.append({**metrics, EVAL_CHECKPOINT_STEP: float(step)})
 
-    def scan_history(self, *, keys: list[str], page_size: int):
-        del page_size
-        return ({key: row[key] for key in keys if key in row} for row in self.rows)
 
 
-class PublicJournalHistory:
+class PublicJournalHistory(MetricHistory):
     """A verified public telemetry document through the same history reader seam."""
 
     def __init__(self, document: Mapping[str, Any], *, run_id: str, digest: str):
@@ -105,6 +110,25 @@ class PublicJournalHistory:
                 raise ValueError("public telemetry history row is invalid")
             self.rows.append(dict(row))
 
-    def scan_history(self, *, keys: list[str], page_size: int):
-        del page_size
-        return ({key: row[key] for key in keys if key in row} for row in self.rows)
+
+
+@dataclass(frozen=True)
+class ScientificEvidence:
+    """Backend-neutral history, frozen configuration, and representative media."""
+    config: Mapping[str, Any]
+    _read: Callable[[list[str]], Iterable[Mapping[str, Any]]]
+    media: tuple[Mapping[str, Any], ...] = ()
+
+    def read(self, keys: list[str]) -> Iterable[Mapping[str, Any]]:
+        return (dict(row) for row in self._read(keys) if isinstance(row, Mapping))
+
+    @classmethod
+    def journal(cls, history: MetricHistory, config: Mapping[str, Any]) -> ScientificEvidence:
+        return cls(dict(config), history.read, tuple(getattr(history, "media", ())))
+
+    @classmethod
+    def historical_wandb(cls, run: Any) -> ScientificEvidence:
+        # Historical releases keep their original reader. Sparse SDK requests
+        # stay independent so missing optional measures cannot hide verdicts.
+        return cls(dict(getattr(run, "config", {}) or {}),
+                   lambda keys: run.scan_history(keys=keys, page_size=10_000))

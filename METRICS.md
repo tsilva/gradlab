@@ -30,7 +30,8 @@ authority for that decision.
 - The validated GradLab metric journal is the authoritative scientific metric record for new-schema Runs. The supervisor is the only selected-service writer:
   the training-container supervisor for queued runs, or the local training host holding the
   exclusive per-run lock and R2 writer lease for online local runs. Both publish the learner's SQLite outbox through
-  the same metric registry. W&B with online delivery remains the default; `--no-wandb` selects
+  the same metric registry and selected-service writer. The resolved `tracking` contract selects
+  W&B or MLflow; `experiments/tracking.yaml` currently defaults to MLflow online delivery. `--no-wandb` selects
   the explicit credential-free `local_only` delivery mode. The bundled bandit recipe selects this
   mode itself. Successful online local completion requires service close
   and remote confirmation of the outbox high-water mark, recorded in service delivery evidence.
@@ -119,6 +120,7 @@ authority for that decision.
   episode as playable `eval/video`, with canonical R2 bytes and provenance;
   nonvisual environments may omit it. An explicit transition-dataset Monitoring
   campaign separately delivers its representative video at `eval/monitor/video`.
+- MLflow stores asset bytes only in the public-model R2 store. Its `gradlab.asset.{journal_sequence}` tags retain immutable URLs, hashes, sizes and Checkpoint steps; the Run description lists recent clickable R2 assets. These tags and links are metadata, not additional scientific metrics. Evaluation-private videos remain private evidence; the supervisor publishes a verified representative copy in public-model R2 for viewing.
 - Interactive playback uses local descriptor keys such as `reward/shaped`, `policy/value`, and
   `action/executed` to configure live panels. They are typed projections of one streamed transition
   or its bounded in-browser history, are not emitted metrics, and must not be interpreted as aliases
@@ -896,7 +898,7 @@ Operational failures and prefixes
 never become failed scientific episodes. Monitoring events remain distinct from
 Acceptance events even where metric names are shared, with eval/step pinned to the immutable Checkpoint even when its
 result arrives after newer training events. ops/sequence remains delivery order.
-The supervisor sends actual representative video media through its durable outbox;
+The supervisor sends representative video references through its durable outbox;
 R2 retains canonical video and the configured subset of complete trajectories,
 plus lightweight results for all evaluations. With zero recorded episodes there
 is no video; scalar delivery still completes. Transport is at least once.

@@ -42,6 +42,7 @@ export async function runChecks() {
   try {
     await control('reset');
     await list();
+    await wait(() => $('#source-browser button[aria-label="Refresh"]'), 'initial catalog refresh not settled');
     const path = location.pathname;
     await control('catalog-fail');
     click('#source-browser button[aria-label="Refresh"]');
@@ -52,14 +53,14 @@ export async function runChecks() {
     assert((await control('status')).prepared.length === 0, 'catalog Retry prepared a checkpoint');
     pass('catalog refresh recovery retains rows without preparing a checkpoint');
     await control('observer');
-    await new Promise(requestAnimationFrame);
+    await wait(() => rows()[0]?.getAttribute('aria-disabled') === 'true', 'observer state not shown');
     rows()[0].click();
     assert(!mask() && location.pathname === path, 'observer refusal changed selection');
     assert((await control('status')).prepared.length === 0, 'observer dispatched preparation');
     pass('observer refusal preserves route and mask');
     await control('control');
     // A server status round trip fences the control update before selection.
-    await wait(() => !rows()[0]?.classList.contains('disabled'), 'control not restored');
+    await wait(() => rows()[0]?.getAttribute('aria-disabled') === 'false', 'control not restored');
     await control('reject');
     rows()[0].click();
     await wait(() => $('#toast').textContent === 'Fixture command rejected' && !mask(), 'rejection did not clear mask');
@@ -109,7 +110,9 @@ export async function runChecks() {
     const browsePath = location.pathname;
     const before = await control('status');
     await control('observer');
+    await wait(() => rows()[0]?.getAttribute('aria-disabled') === 'true', 'background observer state not shown');
     await control('control');
+    await wait(() => rows()[0]?.getAttribute('aria-disabled') === 'false', 'background control not restored');
     assert(location.pathname === browsePath && !$('#source-browser').hidden, 'background snapshot left browsing');
     assert((await control('status')).commands.filter(name => name === 'browse_sources').length === before.commands.filter(name => name === 'browse_sources').length, 'local browse closed runner');
     pass('local browsing survives background control snapshots without closing runner');
@@ -194,6 +197,10 @@ export async function runAdditionalChecks() {
     await waitStatus(status => !status.preparing, 'cancelled worker did not drain');
     assert((await control('status')).epoch === beforeCancel.epoch, 'cancel discarded previous runner');
     pass('covered Cancel control retains the previous runner and presentation behavior');
+    click('[aria-label="Start recording episode"]');
+    await wait(() => $('[aria-label="Stop recording episode"]'), 'recording did not start');
+    click('#trajectory-next');
+    await wait(() => !$('#trajectory-download').disabled, 'recorded transition not available');
     const beforeImport = await control('status');
     await control('import');
     await wait(() => $('[data-checkpoint-position]').closest('nav').hidden && document.body.textContent.includes('inspection only'), 'imported playback not mounted');

@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
-from gradlab.local_wandb import sync_local_run
+from gradlab.local_metrics import sync_local_run
 from gradlab.clock import parse_utc_datetime
 from gradlab.metric_journal import read_control_journal
 from gradlab.metric_names import (

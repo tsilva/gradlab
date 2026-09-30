@@ -18,7 +18,7 @@ import {
 import { episodeReport } from "./episode-report.js";
 import { timelineEventMarkers } from "./episode-timeline.js";
 import { eventColorFill, eventLabels } from "./event-colors.js";
-import { mountPlaybackSettings } from "../../../frontend/mount.ts";
+import { mountPlaybackSettings, mountSourceBrowser, mountContractViewer } from "../../../frontend/mount.ts";
 import { CheckpointSelection } from "./checkpoint-selection.js";
 import {
   playbackSourceTitle,
@@ -212,8 +212,8 @@ function resetSession(epoch) {
 async function ensureSourceBrowser() {
   if (sourceBrowser) return sourceBrowser;
   if (!sourceBrowserPromise) {
-    sourceBrowserPromise = import("./sources/browser.js").then(({ SourceBrowser }) => {
-      sourceBrowser = new SourceBrowser($("#source-browser"), $("#source-breadcrumbs"), {
+    sourceBrowserPromise = import("./sources/browser.js").then(async ({ SourceBrowser }) => {
+      const browser = new SourceBrowser($("#source-browser"), $("#source-breadcrumbs"), {
         token,
         command,
         getState: playerState,
@@ -223,6 +223,8 @@ async function ensureSourceBrowser() {
         openInspection: (endpoint, options) => openContractInspection(endpoint, options),
         openSourceRoute: (route) => openSourceRoute(route),
       });
+      browser.view = await mountSourceBrowser(browser, $("#source-browser"), $("#source-breadcrumbs"), $("#checkpoint-navigation"));
+      sourceBrowser = browser;
       return sourceBrowser;
     });
   }
@@ -232,8 +234,10 @@ async function ensureSourceBrowser() {
 async function ensureContractViewer() {
   if (contractViewer) return contractViewer;
   if (!contractViewerPromise) {
-    contractViewerPromise = import("./documents/viewer.js").then(({ ContractViewer }) => {
-      contractViewer = new ContractViewer($("#contract-viewer"), { token, showToast });
+    contractViewerPromise = import("./documents/viewer.js").then(async ({ ContractViewer }) => {
+      const viewer = new ContractViewer($("#contract-viewer"), { token, showToast });
+      viewer.presentation = await mountContractViewer(viewer, $("#contract-viewer"));
+      contractViewer = viewer;
       return contractViewer;
     });
   }
@@ -401,6 +405,7 @@ function handleMessage(message) {
       state.hasControl = Boolean(message.control?.has_control);
       inspection.updateConnection({ hasControl: state.hasControl });
       state.controlEpoch = Number(message.control_epoch || 0);
+      sourceBrowser?.renderView();
       trajectoryControls.render();
       return;
     }
@@ -435,12 +440,10 @@ function handleMessage(message) {
 }
 
 function updatePublicationButton() {
-  const button = $("#publish-episode");
-  if (!button) return;
   const snapshot = state.applicationSnapshot || inspection.view.liveSnapshot;
   const configured = Boolean(snapshot?.publication?.configured);
   const complete = snapshot?.publication_capture?.ready === true;
-  button.hidden = !(configured && complete && state.publicationAuthority);
+  shellState.publication.enabled = Boolean(configured && complete && state.publicationAuthority);
 }
 
 async function publicationApi(path, { method = "GET", body } = {}) {
@@ -464,37 +467,24 @@ async function publicationApi(path, { method = "GET", body } = {}) {
   return payload;
 }
 
-function publicationFact(term, value, selector = "#publication-capture") {
-  const facts = $(selector);
-  const dt = document.createElement("dt");
-  const dd = document.createElement("dd");
-  dt.textContent = term;
-  dd.textContent = String(value ?? "—");
-  facts.append(dt, dd);
-}
-
 function publicationSettings() {
   return {
-    privacy: $("#publication-privacy").value,
-    thumbnail_time: Number($("#publication-thumbnail-time").value),
-    tags: $("#publication-tags").value.split(",").map((value) => value.trim()).filter(Boolean),
-    operator_note: $("#publication-note").value,
+    privacy: shellState.publication.privacy,
+    thumbnail_time: Number(shellState.publication.thumbnailTime),
+    tags: shellState.publication.tags.split(",").map((value) => value.trim()).filter(Boolean),
+    operator_note: shellState.publication.note,
   };
 }
 
 function renderPublicationPreview(preview) {
-  const facts = $("#publication-generated");
-  facts.replaceChildren();
-  if (!preview) return;
-  publicationFact("Generated title", preview.title, "#publication-generated");
-  publicationFact("Generated description", preview.description, "#publication-generated");
-  publicationFact("Repository", `${preview.repo_id}@${preview.release_tag}`, "#publication-generated");
-  publicationFact("Release tier", preview.release_tier, "#publication-generated");
-  publicationFact("Acceptance", preview.acceptance?.passed ? "Accepted" : "Not accepted", "#publication-generated");
-  publicationFact("Replay", `${preview.replay?.status}: ${preview.replay?.outcome}`, "#publication-generated");
-  publicationFact("Comparison", preview.comparison?.reason, "#publication-generated");
-  publicationFact("Environment container", preview.containers?.environment, "#publication-generated");
-  publicationFact("Operator note", preview.operator_note || "None", "#publication-generated");
+  shellState.publication.generated = !preview ? [] : [
+    ["Generated title", preview.title], ["Generated description", preview.description],
+    ["Repository", `${preview.repo_id}@${preview.release_tag}`], ["Release tier", preview.release_tier],
+    ["Acceptance", preview.acceptance?.passed ? "Accepted" : "Not accepted"],
+    ["Replay", `${preview.replay?.status}: ${preview.replay?.outcome}`],
+    ["Comparison", preview.comparison?.reason], ["Environment container", preview.containers?.environment],
+    ["Operator note", preview.operator_note || "None"],
+  ];
 }
 
 async function refreshPublicationPreview() {
@@ -509,63 +499,38 @@ async function refreshPublicationPreview() {
 function renderPublicationCurrent(current) {
   state.publicationCurrent = current;
   const capture = current?.capture;
-  const facts = $("#publication-capture");
-  facts.replaceChildren();
+  shellState.publication.capture = [];
   if (!current?.available || !capture) {
-    $("#publication-status").textContent = current?.message || "No publishable episode is ready.";
-    $("#publication-submit").disabled = true;
+    shellState.publication.status = current?.message || "No publishable episode is ready.";
+    shellState.publication.submitDisabled = true;
     return;
   }
-  publicationFact("Outcome", capture.outcome);
-  publicationFact("Episode seed", capture.seed);
-  publicationFact("Steps", capture.steps);
-  publicationFact("Return", capture.return);
-  publicationFact("Action selection", capture.sampling_mode);
-  publicationFact("Capture", capture.capture_id);
-  $("#publication-status").textContent = "The exact completed episode will be uploaded to both destinations.";
+  shellState.publication.capture = [
+    ["Outcome", capture.outcome], ["Episode seed", capture.seed], ["Steps", capture.steps],
+    ["Return", capture.return], ["Action selection", capture.sampling_mode], ["Capture", capture.capture_id],
+  ];
+  shellState.publication.status = "The exact completed episode will be uploaded to both destinations.";
   renderPublicationPreview(current.preview);
   if (current.job) renderPublicationJob(current.job);
 }
 
 function renderPublicationCredentials(result) {
-  const panel = $("#publication-credentials");
   const hf = result?.huggingface || {};
   const yt = result?.youtube || {};
-  panel.textContent = [
+  shellState.publication.credentials = [
     `Hugging Face: ${hf.ready ? `${hf.username} → ${hf.namespace}` : (hf.message || "not ready")}`,
     `YouTube: ${yt.ready ? `${yt.channel_title} (${yt.channel_id})` : (yt.message || "not ready")}`,
   ].join("\n");
-  panel.style.whiteSpace = "pre-line";
-  $("#publication-authorize-youtube").hidden = Boolean(yt.ready);
-  $("#publication-submit").disabled = !(result?.ready && state.publicationCurrent?.available && !state.publicationJob);
+  shellState.publication.youtubeReady = Boolean(yt.ready);
+  shellState.publication.submitDisabled = !(result?.ready && state.publicationCurrent?.available && !state.publicationJob);
 }
 
 function renderPublicationJob(job) {
   if (!job) return;
   state.publicationJob = job;
-  const panel = $("#publication-job");
-  panel.hidden = false;
-  panel.replaceChildren();
-  const summary = document.createElement("div");
-  summary.textContent = `${job.state || "queued"} · ${job.progress?.phase || "queued"}${job.message ? ` · ${job.message}` : ""}`;
-  panel.append(summary);
-  Object.entries(job.urls || {}).forEach(([label, url]) => {
-    if (!String(url).startsWith("https://")) return;
-    const row = document.createElement("div");
-    const link = document.createElement("a");
-    link.href = String(url);
-    link.target = "_blank";
-    link.rel = "noopener noreferrer";
-    link.textContent = `${label}: ${url}`;
-    row.append(link);
-    panel.append(row);
-  });
+  shellState.publication.job = job;
+  shellState.publication.submitDisabled = true;
   const terminal = ["succeeded", "failed", "blocked", "canceled"].includes(job.state);
-  $("#publication-submit").disabled = true;
-  $("#publication-retry").hidden = !["failed", "blocked", "canceled"].includes(job.state);
-  $("#publication-cancel").hidden = terminal;
-  $("#publication-resolve").hidden = !(job.state === "blocked" && job.progress?.phase === "youtube_uncertain");
-  $("#publication-cleanup").hidden = !terminal;
   clearInterval(state.publicationPoll);
   state.publicationPoll = null;
   if (!terminal && job.job_id) {
@@ -582,7 +547,7 @@ function renderPublicationJob(job) {
 }
 
 async function checkPublicationCredentials() {
-  $("#publication-credentials").textContent = "Checking both accounts…";
+  shellState.publication.credentials = "Checking both accounts…";
   const result = await publicationApi("/api/publication/preflight", { method: "POST" });
   renderPublicationCredentials(result);
   return result;
@@ -592,7 +557,7 @@ async function openPublicationDialog() {
   const dialog = $("#publication-dialog");
   dialog.showModal();
   try {
-    $("#publication-status").textContent = "Rendering the completed episode…";
+    shellState.publication.status = "Rendering the completed episode…";
     await publicationApi("/api/publication/render", { method: "POST" });
     const [current, ticket] = await Promise.all([
       publicationApi("/api/publication/current"),
@@ -600,12 +565,12 @@ async function openPublicationDialog() {
     ]);
     renderPublicationCurrent(current);
     await refreshPublicationPreview();
-    $("#publication-video").src = ticket.url;
+    shellState.publication.videoUrl = ticket.url;
     if (current.job) renderPublicationJob(current.job);
     else await checkPublicationCredentials();
   } catch (error) {
-    $("#publication-status").textContent = error.message || String(error);
-    $("#publication-submit").disabled = true;
+    shellState.publication.status = error.message || String(error);
+    shellState.publication.submitDisabled = true;
   }
 }
 
@@ -1043,7 +1008,7 @@ function updateLayoutTitle() {
     : pairedWorkspace && state.windowId === STATS_WINDOW_ID
       ? `${environmentTitle} · Stats`
       : environmentTitle;
-  $("#page-title").textContent = title;
+  shellState.pageTitle = title;
   $("#layout-name-input").value = state.layout.name;
   const role = state.windowId === "main" ? "Player" : "Stats";
   document.title = `GradLab — ${role} · ${environmentTitle}${panelName ? ` · ${panelLabel(panelName)}` : ""}`;
@@ -1225,11 +1190,8 @@ function openPanelMenu(name, anchor) {
   if (!workspaceIsEditable(state.layout.preset)) return;
   state.selectedPanel = name;
   const instance = state.layout.panels[name];
-  $("#panel-menu-title").textContent = panelLabel(name);
-  $("#panel-dock-main").hidden = state.windowId === "main";
-  $("#panel-edit").hidden = instance?.type !== "telemetry";
-  $("#panel-duplicate").hidden = instance?.type !== "telemetry";
-  $("#panel-remove").hidden = Boolean(instance?.builtin);
+  shellState.panelMenu = {title: panelLabel(name), dockMain: state.windowId !== "main", telemetry: instance?.type === "telemetry", removable: !instance?.builtin};
+  flushSync();
   positionMenu($("#panel-menu"), anchor);
 }
 
@@ -1341,9 +1303,7 @@ function bindWorkspaceMenus() {
   const switchWindow = $("#switch-window");
   const targetWindow = windowId === "main" ? STATS_WINDOW_ID : "main";
   const targetLabel = targetWindow === "main" ? "Player" : "Stats";
-  switchWindow.hidden = !pairedWorkspace;
-  switchWindow.querySelector("span").textContent = targetLabel;
-  switchWindow.title = `Open or focus ${targetLabel.toLowerCase()}`;
+  shellState.switchWindow = {visible: pairedWorkspace, label: targetLabel};
   switchWindow.addEventListener("click", () => {
     void openWorkspaceWindow(targetWindow).catch(error => showToast(error.message, true));
   });
@@ -1678,7 +1638,8 @@ function initWorkspace() {
     state.publicationPoll = null;
     const video = $("#publication-video");
     video.pause();
-    video.removeAttribute("src");
+    shellState.publication.videoUrl = "";
+    flushSync();
     video.load();
   });
   $("#publication-check").addEventListener("click", () => {
@@ -1727,8 +1688,7 @@ function initWorkspace() {
   });
   $("#publication-form").addEventListener("submit", async (event) => {
     event.preventDefault();
-    const submit = $("#publication-submit");
-    submit.disabled = true;
+    shellState.publication.submitDisabled = true;
     try {
       const result = await publicationApi("/api/publication/admit", {
         method: "POST",
@@ -1739,7 +1699,7 @@ function initWorkspace() {
       renderPublicationJob(result.job);
       showToast(result.created ? "Combined publication queued." : "Publication is already queued.");
     } catch (error) {
-      submit.disabled = false;
+      shellState.publication.submitDisabled = false;
       showToast(error.message || String(error), true);
     }
   });

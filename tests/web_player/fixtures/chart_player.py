@@ -11,7 +11,8 @@ from tempfile import TemporaryDirectory
 
 from aiohttp import web
 
-from gradlab.play_web import PlaybackWebServer, WebPlaybackRunner
+from gradlab.play_engine import WebPlaybackRunner
+from gradlab.play_web import PlaybackWebServer
 from gradlab.policy_bundle import load_policy_bundle
 from tests.test_play_trajectory import ScriptedSession
 from tests.test_policy_bundle import write_bundle

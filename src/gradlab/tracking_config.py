@@ -9,7 +9,7 @@ from typing import Any
 from gradlab.config_loader import load_mapping_document
 
 
-DEFAULT_TRACKING = {"backend": "wandb", "delivery": "online"}
+DEFAULT_TRACKING = {"backend": "mlflow", "delivery": "online"}
 BACKENDS = frozenset({"wandb", "mlflow"})
 DELIVERY_MODES = frozenset({"online", "local_only"})
 

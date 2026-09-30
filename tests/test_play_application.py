@@ -16,7 +16,7 @@ from gradlab.play_runtime import (
     apply_vizdoom_playback_iwad_override,
     _implicit_playback_seed,
 )
-from gradlab.play_web import PlaybackCommand
+from gradlab.play_engine import PlaybackCommand
 
 
 class FakeEncoder:

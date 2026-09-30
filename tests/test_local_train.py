@@ -34,10 +34,12 @@ from gradlab.rom_runtime import RomRuntimeBinding
 
 
 @pytest.fixture(autouse=True)
-def isolate_local_wandb_transport():
+def isolate_local_tracking_transport():
     # These tests exercise CLI/materialization; transport has real-outbox tests separately.
-    with mock.patch(
-        "gradlab.local_train.local_wandb_writer", side_effect=lambda *a, **k: nullcontext(None)
+    with (
+        mock.patch(
+            "gradlab.local_train.local_metrics_writer", side_effect=lambda *a, **k: nullcontext(None)
+        ),
     ):
         yield
 
@@ -198,7 +200,7 @@ def test_bundled_smoke_uses_local_only_tracking_without_service(
         assert argv[argv.index("--execution-mode") + 1] == "local-training"
         config_path = Path(argv[argv.index("--train-config-json") + 1])
         config = json.loads(config_path.read_text())
-        assert config["tracking"]["backend"] == "wandb"
+        assert config["tracking"]["backend"] == "mlflow"
         assert config["tracking"]["delivery"] == "local_only"
         run_dir = Path(config["runs_dir"]) / config["run_name"]
         (run_dir / "final_model.zip").write_bytes(b"model")
@@ -207,7 +209,7 @@ def test_bundled_smoke_uses_local_only_tracking_without_service(
 
     with (
         mock.patch("gradlab.train.main", side_effect=fake_learner),
-        mock.patch("gradlab.local_train.local_wandb_writer", side_effect=AssertionError("service called")),
+        mock.patch("gradlab.local_metrics._open_delivery", side_effect=AssertionError("service called")),
     ):
         assert main(["gradlab__bandit/ppo", "--runs-dir", str(tmp_path), "--no-tui"]) == 0
     receipts = list(tmp_path.rglob(LOCAL_RUN_RECEIPT))
@@ -269,7 +271,7 @@ def test_local_train_materializes_playable_run_with_explicit_logging_mode(
     assert config["checkpoint_eval_backend"] == "none"
     assert "stop_on_acceptance" not in config
     assert "wandb" not in config
-    assert config["tracking"]["backend"] == "wandb"
+    assert config["tracking"]["backend"] == "mlflow"
     assert config["tracking"]["delivery"] == ("online" if wandb_enabled else "local_only")
     assert config["wandb_run_id"].startswith("gradlab-")
     assert config["wandb_group"] == config["wandb_run_id"]

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PublicationDialog from "./PublicationDialog.svelte";
   import { shellState } from "../shell-state.svelte";
   import {
     eventColorFill,
@@ -21,7 +22,7 @@
         ><use href="/assets/tabler-icons.svg#ti-arrow-left"></use></svg
       ><span>Back</span></button
     >
-    <h1 id="page-title" hidden>Environment</h1>
+    <h1 id="page-title" hidden>{shellState.pageTitle}</h1>
     <nav
       id="source-breadcrumbs"
       class="source-breadcrumbs header-breadcrumbs"
@@ -35,11 +36,11 @@
       id="switch-window"
       class="quiet button-with-icon"
       type="button"
-      title="Open or focus stats"
-      hidden
+      title={`Open or focus ${shellState.switchWindow.label.toLowerCase()}`}
+      hidden={!shellState.switchWindow.visible}
       ><svg class="icon" aria-hidden="true"
         ><use href="/assets/tabler-icons.svg#ti-external-link"></use></svg
-      ><span>Stats</span></button
+      ><span>{shellState.switchWindow.label}</span></button
     >
     <button
       id="trajectory-download"
@@ -167,8 +168,8 @@
     class="quiet button-with-icon"
     type="button"
     title="Publish the completed episode to YouTube and Hugging Face"
-    hidden
-    ><svg class="icon" aria-hidden="true"
+
+     hidden={!shellState.publication.enabled}><svg class="icon" aria-hidden="true"
       ><use href="/assets/tabler-icons.svg#ti-external-link"></use></svg
     ><span>Publish episode</span></button
   >
@@ -253,7 +254,7 @@
 </div>
 
 <div id="panel-menu" class="floating-menu panel-menu" hidden>
-  <strong id="panel-menu-title">Panel</strong>
+  <strong id="panel-menu-title">{shellState.panelMenu.title}</strong>
   <button
     id="panel-new-window"
     class="button-with-icon"
@@ -268,7 +269,7 @@
     class="button-with-icon"
     type="button"
     title="Dock panel in the main window"
-    ><svg class="icon" aria-hidden="true"
+     hidden={!shellState.panelMenu.dockMain}><svg class="icon" aria-hidden="true"
       ><use href="/assets/tabler-icons.svg#ti-layout-dashboard"></use></svg
     ><span>Dock to main window</span></button
   >
@@ -277,7 +278,7 @@
     class="button-with-icon"
     type="button"
     title="Edit telemetry visualizations"
-    ><svg class="icon" aria-hidden="true"
+     hidden={!shellState.panelMenu.telemetry}><svg class="icon" aria-hidden="true"
       ><use href="/assets/tabler-icons.svg#ti-edit"></use></svg
     ><span>Edit</span></button
   >
@@ -286,7 +287,7 @@
     class="button-with-icon"
     type="button"
     title="Duplicate as a telemetry panel"
-    ><svg class="icon" aria-hidden="true"
+     hidden={!shellState.panelMenu.telemetry}><svg class="icon" aria-hidden="true"
       ><use href="/assets/tabler-icons.svg#ti-copy"></use></svg
     ><span>Duplicate</span></button
   >
@@ -313,7 +314,7 @@
     class="button-with-icon danger"
     type="button"
     title="Remove custom panel"
-    ><svg class="icon" aria-hidden="true"
+     hidden={!shellState.panelMenu.removable}><svg class="icon" aria-hidden="true"
       ><use href="/assets/tabler-icons.svg#ti-trash"></use></svg
     ><span>Remove</span></button
   >
@@ -569,261 +570,9 @@
   class="contract-viewer"
   aria-labelledby="contract-viewer-heading"
 >
-  <div class="contract-viewer-shell">
-    <header class="contract-viewer-header">
-      <div>
-        <span class="eyebrow">RESOLVED CONTRACT</span>
-        <h2 id="contract-viewer-heading">Goal and recipe YAML</h2>
-        <p
-          id="contract-viewer-status"
-          class="contract-viewer-status"
-          aria-live="polite"
-        ></p>
-      </div>
-      <button
-        id="contract-viewer-close"
-        class="quiet icon-only"
-        type="button"
-        aria-label="Close contract viewer"
-        title="Close"
-        ><svg class="icon" aria-hidden="true"
-          ><use href="/assets/tabler-icons.svg#ti-x"></use></svg
-        ></button
-      >
-    </header>
-    <div class="contract-viewer-toolbar">
-      <div
-        id="contract-document-tabs"
-        class="contract-tabs"
-        role="tablist"
-        aria-label="Contract document"
-      ></div>
-      <label
-        id="contract-recipe-picker-label"
-        class="contract-recipe-picker"
-        hidden
-      >
-        <span>Recipe</span>
-        <select id="contract-recipe-picker"></select>
-      </label>
-      <div
-        id="contract-view-tabs"
-        class="contract-tabs contract-view-tabs"
-        role="tablist"
-        aria-label="Contract view"
-      ></div>
-      <details
-        id="contract-search-disclosure"
-        class="contract-search-disclosure"
-      >
-        <summary
-          ><svg class="icon" aria-hidden="true"
-            ><use href="/assets/tabler-icons.svg#ti-search"></use></svg
-          ><span>Search</span></summary
-        >
-        <label class="contract-search">
-          <svg class="icon" aria-hidden="true"
-            ><use href="/assets/tabler-icons.svg#ti-search"></use></svg
-          >
-          <input
-            id="contract-search-input"
-            type="search"
-            autocomplete="off"
-            placeholder="Search YAML or diff"
-            aria-label="Search YAML or diff"
-          />
-          <span id="contract-search-count" aria-live="polite"></span>
-        </label>
-      </details>
-      <button id="contract-copy" class="quiet button-with-icon" type="button"
-        ><svg class="icon" aria-hidden="true"
-          ><use href="/assets/tabler-icons.svg#ti-copy"></use></svg
-        ><span>Copy</span></button
-      >
-    </div>
-    <div
-      id="contract-viewer-message"
-      class="contract-viewer-message"
-      hidden
-    ></div>
-    <div id="contract-viewer-loading" class="contract-viewer-loading" hidden>
-      <span class="spinner" aria-hidden="true"></span><span
-        >Loading contract…</span
-      >
-    </div>
-    <div id="contract-viewer-content" class="contract-viewer-content">
-      <!-- svelte-ignore a11y_no_noninteractive_tabindex (scrollable code must remain keyboard accessible) -->
-      <pre
-        id="contract-single-content"
-        class="contract-single-content"
-        tabindex="0"><code></code></pre>
-      <div
-        id="contract-diff-content"
-        class="contract-diff-content"
-        aria-label="Side-by-side contract changes"
-        hidden
-      >
-        <section
-          class="contract-diff-pane"
-          aria-labelledby="contract-diff-base-heading"
-        >
-          <header id="contract-diff-base-heading" class="contract-diff-heading">
-            <strong>Base</strong><span id="contract-diff-base-name"></span>
-          </header>
-          <!-- svelte-ignore a11y_no_noninteractive_tabindex (scrollable code must remain keyboard accessible) -->
-          <div
-            id="contract-diff-base-scroll"
-            class="contract-diff-scroll"
-            tabindex="0"
-            aria-label="Base YAML"
-          >
-            <div
-              id="contract-diff-base-lines"
-              class="contract-diff-lines"
-            ></div>
-          </div>
-        </section>
-        <section
-          class="contract-diff-pane contract-diff-resolved"
-          aria-labelledby="contract-diff-resolved-heading"
-        >
-          <header
-            id="contract-diff-resolved-heading"
-            class="contract-diff-heading"
-          >
-            <strong>Resolved</strong><span id="contract-diff-resolved-name"
-            ></span>
-          </header>
-          <!-- svelte-ignore a11y_no_noninteractive_tabindex (scrollable code must remain keyboard accessible) -->
-          <div
-            id="contract-diff-resolved-scroll"
-            class="contract-diff-scroll"
-            tabindex="0"
-            aria-label="Resolved YAML"
-          >
-            <div
-              id="contract-diff-resolved-lines"
-              class="contract-diff-lines"
-            ></div>
-          </div>
-        </section>
-      </div>
-      <div
-        id="contract-diff-error"
-        class="contract-diff-error"
-        role="alert"
-        hidden
-      ></div>
-    </div>
-  </div>
 </dialog>
 
-<dialog
-  id="publication-dialog"
-  class="publication-dialog"
-  aria-labelledby="publication-heading"
->
-  <div class="publication-shell">
-    <header class="publication-header">
-      <div>
-        <span class="eyebrow">COMBINED RELEASE</span>
-        <h2 id="publication-heading">Publish episode</h2>
-        <p
-          id="publication-status"
-          class="publication-status"
-          aria-live="polite"
-        >
-          Checking the completed episode…
-        </p>
-      </div>
-      <button
-        id="publication-close"
-        class="quiet icon-only"
-        type="button"
-        aria-label="Close publication dialog"
-        title="Close"
-        ><svg class="icon" aria-hidden="true"
-          ><use href="/assets/tabler-icons.svg#ti-x"></use></svg
-        ></button
-      >
-    </header>
-    <div class="publication-body">
-      <section class="publication-preview">
-        <video id="publication-video" controls preload="metadata"></video>
-        <dl id="publication-capture" class="publication-facts"></dl>
-        <dl
-          id="publication-generated"
-          class="publication-facts publication-generated"
-        ></dl>
-      </section>
-      <form id="publication-form" class="publication-form">
-        <div class="publication-fields">
-          <label
-            ><span>Privacy</span><select id="publication-privacy"
-              ><option value="public">Public</option><option value="unlisted"
-                >Unlisted</option
-              ><option value="private">Private</option></select
-            ></label
-          >
-          <label
-            ><span>Thumbnail time (seconds)</span><input
-              id="publication-thumbnail-time"
-              type="number"
-              min="0"
-              step="0.25"
-              value="10"
-              required
-            /></label
-          >
-          >
-          <label class="publication-wide"
-            ><span>Extra tags (comma-separated)</span><input
-              id="publication-tags"
-              maxlength="300"
-            /></label
-          >
-          <label class="publication-wide"
-            ><span
-              >Operator note <small>clearly labeled as unverified</small></span
-            ><textarea id="publication-note" rows="3" maxlength="1000"
-            ></textarea></label
-          >
-        </div>
-        <div id="publication-credentials" class="publication-credentials"></div>
-        <div id="publication-job" class="publication-job" hidden></div>
-        <footer class="publication-actions">
-          <button
-            id="publication-authorize-youtube"
-            class="quiet"
-            type="button"
-            hidden>Authorize YouTube</button
-          >
-          <button id="publication-check" class="quiet" type="button"
-            >Check accounts</button
-          >
-          <button id="publication-retry" class="quiet" type="button" hidden
-            >Retry</button
-          >
-          <button
-            id="publication-cancel"
-            class="quiet danger"
-            type="button"
-            hidden>Cancel</button
-          >
-          <button id="publication-resolve" class="quiet" type="button" hidden
-            >Resolve upload</button
-          >
-          <button id="publication-cleanup" class="quiet" type="button" hidden
-            >Clean local staging</button
-          >
-          <button id="publication-submit" class="primary" type="submit" disabled
-            >Publish to both</button
-          >
-        </footer>
-      </form>
-    </div>
-  </div>
-</dialog>
+<PublicationDialog />
 
 <div
   id="toast"

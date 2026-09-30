@@ -22,6 +22,7 @@ def local_run(tmp_path, request):
         goal.parent / "recipes/ppo.yaml",
         source_sha="e" * 40,
         recipe_overrides=(
+            "tracking.backend=wandb",
             f"tracking.delivery={parameters.get('delivery', 'online')}",
             *parameters.get("overrides", ()),
         ),
@@ -239,7 +240,8 @@ def test_lost_lease_fences_publication(local_run):
 
 
 def test_remote_metric_confirmation_is_required_before_terminal(local_run, monkeypatch):
-    from gradlab import local_wandb
+    from gradlab import local_metrics
+    from gradlab.wandb_publisher import WandbProjector
     from unittest.mock import Mock
 
     directory, config, store, authority, env = local_run
@@ -255,18 +257,19 @@ def test_remote_metric_confirmation_is_required_before_terminal(local_run, monke
     run.summary = summary
     run.log = lambda payload, step: summary.update(payload)
     run.define_metric = lambda *args, **kwargs: None
-    projector = SimpleNamespace(run=run, close=Mock())
-    monkeypatch.setattr(local_wandb.WandbProjector, "start_live", lambda *a, **k: projector)
-    monkeypatch.setattr(local_wandb, "resolve_env_config", lambda *a: env)
+    projector = WandbProjector(run)
+    projector.close = Mock()
+    monkeypatch.setattr(local_metrics.WandbProjector, "start_live", lambda *a, **k: projector)
+    monkeypatch.setattr(local_metrics, "resolve_env_config", lambda *a: env)
     monkeypatch.setattr(
-        local_wandb,
+        local_metrics,
         "local_publication",
         lambda d, c, s, e: LocalRunPublication(d, c, s, e, authority=authority),
     )
     verify = Mock(side_effect=TimeoutError("not delivered"))
-    monkeypatch.setattr(local_wandb, "_verify_remote_delivery", verify)
+    monkeypatch.setattr(local_metrics.MetricsWriter, "confirm", verify)
     with pytest.raises(TimeoutError, match="not delivered"):
-        with local_wandb.local_wandb_writer(directory, config):
+        with local_metrics.local_metrics_writer(directory, config):
             pass
     assert not (directory / "publication-delivery.json").exists()
     assert (
@@ -276,7 +279,7 @@ def test_remote_metric_confirmation_is_required_before_terminal(local_run, monke
         is None
     )
     verify.side_effect = None
-    with local_wandb.local_wandb_writer(directory, config):
+    with local_metrics.local_metrics_writer(directory, config):
         pass
     assert (
         json.loads((directory / "publication-delivery.json").read_text())["status"] == "delivered"

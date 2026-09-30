@@ -70,10 +70,12 @@ from gradlab.run_contracts import (
     TerminalReceipt,
     default_liveness_policy,
 )
-from gradlab.run_supervisor import (
-    IncompleteEvaluationEvidence,
+from gradlab.supervisor_lifecycle import (
     LearnerFailure,
     LearnerTeardownTimeout,
+)
+from gradlab.run_supervisor import (
+    IncompleteEvaluationEvidence,
     METRIC_JOURNAL_RETENTION_DAYS,
     RunSupervisor,
     _terminal_outcome,
@@ -1387,7 +1389,7 @@ def _scenario_wandb_visibility_gating(
         high_water == 1 and timed_out,
         evidence={
             "local_high_water": high_water,
-            "remote_high_water": supervisor.wandb_remote_high_water,
+            "remote_high_water": supervisor.delivery_schedule.remote_high_water,
         },
     )
     return {
@@ -1660,12 +1662,12 @@ def _scenario_eval_result_reconciliation(root: Path) -> dict[str, Any]:
         "durable-acceptance-reconciled-before-next-submit",
         len(prepared.backend.submissions) == 1
         and statuses == ["accepted", "deferred"]
-        and supervisor.eval_admission_closed
+        and supervisor.automatic_evaluation.closed
         and supervisor.store.all_evals_settled(),
         evidence={
             "submissions": len(prepared.backend.submissions),
             "statuses": statuses,
-            "admission_closed": supervisor.eval_admission_closed,
+            "admission_closed": supervisor.automatic_evaluation.closed,
         },
     )
     checkpoints, evals = supervisor._terminal_inventory()
@@ -1776,7 +1778,7 @@ def _scenario_cancellation_terminalization(root: Path) -> dict[str, Any]:
         drain={
             "complete": converged,
             "metric_segment_high_water": prepared.supervisor.store.metric_segment_high_water(),
-            "wandb_remote_high_water_mark": prepared.supervisor.wandb_remote_high_water,
+            "wandb_remote_high_water_mark": prepared.supervisor.delivery_schedule.remote_high_water,
         },
         completed_at=fixture.clock.utc_now(),
     )
@@ -2268,8 +2270,8 @@ def _prepare_scripted_learner(
     supervisor.run_dir.mkdir(parents=True, exist_ok=True)
     supervisor.train_config = {"training_backend": {"id": "sb3.ppo"}}
     supervisor.learner = process
-    supervisor.expected_learner_pid = process.pid
-    supervisor.learner_started_at = supervisor.clock.monotonic()
+    supervisor.learner_state.pid = process.pid
+    supervisor.learner_state.started_at = supervisor.clock.monotonic()
     write_canonical_json(
         supervisor.run_dir / "training-result.json",
         _scripted_learner_result(prepared, process=process, status=status),
@@ -2292,8 +2294,8 @@ def _scenario_failed_result_live_process(root: Path) -> dict[str, Any]:
     recorder.require(
         "failed-result-is-authoritative-within-one-poll",
         failure is not None
-        and supervisor.learner_result_observed_at == detected_at
-        and supervisor.learner_final_step == 0,
+        and supervisor.learner_state.result_observed_at == detected_at
+        and supervisor.learner_state.final_step == 0,
         evidence={
             "poll_interval_seconds": supervisor.manifest.liveness["poll_interval_seconds"],
             "detected_at": detected_at,
@@ -2324,14 +2326,14 @@ def _scenario_failed_result_live_process(root: Path) -> dict[str, Any]:
         evidence={
             "state": state,
             "stop_reason": supervisor.stop_reason,
-            "teardown": supervisor.learner_teardown_evidence,
+            "teardown": supervisor.learner_state.teardown_evidence,
         },
     )
     return {
         "invariants": recorder.invariants,
         "evidence": {
-            "final_step": supervisor.learner_final_step,
-            "teardown_phase": supervisor.learner_teardown_evidence["completed_phase"],
+            "final_step": supervisor.learner_state.final_step,
+            "teardown_phase": supervisor.learner_state.teardown_evidence["completed_phase"],
         },
     }
 
@@ -2360,18 +2362,18 @@ def _scenario_completed_result_hung_process(root: Path) -> dict[str, Any]:
         and not process.alive
         and process.term_signals == 1
         and process.kill_signals == 1
-        and supervisor.learner_teardown_evidence["completed_phase"] == "kill"
+        and supervisor.learner_state.teardown_evidence["completed_phase"] == "kill"
         and supervisor.stop_reason == "teardown_timeout",
         evidence={
             "virtual_time_seconds": fixture.clock.monotonic(),
-            "teardown": supervisor.learner_teardown_evidence,
+            "teardown": supervisor.learner_state.teardown_evidence,
         },
     )
     return {
         "invariants": recorder.invariants,
         "evidence": {
             "virtual_time_seconds": fixture.clock.monotonic(),
-            "teardown_phase": supervisor.learner_teardown_evidence["completed_phase"],
+            "teardown_phase": supervisor.learner_state.teardown_evidence["completed_phase"],
         },
     }
 
@@ -2628,7 +2630,7 @@ def _scenario_checkpoint_monitoring(root: Path) -> dict[str, Any]:
     prepared = fixture.prepare(run_number=91)
     supervisor = prepared.supervisor
     supervisor.evaluation_required = False
-    supervisor.eval_admission_closed = True
+    supervisor.automatic_evaluation.closed = True
     supervisor.train_config["checkpoint_monitoring"] = {
         **asdict(MonitoringConfig()), "enabled": True, "episodes": 2,
         "task_cpus": 3, "memory_bytes": 6 * 1024**3 + 64 * 1024**2, "spool_bytes": 4 * 512 * 1024**2,
@@ -2701,7 +2703,7 @@ def _scenario_delivery_scheduling(root: Path) -> dict[str, Any]:
     prepared = fixture.prepare(run_number=92)
     owner = prepared.supervisor
     owner.evaluation_required = False
-    owner.eval_admission_closed = True
+    owner.automatic_evaluation.closed = True
     # Persist evidence once at the end; avoid quadratic fixture transcript I/O.
     prepared.runtime.evidence_path = prepared.observer.evidence_path = None
     for index in range(384):

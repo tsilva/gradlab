@@ -18,7 +18,7 @@ from gradlab.metric_store import MetricStore
 from gradlab.mlflow_delivery import MlflowDelivery
 from gradlab.run_contracts import TerminalReceipt
 from gradlab.runtime_contract import runtime_contract
-from gradlab.selected_delivery import DeliveryAdapter, publish_outbox
+from gradlab.selected_delivery import DeliveryAdapter, MetricsWriter
 from gradlab.wandb_publisher import WandbProjector
 
 
@@ -132,9 +132,8 @@ class SupervisorRuntime:
         heartbeat: Callable[[], None] | None = None,
         should_continue: Callable[[], bool] | None = None,
     ) -> int:
-        return publish_outbox(
-            store, projector, limit=limit, event_seq_offset=event_seq_offset,
-            heartbeat=heartbeat, should_continue=should_continue,
+        return MetricsWriter(store, projector, heartbeat=heartbeat, clock=self.clock).publish(
+            limit=limit, event_seq_offset=event_seq_offset, should_continue=should_continue
         )
 
     def publish_promotion(

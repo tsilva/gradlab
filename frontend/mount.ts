@@ -29,3 +29,50 @@ export function mountPanel(component: Component<any, any>, options: any) {
 }
 export const mountPlaybackSettings = (options: any) =>
   mountPanel(PlaybackSettings, options);
+
+export async function mountSourceBrowser(
+  controller: any,
+  root: HTMLElement,
+  breadcrumbsRoot: HTMLElement,
+  navigationRoot: HTMLElement,
+) {
+  const [{ default: Browser }, { default: Navigation }] = await Promise.all([
+    import("./components/SourceBrowser.svelte"),
+    import("./components/SourceNavigation.svelte"),
+  ]);
+  const browser = mountPanel(Browser, { controller });
+  const breadcrumbs = mountPanel(Navigation, {
+    controller,
+    kind: "breadcrumbs",
+  });
+  const navigation = mountPanel(Navigation, {
+    controller,
+    kind: "checkpoints",
+  });
+  root.replaceChildren(browser.element);
+  breadcrumbsRoot.replaceChildren(breadcrumbs.element);
+  navigationRoot.replaceChildren(navigation.element);
+  return {
+    render: browser.render,
+    breadcrumbs(items: any[]) {
+      breadcrumbs.render(items);
+      breadcrumbsRoot.hidden = !items.length;
+    },
+    navigation(value: any) {
+      if (value) navigation.render(value);
+      navigationRoot.hidden = !value;
+      navigationRoot.classList.toggle("warning", Boolean(value?.warning));
+    },
+  };
+}
+
+export async function mountContractViewer(
+  controller: any,
+  dialog: HTMLElement,
+) {
+  const { default: Viewer } =
+    await import("./components/ContractViewer.svelte");
+  const viewer = mountPanel(Viewer, { controller });
+  dialog.replaceChildren(viewer.element);
+  return viewer;
+}

@@ -42,14 +42,16 @@ from gradlab.run_contracts import (
     new_run_id,
     utc_now,
 )
-from gradlab.run_supervisor import (
-    IncompleteEvaluationEvidence,
+from gradlab.supervisor_lifecycle import (
     LearnerExitContractMismatch,
     LearnerFailure,
     LearnerStartupTimeout,
     LearnerStateContractError,
     LearnerStopAcknowledgementTimeout,
     LearnerTeardownTimeout,
+)
+from gradlab.run_supervisor import (
+    IncompleteEvaluationEvidence,
     RunSupervisor,
     _bind_evaluation_contract,
     _terminal_outcome,
@@ -372,8 +374,8 @@ class RunSupervisorTests(unittest.TestCase):
     def prepare_live_learner_contract(self, supervisor: RunSupervisor) -> None:
         supervisor.run_dir.mkdir(parents=True, exist_ok=True)
         supervisor.train_config = {"training_backend": {"id": "sb3.ppo"}}
-        supervisor.expected_learner_pid = 1234
-        supervisor.learner_started_at = 0.0
+        supervisor.learner_state.pid = 1234
+        supervisor.learner_state.started_at = 0.0
 
     def test_runtime_verification_uses_build_identity_and_runtime_input(self) -> None:
         supervisor = self.supervisor()
@@ -431,8 +433,8 @@ class RunSupervisorTests(unittest.TestCase):
         learner = MagicMock()
         learner.poll.return_value = None
         supervisor.learner = learner
-        supervisor.learner_stop_requested_at = 0.0
-        supervisor.last_learner_stop_signal_at = 0.0
+        supervisor.learner_state.stop_requested_at = 0.0
+        supervisor.learner_state.last_stop_signal_at = 0.0
         supervisor.stop_reason = "canceled"
 
         with patch.object(supervisor.runtime, "request_learner_stop") as request_stop:
@@ -448,8 +450,8 @@ class RunSupervisorTests(unittest.TestCase):
             supervisor._maintain_learner_stop(2.1)
 
         request_stop.assert_called_once_with(learner)
-        self.assertEqual(supervisor.learner_stop_signal_attempts, 1)
-        self.assertTrue(supervisor.learner_stop_acknowledged)
+        self.assertEqual(supervisor.learner_state.stop_signal_attempts, 1)
+        self.assertTrue(supervisor.learner_state.stop_acknowledged)
 
     def test_supervisor_bounds_missing_stop_acknowledgement(self) -> None:
         supervisor = self.supervisor()
@@ -457,8 +459,8 @@ class RunSupervisorTests(unittest.TestCase):
         learner = MagicMock()
         learner.poll.return_value = None
         supervisor.learner = learner
-        supervisor.learner_stop_requested_at = 0.0
-        supervisor.last_learner_stop_signal_at = 9.0
+        supervisor.learner_state.stop_requested_at = 0.0
+        supervisor.learner_state.last_stop_signal_at = 9.0
         supervisor.stop_reason = "canceled"
 
         with self.assertRaises(LearnerStopAcknowledgementTimeout):
@@ -867,6 +869,49 @@ class RunSupervisorTests(unittest.TestCase):
         self.assertIsNone(receipt["drain"]["calibration_host_load"])
         self.assertIsNone(receipt["drain"]["wandb_final_drain_seconds"])
 
+    def test_wandb_finish_allows_upload_headroom_within_task_deadline(self) -> None:
+        supervisor = self.supervisor()
+        supervisor.store.init()
+        projector = MagicMock()
+        supervisor.projector = projector
+        task_duration = int(supervisor.manifest.compute["selected"]["max_duration_seconds"])
+        with (
+            patch("gradlab.run_supervisor.parse_utc_datetime") as parse_created_at,
+            patch.object(supervisor.clock, "time", return_value=1_000),
+            patch.object(supervisor.runtime, "close_wandb") as close_wandb,
+        ):
+            parse_created_at.return_value.timestamp.return_value = 1_000
+            supervisor._finish_wandb()
+        close_wandb.assert_called_once_with(projector, timeout_seconds=1_200)
+        self.assertIsNone(supervisor.projector)
+
+        supervisor.projector = projector
+        with (
+            patch("gradlab.run_supervisor.parse_utc_datetime") as parse_created_at,
+            patch.object(supervisor.clock, "time", return_value=1_000 + task_duration - 420),
+            patch.object(supervisor.runtime, "close_wandb") as close_wandb,
+        ):
+            parse_created_at.return_value.timestamp.return_value = 1_000
+            supervisor._finish_wandb()
+        close_wandb.assert_called_once_with(projector, timeout_seconds=420)
+        self.assertIsNone(supervisor.projector)
+
+    def test_wandb_finish_timeout_does_not_open_second_session(self) -> None:
+        supervisor = self.supervisor()
+        with (
+            patch.object(supervisor, "validate_runtime"),
+            patch.object(supervisor, "materialize"),
+            patch.object(supervisor, "_recover_durable_state"),
+            patch.object(supervisor, "_start_wandb"),
+            patch.object(supervisor, "_start_learner"),
+            patch.object(supervisor, "_publish_state_archive", side_effect=RuntimeError("archive failed")),
+            patch.object(supervisor, "_failure_drain"),
+            patch.object(supervisor, "_finish_wandb", side_effect=TimeoutError("W&B finish timed out")),
+            patch.object(supervisor.runtime, "publish_terminal") as publish_terminal,
+        ):
+            self.assertEqual(supervisor.run(), 1)
+        publish_terminal.assert_not_called()
+
     def test_recovery_failure_after_lease_creates_terminal_receipt(self) -> None:
         supervisor = self.supervisor()
         with (
@@ -1101,8 +1146,8 @@ class RunSupervisorTests(unittest.TestCase):
         with self.assertRaisesRegex(LearnerFailure, "learner exploded"):
             supervisor._observe_live_learner_state(0.25)
 
-        self.assertEqual(supervisor.learner_final_step, 17)
-        self.assertEqual(supervisor.learner_result_observed_at, 0.25)
+        self.assertEqual(supervisor.learner_state.final_step, 17)
+        self.assertEqual(supervisor.learner_state.result_observed_at, 0.25)
 
     def test_live_learner_state_rejects_noncurrent_and_identity_mismatch(self) -> None:
         supervisor = self.supervisor()
@@ -1540,7 +1585,7 @@ class RunSupervisorTests(unittest.TestCase):
             )
 
         self.assertEqual(api.path, supervisor.wandb_run_path)
-        self.assertEqual(supervisor.wandb_remote_high_water, 10)
+        self.assertEqual(supervisor.delivery_schedule.remote_high_water, 10)
 
     def test_wandb_remote_probe_reads_flattened_max_summary(self) -> None:
         supervisor = self.supervisor()
@@ -1556,7 +1601,7 @@ class RunSupervisorTests(unittest.TestCase):
             force=True,
         )
 
-        self.assertEqual(supervisor.wandb_remote_high_water, 777)
+        self.assertEqual(supervisor.delivery_schedule.remote_high_water, 777)
 
     def test_wandb_delivery_drain_accepts_stale_reducer_with_current_step(self) -> None:
         supervisor = self.supervisor()
@@ -1577,7 +1622,7 @@ class RunSupervisorTests(unittest.TestCase):
             supervisor._wait_for_remote_delivery(778)
 
         sleep.assert_not_called()
-        self.assertEqual(supervisor.wandb_remote_high_water, 778)
+        self.assertEqual(supervisor.delivery_schedule.remote_high_water, 778)
 
     def test_materializes_exact_mario_acceptance_contract(self) -> None:
         supervisor = self.supervisor()
@@ -1828,7 +1873,7 @@ class RunSupervisorTests(unittest.TestCase):
             self.assertTrue(supervisor._observe_result(row))
 
         self.assertEqual(events, ["stop", "metrics"])
-        self.assertTrue(supervisor.eval_admission_closed)
+        self.assertTrue(supervisor.automatic_evaluation.closed)
         self.assertEqual(
             supervisor.store.state("automatic_eval_admission")["checkpoint_id"],
             result.checkpoint_id,
@@ -1907,7 +1952,7 @@ class RunSupervisorTests(unittest.TestCase):
             sha256="d" * 64,
         )
         supervisor._ensure_eval(2, later)
-        supervisor.eval_admission_closed = True
+        supervisor.automatic_evaluation.closed = True
 
         self.assertEqual(supervisor._submit_pending_evals(), 0)
         self.assertEqual(
@@ -1961,7 +2006,7 @@ class RunSupervisorTests(unittest.TestCase):
                 status="accepted",
                 result={"status": "accepted"},
             )
-            supervisor.eval_admission_closed = True
+            supervisor.automatic_evaluation.closed = True
             return True
 
         with patch.object(supervisor, "_observe_result", side_effect=observe):
@@ -1993,7 +2038,7 @@ class RunSupervisorTests(unittest.TestCase):
 
         supervisor._close_eval_admission_for_failure(failure)
 
-        self.assertTrue(supervisor.eval_admission_closed)
+        self.assertTrue(supervisor.automatic_evaluation.closed)
         self.assertEqual(supervisor._submit_pending_evals(), 0)
         self.assertEqual(
             supervisor.store.state("automatic_eval_admission")["reason"],

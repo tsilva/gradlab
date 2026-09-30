@@ -1,11 +1,11 @@
 from contextlib import nullcontext
 import json
-from types import SimpleNamespace
 from unittest import mock
 
 import pytest
 
-from gradlab.local_wandb import local_wandb_writer, sync_local_run
+from gradlab.local_metrics import local_metrics_writer, sync_local_run
+from gradlab.wandb_publisher import WandbProjector
 from gradlab.metric_store import MetricStore
 
 
@@ -28,14 +28,15 @@ class FakeRun:
 
 @pytest.fixture
 def transport():
-    projector = SimpleNamespace(run=FakeRun(), close=mock.Mock())
+    projector = WandbProjector(FakeRun())
+    projector.close = mock.Mock()
     with (
         mock.patch(
-            "gradlab.local_wandb.WandbProjector.start_live", return_value=projector
+            "gradlab.local_metrics.WandbProjector.start_live", return_value=projector
         ) as start,
-        mock.patch("gradlab.local_wandb.resolve_env_config"),
-        mock.patch("gradlab.local_wandb.local_publication", return_value=nullcontext(None)),
-        mock.patch("gradlab.local_wandb._verify_remote_delivery") as verify,
+        mock.patch("gradlab.local_metrics.resolve_env_config"),
+        mock.patch("gradlab.local_metrics.local_publication", return_value=nullcontext(None)),
+        mock.patch("gradlab.local_metrics.MetricsWriter.confirm") as verify,
     ):
         yield projector, start, verify
 
@@ -43,7 +44,7 @@ def transport():
 def test_local_writer_publishes_real_outbox_and_confirms_terminal_delivery(tmp_path, transport):
     projector, start, verify = transport
     store = MetricStore(tmp_path / "gradlab.sqlite")
-    with local_wandb_writer(tmp_path, {"wandb_mode": "online"}):
+    with local_metrics_writer(tmp_path, {"wandb_mode": "online"}):
         store.append_metrics({"train/return/mean": 0.25}, step=4096, source="training")
         (tmp_path / "training-result.json").write_text(
             json.dumps(
@@ -66,23 +67,22 @@ def test_local_writer_publishes_real_outbox_and_confirms_terminal_delivery(tmp_p
     assert store.pending_metric_frames() == []
     projector.close.assert_called_once_with(timeout_seconds=60, exit_code=0)
     verify.assert_called_once()
-    assert verify.call_args.args == (projector.run.path, 1)
-    assert callable(verify.call_args.kwargs["heartbeat"])
+    assert verify.call_args.args == (1,)
     assert json.loads((tmp_path / "wandb-delivery.json").read_text())["status"] == "delivered"
     assert projector.run.summary["ops/reason"] == "early_stop_neutral"
 
 
 def test_explicit_opt_out_never_initializes_wandb(tmp_path, transport):
     _, start, _ = transport
-    with local_wandb_writer(tmp_path, {"wandb_mode": "disabled"}) as url:
+    with local_metrics_writer(tmp_path, {"wandb_mode": "disabled"}) as url:
         assert url is None
     start.assert_not_called()
 
 
 def test_second_writer_cannot_acquire_same_run(tmp_path, transport):
-    with local_wandb_writer(tmp_path, {"wandb_mode": "online"}):
+    with local_metrics_writer(tmp_path, {"wandb_mode": "online"}):
         with pytest.raises(RuntimeError, match="already owns"):
-            with local_wandb_writer(tmp_path, {"wandb_mode": "online"}):
+            with local_metrics_writer(tmp_path, {"wandb_mode": "online"}):
                 pass
 
 
@@ -90,7 +90,7 @@ def test_delivery_failure_does_not_write_success_receipt(tmp_path, transport):
     _, _, verify = transport
     verify.side_effect = TimeoutError("remote delivery incomplete")
     with pytest.raises(TimeoutError, match="remote delivery incomplete"):
-        with local_wandb_writer(tmp_path, {"wandb_mode": "online"}):
+        with local_metrics_writer(tmp_path, {"wandb_mode": "online"}):
             pass
     assert not (tmp_path / "wandb-delivery.json").exists()
 
@@ -128,7 +128,7 @@ def test_recovery_replays_sdk_acknowledged_frames_missing_remotely(tmp_path, tra
     assert store.claim_metric_frame(frame)
     store.mark_metric_frame_published(frame, step=200)
     assert transport[0].run.summary == {}
-    with local_wandb_writer(tmp_path, {"wandb_mode": "online"}):
+    with local_metrics_writer(tmp_path, {"wandb_mode": "online"}):
         pass
     assert len(transport[0].run.frames) == 1
     assert transport[0].run.frames[0][0] == frame
@@ -137,7 +137,7 @@ def test_recovery_replays_sdk_acknowledged_frames_missing_remotely(tmp_path, tra
 def test_learner_exception_still_drains_metrics_and_closes_failed_run(tmp_path, transport):
     store = MetricStore(tmp_path / "gradlab.sqlite")
     with pytest.raises(ValueError, match="learner failure"):
-        with local_wandb_writer(tmp_path, {"wandb_mode": "online"}):
+        with local_metrics_writer(tmp_path, {"wandb_mode": "online"}):
             store.append_metrics({"train/return/mean": 0.1}, step=100, source="training")
             raise ValueError("learner failure")
     assert len(transport[0].run.frames) == 1

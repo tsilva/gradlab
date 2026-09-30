@@ -14,18 +14,27 @@ import hashlib
 import json
 from types import SimpleNamespace
 
+import pytest
+
 from mlflow.tracking import MlflowClient
 
 from gradlab.metric_store import MetricStore
 from gradlab.metric_names import METRICS_SCHEMA_VERSION
 from gradlab.mlflow_delivery import MlflowDelivery
 from gradlab.wandb_publisher import _publish_frame
-from gradlab.local_mlflow import local_mlflow_writer, sync_local_mlflow
+from gradlab.local_metrics import local_metrics_writer, sync_local_run
 from gradlab.mlflow_rebind import replace_mlflow_binding
 from gradlab.r2_store import BucketConfig, RunStorageConfig
 from gradlab.r2_store import R2Bucket
 from gradlab.run_authority import RunAuthority
 from tests.test_experiment_cli import _manifest_only_run
+
+
+@pytest.fixture(autouse=True)
+def public_assets(tmp_path: Path, monkeypatch):
+    uri = (tmp_path / "public-assets").as_uri()
+    monkeypatch.setenv("GRADLAB_MODELS_R2_URI", uri)
+    monkeypatch.setenv("GRADLAB_MODELS_R2_PUBLIC_BASE_URL", uri)
 
 
 @contextmanager
@@ -144,11 +153,28 @@ def test_mlflow_exposes_representative_video_from_canonical_r2(tmp_path: Path) -
             "bytes": len(content), "sha256": digest,
         }),
     })
-    artifacts = delivery.client.list_artifacts(delivery.run_id, "journal/1")
-    assert [(row.path, row.file_size) for row in artifacts] == [
-        ("journal/1/episode.mp4", len(content))
-    ]
+    delivery.publish_frame({
+        "id": 1, "kind": "evaluation_video", "step": 256, "source": "eval",
+        "payload_json": json.dumps({"bucket_uri": bucket.config.uri,
+                                    "key": "runs/video.mp4", "bytes": len(content), "sha256": digest}),
+    })
+    tags = delivery.client.get_run(delivery.run_id).data.tags
+    reference = json.loads(tags["gradlab.asset.000000000001"])
+    assert Path(reference["url"].removeprefix("file://")).read_bytes() == content
+    assert reference["sha256"] == digest
+    assert reference["step"] == 256
+    assert tags["mlflow.note.content"].count("[episode.mp4") == 1
+    assert delivery.client.list_artifacts(delivery.run_id) == []
     assert delivery.remote_high_water() == 1
+
+    with pytest.raises(ValueError, match="hash/size mismatch"):
+        delivery.publish_frame({
+            "id": 2, "kind": "evaluation_video", "step": 512, "source": "eval",
+            "payload_json": json.dumps({"bucket_uri": bucket.config.uri,
+                                        "key": "runs/video.mp4", "bytes": len(content), "sha256": "0" * 64}),
+        })
+    assert delivery.remote_high_water() == 1
+    assert "gradlab.asset.000000000002" not in delivery.client.get_run(delivery.run_id).data.tags
 
 
 def test_replay_after_tracking_server_restart_has_one_visible_point(tmp_path: Path) -> None:
@@ -180,10 +206,10 @@ def test_replay_after_tracking_server_restart_has_one_visible_point(tmp_path: Pa
         )
         assert [(point.value, point.step) for point in history] == [(0.5, 256)]
         assert resumed.remote_high_water() == 1
-        artifacts = MlflowClient(tracking_uri=uri).list_artifacts(service_run_id, "journal/1")
-        assert [(item.path, item.file_size) for item in artifacts] == [
-            ("journal/1/summary.json", len(b'{"score":0.5}'))
-        ]
+        client = MlflowClient(tracking_uri=uri)
+        assert client.list_artifacts(service_run_id) == []
+        reference = json.loads(client.get_run(service_run_id).data.tags["gradlab.asset.000000000001"])
+        assert Path(reference["url"].removeprefix("file://")).read_bytes() == b'{"score":0.5}'
 
 
 def test_direct_local_online_writer_drains_to_real_mlflow_store(
@@ -192,21 +218,21 @@ def test_direct_local_online_writer_drains_to_real_mlflow_store(
     uri = f"sqlite:///{tmp_path / 'tracking.db'}"
     monkeypatch.setenv("MLFLOW_TRACKING_URI", uri)
     monkeypatch.setattr(
-        "gradlab.local_mlflow.load_repository_operator_environment", lambda *a, **k: None
+        "gradlab.local_metrics.load_repository_operator_environment", lambda *a, **k: None
     )
-    monkeypatch.setattr("gradlab.local_mlflow.env_config_from_mapping", lambda _c: None)
+    monkeypatch.setattr("gradlab.local_metrics.env_config_from_mapping", lambda _c: None)
     monkeypatch.setattr(
-        "gradlab.local_mlflow.resolve_env_config",
+        "gradlab.local_metrics.resolve_env_config",
         lambda _c: SimpleNamespace(game="bandit"),
     )
-    monkeypatch.setattr("gradlab.local_mlflow.local_publication", lambda *a: nullcontext(None))
+    monkeypatch.setattr("gradlab.local_metrics.local_publication", lambda *a: nullcontext(None))
     run_id = "gradlab-" + "c" * 32
     (tmp_path / "local-run.json").write_text(
         json.dumps({"started_at": "2026-09-29T12:00:00Z"})
     )
     store = MetricStore(tmp_path / "gradlab.sqlite")
     store.init()
-    with local_mlflow_writer(tmp_path, {"wandb_run_id": run_id}) as url:
+    with local_metrics_writer(tmp_path, {"wandb_run_id": run_id, "tracking": {"backend": "mlflow", "delivery": "online"}}) as url:
         assert url.startswith("mlflow:")
         store.append_metrics({"train/return/mean": 0.5}, step=64, source="train")
         (tmp_path / "training-result.json").write_text(
@@ -225,11 +251,11 @@ def test_later_mlflow_sync_preserves_original_local_receipt(
     uri = f"sqlite:///{tmp_path / 'tracking.db'}"
     monkeypatch.setenv("MLFLOW_TRACKING_URI", uri)
     monkeypatch.setattr(
-        "gradlab.local_mlflow.load_repository_operator_environment", lambda *a, **k: None
+        "gradlab.local_metrics.load_repository_operator_environment", lambda *a, **k: None
     )
-    monkeypatch.setattr("gradlab.local_mlflow.env_config_from_mapping", lambda _c: None)
+    monkeypatch.setattr("gradlab.local_metrics.env_config_from_mapping", lambda _c: None)
     monkeypatch.setattr(
-        "gradlab.local_mlflow.resolve_env_config",
+        "gradlab.local_metrics.resolve_env_config",
         lambda _c: SimpleNamespace(game="bandit"),
     )
     run_id = "gradlab-" + "e" * 32
@@ -241,8 +267,9 @@ def test_later_mlflow_sync_preserves_original_local_receipt(
     store.init()
     store.append_metrics({"train/return/mean": 0.75}, step=256, source="train", publish=False)
     config = {"wandb_run_id": run_id, "tracking": {"backend": "mlflow", "delivery": "local_only"}}
-    first = sync_local_mlflow(tmp_path, config)
-    second = sync_local_mlflow(tmp_path, config)
+    (tmp_path / "train-config.json").write_text(json.dumps(config))
+    first = sync_local_run(tmp_path)
+    second = sync_local_run(tmp_path)
     assert first == second
     assert receipt.read_bytes() == original_bytes
     evidence = json.loads((tmp_path / "tracker-sync.json").read_text())

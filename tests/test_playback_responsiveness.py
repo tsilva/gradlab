@@ -14,7 +14,7 @@ import pytest
 
 def _slow_history_worker(*args):
     from gradlab.play_application import PlaybackHost
-    from gradlab.play_web import WebPlaybackRunner
+    from gradlab.play_engine import WebPlaybackRunner
     from tests.test_playback_episode_history import _episode_inspection_worker
 
     method = getattr(args[1], "blocked_read", "read_diagnostics")
@@ -160,7 +160,7 @@ def test_appending_one_chart_point_does_not_rescan_old_points(tmp_path, monkeypa
         transition=read,
     )
     runner = SimpleNamespace(recording=recording, history=[])
-    with patch("gradlab.play_web.history_point_payload", side_effect=lambda p: p):
+    with patch("gradlab.play_engine.history_point_payload", side_effect=lambda p: p):
         charts.chart_history(runner, "growing", None, None)
         calls = 0
         original = charts.scalars
@@ -242,7 +242,8 @@ def test_blocked_update_read_does_not_block_http(tmp_path):
     import asyncio
     import threading
     from aiohttp import ClientSession
-    from gradlab.play_web import PlaybackWebServer, playback_updates
+    from gradlab.play_engine import playback_updates
+    from gradlab.play_web import PlaybackWebServer
     from tests.test_play_web import HumanRecordingRunner, FakeHumanSession, human_args
 
     async def scenario():

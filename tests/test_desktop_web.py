@@ -10,7 +10,8 @@ from unittest.mock import AsyncMock, Mock
 from aiohttp import ClientSession, WSServerHandshakeError, web
 import pytest
 
-from gradlab.play_web import HumanRecordingRunner, PlaybackWebServer
+from gradlab.play_engine import HumanRecordingRunner
+from gradlab.play_web import PlaybackWebServer
 from tests.test_play_web import FakeHumanSession, human_args
 
 

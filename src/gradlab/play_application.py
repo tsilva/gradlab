@@ -19,7 +19,7 @@ from gradlab.model_sources import (
     NoDefaultPublicRunCheckpointError,
     is_public_checkpoint_manifest_ref,
 )
-from gradlab.play_web import idle_playback_snapshot
+from gradlab.play_engine import idle_playback_snapshot
 from gradlab.play_processing import (
     PLAYER_PROCESSING_FEATURES,
     normalize_player_processing,
@@ -408,7 +408,7 @@ class PlaybackHost:
             return None
 
     def _response(self, command, *, ok: bool, **extra: Any) -> None:
-        from gradlab.play_web import PlaybackResponse
+        from gradlab.play_engine import PlaybackResponse
 
         self._responses.put(
             PlaybackResponse(
@@ -550,7 +550,7 @@ class PlaybackHost:
             active = self._active
         if active is not None:
             try:
-                from gradlab.play_web import PlaybackCommand
+                from gradlab.play_engine import PlaybackCommand
 
                 active.runner.submit(
                     PlaybackCommand(uuid.uuid4().hex, "application", "pause", {}, None)

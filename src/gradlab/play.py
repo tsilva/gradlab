@@ -4,33 +4,22 @@ import sys
 from pathlib import Path
 
 from gradlab.cli_args import explicit_arg_dests
-from gradlab.play_session import build_parser
+from gradlab.play_args import build_parser
 
 
 def main(argv: list[str] | None = None) -> int:
-    from gradlab.model_sources import (
-        NoDefaultPublicRunCheckpointError,
-        is_huggingface_model_ref,
-        is_public_checkpoint_manifest_ref,
-        public_checkpoint_manifest,
-        public_run_checkpoint_manifest_url,
-    )
-    from gradlab.play_catalog import PlayCatalog, parse_wandb_location
-    from gradlab.play_runtime import PlaySourceSpec
-    from gradlab.playback_worker import IsolatedPlaybackHost
-    from gradlab.play_web import run_web_player_application
-    from gradlab.recipe_catalog import (
-        experiments_root,
-        latest_local_recipe_model,
-        recipe_identity,
-        resolve_recipe_source,
-    )
-    from gradlab.recipe_documents import compose_train_document
-
     parser = build_parser()
     argv_list = list(sys.argv[1:] if argv is None else argv)
     args = parser.parse_args(argv_list)
+
+    from concurrent.futures import ThreadPoolExecutor
+    from gradlab.catalog_errors import CatalogError, CatalogIntegrityError, CatalogUnavailable
+    from gradlab.play_catalog_authority import (
+        scrub_protected_environment,
+        start_catalog_authority_helper,
+    )
     from gradlab.play_dev_assets import source_checkout_root
+    from gradlab.recipe_catalog import experiments_root
 
     if args.hotreload and source_checkout_root() is None:
         parser.error("--hotreload requires a source checkout")
@@ -52,6 +41,46 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.recording and not args.recording.expanduser().is_file():
         parser.error(f"recording file does not exist: {args.recording}")
+    repo_root = experiments_root().parent
+    catalog_executor = (
+        ThreadPoolExecutor(max_workers=1, thread_name_prefix="gradlab-catalog-start")
+        if selected_sources == 0 or args.latest
+        else None
+    )
+    catalog_future = (
+        catalog_executor.submit(start_catalog_authority_helper, repo_root)
+        if catalog_executor is not None
+        else None
+    )
+
+    from gradlab.model_sources import (
+        NoDefaultPublicRunCheckpointError,
+        is_huggingface_model_ref,
+        is_public_checkpoint_manifest_ref,
+        public_checkpoint_manifest,
+        public_run_checkpoint_manifest_url,
+    )
+    from gradlab.play_catalog import PlayCatalog, parse_wandb_location
+    from gradlab.play_runtime import PlaySourceSpec
+    from gradlab.playback_worker import IsolatedPlaybackHost
+    from gradlab.play_web import run_web_player_application
+    from gradlab.recipe_catalog import (
+        latest_local_recipe_model,
+        recipe_identity,
+        resolve_recipe_source,
+    )
+    from gradlab.recipe_documents import compose_train_document
+
+    catalog_authority = None
+    catalog_control_error = ""
+    if catalog_future is not None:
+        try:
+            catalog_authority = catalog_future.result()
+        except CatalogError as exc:
+            catalog_control_error = str(exc)
+    if catalog_executor is not None:
+        catalog_executor.shutdown(wait=True)
+
     wandb_location = parse_wandb_location(args.artifact_ref)
     if args.recipe:
         recipe_source = resolve_recipe_source(args.recipe)
@@ -70,15 +99,6 @@ def main(argv: list[str] | None = None) -> int:
     args.respect_task_termination = not args.continuous_play
     explicit_dests = explicit_arg_dests(parser, argv_list)
 
-    repo_root = experiments_root().parent
-    catalog_authority = None
-    catalog_control_error = ""
-    from gradlab.catalog_errors import CatalogError, CatalogIntegrityError, CatalogUnavailable
-    from gradlab.play_catalog_authority import (
-        scrub_protected_environment,
-        start_catalog_authority_helper,
-    )
-
     def start_private_catalog() -> None:
         nonlocal catalog_authority, catalog_control_error
         try:
@@ -86,8 +106,6 @@ def main(argv: list[str] | None = None) -> int:
         except CatalogError as exc:
             catalog_control_error = str(exc)
 
-    if selected_sources == 0 or args.latest:
-        start_private_catalog()
     catalog = PlayCatalog(
         public_models_base_url=args.public_models_base_url,
         repo_root=repo_root,
