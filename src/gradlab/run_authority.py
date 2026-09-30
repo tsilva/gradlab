@@ -1469,6 +1469,10 @@ class RunAuthority:
                     match = re.fullmatch(r"eval:([0-9a-f]{64}):video", str(event["source"]))
                     if match is None:
                         raise ValueError("public video has no immutable evaluation identity")
+                    if not str(video.get("key") or "").startswith(
+                        f"{prefix}/evals/{match.group(1)}/"
+                    ):
+                        raise ValueError("public video disagrees with its evaluation identity")
                     evidence = self.evaluation.get_json(
                         f"{prefix}/evals/{match.group(1)}/intent.json"
                     )
