@@ -92,6 +92,14 @@ class PublicJournalHistory:
         if not isinstance(raw_rows, list) or not raw_rows:
             raise ValueError("public telemetry has no scientific histories")
         self.rows = []
+        self.media = []
+        for item in document.get("media", []):
+            if (not isinstance(item, Mapping)
+                    or item.get("kind") not in {"evaluation_video", "monitoring"}
+                    or type(item.get("step")) is not int or item["step"] < 0
+                    or type(item.get("bytes")) is not int or item["bytes"] <= 0):
+                raise ValueError("public telemetry media reference is invalid")
+            self.media.append(dict(item))
         for row in raw_rows:
             if not isinstance(row, Mapping):
                 raise ValueError("public telemetry history row is invalid")

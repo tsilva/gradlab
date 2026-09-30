@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 import threading
+import tempfile
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
@@ -1399,11 +1400,54 @@ class RunAuthority:
             if int(events[-1]["event_seq"]) < terminal_high_water:
                 raise ValueError("public telemetry journal is shorter than the terminal receipt")
         rows = JournalHistory(events).rows
+        public_index = self.models.get_json_optional(f"{prefix}/index.json") or {}
+        published_steps = {int(row["step"]) for row in public_index.get("checkpoints", [])}
+        media = []
+        for event in events:
+            if int(event["step"]) not in published_steps:
+                continue
+            kind = event.get("kind")
+            payload = event.get("payload") or {}
+            video = (
+                payload if kind == "evaluation_video"
+                else {**payload["video"], "bucket_uri": payload["bucket_uri"]}
+                if kind == "monitoring" and payload.get("video") else None
+            )
+            if video is None:
+                continue
+            key = str(video.get("key") or "")
+            digest = str(video.get("sha256") or "")
+            size = video.get("bytes")
+            if (
+                video.get("bucket_uri") != self.evaluation.config.uri
+                or not key.startswith(f"{prefix}/")
+                or SHA256_PATTERN.fullmatch(digest) is None
+                or type(size) is not int or not 0 < size <= 512 * 1024**2
+            ):
+                raise ValueError("public video has an invalid immutable reference")
+            public_key = f"{prefix}/media/{digest}.mp4"
+            with tempfile.TemporaryDirectory(prefix="gradlab-public-video-") as temporary:
+                path = Path(temporary) / "video.mp4"
+                try:
+                    self.evaluation.download_verified(key, path, size=size, sha256=digest)
+                    self.models.put_file(public_key, path, sha256=digest,
+                                         content_type="video/mp4",
+                                         cache_control="public, max-age=31536000, immutable")
+                    self.models.download_verified(public_key, path, size=size, sha256=digest)
+                except ValueError as exc:
+                    raise ValueError("public video integrity verification failed") from exc
+            media.append({
+                "kind": kind, "step": int(event["step"]),
+                "event_seq": int(event["event_seq"]),
+                "episode_id": str(video.get("episode_id") or ""),
+                "url": self.models.public_url(public_key), "sha256": digest, "bytes": size,
+            })
         document = {
             "schema_version": 1,
             "run_id": run_id,
             "event_high_water": int(events[-1]["event_seq"]),
             "histories": rows,
+            "media": media,
         }
         payload = canonical_json_bytes(document)
         digest = hashlib.sha256(payload).hexdigest()

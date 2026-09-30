@@ -285,6 +285,7 @@ class CheckpointSummary:
     playback_seed_source: Literal["evaluation", "training"] | None
     metrics: Mapping[str, float | None]
     evaluation: Mapping[str, Any] | None = None
+    representative_media: tuple[Mapping[str, Any], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -315,6 +316,7 @@ class _CheckpointEvaluationData:
     evaluation_seed: int | None
     training_metric_history: Mapping[str, tuple[tuple[int, float], ...]]
     warning: Mapping[str, Any] | None = None
+    media: tuple[Mapping[str, Any], ...] = ()
 
 
 def parse_wandb_location(value: object) -> WandbRunLocation | None:
@@ -3558,11 +3560,21 @@ class PlayCatalog:
                     raise ValueError("public telemetry reference is invalid")
                 document = _public_json(url, max_bytes=64 * 1024 * 1024)
                 run = PublicJournalHistory(document, run_id=run_id, digest=digest)
+                media = tuple(run.media)
+                for item in media:
+                    media_digest = str(item.get("sha256") or "")
+                    if (SHA256_PATTERN.fullmatch(media_digest) is None
+                            or item.get("url") != (
+                                f"{self.public_models_base_url}/runs/{run_id}/media/"
+                                f"{media_digest}.mp4"
+                            )):
+                        raise ValueError("public telemetry media URL is invalid")
                 if len(run.rows) != int(reference.get("history_count") or 0):
                     raise ValueError("public telemetry history count mismatch")
                 config = dict(public_recipe_config or {})
             else:
                 run = self._wandb_api().run(f"{entity}/{project}/{run_id}")
+                media = ()
                 config = dict(getattr(run, "config", {}) or {})
             validate_wandb_config(config)
             require_current_metrics_schema(metric_contract.metrics_schema_version)
@@ -3672,6 +3684,7 @@ class PlayCatalog:
             training_seed = None
             evaluation_seed = None
             training_metric_history = {}
+            media = ()
             source = "public-telemetry" if use_public else "wandb"
             warning = {
                 "code": (
@@ -3691,6 +3704,7 @@ class PlayCatalog:
             evaluation_seed=evaluation_seed,
             training_metric_history=training_metric_history,
             warning=warning,
+            media=media,
         )
         return data
 
@@ -3945,6 +3959,9 @@ class PlayCatalog:
                     columns,
                 ),
                 evaluation=evaluation,
+                representative_media=tuple(
+                    item for item in evaluation_data.media if item["step"] == manifest.step
+                ),
             )
             rows.append(row)
         rows.sort(key=lambda row: (row.step, row.sha256), reverse=True)

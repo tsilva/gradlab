@@ -164,6 +164,10 @@ def current_goal_document(*, goal_id: str, title: str) -> str:
             "evaluation_mode: evaluated",
             f"title: {title}",
             "objective:",
+            "  training_success:",
+            "    metric: train/return/mean",
+            "    operator: '>='",
+            "    threshold: 0.9",
             "  rank:",
             "  - min(leader/step)",
             "  - max(eval/return/mean)",
@@ -1320,6 +1324,7 @@ def test_projected_run_status_uses_the_authoritative_goal_catalog(
         "state": "running",
         "stop_reason": "",
         "early_stop": None,
+        "training_success": None,
         "updated_at": "2026-09-03T10:00:00Z",
     }
 
@@ -1377,6 +1382,9 @@ def test_public_checkpoint_history_uses_verified_telemetry_without_private_servi
     }
     telemetry = {
         "schema_version": 1, "run_id": RUN_ID, "event_high_water": 2,
+        "media": [{"kind": "evaluation_video", "step": 250_000,
+                   "bytes": 100, "sha256": "a" * 64,
+                   "url": f"https://models.example/runs/{RUN_ID}/media/{'a' * 64}.mp4"}],
         "histories": [
             {"train/step": 250_000.0, "train/return/mean": 0.75},
             {"eval/step": 250_000.0, "eval/pass": 1.0, "eval/success/min": 1.0},
@@ -1402,10 +1410,12 @@ def test_public_checkpoint_history_uses_verified_telemetry_without_private_servi
     page = catalog.checkpoints(run_id=RUN_ID, include_wandb=False)
     assert page.items[0]["metrics"]["train/return/mean"] == 0.75
     assert page.items[0]["evaluation"]["status"] == "accepted"
+    assert list(page.items[0]["representative_media"]) == telemetry["media"]
     assert not page.warnings
     telemetry["histories"][0]["train/return/mean"] = 0.99
     tampered = catalog.checkpoints(run_id=RUN_ID, include_wandb=False)
     assert tampered.items[0]["metrics"]["train/return/mean"] is None
+    assert not tampered.items[0]["representative_media"]
     assert tampered.warnings[-1]["source"] == "public-telemetry"
 
 
@@ -1827,10 +1837,11 @@ def test_current_breakout_goal_ranks_normalized_bricks() -> None:
     root = Path.cwd() / "experiments/goals/Breakout-Atari2600-v0"
     for goal_id in ("FirstWall", "TwoWalls"):
         goal = load_goal_contract(root / goal_id / "_goal.yaml", Path.cwd())
+        family = "train" if goal_id == "FirstWall" else "eval"
         assert goal["objective"]["rank"] == [
-            "max(train/progress/bricks_destroyed_normalized/mean)",
-            "max(train/progress/bricks_destroyed_normalized/max)",
-            "min(train/episode_steps/mean)",
+            f"max({family}/progress/bricks_destroyed_normalized/mean)",
+            f"max({family}/progress/bricks_destroyed_normalized/max)",
+            f"min({family}/episode_steps/mean)",
         ]
 
 

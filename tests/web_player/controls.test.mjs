@@ -217,15 +217,15 @@ test("timeline controls use accessible icons and distinct action colors", () => 
 });
 
 test("header checkpoint and overflow controls share one height", () => {
-  assert.match(styles, /--header-control-height: 2\.25rem/);
+  assert.match(styles, /--header-control-height: calc\(var\(--font-size-sm\) \* var\(--line-height-tight\) \+ \.56rem \+ 2px\)/);
   assert.match(
     styles,
-    /\.header-status > \.checkpoint-navigation,[\s\S]*\.header-status > #more-toggle \{ height: var\(--header-control-height\); \}/,
+    /\.header-status > button,[\s\S]*\.header-status > \.checkpoint-navigation \{[^}]*height: var\(--header-control-height\);/,
   );
   assert.match(styles, /\.checkpoint-navigation-button \{[^}]*height: 100%/);
   assert.match(styles, /\.checkpoint-navigation-position \{[^}]*height: 100%/);
   assert.match(styles, /\.checkpoint-navigation-position \{[^}]*min-width: 4\.25rem/);
-  assert.match(styles, /#more-toggle\.icon-only \{ width: var\(--header-control-height\); \}/);
+  assert.match(styles, /\.app-header \.icon-only \{[^}]*width: var\(--header-control-height\);/);
   assert.match(
     page,
     /id="more-toggle" class="quiet icon-only"[^>]*aria-label="More playback actions"[^>]*>[\s\S]*?#ti-dots-vertical[\s\S]*?<\/button>/,
@@ -256,7 +256,7 @@ test("the overflow menu omits the redundant change-checkpoint action", () => {
   assert.doesNotMatch(page, /change-source|Change checkpoint/);
   assert.doesNotMatch(app, /change-source/);
   assert.doesNotMatch(styles, /change-source/);
-  assert.match(page, /id="source-back"[^>]*aria-label="Back to source selection"/);
+  assert.match(page, /id="source-back"[^>]*aria-label="Back"/);
 });
 
 

@@ -1,6 +1,12 @@
 defaults:
 - ../_gymnasium-classic-control-common@_global_
 - _self_
+objective:
+  # Gymnasium registry threshold for maintaining balance.
+  training_success:
+    metric: train/return/mean
+    operator: '>='
+    threshold: 475
 title: Gymnasium CartPole balance benchmark
 train:
   checkpoint_freq: 10000

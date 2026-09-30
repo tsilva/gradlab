@@ -159,6 +159,39 @@ def test_local_writer_obeys_remote_lease(local_run):
             pytest.fail("must not acquire a second writer")
 
 
+@pytest.mark.parametrize("local_run", [{"delivery": "local_only"}], indirect=True)
+def test_public_checkpoint_telemetry_retains_verified_video_without_tracker_access(local_run):
+    import hashlib
+    from gradlab.metric_journal import PublicJournalHistory
+    from gradlab.json_utils import canonical_json_sha256
+
+    directory, config, store, authority, env = local_run
+    video = b"canonical-evaluation-video"
+    digest = hashlib.sha256(video).hexdigest()
+    key = f"runs/{config['wandb_run_id']}/evals/representative/episode.mp4"
+    authority.evaluation.put_bytes(key, video)
+    store.enqueue_event(kind="evaluation_video", step=1000, source="eval:video",
+                        payload={"bucket_uri": authority.evaluation.config.uri, "key": key,
+                                 "bytes": len(video), "sha256": digest,
+                                 "episode_id": "episode-a"})
+    with LocalRunPublication(directory, config, store, env, authority=authority) as publication:
+        publication.finish()
+    reference = authority.publish_run_telemetry(config['wandb_run_id'])
+    telemetry_key = f"runs/{config['wandb_run_id']}/telemetry/{reference['sha256']}.json"
+    telemetry = authority.models.get_json(telemetry_key)
+    public = PublicJournalHistory(telemetry, run_id=config['wandb_run_id'],
+                                  digest=canonical_json_sha256(telemetry))
+    media = public.media[0]
+    assert media['step'] == 1000
+    assert media['episode_id'] == 'episode-a'
+    assert authority.models.get_bytes(f"runs/{config['wandb_run_id']}/media/{digest}.mp4") == video
+    assert media['sha256'] == digest
+    authority.evaluation.put_bytes(key, b"corrupted", create_only=False,
+                                  if_match=str(authority.evaluation.head(key)["etag"]))
+    with pytest.raises(ValueError, match="video.*integrity"):
+        authority.publish_run_telemetry(config['wandb_run_id'])
+
+
 def test_missing_checkpoint_prevents_complete_receipt(local_run):
     directory, config, store, authority, env = local_run
     Path(store.checkpoints()[0]["path"]).unlink()
