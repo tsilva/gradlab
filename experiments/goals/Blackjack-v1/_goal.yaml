@@ -1,6 +1,12 @@
 defaults:
 - ../_gymnasium-discrete-common@_global_
 - _self_
+objective:
+  # Near-break-even training proxy; blackjack's optimal expected return is negative.
+  training_success:
+    metric: train/return/mean
+    operator: '>='
+    threshold: -0.1
 title: Gymnasium Blackjack benchmark
 train:
   checkpoint_freq: 100000

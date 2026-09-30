@@ -7,7 +7,7 @@ and requires every emitted metric to match an exact registry entry or a bounded 
 threshold over training-time metrics. It is a cheap proxy used to classify and compare Runs; it
 does not establish that a Research Goal is solved. `Acceptance` is the separate determination from
 an Evaluated Goal's stricter checkpoint evaluation on seeds different from the training seeds.
-Only Acceptance can authorize Promotion, and neither metric delivery nor its W&B projection is the
+Only Acceptance can authorize Promotion, and neither metric delivery nor its service projection is the
 authority for that decision.
 
 ## Surfaces and dimensions
@@ -27,30 +27,36 @@ authority for that decision.
   scrubbing do not count; the rate falls to zero when playback stops. The tooltip
   identifies this mode and omits decode/draw timings. Switching RGB mode, changing
   episodes, or moving backward resets the sample history.
-- W&B is the authoritative scientific metric surface. The supervisor is the only W&B writer:
+- The validated GradLab metric journal is the authoritative scientific metric record for new-schema Runs. The supervisor is the only selected-service writer:
   the training-container supervisor for queued runs, or the local training host holding the
   exclusive per-run lock and R2 writer lease for online local runs. Both publish the learner's SQLite outbox through
-  the same projector and metric registry. Local runs enable W&B by default; `--no-wandb` is
-  an explicit credential-free opt-out. Successful online local completion requires SDK finish
-  and remote confirmation of the outbox high-water mark, recorded in `wandb-delivery.json`.
+  the same metric registry. W&B with online delivery remains the default; `--no-wandb` selects
+  the explicit credential-free `local_only` delivery mode. The bundled bandit recipe selects this
+  mode itself. Successful online local completion requires service close
+  and remote confirmation of the outbox high-water mark, recorded in service delivery evidence.
   It also requires R2 checkpoint publication, the matching private metric-journal high-water
   mark, and an attempt terminal receipt projected into the shared playback catalog.
-  `publication-delivery.json` records that drain; `gradlab sync <run-directory>` retries
-  publication with the original run identity and recorded goal contract. W&B config links
-  to the public checkpoint index through `public_run_index_url`; checkpoint bytes remain in R2.
-  Offline and explicitly disabled local runs make no R2 publication requests.
+  `publication-delivery.json` records that drain. A local-only Run can later request an explicit
+  projection with `gradlab sync <run-directory>` while retaining its original `complete_local`
+  receipt. W&B config links to the public checkpoint index through `public_run_index_url`;
+  checkpoint bytes remain in R2. Local-only training needs no R2 or tracker credentials.
 - The learner writes structured events only to its embedded SQLite WAL outbox. It performs no
   network I/O for metrics, checkpoint publication, or evaluation dispatch.
-- W&B-disabled runs retain history frames in SQLite with `local_only` delivery status so bounded
+- Local-only runs retain history frames in SQLite with `local_only` delivery status so bounded
   benchmarks can evaluate every rollout rather than only the latest scalar; those frames never
   enter the publisher retry queue.
-- Modal never receives W&B credentials. The supervisor validates Modal results and appends their
-  metrics to the same W&B run.
-- SQLite and private-R2 JSONL metric segments are delivery and recovery transports, not competing
-  scientific metric stores. Verified terminal journals expire after seven days.
+- Modal never receives metrics-service credentials. The supervisor validates Modal results and appends their
+  metrics to the same selected Run journal.
+- SQLite and private-R2 JSONL metric segments hold the scientific journal and support recovery. New-schema
+  terminal journals remain durable for the Run's lifetime, subject to explicit retention or deletion policy.
 - Public model R2 contains immutable checkpoint closures and a mutable no-cache run index. Private
   eval R2 contains intents, results, and episode evidence. Private control R2 contains leases,
   journals, promotions, and terminal receipts.
+- Explicit Publication verifies the retained new-schema journal and writes immutable public
+  scientific histories under the GradLab Run ID. The public run index links their content-addressed
+  document; a reader needs neither W&B nor private MLflow credentials. A direct local-only Run
+  uses `gradlab publish-local <run-directory>` to upload its journal and checkpoints before that
+  public telemetry is created. This operation does not perform tracker sync.
 - Player checkpoint tables populate full-evaluation columns only from verified checkpoint-evaluation
   evidence. Train columns contain training-family ranking measures, available proxies for evaluation
   ranking or Acceptance measures, and `train/return/mean`; Eval columns contain evaluation-family
@@ -59,13 +65,13 @@ authority for that decision.
   and return. Historical raw-brick ranks are displayed through their equivalent normalized values
   (raw bricks divided by 216), while retaining the recorded rank contract. For a single-start run,
   the Train success mean is the recorded success minimum because the two reductions are identical.
-  Training-proxy columns sample W&B history at the latest `train/step` no greater
-  than the checkpoint step, but only after W&B's metrics schema, selection rank, and checkpoint
-  acceptance contract match the immutable recipe. Any contract mismatch suppresses all optional
-  W&B enrichment and surfaces a warning rather than displaying potentially misbound proxy values.
+  Training-proxy columns sample the retained journal for new-schema Runs at the latest `train/step`
+  no greater than the checkpoint step, after the metrics schema, selection rank, and checkpoint
+  acceptance contract match the immutable recipe. Any contract mismatch suppresses optional
+  enrichment and surfaces a warning rather than displaying potentially misbound proxy values.
   When `checkpoint_eval_backend` is `none`, the supervisor intentionally omits
   `checkpoint_eval_contract`; the catalog must validate that expected absence against the immutable
-  recipe and W&B run dimensions without suppressing otherwise compatible training-proxy history.
+  recipe and Run dimensions without suppressing otherwise compatible training-proxy history.
   Full-evaluation values remain unavailable until verified checkpoint-evaluation evidence exists.
   Breakout Training-Only checkpoint tables also expose observational `eval/success/mean`,
   `eval/progress/bricks_destroyed_normalized/mean`,
@@ -106,7 +112,7 @@ authority for that decision.
   without scanning runs, objects, or artifacts.
 - `leader/*` contains diagnostic projections of the selected checkpoint. The
   create-only private-R2 `PromotionReceipt` is the authoritative selection.
-- `ops/state` and `ops/reason` are W&B summary-only
+- `ops/state` and `ops/reason` are selected-service summary-only
   catalog projections, not history metrics; the private-R2 `TerminalReceipt` remains authoritative.
 - Model bytes, replay archives, episode rows and recovery payloads remain in R2.
   Enabled Checkpoint evaluation of a visual environment delivers one declared
@@ -141,7 +147,7 @@ is intentionally not emitted; `train/curriculum/feedback/count` reports only how
 many such trajectory updates were committed.
 
 An episode metric is a **return**. `reward` is reserved for per-step shaping and component
-attribution. Frame skip remains run config. W&B uses three explicit axes:
+attribution. Frame skip remains run config. All selected services use three explicit axes:
 
 - `train/step`: policy environment transitions consumed by training.
 - `eval/step`: step of the checkpoint represented by an evaluation row.
@@ -641,17 +647,17 @@ aggregates and episode evidence remain authoritative in private eval R2.
 
 ## Delivery, backpressure, and recovery
 
-Every event has a stable content-derived internal event ID. Delivery to W&B is at least once; the
-durable `ops/sequence` is also W&B's internal step, so replay after an interrupted
-local acknowledgement cannot append a second scientific point. The event ID remains a transport
-invariant and is not duplicated as a W&B metric. Promotion, terminal state, and early-stop
+Every event has a stable content-derived internal event ID. Online delivery to the selected service
+uses stable sequence, step, and value identity, so replay after an interrupted local acknowledgement
+cannot append a second scientific point. The event ID remains a transport invariant and is not
+duplicated as a scientific metric. Promotion, terminal state, and early-stop
 authority are exactly once through conditional private-R2 receipts.
 
-Attempt-receipt fields `drain.metric_segment_high_water` and
-`drain.wandb_remote_high_water_mark` both contain highest event-sequence IDs despite the former's
-historical name. Their difference counts events not yet remotely visible at receipt creation, not
-metric-segment objects. Because an attempt receipt is immutable, W&B may later catch up after a
-failure receipt without changing the recorded drain completeness or terminal state.
+New-schema Attempt receipts record `drain.metric_segment_high_water` and
+`drain.service_remote_high_water_mark` as event-sequence IDs. Their difference counts events not yet
+remotely visible at receipt creation, rather than metric-segment objects. An immutable failure
+receipt remains unchanged if the selected service catches up later. The legacy W&B field remains
+for older readers.
 
 Historical publication imports may display retired, source-bound metric names from their immutable
 evaluation contracts. Those names are evidence labels only: they are not current emitted metrics,
@@ -659,20 +665,20 @@ registry aliases, or permission to translate a historical acceptance rule to a s
 metric.
 
 The supervisor seals immutable metric-journal segments to private R2 every five seconds or 1,000
-events and batches pending frames to W&B. A retry reconstructs its local SQLite state from those
-segments before producing new events. It resumes the same W&B run with `resume="must"`.
+events and batches pending frames to the selected service when online. A retry reconstructs its local SQLite state from those
+segments before producing new events. It reconciles the same frozen service binding.
 
-Backpressure is sampled every 15 seconds. W&B receives pending outbox count, oldest unpublished
+Backpressure is sampled every 15 seconds. The selected online service receives pending outbox count, oldest unpublished
 age, remote-visible lag, pending checkpoints, pending evaluations, scratch utilization, and
 post-learner idle-GPU time. Ingress, publication capacity, durable high-water marks, and
 accepted-result-to-stop timing remain transport invariants or receipt evidence rather than
 duplicated public metrics.
 
-Unpublished W&B age warns at 45 seconds and is unhealthy at 60 seconds. Acceptance evaluation drain
+Unpublished selected-service age warns at 45 seconds and is unhealthy at 60 seconds. Acceptance evaluation drain
 is governed by its declared per-attempt expiry windows; Checkpoint Monitoring execution uses its
 whole-run deadline. Once Acceptance and monitoring execution have settled, delivery fails after
-300 seconds without an increase in acknowledged W&B sequence or published checkpoint count.
-Verified monitoring results awaiting W&B acknowledgement count as delivery, not ongoing execution.
+300 seconds without an increase in acknowledged service sequence or published checkpoint count.
+Verified monitoring results awaiting selected-service acknowledgement count as delivery, not ongoing execution.
 The watchdog resets on actual delivery progress; the declared whole-task deadline still bounds
 terminal drain, including when progress continues.
 
@@ -686,13 +692,14 @@ and monitoring calls (monitoring time includes cooperative publishing). These ar
 measurements, not public scientific metrics or service-capacity guarantees.
 
 A growing outbox can reflect insufficient publication throughput without an upload error. If
-neither W&B nor private R2 can preserve pending metrics, or task scratch usage reaches 95%, the
+neither the local journal nor private R2 can preserve pending metrics, or task scratch usage reaches 95%, the
 supervisor requests a safe learner stop and emits a resumable failure rather than discarding
 evidence.
 
 A logical run succeeds only when its private-R2 `TerminalReceipt` proves the complete checkpoint
-inventory, the terminal inventory of automatically submitted evaluations, a promotion, the W&B
-high-water mark, and a complete drain. Checkpoints published after acceptance may remain
+inventory, the terminal inventory of automatically submitted evaluations, a promotion, the selected-service
+high-water mark for online delivery, and a complete drain. Local-only completion records `complete_local`
+with a sealed journal and no remote-delivery claim. Checkpoints published after acceptance may remain
 unevaluated for future explicit user action. dstack process exit alone is never scientific success.
 
 ## Naming and publication rules
@@ -787,10 +794,10 @@ and target-progress fields are not registry metrics and cannot enter the publish
 | `leader/updated_at` | Leader projection time | Selected checkpoint projection update timestamp. | timestamp | selection | summary | none | - | selection | - | - |
 | `train/step` | Training global step | Scientific training X-axis: policy environment transitions consumed. | steps | frame | history | max | train/step | training | - | - |
 | `eval/step` | Evaluation checkpoint step | Scientific evaluation X-axis: step of the evaluated checkpoint. | steps | evaluation | history | max | eval/step | acceptance | - | - |
-| `ops/sequence` | Orchestration event sequence | Monotonic local outbox event sequence used as W&B delivery order. | events | frame | history | max | ops/sequence | operational | - | - |
-| `ops/outbox/count` | Pending outbox frames | Metric outbox frames not yet acknowledged by the W&B SDK. | events | supervisor sample | history | last | ops/sequence | operational | - | - |
-| `ops/outbox/age/seconds` | Oldest unpublished age | Age of the oldest metric frame not yet acknowledged by the W&B SDK. | seconds | supervisor sample | history | last | ops/sequence | operational | - | - |
-| `ops/visibility/seconds` | Remote visibility lag | Age of the oldest local metric frame beyond the W&B API's observed event-sequence high-water mark, sampled at the last successful remote probe. | seconds | remote visibility probe | history | last | ops/sequence | operational | - | - |
+| `ops/sequence` | Orchestration event sequence | Monotonic local outbox event sequence used as selected-service delivery order. | events | frame | history | max | ops/sequence | operational | - | - |
+| `ops/outbox/count` | Pending outbox frames | Metric outbox frames not yet acknowledged by the selected service. | events | supervisor sample | history | last | ops/sequence | operational | - | - |
+| `ops/outbox/age/seconds` | Oldest unpublished age | Age of the oldest metric frame not yet acknowledged by the selected service. | seconds | supervisor sample | history | last | ops/sequence | operational | - | - |
+| `ops/visibility/seconds` | Remote visibility lag | Age of the oldest local metric frame beyond the selected service's observed event-sequence high-water mark, sampled at the last successful remote probe. | seconds | remote visibility probe | history | last | ops/sequence | operational | - | - |
 | `ops/checkpoints/count` | Pending checkpoints | Ready local checkpoints not yet verified in public model R2. | checkpoints | supervisor sample | history | last | ops/sequence | operational | - | - |
 | `ops/evals/count` | Pending evaluations | Persisted evaluation intents pending submission or a verified result; intents deferred after acceptance are excluded. | evaluations | supervisor sample | history | last | ops/sequence | operational | - | - |
 | `ops/drain/seconds` | GPU idle drain time | Elapsed wall time since learner exit, sampled after the first terminal drain. This is not measured GPU utilization and excludes subsequent publication and terminal work. | seconds | terminal drain | history | last | ops/sequence | operational | - | - |

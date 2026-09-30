@@ -302,6 +302,7 @@ class MetricStore(SqliteStore):
             kind="monitoring", source="eval:monitor", step=int(result["checkpoint_step"]),
             event_id=identity, payload={
                 "evaluation_id": result["evaluation_id"], "metrics": metrics,
+                "checkpoint_id": result["checkpoint_id"],
                 "video": result["video"], "bucket_uri": bucket_uri,
                 "media_spool_bytes": media_spool_bytes, "scratch_headroom_bytes": scratch_headroom_bytes,
             },
@@ -313,7 +314,17 @@ class MetricStore(SqliteStore):
                 "SELECT status FROM metric_frames WHERE event_id=? AND kind='monitoring'",
                 ("monitoring:" + evaluation_id,),
             ).fetchone()
-        return row is not None and row[0] == "published"
+        return row is not None and row[0] in {"published", "local_only"}
+
+    def mark_pending_frames_local_only(self) -> int:
+        """Fulfill local-only delivery after frames have entered the durable journal."""
+
+        with self.connection() as connection:
+            cursor = connection.execute(
+                "UPDATE metric_frames SET status = 'local_only' "
+                "WHERE status IN ('pending', 'failed_retryable')"
+            )
+        return int(cursor.rowcount)
 
     def enqueue_event(
         self,

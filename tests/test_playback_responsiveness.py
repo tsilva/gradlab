@@ -36,6 +36,10 @@ def _slow_history_worker(*args):
 def test_slow_history_does_not_hold_control_rpc(tmp_path, monkeypatch, method):
     import gradlab.playback_worker as worker
 
+    # The production play entry point scrubs credentials before starting the worker.
+    for name in worker.PROTECTED_ENV_NAMES:
+        monkeypatch.delenv(name, raising=False)
+
     monkeypatch.setattr(worker, "_worker_main", _slow_history_worker)
     host = worker.IsolatedPlaybackHost(
         Namespace(fps=30, fixture_root=str(tmp_path), blocked_read=method),
@@ -82,14 +86,14 @@ def test_recorded_frame_encoding_releases_lock_and_fences_replacement(tmp_path, 
     pool = ThreadPoolExecutor(2, thread_name_prefix="fps-inspection")
     try:
         runner._step_once()
-        episode = runner.recording.metadata["episode_id"]
-        recorded_root = runner.recording.root
+        episode = runner.recording_status()["episode_id"]
+        recorded_root = runner.seek_recording.root
         with patch.object(Image.Image, "save", delayed):
             query = pool.submit(runner.inspect_recorded_step, episode, 1)
             assert entered.wait(2)
             if replace_episode:
                 pool.submit(runner._begin_recording).result(timeout=0.5)
-                assert runner.recording.metadata["episode_id"] != episode
+                assert runner.recording_status()["episode_id"] != episode
                 assert recorded_root.exists(), "the outstanding read must pin its old files"
             else:
                 pool.submit(runner._step_once).result(timeout=0.5)
@@ -124,7 +128,7 @@ def test_recorded_step_read_does_not_wait_for_an_inflight_policy_decision(tmp_pa
     pool = ThreadPoolExecutor(2)
     try:
         runner._step_once()
-        episode = runner.recording.metadata["episode_id"]
+        episode = runner.recording_status()["episode_id"]
         with patch.object(runner.session, "step", delayed):
             decision = pool.submit(runner._step_once)
             assert entered.wait(2)
@@ -189,7 +193,7 @@ def test_slow_diagnostic_process_does_not_lock_inference(tmp_path):
     pool = ThreadPoolExecutor(2)
     try:
         runner._step_once()
-        episode = runner.recording.metadata["episode_id"]
+        episode = runner.recording_status()["episode_id"]
         with patch.object(runner.diagnostics._queries, "query", blocked):
             query = pool.submit(runner.diagnostics.read, DiagnosticRead("chart", episode))
             assert entered.wait(2)

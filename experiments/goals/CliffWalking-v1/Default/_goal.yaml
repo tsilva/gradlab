@@ -1,6 +1,12 @@
 defaults:
 - ../../_gymnasium-discrete-common@_global_
 - _self_
+objective:
+  # A short safe route with some exploration; the optimal route returns -13.
+  training_success:
+    metric: train/return/mean
+    operator: '>='
+    threshold: -20
 title: Gymnasium CliffWalking benchmark
 train:
   checkpoint_freq: 50000

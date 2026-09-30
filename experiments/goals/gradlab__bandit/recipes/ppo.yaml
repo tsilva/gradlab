@@ -1,5 +1,7 @@
 recipe_id: ppo
 description: PPO smoke test for the ROM-free native-vector {{ goal_id }} target.
+tracking:
+  delivery: local_only
 train:
   timesteps: 256
   policy_model:
@@ -22,5 +24,3 @@ train:
       vf_coef: 0.5
       adam_eps: 1.0e-05
       normalize_advantage: true
-logging:
-  wandb_mode: online

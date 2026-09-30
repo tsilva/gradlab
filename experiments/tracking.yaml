@@ -1,0 +1,4 @@
+# Project-wide default for newly resolved Runs. Private service routes and credentials
+# belong in operator configuration, never in this file.
+backend: wandb
+delivery: online

@@ -24,6 +24,7 @@ def test_policy_loop_does_not_wait_for_display_clock():
     runner._stop = threading.Event()
     runner._drain_commands = Mock()
     runner.recording_enabled = False
+    runner.seek_recording = None
     runner.run_state = "playing"
     runner.driver = "policy"
     runner.target_fps = 1.0

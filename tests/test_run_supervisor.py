@@ -56,6 +56,21 @@ from gradlab.run_supervisor import (
 )
 
 
+def test_forced_terminal_delivery_seals_metric_tail_before_publishing(tmp_path: Path) -> None:
+    from gradlab.lifecycle_certification import CertificationFixture
+
+    prepared = CertificationFixture(tmp_path).prepare(run_number=91)
+    supervisor = prepared.supervisor
+    supervisor.store.append_metrics({"train/return/mean": 1.0}, step=1, source="train")
+    supervisor.last_segment = supervisor.clock.monotonic()
+
+    supervisor._service_delivery(force=True)
+
+    assert supervisor.store.next_metric_events(limit=1) == []
+    assert supervisor.store.metric_segment_high_water() == 1
+    assert supervisor._wandb_high_water() == 1
+
+
 SOURCE_SHA = "a" * 40
 BUILD_SOURCE_SHA = "f" * 40
 RUNTIME_INPUT_SHA256 = "e" * 64
@@ -375,9 +390,9 @@ class RunSupervisorTests(unittest.TestCase):
         ):
             supervisor.validate_runtime()
 
-    def test_manifest_v5_requires_bounded_liveness_policy(self) -> None:
+    def test_manifest_v6_requires_bounded_liveness_policy(self) -> None:
         self.manifest.validate()
-        self.assertEqual(self.manifest.schema_version, 5)
+        self.assertEqual(self.manifest.schema_version, 6)
         self.assertEqual(self.manifest.liveness["poll_interval_seconds"], 0.25)
 
         missing = RunManifest(**{**self.manifest.to_dict(), "liveness": None})

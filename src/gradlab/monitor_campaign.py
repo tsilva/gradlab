@@ -195,12 +195,25 @@ def collect_campaign(campaign, runs, authority):
         if terminal_doc is None:
             return assess_calibration(measurements)
         terminal = TerminalReceipt.from_dict(terminal_doc)
+        selected = terminal.tracking or {"backend": "wandb", "delivery": "online"}
+        high_water = (
+            terminal.service_high_water_mark
+            if terminal.tracking is not None
+            else terminal.wandb_high_water_mark
+        )
+        remote_high_water = (
+            terminal.drain.get("service_remote_high_water_mark", 0)
+            if terminal.tracking is not None
+            else terminal.drain.get("wandb_remote_high_water_mark", 0)
+        )
+        delivery_incomplete = (
+            selected["delivery"] == "online"
+            and (int(high_water or 0) <= 0 or int(remote_high_water or 0) < int(high_water or 0))
+        )
         if (
             not terminal.drain.get("complete")
             or terminal.state in {"failed", "canceled"}
-            or terminal.wandb_high_water_mark <= 0
-            or terminal.drain.get("wandb_remote_high_water_mark", 0)
-            < terminal.wandb_high_water_mark
+            or delivery_incomplete
         ):
             return dict(
                 status="incomplete", reason=f"calibration Run {run_id} lacks complete delivery"

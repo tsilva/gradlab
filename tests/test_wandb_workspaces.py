@@ -62,7 +62,7 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
         self.assertEqual(len(charts), 6)
         self.assertTrue(all(panel.x == "eval/step" for panel in charts))
         video = next(panel for panel in section.panels if isinstance(panel, wr.MediaBrowser))
-        self.assertEqual(video.media_keys, ["eval/monitor/video"])
+        self.assertEqual(video.media_keys, ["eval/video", "eval/monitor/video"])
 
     def test_default_profile_compiles_for_every_resolved_project(self) -> None:
         first = compile_workspace_specs(ROOT)

@@ -9,6 +9,7 @@ from gradlab.policy_bundle import PolicyBundle, UnsupportedPolicyDocumentVersion
 from gradlab.publication import (
     HASHED_RELEASE_FILES,
     PublicationIdentity,
+    PublicationEvaluation,
     RELEASE_MANIFEST_VERSION,
     REPO_NAMING_SCHEMA_VERSION,
     build_model_repo_id,
@@ -17,6 +18,7 @@ from gradlab.publication import (
     latest_comparable_release,
     policy_lineage_contract,
     publication_identity_from_policy_bundle,
+    publication_source_from_policy_bundle,
     release_comparison,
     render_model_card,
     render_historical_model_card,
@@ -163,6 +165,23 @@ def bundle(*, seed: int = 7, step: int = 4_000_000) -> PolicyBundle:
         recipe=recipe,
         source="fixture",
     )
+
+
+def test_local_only_wandb_release_source_uses_gradlab_identity_without_tracker_project():
+    selected = bundle()
+    selected.recipe["recipe"].setdefault("train_config", {})["tracking"] = {
+        "backend": "wandb", "delivery": "local_only"
+    }
+    selected.model["provenance"]["wandb_project"] = ""
+    evaluation = PublicationEvaluation(
+        action_sampling="deterministic", protocol="test", checkpoint_step=4_000_000,
+        checkpoint_artifact="https://models.example.test/checkpoint.zip", episodes=1,
+        success_rate_min=1.0, success_rate_mean=1.0, return_mean=1.0,
+        progress_max=None, by_start=(),
+    )
+    source = publication_source_from_policy_bundle(selected, evaluation)
+    assert source["run_id"] == selected.model["provenance"]["wandb_run_id"]
+    assert source["wandb_project"] == ""
 
 
 def evaluation_evidence() -> dict:

@@ -12,7 +12,7 @@ from gradlab.json_utils import canonical_json_sha256 as document_sha256
 
 
 SCHEMA_VERSION = 2
-RUN_MANIFEST_SCHEMA_VERSION = 5
+RUN_MANIFEST_SCHEMA_VERSION = 6
 COORDINATOR_BINDING_SCHEMA_VERSION = 1
 CANCEL_REQUEST_SCHEMA_VERSION = 1
 DSTACK_STOP_DURATION_SECONDS = 10 * 60
@@ -202,6 +202,7 @@ class RunManifest(_CurrentContract):
     storage: Mapping[str, Any]
     goal_variant: Mapping[str, Any] | None = None
     liveness: Mapping[str, Any] | None = None
+    tracking: Mapping[str, Any] | None = None
     schema_version: int = RUN_MANIFEST_SCHEMA_VERSION
 
     def validate(self) -> None:
@@ -261,6 +262,34 @@ class RunManifest(_CurrentContract):
         ):
             if not isinstance(value, Mapping):
                 raise ValueError(f"{label} must be a mapping")
+        from gradlab.tracking_config import validate_tracking
+
+        selected_tracking = validate_tracking(
+            (
+                {key: self.tracking[key] for key in ("backend", "delivery") if key in self.tracking}
+                if self.tracking is not None
+                else {"backend": "wandb", "delivery": "online"}
+            ),
+            label="run manifest tracking",
+        )
+        if set(selected_tracking) != {"backend", "delivery"}:
+            raise ValueError("run manifest must freeze tracking backend and delivery")
+        if self.tracking is not None:
+            private_tls_ca = self.tracking.get("private_tls_ca", False)
+            if not isinstance(private_tls_ca, bool) or (
+                private_tls_ca
+                and selected_tracking != {"backend": "mlflow", "delivery": "online"}
+            ):
+                raise ValueError("run manifest tracking private_tls_ca is invalid")
+            sources = self.tracking.get("sources")
+            if not isinstance(sources, Mapping) or set(sources) != {"backend", "delivery"}:
+                raise ValueError("run manifest tracking sources are incomplete")
+            profile = self.tracking.get("operator_profile")
+            if profile is not None and (
+                not isinstance(profile, str)
+                or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", profile) is None
+            ):
+                raise ValueError("run manifest tracking operator_profile is invalid")
         request = self.compute.get("request")
         selected = self.compute.get("selected")
         if not isinstance(request, Mapping) or not isinstance(selected, Mapping):
@@ -318,14 +347,17 @@ class RunManifest(_CurrentContract):
                 raise ValueError(
                     "compute.runtime_build_source_sha must be a full lowercase Git SHA"
                 )
-        if str(self.wandb.get("run_id") or "") != self.run_id:
-            raise ValueError("wandb.run_id must equal run_id")
-        _require_text(self.wandb.get("entity"), "wandb.entity")
-        _require_text(self.wandb.get("project"), "wandb.project")
-        _require_text(self.wandb.get("url"), "wandb.url")
-        for field in ("display_name", "group"):
-            if field in self.wandb:
-                _require_text(self.wandb.get(field), f"wandb.{field}")
+        if selected_tracking == {"backend": "wandb", "delivery": "online"}:
+            if str(self.wandb.get("run_id") or "") != self.run_id:
+                raise ValueError("wandb.run_id must equal run_id")
+            _require_text(self.wandb.get("entity"), "wandb.entity")
+            _require_text(self.wandb.get("project"), "wandb.project")
+            _require_text(self.wandb.get("url"), "wandb.url")
+            for field in ("display_name", "group"):
+                if field in self.wandb:
+                    _require_text(self.wandb.get(field), f"wandb.{field}")
+        elif self.wandb:
+            raise ValueError("non-W&B online Runs must not declare a W&B service binding")
         modal_enabled = self.modal.get("enabled")
         if not isinstance(modal_enabled, bool):
             raise ValueError("modal.enabled must be a boolean")
@@ -689,6 +721,7 @@ class TerminalReceipt(_CurrentContract):
         "canceled",
         "interrupted",
         "resumable_failure",
+        "complete_local",
     ]
     acceptance_required: bool
     stop_reason: str
@@ -701,6 +734,8 @@ class TerminalReceipt(_CurrentContract):
     early_stop: Mapping[str, Any] | None = None
     training_success: Mapping[str, Any] | None = None
     state_archive: Mapping[str, Any] | None = None
+    tracking: Mapping[str, Any] | None = None
+    service_high_water_mark: int | None = None
     schema_version: int = SCHEMA_VERSION
 
     def validate(self) -> None:
@@ -722,6 +757,7 @@ class TerminalReceipt(_CurrentContract):
             "canceled",
             "interrupted",
             "resumable_failure",
+            "complete_local",
         }:
             raise ValueError(f"invalid terminal state: {self.state}")
         if not isinstance(self.acceptance_required, bool):
@@ -731,6 +767,32 @@ class TerminalReceipt(_CurrentContract):
             raise ValueError("final_step must be non-negative")
         if int(self.wandb_high_water_mark) < 0:
             raise ValueError("wandb_high_water_mark must be non-negative")
+        if self.tracking is not None:
+            from gradlab.tracking_config import validate_tracking
+
+            validate_tracking(
+                {key: self.tracking[key] for key in ("backend", "delivery")},
+                label="terminal tracking",
+            )
+            if self.service_high_water_mark is None or self.service_high_water_mark < 0:
+                raise ValueError("selected service high-water mark must be non-negative")
+            if self.tracking["delivery"] == "local_only":
+                if self.service_high_water_mark != 0 or self.wandb_high_water_mark != 0:
+                    raise ValueError("local-only receipt cannot claim service delivery")
+                if self.state == "succeeded":
+                    raise ValueError("local-only completion must use complete_local state")
+                if self.state == "complete_local" and (
+                    self.drain.get("complete") is not True
+                    or int(self.drain.get("metric_segment_high_water") or 0) < 1
+                ):
+                    raise ValueError("complete_local requires a complete retained journal")
+            elif self.state in {"succeeded", "stopped"}:
+                if int(self.service_high_water_mark) < 1:
+                    raise ValueError("online completion requires service delivery")
+                if int(self.drain.get("metric_segment_high_water") or 0) != int(self.service_high_water_mark):
+                    raise ValueError("journal and service high-water marks do not match")
+                if int(self.drain.get("service_remote_high_water_mark") or 0) < int(self.service_high_water_mark):
+                    raise ValueError("selected service delivery is not remotely visible")
         if not isinstance(self.drain, Mapping):
             raise ValueError("terminal receipt drain must be an object")
         learner_log = self.drain.get("learner_log")
@@ -843,11 +905,11 @@ class TerminalReceipt(_CurrentContract):
             drain = self.drain
             if not isinstance(drain, Mapping) or drain.get("complete") is not True:
                 raise ValueError("stopped terminal requires a complete drain")
-            if int(self.wandb_high_water_mark) <= 0:
+            if self.tracking is None and int(self.wandb_high_water_mark) <= 0:
                 raise ValueError("stopped terminal requires W&B metric delivery")
-            if int(drain.get("metric_segment_high_water") or 0) != int(self.wandb_high_water_mark):
+            if self.tracking is None and int(drain.get("metric_segment_high_water") or 0) != int(self.wandb_high_water_mark):
                 raise ValueError("stopped terminal R2 and W&B high-water marks do not match")
-            if int(drain.get("wandb_remote_high_water_mark") or 0) < int(
+            if self.tracking is None and int(drain.get("wandb_remote_high_water_mark") or 0) < int(
                 self.wandb_high_water_mark
             ):
                 raise ValueError("stopped terminal W&B delivery is not remotely visible")

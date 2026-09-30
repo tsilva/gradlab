@@ -1,6 +1,12 @@
 defaults:
 - ../../_gymnasium-discrete-common@_global_
 - _self_
+objective:
+  # At least 90% recent goal-reaching episodes under the native 0/1 reward.
+  training_success:
+    metric: train/return/mean
+    operator: '>='
+    threshold: 0.9
 title: Gymnasium FrozenLake deterministic 8x8 maze
 train:
   checkpoint_freq: 50000

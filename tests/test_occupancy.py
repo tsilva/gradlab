@@ -131,7 +131,8 @@ def test_invalid_recovery_is_rejected_before_mutating_live_totals():
 
 def test_outbox_replay_keeps_one_validated_window_and_publisher_table(tmp_path):
     from gradlab.metric_store import MetricStore
-    from gradlab.wandb_publisher import publish_pending_frames
+    from gradlab.supervisor_runtime import SupervisorRuntime
+    from gradlab.wandb_publisher import WandbProjector
 
     _, runtime = runtime_with_tracking()
     runtime.reset()
@@ -154,8 +155,9 @@ def test_outbox_replay_keeps_one_validated_window_and_publisher_table(tmp_path):
             self.logged.append(payload)
 
     run = Run()
-    assert publish_pending_frames(store, run, limit=10) == 1
-    assert publish_pending_frames(store, run, limit=10) == 0
+    delivery = WandbProjector(run)
+    assert SupervisorRuntime().publish_frames(store, delivery, limit=10) == 1
+    assert SupervisorRuntime().publish_frames(store, delivery, limit=10) == 0
     table = run.logged[0]["train/occupancy/table"]
     assert len(table.data) == 12
     assert "cell_space_hash" in table.columns
