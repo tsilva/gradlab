@@ -13,6 +13,9 @@ def public_view():
 
     class Upstream(BaseHTTPRequestHandler):
         def do_GET(self):
+            # Consume POST bodies before closing HTTP/1.0 responses; leaving
+            # unread bytes can reset the socket during the gateway's stream.
+            self.rfile.read(int(self.headers.get('Content-Length', '0')))
             requests.append((self.command, self.path, self.headers.get('Authorization')))
             self.send_response(403 if 'private-run' in self.path else 200)
             self.send_header('Content-Type', 'video/mp4' if self.path.startswith('/get-artifact')
