@@ -1400,48 +1400,7 @@ class RunAuthority:
             if int(events[-1]["event_seq"]) < terminal_high_water:
                 raise ValueError("public telemetry journal is shorter than the terminal receipt")
         rows = JournalHistory(events).rows
-        public_index = self.models.get_json_optional(f"{prefix}/index.json") or {}
-        published_steps = {int(row["step"]) for row in public_index.get("checkpoints", [])}
-        media = []
-        for event in events:
-            if int(event["step"]) not in published_steps:
-                continue
-            kind = event.get("kind")
-            payload = event.get("payload") or {}
-            video = (
-                payload if kind == "evaluation_video"
-                else {**payload["video"], "bucket_uri": payload["bucket_uri"]}
-                if kind == "monitoring" and payload.get("video") else None
-            )
-            if video is None:
-                continue
-            key = str(video.get("key") or "")
-            digest = str(video.get("sha256") or "")
-            size = video.get("bytes")
-            if (
-                video.get("bucket_uri") != self.evaluation.config.uri
-                or not key.startswith(f"{prefix}/")
-                or SHA256_PATTERN.fullmatch(digest) is None
-                or type(size) is not int or not 0 < size <= 512 * 1024**2
-            ):
-                raise ValueError("public video has an invalid immutable reference")
-            public_key = f"{prefix}/media/{digest}.mp4"
-            with tempfile.TemporaryDirectory(prefix="gradlab-public-video-") as temporary:
-                path = Path(temporary) / "video.mp4"
-                try:
-                    self.evaluation.download_verified(key, path, size=size, sha256=digest)
-                    self.models.put_file(public_key, path, sha256=digest,
-                                         content_type="video/mp4",
-                                         cache_control="public, max-age=31536000, immutable")
-                    self.models.download_verified(public_key, path, size=size, sha256=digest)
-                except ValueError as exc:
-                    raise ValueError("public video integrity verification failed") from exc
-            media.append({
-                "kind": kind, "step": int(event["step"]),
-                "event_seq": int(event["event_seq"]),
-                "episode_id": str(video.get("episode_id") or ""),
-                "url": self.models.public_url(public_key), "sha256": digest, "bytes": size,
-            })
+        media = self._publish_public_journal_media(run_id, events)
         document = {
             "schema_version": 1,
             "run_id": run_id,
@@ -1484,6 +1443,71 @@ class RunAuthority:
             }
         self._update_public_index(run_id, telemetry=reference)
         return reference
+
+    def _publish_public_journal_media(
+        self, run_id: str, events: Sequence[Mapping[str, Any]],
+    ) -> list[dict[str, Any]]:
+        prefix = self.run_prefix(run_id)
+        public_index = self.models.get_json_optional(f"{prefix}/index.json") or {}
+        checkpoints = {row["checkpoint_id"]: row for row in public_index.get("checkpoints", [])}
+        media = []
+        for event in events:
+            kind = event.get("kind")
+            payload = event.get("payload") or {}
+            video = (
+                payload if kind == "evaluation_video"
+                else {**payload["video"], "bucket_uri": payload["bucket_uri"]}
+                if kind == "monitoring" and payload.get("video") else None
+            )
+            if video is None:
+                continue
+            identifier = payload.get("checkpoint_id")
+            if not identifier:
+                # Earlier journal frames omitted identity. A unique published step
+                # is sufficient; ambiguous frames must never label another Policy.
+                matches = [name for name, row in checkpoints.items()
+                           if int(row["step"]) == int(event["step"])]
+                if len(matches) != 1:
+                    continue
+                identifier = matches[0]
+            if identifier not in checkpoints:
+                continue
+            if int(checkpoints[identifier]["step"]) != int(event["step"]):
+                raise ValueError("public video checkpoint step mismatch")
+            source = self.evaluation if kind == "evaluation_video" else self.models
+            source_prefix = (
+                f"{prefix}/" if kind == "evaluation_video"
+                else f"monitoring/{run_id}/{payload['evaluation_id']}/"
+            )
+            key = str(video.get("key") or "")
+            digest = str(video.get("sha256") or "")
+            size = video.get("bytes")
+            if (
+                video.get("bucket_uri") != source.config.uri
+                or not key.startswith(source_prefix)
+                or SHA256_PATTERN.fullmatch(digest) is None
+                or type(size) is not int or not 0 < size <= 512 * 1024**2
+            ):
+                raise ValueError("public video has an invalid immutable reference")
+            public_key = f"{prefix}/media/{digest}.mp4"
+            with tempfile.TemporaryDirectory(prefix="gradlab-public-video-") as temporary:
+                path = Path(temporary) / "video.mp4"
+                try:
+                    source.download_verified(key, path, size=size, sha256=digest)
+                    self.models.put_file(public_key, path, sha256=digest,
+                                         content_type="video/mp4",
+                                         cache_control="public, max-age=31536000, immutable")
+                    self.models.download_verified(public_key, path, size=size, sha256=digest)
+                except ValueError as exc:
+                    raise ValueError("public video integrity verification failed") from exc
+            media.append({
+                "kind": kind, "step": int(event["step"]),
+                "checkpoint_id": identifier,
+                "event_seq": int(event["event_seq"]),
+                "episode_id": str(video.get("episode_id") or ""),
+                "url": self.models.public_url(public_key), "sha256": digest, "bytes": size,
+            })
+        return media
 
     def _upsert_public_index(self, checkpoint: CheckpointManifest) -> None:
         self._update_public_index(checkpoint.run_id, checkpoint=checkpoint)

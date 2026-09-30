@@ -160,7 +160,8 @@ def test_local_writer_obeys_remote_lease(local_run):
 
 
 @pytest.mark.parametrize("local_run", [{"delivery": "local_only"}], indirect=True)
-def test_public_checkpoint_telemetry_retains_verified_video_without_tracker_access(local_run):
+@pytest.mark.parametrize("kind", ["evaluation_video", "monitoring"])
+def test_public_checkpoint_telemetry_retains_verified_video_without_tracker_access(local_run, kind):
     import hashlib
     from gradlab.metric_journal import PublicJournalHistory
     from gradlab.json_utils import canonical_json_sha256
@@ -168,12 +169,19 @@ def test_public_checkpoint_telemetry_retains_verified_video_without_tracker_acce
     directory, config, store, authority, env = local_run
     video = b"canonical-evaluation-video"
     digest = hashlib.sha256(video).hexdigest()
-    key = f"runs/{config['wandb_run_id']}/evals/representative/episode.mp4"
-    authority.evaluation.put_bytes(key, video)
-    store.enqueue_event(kind="evaluation_video", step=1000, source="eval:video",
-                        payload={"bucket_uri": authority.evaluation.config.uri, "key": key,
-                                 "bytes": len(video), "sha256": digest,
-                                 "episode_id": "episode-a"})
+    source = authority.evaluation if kind == "evaluation_video" else authority.models
+    key = (f"runs/{config['wandb_run_id']}/evals/representative/episode.mp4"
+           if kind == "evaluation_video"
+           else f"monitoring/{config['wandb_run_id']}/representative/representative.mp4")
+    source.put_bytes(key, video)
+    from gradlab.run_contracts import checkpoint_id
+    identifier = checkpoint_id(step=1000, sha256=hashlib.sha256(b"checkpoint").hexdigest())
+    reference = {"key": key, "bytes": len(video), "sha256": digest, "episode_id": "episode-a"}
+    payload = {"bucket_uri": source.config.uri, "checkpoint_id": identifier}
+    payload.update(reference if kind == "evaluation_video" else {
+        "video": reference, "evaluation_id": "representative", "metrics": {},
+    })
+    store.enqueue_event(kind=kind, step=1000, source="eval:video", payload=payload)
     with LocalRunPublication(directory, config, store, env, authority=authority) as publication:
         publication.finish()
     reference = authority.publish_run_telemetry(config['wandb_run_id'])
@@ -184,10 +192,11 @@ def test_public_checkpoint_telemetry_retains_verified_video_without_tracker_acce
     media = public.media[0]
     assert media['step'] == 1000
     assert media['episode_id'] == 'episode-a'
+    assert media['checkpoint_id'] == identifier
     assert authority.models.get_bytes(f"runs/{config['wandb_run_id']}/media/{digest}.mp4") == video
     assert media['sha256'] == digest
-    authority.evaluation.put_bytes(key, b"corrupted", create_only=False,
-                                  if_match=str(authority.evaluation.head(key)["etag"]))
+    source.put_bytes(key, b"corrupted", create_only=False,
+                     if_match=str(source.head(key)["etag"]))
     with pytest.raises(ValueError, match="video.*integrity"):
         authority.publish_run_telemetry(config['wandb_run_id'])
 

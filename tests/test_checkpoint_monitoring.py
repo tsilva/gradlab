@@ -565,6 +565,7 @@ def test_real_wandb_outbox_stages_video_with_checkpoint_axis(tmp_path, record_vi
     store.append_metrics({"train/return/mean": 1}, step=900, source="train")
     result = dict(
         evaluation_id="eval-video",
+        checkpoint_id="checkpoint-100-" + "a" * 16,
         checkpoint_step=100,
         metrics={name: (400 if name == "eval/episodes/count" else 0.5)
                  for name in MONITORING_SCALAR_METRICS},

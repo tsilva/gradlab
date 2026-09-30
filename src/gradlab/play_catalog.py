@@ -3277,6 +3277,34 @@ class PlayCatalog:
                     evaluations[step]["metrics"][metric] = value
         return evaluations
 
+    def _public_journal_history(
+        self, run_id: str, reference: Mapping[str, Any],
+    ) -> PublicJournalHistory:
+        reference = dict(reference)
+        digest = str(reference.get("sha256") or "")
+        url = str(reference.get("url") or "")
+        expected_prefix = f"{self.public_models_base_url}/runs/{run_id}/telemetry/"
+        if (
+            SHA256_PATTERN.fullmatch(digest) is None
+            or url != f"{expected_prefix}{digest}.json"
+            or reference.get("run_id") != run_id
+        ):
+            raise ValueError("public telemetry reference is invalid")
+        document = _public_json(url, max_bytes=64 * 1024 * 1024)
+        run = PublicJournalHistory(document, run_id=run_id, digest=digest)
+        media = tuple(run.media)
+        for item in media:
+            media_digest = str(item.get("sha256") or "")
+            if (SHA256_PATTERN.fullmatch(media_digest) is None
+                    or item.get("url") != (
+                        f"{self.public_models_base_url}/runs/{run_id}/media/"
+                        f"{media_digest}.mp4"
+                    )):
+                raise ValueError("public telemetry media URL is invalid")
+        if len(run.rows) != int(reference.get("history_count") or 0):
+            raise ValueError("public telemetry history count mismatch")
+        return run
+
     def _checkpoint_evaluations(
         self,
         *,
@@ -3289,6 +3317,20 @@ class PlayCatalog:
         public_telemetry: Mapping[str, Any] | None = None,
         public_recipe_config: Mapping[str, Any] | None = None,
     ) -> _CheckpointEvaluationData:
+        def frozen_journal_config(raw: Mapping[str, Any]) -> dict[str, Any]:
+            config = dict(raw)
+            if (metric_contract.acceptance and metric_contract.evaluation_backend != "none"
+                    and not isinstance(config.get("checkpoint_eval_contract"), Mapping)):
+                from gradlab.checkpoint_acceptance import CheckpointEvalContractCompiler
+
+                config["checkpoint_eval_contract"] = (
+                    CheckpointEvalContractCompiler.from_train_config(
+                        config, portable_asset=True, require_asset=False,
+                        materialize_seed_defaults=True,
+                    ).contract(require_acceptance=True)
+                )
+            return config
+
         def validate_wandb_config(config: Mapping[str, Any]) -> None:
             schema_version = require_current_metrics_schema(config.get("metrics_schema_version"))
             if schema_version != metric_contract.metrics_schema_version:
@@ -3446,7 +3488,7 @@ class PlayCatalog:
                     recipe_document = self._control_recipe_document(str(manifest["recipe_sha256"]))
                     if recipe_document is None:
                         raise ValueError("frozen Run recipe is unavailable")
-                    config = dict(recipe_document["recipe"]["train_config"])
+                    config = frozen_journal_config(recipe_document["recipe"]["train_config"])
                     validate_wandb_config(config)
                     history_run = JournalHistory(
                         read_control_journal(self.control_bucket, run_id)
@@ -3480,12 +3522,21 @@ class PlayCatalog:
                         "retryable": isinstance(exc, (TimeoutError, OSError)),
                         "source": "gradlab-journal",
                     }
+                media = ()
+                if isinstance(public_telemetry, Mapping):
+                    try:
+                        media = tuple(self._public_journal_history(run_id, public_telemetry).media)
+                    except Exception as exc:
+                        warning = {"code": "public_media_unavailable", "source": "public-telemetry",
+                                   "message": f"Published media is unavailable: {exc}",
+                                   "retryable": isinstance(exc, (TimeoutError, OSError))}
                 return _CheckpointEvaluationData(
                     evaluations=evaluations,
                     training_seed=training_seed,
                     evaluation_seed=evaluation_seed,
                     training_metric_history=training_metric_history,
                     warning=warning,
+                    media=media,
                 )
             wandb = manifest.get("wandb")
             entity = str(wandb.get("entity") or "").strip() if isinstance(wandb, Mapping) else ""
@@ -3548,30 +3599,9 @@ class PlayCatalog:
         run = None
         try:
             if use_public:
-                reference = dict(public_telemetry)
-                digest = str(reference.get("sha256") or "")
-                url = str(reference.get("url") or "")
-                expected_prefix = f"{self.public_models_base_url}/runs/{run_id}/telemetry/"
-                if (
-                    SHA256_PATTERN.fullmatch(digest) is None
-                    or url != f"{expected_prefix}{digest}.json"
-                    or reference.get("run_id") != run_id
-                ):
-                    raise ValueError("public telemetry reference is invalid")
-                document = _public_json(url, max_bytes=64 * 1024 * 1024)
-                run = PublicJournalHistory(document, run_id=run_id, digest=digest)
+                run = self._public_journal_history(run_id, public_telemetry)
                 media = tuple(run.media)
-                for item in media:
-                    media_digest = str(item.get("sha256") or "")
-                    if (SHA256_PATTERN.fullmatch(media_digest) is None
-                            or item.get("url") != (
-                                f"{self.public_models_base_url}/runs/{run_id}/media/"
-                                f"{media_digest}.mp4"
-                            )):
-                        raise ValueError("public telemetry media URL is invalid")
-                if len(run.rows) != int(reference.get("history_count") or 0):
-                    raise ValueError("public telemetry history count mismatch")
-                config = dict(public_recipe_config or {})
+                config = frozen_journal_config(public_recipe_config or {})
             else:
                 run = self._wandb_api().run(f"{entity}/{project}/{run_id}")
                 media = ()
@@ -3960,7 +3990,8 @@ class PlayCatalog:
                 ),
                 evaluation=evaluation,
                 representative_media=tuple(
-                    item for item in evaluation_data.media if item["step"] == manifest.step
+                    item for item in evaluation_data.media
+                    if item.get("checkpoint_id") == manifest.checkpoint_id
                 ),
             )
             rows.append(row)

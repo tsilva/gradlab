@@ -302,6 +302,7 @@ class MetricStore(SqliteStore):
             kind="monitoring", source="eval:monitor", step=int(result["checkpoint_step"]),
             event_id=identity, payload={
                 "evaluation_id": result["evaluation_id"], "metrics": metrics,
+                "checkpoint_id": result["checkpoint_id"],
                 "video": result["video"], "bucket_uri": bucket_uri,
                 "media_spool_bytes": media_spool_bytes, "scratch_headroom_bytes": scratch_headroom_bytes,
             },

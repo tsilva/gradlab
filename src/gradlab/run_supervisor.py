@@ -1982,6 +1982,7 @@ class RunSupervisor:
             kind="evaluation_video",
             payload={
                 "bucket_uri": self.authority.evaluation.config.uri,
+                "checkpoint_id": str(row["checkpoint_id"]),
                 "key": key,
                 "bytes": int(video["bytes"]),
                 "sha256": str(video["sha256"]),
