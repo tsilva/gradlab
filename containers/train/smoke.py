@@ -89,8 +89,13 @@ def main() -> None:
         "stable-baselines3",
         "torch",
         "wandb",
+        "mlflow-skinny",
     ):
         print(f"package/{package}={package_version(package)}")
+
+    import gradlab.run_supervisor  # noqa: F401
+
+    print("supervisor_import=ok")
 
     lock_path = root / "uv.lock"
     if lock_path.is_file():

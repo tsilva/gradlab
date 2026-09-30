@@ -4,6 +4,15 @@ schema_version = 3
 #   ~/.config/gradlab/operator.toml
 [environment]
 WANDB_ENTITY = "<wandb-entity>"
+# A private route reachable from the selected training host and operator machine.
+# Enroll only fleets with a verified private route and capacity.
+MLFLOW_TRACKING_URI = "https://<private-mlflow-host>"
+# Logical destination identity is frozen in each MLflow Run manifest.
+MLFLOW_OPERATOR_PROFILE = "<private-mlflow-profile>"
+# Exact configured dstack fleet IDs permitted to reach the private service.
+MLFLOW_ALLOWED_FLEETS = "<approved-fleet-id>"
+# Optional for a private CA: base64 of its single PEM certificate.
+# GRADLAB_MLFLOW_TLS_CA_B64 = "<base64-pem-ca-certificate>"
 GRADLAB_CONTROL_R2_URI = "s3://<control-bucket>"
 GRADLAB_CONTROL_R2_ENDPOINT_URL = "https://<account-id>.r2.cloudflarestorage.com"
 GRADLAB_CONTROL_R2_REGION = "auto"
@@ -55,6 +64,14 @@ disk = "50GB"
 [keychain.WANDB_API_KEY]
 service = "gradlab-wandb"
 account = "api-key"
+
+[keychain.MLFLOW_TRACKING_USERNAME]
+service = "gradlab-mlflow"
+account = "username"
+
+[keychain.MLFLOW_TRACKING_PASSWORD]
+service = "gradlab-mlflow"
+account = "password"
 
 [keychain.GRADLAB_CONTROL_R2_ACCESS_KEY_ID]
 service = "gradlab-r2-control"

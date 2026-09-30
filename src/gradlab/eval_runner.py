@@ -176,6 +176,10 @@ def _evaluate_model_episodes_vector(
                 lane_watchdog_steps[lane] = 0
                 lane_ordinal = lane_episode_ordinals.get(lane, 0)
                 lane_episode_ordinals[lane] = lane_ordinal + 1
+                if rejected:
+                    # Continue the selected video episode without extending the
+                    # fail-fast Acceptance evidence past its first failure.
+                    continue
                 manifest_entry = planned.get((lane, lane_ordinal)) if planned is not None else None
                 if planned is not None and manifest_entry is None:
                     # A lane that completed its fixed quota remains alive while slower
@@ -216,7 +220,8 @@ def _evaluate_model_episodes_vector(
                 rejected and (episode_video_capture is None or episode_video_capture.complete)
             ):
                 break
-            expired = np.flatnonzero(lane_watchdog_steps >= watchdog_steps)
+            watched_steps = lane_watchdog_steps[:1] if rejected else lane_watchdog_steps
+            expired = np.flatnonzero(watched_steps >= watchdog_steps)
             if expired.size:
                 raise RuntimeError(
                     "evaluation watchdog expired without a scientific episode-boundary "

@@ -227,9 +227,39 @@ def test_resume_wandb_requires_or_uses_display_name(
 
     assert captured["name"] == expected_name
     assert captured["id"] == train_config["wandb_run_id"]
+    assert captured["resume"] == "must"
+    assert captured["config"] is None
     assert captured["group"] == train_config["wandb_group"]
     assert captured["settings"]["x_update_finish_state"] is True
     assert captured["settings"]["x_server_side_expand_glob_metrics"] is False
+
+
+def test_reconciled_startup_can_create_missing_wandb_run() -> None:
+    captured = {}
+
+    class FakeRun:
+        def define_metric(self, *_args, **_kwargs) -> None:
+            return None
+
+    fake_wandb = SimpleNamespace(
+        init=lambda **kwargs: captured.update(kwargs) or FakeRun(),
+        Settings=lambda **kwargs: kwargs,
+    )
+    config = {
+        "wandb_run_id": "gradlab-0123456789abcdef0123456789abcdef",
+        "wandb_entity": "entity", "wandb_project": "Bandit-v0",
+        "wandb_display_name": "bandit-startup-failure",
+        "metrics_schema_version": METRICS_SCHEMA_VERSION,
+    }
+    with (
+        patch("gradlab.wandb_publisher.load_wandb_env"),
+        patch.dict(sys.modules, {"wandb": fake_wandb}),
+    ):
+        WandbProjector.resume(config, allow_create=True)
+
+    assert captured["resume"] == "allow"
+    assert captured["id"] == config["wandb_run_id"]
+    assert captured["config"]["wandb_run_id"] == config["wandb_run_id"]
 
 
 def test_resume_wandb_requires_current_metrics_schema() -> None:

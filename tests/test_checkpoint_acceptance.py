@@ -381,6 +381,35 @@ def test_recorded_episode_video_must_belong_to_evaluation_manifest() -> None:
         validate_attempt_result({**result, "video": None}, contract=value, attempt_id=attempt_id)
 
 
+def test_fail_fast_video_may_finish_after_scientific_rejection() -> None:
+    value = modal_contract(episodes=2, n_envs=2)
+    value["record_episode"] = True
+    attempt_id = "attempt-fail-fast-video"
+    failed = next(entry for entry in value["manifest"]["episodes"] if entry["lane"] == 1)
+    result = {
+        **result_identity(value, attempt_id=attempt_id),
+        "status": "succeeded",
+        "verdict": "rejected",
+        "episode_results": [row(failed, success=False)],
+        "duration_seconds": 1.0,
+        "video": {
+            "episode_id": "lane-00-episode-000",
+            "frames": 722,
+            "bytes": 243619,
+            "content_type": "video/mp4",
+            "source": "native_rgb",
+            "object_uri": "s3://evaluation/runs/example/video.mp4",
+            "sha256": "a" * 64,
+        },
+    }
+
+    normalized = normalize_attempt_result(result, contract=value, attempt_id=attempt_id)
+
+    assert normalized["status"] == "rejected"
+    assert len(normalized["episode_results"]) == 1
+    assert normalized["video"]["episode_id"] == "lane-00-episode-000"
+
+
 def test_complete_evidence_requires_every_identity_once() -> None:
     value = contract(episodes=4, n_envs=2)
     rows = [row(entry) for entry in value["manifest"]["episodes"]]

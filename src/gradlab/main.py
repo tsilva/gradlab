@@ -9,7 +9,10 @@ from gradlab.cli_parser import ExactArgumentParser
 
 COMMANDS: dict[str, tuple[str, str]] = {
     "monitor": ("calibrate checkpoint monitoring from measured evidence", "gradlab.monitor_calibration"),
-    "sync": ("sync a finished local run to W&B, R2, and playback", "gradlab.local_wandb"),
+    "sync": ("project a finished local Run to its frozen metrics service", "gradlab.local_wandb"),
+    "sync-run": ("project a queued complete_local Run to its frozen metrics service", "gradlab.queued_tracking_sync"),
+    "publish-local": ("upload a complete local-only Run's checkpoints and journal", "gradlab.local_publication"),
+    "rebind-mlflow": ("audit and replay an irrecoverable MLflow service replacement", "gradlab.mlflow_rebind"),
     "train": ("train a checked-in recipe locally", "gradlab.local_train"),
     "experiment": ("launch and observe dstack training experiments", "gradlab.experiment_cli"),
     "eval": ("run a direct local evaluation", "gradlab.eval"),

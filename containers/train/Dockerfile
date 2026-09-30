@@ -142,6 +142,7 @@ COPY frontend ./frontend
 COPY scripts ./scripts
 COPY experiments/goals ./experiments/goals
 COPY experiments/recipes ./experiments/recipes
+COPY experiments/tracking.yaml ./experiments/tracking.yaml
 COPY src ./src
 
 RUN --mount=type=cache,target=/root/.cache/uv \
@@ -156,6 +157,7 @@ COPY src /root/gradlab/src
 COPY scripts /root/gradlab/scripts
 COPY experiments/goals /root/gradlab/experiments/goals
 COPY experiments/recipes /root/gradlab/experiments/recipes
+COPY experiments/tracking.yaml /root/gradlab/experiments/tracking.yaml
 COPY experiments/modal_eval.yaml /root/gradlab/experiments/modal_eval.yaml
 COPY --chmod=755 containers/train/gradlab /usr/local/bin/gradlab
 COPY --chmod=755 containers/train/entrypoint.sh /usr/local/bin/gradlab-container-entrypoint

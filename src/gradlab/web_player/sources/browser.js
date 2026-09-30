@@ -587,7 +587,7 @@ export function metricLabel(metric) {
     return `${humanizeMetricPart(progress[1])} ${progress[2]}`;
   }
   const trainingProgress = name.match(
-    /^train\/target\/progress\/([^/]+)\/(mean|max|min)$/,
+    /^train\/progress\/([^/]+)\/(mean|max|min)$/,
   );
   if (trainingProgress) {
     return `Recent target ${humanizeMetricPart(trainingProgress[1]).toLowerCase()} ${trainingProgress[2]}`;
@@ -603,7 +603,7 @@ export function formatMetricValue(metric, value) {
   if (value === null || value === undefined || value === "") return "—";
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return "—";
-  if (String(metric).includes("/rate/") || String(metric).endsWith("/rate") || /\/success\/(?:observed_)?start_rate_/.test(String(metric))) {
+  if (String(metric).includes("/rate/") || String(metric).endsWith("/rate") || /\/success\/(?:min|mean|max)$/.test(String(metric))) {
     return `${(numeric * 100).toLocaleString(undefined, { maximumFractionDigits: 2 })}%`;
   }
   return numeric.toLocaleString(undefined, { maximumFractionDigits: 3 });
@@ -3920,6 +3920,16 @@ export class SourceBrowser {
           const identity = document.createElement("div");
           identity.className = "checkpoint-step";
           identity.append(main);
+          for (const media of item.representative_media || []) {
+            const video = document.createElement("a");
+            video.href = String(media.url);
+            video.target = "_blank";
+            video.rel = "noopener noreferrer";
+            video.textContent = media.kind === "monitoring" ? "Monitoring video" : "Evaluation video";
+            video.setAttribute("aria-label", `${video.textContent} at step ${item.step}`);
+            video.addEventListener("click", (event) => event.stopPropagation());
+            identity.append(video);
+          }
           if (/final/i.test(String(item.purpose || ""))) {
             const badge = document.createElement("span");
             badge.className = "checkpoint-purpose-badge";

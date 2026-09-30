@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
 import json
 from pathlib import Path
 import threading
@@ -22,8 +21,8 @@ from gradlab.wandb_utils import load_wandb_env, resolve_wandb_namespace
 
 
 def local_publication(run_dir, config, store, environment):
-    """Offline and explicitly disabled runs make no R2 requests."""
-    if config.get("wandb_mode", "online") != "online":
+    """Direct local Runs publish remotely only when explicitly online."""
+    if (config.get("tracking") or {}).get("delivery", "online") != "online":
         from contextlib import nullcontext
 
         return nullcontext(None)
@@ -55,13 +54,30 @@ class LocalRunPublication:
             load_repository_operator_environment(Path.cwd(), requested_names=names)
             authority = RunAuthority(RunStorageConfig.from_env())
         self.authority = authority
-        load_wandb_env()
-        entity, project = resolve_wandb_namespace(
-            config.get("wandb_entity"),
-            config.get("wandb_project"),
-            environment.game,
-            env_provider=environment.env_provider,
-        )
+        selected = config.get("tracking") or {"backend": "wandb", "delivery": "online"}
+        tracking = {
+            **selected,
+            "operator_profile": (
+                "mlflow-default" if selected["backend"] == "mlflow" else "wandb-default"
+            ),
+        }
+        wandb = {}
+        if tracking["backend"] == "wandb" and tracking["delivery"] == "online":
+            load_wandb_env()
+            entity, project = resolve_wandb_namespace(
+                config.get("wandb_entity"),
+                config.get("wandb_project"),
+                environment.game,
+                env_provider=environment.env_provider,
+            )
+            wandb = {
+                "run_id": config["wandb_run_id"],
+                "entity": entity,
+                "project": project,
+                "url": f"https://wandb.ai/{entity}/{project}/runs/{config['wandb_run_id']}",
+                "group": config["wandb_run_id"],
+                "display_name": config.get("wandb_display_name") or config["run_name"],
+            }
         identity = store.state("local_publication_identity")
         if identity is None:
             identity = {
@@ -70,7 +86,7 @@ class LocalRunPublication:
             }
             store.set_state("local_publication_identity", identity)
         if identity["run_id"] != config["wandb_run_id"]:
-            raise ValueError("local publication and W&B run identities differ")
+            raise ValueError("local publication and Run identities differ")
         recipe = self.recipe["recipe"]
         runtime = self.recipe["provenance"]["runtime"]
         target = {"kind": "local", "max_steps": int(config["timesteps"])}
@@ -93,14 +109,8 @@ class LocalRunPublication:
                 "selected": target,
                 "runtime": runtime,
             },
-            wandb={
-                "run_id": identity["run_id"],
-                "entity": entity,
-                "project": project,
-                "url": f"https://wandb.ai/{entity}/{project}/runs/{identity['run_id']}",
-                "group": identity["run_id"],
-                "display_name": config.get("wandb_display_name") or config["run_name"],
-            },
+            wandb=wandb,
+            tracking=tracking,
             modal={"enabled": False},
             storage=authority.storage.manifest_locations(),
             goal_variant=recipe["goal_variant"],
@@ -258,16 +268,21 @@ class LocalRunPublication:
         )
         return state, reason
 
-    def finish(self, *, wandb_high_water: int):
+    def finish(self, *, wandb_high_water: int = 0):
         self.publish()
+        local_only = self.manifest.tracking["delivery"] == "local_only"
         result_path = self.run_dir / "training-result.json"
         if not result_path.is_file():
             raise RuntimeError(
                 "local training has no terminal result; artifacts retained for recovery"
             )
         result = json.loads(result_path.read_text())
-        if self.store.metric_segment_high_water() != wandb_high_water:
-            raise RuntimeError("local R2 and W&B metric high-water marks differ")
+        journal_high_water = self.store.metric_segment_high_water()
+        if local_only:
+            if journal_high_water < 1:
+                raise RuntimeError("local-only publication has no retained metric journal")
+        elif journal_high_water != wandb_high_water:
+            raise RuntimeError("local R2 and selected-service metric high-water marks differ")
         if int(result.get("final_step") or 0) > 0 and not any(
             row["purpose"] == "final" and row["step"] == int(result["final_step"])
             for row in self.store.checkpoint_publications()
@@ -275,7 +290,7 @@ class LocalRunPublication:
             raise RuntimeError("local training final checkpoint is missing from R2")
         terminal = self.store.state("local_publication_terminal")
         if terminal is None:
-            archive = self.authority.archive_metric_journals(
+            archive = self.authority.retain_metric_journals(
                 run_id=self.manifest.run_id, heartbeat=self.check_lease
             )
             completed_at = (
@@ -284,6 +299,8 @@ class LocalRunPublication:
                 or self.authority.clock.utc_now()
             )
             state, reason, early_stop = self._outcome(result, completed_at)
+            if local_only and state in {"succeeded", "stopped"}:
+                state = "complete_local"
             if early_stop is not None:
                 self.check_lease()
                 self.authority.create_early_stop(EarlyStopReceipt.from_dict(early_stop))
@@ -297,15 +314,24 @@ class LocalRunPublication:
                 final_step=int(result["final_step"]),
                 checkpoint_inventory=self.store.checkpoint_publications(),
                 eval_inventory=[],
-                wandb_high_water_mark=wandb_high_water,
+                wandb_high_water_mark=(
+                    wandb_high_water
+                    if not local_only and self.manifest.tracking["backend"] == "wandb"
+                    else 0
+                ),
+                tracking=self.manifest.tracking,
+                service_high_water_mark=0 if local_only else wandb_high_water,
                 drain={
                     "complete": True,
-                    "metric_segment_high_water": wandb_high_water,
-                    "wandb_remote_high_water_mark": wandb_high_water,
+                    "metric_segment_high_water": journal_high_water,
+                    "wandb_remote_high_water_mark": (
+                        wandb_high_water
+                        if not local_only and self.manifest.tracking["backend"] == "wandb"
+                        else 0
+                    ),
+                    "service_remote_high_water_mark": 0 if local_only else wandb_high_water,
                     "journal_archive": archive,
-                    "journal_expires_at": (
-                        self.authority.clock.utc_datetime() + timedelta(days=7)
-                    ).isoformat(),
+                    "journal_expires_at": None,
                 },
                 completed_at=completed_at,
             )
@@ -318,11 +344,57 @@ class LocalRunPublication:
         write_canonical_json(
             self.run_dir / "publication-delivery.json",
             {
-                "status": "delivered",
+                "status": "complete_local" if local_only else "delivered",
                 "run_id": self.manifest.run_id,
                 "attempt_id": self.manifest.attempt_id,
                 "public_index_url": self.public_index_url,
                 "checkpoint_count": len(self.store.checkpoint_publications()),
-                "metric_high_water": wandb_high_water,
+                "metric_high_water": journal_high_water,
             },
         )
+
+
+def publish_local_run(run_dir: Path, *, authority: RunAuthority | None = None) -> str:
+    """Durably publish a completed local-only Run without synchronizing its tracker."""
+    receipt = json.loads((run_dir / "local-run.json").read_text())
+    if receipt.get("status") != "complete_local":
+        raise ValueError("local-only publication requires a complete_local Run")
+    config = json.loads((run_dir / "train-config.json").read_text())
+    if (config.get("tracking") or {}).get("delivery") != "local_only":
+        raise ValueError("local-only publication requires frozen local_only delivery")
+    store = SupervisorLedger(run_dir / "gradlab.sqlite")
+    store.init()
+    from gradlab.env import resolve_env_config
+    from gradlab.env_config import env_config_from_mapping
+
+    environment = resolve_env_config(env_config_from_mapping(config))
+    with LocalRunPublication(run_dir, config, store, environment, authority=authority) as publication:
+        publication.finish()
+        sync_path = run_dir / "tracker-sync.json"
+        sync_status = "pending"
+        if sync_path.is_file():
+            sync = json.loads(sync_path.read_text())
+            if (
+                sync.get("run_id") == publication.manifest.run_id
+                and sync.get("backend") == config["tracking"]["backend"]
+                and sync.get("status") == "delivered"
+            ):
+                sync_status = "delivered"
+        publication.authority.publish_run_telemetry(
+            publication.manifest.run_id, tracker_sync_status=sync_status
+        )
+        return publication.public_index_url
+
+
+def main(argv: list[str] | None = None) -> int:
+    from gradlab.cli_parser import ExactArgumentParser
+
+    parser = ExactArgumentParser(
+        prog="gradlab publish-local",
+        description="Upload a complete local-only Run's checkpoints and journal without tracker sync.",
+    )
+    parser.add_argument("run_dir", type=Path)
+    args = parser.parse_args(argv)
+    url = publish_local_run(args.run_dir.expanduser().resolve())
+    print(f"Published local Run: {url}")
+    return 0

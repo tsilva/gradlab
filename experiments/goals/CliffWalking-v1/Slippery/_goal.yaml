@@ -1,6 +1,12 @@
 defaults:
 - ../../_gymnasium-discrete-common@_global_
 - _self_
+objective:
+  # A bounded stochastic safe-navigation proxy allowing slips and detours.
+  training_success:
+    metric: train/return/mean
+    operator: '>='
+    threshold: -100
 title: Gymnasium slippery CliffWalking benchmark
 train:
   checkpoint_freq: 100000

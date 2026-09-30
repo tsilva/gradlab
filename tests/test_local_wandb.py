@@ -65,7 +65,9 @@ def test_local_writer_publishes_real_outbox_and_confirms_terminal_delivery(tmp_p
     ]
     assert store.pending_metric_frames() == []
     projector.close.assert_called_once_with(timeout_seconds=60, exit_code=0)
-    verify.assert_called_once_with(projector.run.path, 1)
+    verify.assert_called_once()
+    assert verify.call_args.args == (projector.run.path, 1)
+    assert callable(verify.call_args.kwargs["heartbeat"])
     assert json.loads((tmp_path / "wandb-delivery.json").read_text())["status"] == "delivered"
     assert projector.run.summary["ops/reason"] == "early_stop_neutral"
 
@@ -94,23 +96,28 @@ def test_delivery_failure_does_not_write_success_receipt(tmp_path, transport):
 
 
 def test_backfill_keeps_original_contract_and_reuses_identity(tmp_path, transport):
-    original = json.dumps({"wandb_mode": "disabled", "run_name": "local/maze"})
+    original = json.dumps({
+        "wandb_run_id": FakeRun.id,
+        "run_name": "local/maze",
+        "tracking": {"backend": "wandb", "delivery": "local_only"},
+    })
     (tmp_path / "train-config.json").write_text(original)
-    (tmp_path / "local-run.json").write_text('{"status":"completed"}')
+    (tmp_path / "local-run.json").write_text('{"status":"complete_local"}')
     store = MetricStore(tmp_path / "gradlab.sqlite")
     store.init()
     store.append_metrics({"train/return/mean": 0.0}, step=100, source="training", publish=False)
     sync_local_run(tmp_path)
-    identity = json.loads((tmp_path / "wandb-backfill.json").read_text())
+    identity = json.loads((tmp_path / "tracker-sync.json").read_text())
     sync_local_run(tmp_path)
-    assert json.loads((tmp_path / "wandb-backfill.json").read_text()) == identity
+    assert json.loads((tmp_path / "tracker-sync.json").read_text()) == identity
     assert (tmp_path / "train-config.json").read_text() == original
+    assert json.loads((tmp_path / "local-run.json").read_text())["status"] == "complete_local"
     assert len(transport[0].run.frames) == 1
 
 
 def test_backfill_rejects_active_training(tmp_path):
     (tmp_path / "local-run.json").write_text('{"status":"running"}')
-    with pytest.raises(ValueError, match="running"):
+    with pytest.raises(ValueError, match="complete_local"):
         sync_local_run(tmp_path)
 
 

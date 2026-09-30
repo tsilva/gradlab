@@ -92,10 +92,15 @@ GOAL_PATH = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml")
 RECIPE_PATH = GOAL_PATH.parent / "recipes" / "ppo.yaml"
 DEFAULT_SCENARIOS = (
     "full-lifecycle",
+    "mlflow-full-lifecycle",
+    "local-only-full-lifecycle",
     "parallel-run-isolation",
+    "mlflow-parallel-run-isolation",
     "same-run-lease-fencing",
     "wandb-retry-deduplication",
     "wandb-visibility-gating",
+    "mlflow-retry-deduplication",
+    "mlflow-visibility-gating",
     "checkpoint-upload-retry",
     "blocking-publication-lease-renewal",
     "state-archive-lease-fencing",
@@ -320,7 +325,7 @@ class CertificationRuntime(SupervisorRuntime):
                 continue
             if self.publish_failures > 0:
                 self.publish_failures -= 1
-                store.mark_metric_frame_failed(frame_id, "simulated W&B outage")
+                store.mark_metric_frame_failed(frame_id, "simulated selected-service outage")
                 continue
             payload = json.loads(str(row["payload_json"]))
             event_seq = frame_id + int(event_seq_offset)
@@ -475,8 +480,12 @@ class PreparedSupervisor:
 
 
 class CertificationFixture:
-    def __init__(self, root: Path, *, clock: DeterministicClock | None = None) -> None:
+    def __init__(self, root: Path, *, clock: DeterministicClock | None = None,
+                 tracking_backend: str = "wandb",
+                 tracking_delivery: str = "online") -> None:
         self.root = root
+        self.tracking_backend = tracking_backend
+        self.tracking_delivery = tracking_delivery
         self.clock = clock or DeterministicClock()
         self.storage = RunStorageConfig(
             control=BucketConfig(uri=f"file://{root / 'control'}"),
@@ -505,6 +514,11 @@ class CertificationFixture:
         document = resolved_documents.effective
         contract_document = dict(document)
         config = dict(contract_document["train_config"])
+        config["tracking"] = {
+            "backend": tracking_backend,
+            "delivery": tracking_delivery,
+            "sources": {"backend": "certification", "delivery": "certification"},
+        }
         config["rom_asset_manifest"] = self.asset
         config["checkpoint_eval_backend"] = "modal"
         contract_document["train_config"] = config
@@ -520,6 +534,7 @@ class CertificationFixture:
                 **resolved_documents.base,
                 "train_config": {
                     **resolved_documents.base["train_config"],
+                    "tracking": config["tracking"],
                     "rom_asset_manifest": self.asset,
                     "checkpoint_eval_backend": "modal",
                 },
@@ -585,7 +600,8 @@ class CertificationFixture:
                 "entity": "certification",
                 "project": "SuperMarioBros-Nes-v0",
                 "url": (f"https://wandb.invalid/certification/SuperMarioBros-Nes-v0/runs/{run_id}"),
-            },
+            } if self.tracking_backend == "wandb" and self.tracking_delivery == "online" else {},
+            tracking=self.composed["train_config"]["tracking"],
             modal={
                 "enabled": True,
                 "environment_name": "certification",
@@ -646,8 +662,16 @@ class CertificationFixture:
         supervisor.train_config = dict(self.composed["train_config"])
         supervisor.eval_contract = evaluation_contract(self.recipe_document)
         supervisor.store.init()
-        supervisor.projector = WandbProjector(object())
-        supervisor.wandb_run_path = f"certification/SuperMarioBros-Nes-v0/{manifest.run_id}"
+        supervisor.projector = (
+            WandbProjector(object()) if self.tracking_delivery == "online" else None
+        )
+        supervisor.wandb_run_path = (
+            f"certification/SuperMarioBros-Nes-v0/{manifest.run_id}"
+            if self.tracking_backend == "wandb" and self.tracking_delivery == "online"
+            else f"mlflow:{manifest.run_id}"
+            if self.tracking_delivery == "online"
+            else ""
+        )
         supervisor.lease = self.authority.acquire_lease(
             run_id=manifest.run_id,
             attempt_id=manifest.attempt_id,
@@ -858,33 +882,59 @@ class LifecycleVerifier:
             )
 
         frames = prepared.runtime.wandb_events
+        selected_backend = (receipt.tracking or {}).get("backend", "wandb")
+        selected_delivery = (receipt.tracking or {}).get("delivery", "online")
         event_ids = [str(row["event_id"]) for row in frames]
         writers = {str(row["writer_id"]) for row in frames}
-        check(
-            "single-wandb-writer",
-            writers == {prepared.runtime.writer_id},
-            {"writers": sorted(writers)},
-        )
-        check(
-            "wandb-event-id-deduplication",
-            len(event_ids) == len(set(event_ids)),
-            {"events": len(event_ids), "unique": len(set(event_ids))},
-        )
-        check(
-            "training-and-eval-metrics-share-run",
-            any(str(row["source"]).startswith("learner") for row in frames)
-            and any(str(row["source"]).startswith("eval") for row in frames),
-            {"sources": sorted({str(row["source"]) for row in frames})},
-        )
+        if selected_delivery == "online":
+            check(
+                f"single-{selected_backend}-writer",
+                writers == {prepared.runtime.writer_id},
+                {"writers": sorted(writers)},
+            )
+            check(
+                f"{selected_backend}-event-id-deduplication",
+                len(event_ids) == len(set(event_ids)),
+                {"events": len(event_ids), "unique": len(set(event_ids))},
+            )
+            check(
+                "training-and-eval-metrics-share-run",
+                any(str(row["source"]).startswith("learner") for row in frames)
+                and any(str(row["source"]).startswith("eval") for row in frames),
+                {"sources": sorted({str(row["source"]) for row in frames})},
+            )
+        else:
+            check(
+                "local-only-makes-no-service-writes",
+                not frames and receipt.service_high_water_mark == 0,
+                {"remote_events": len(frames)},
+            )
         max_event_seq = max((int(row["event_seq"]) for row in frames), default=0)
-        check(
-            "delivery-high-water",
-            max_event_seq
-            == int(receipt.wandb_high_water_mark)
-            == int(receipt.drain["metric_segment_high_water"])
-            and int(receipt.drain["wandb_remote_high_water_mark"]) >= max_event_seq,
-            {"high_water": max_event_seq},
+        receipt_high_water = (
+            receipt.service_high_water_mark
+            if receipt.tracking is not None else receipt.wandb_high_water_mark
         )
+        remote_high_water = (
+            receipt.drain.get("service_remote_high_water_mark")
+            if receipt.tracking is not None
+            else receipt.drain.get("wandb_remote_high_water_mark")
+        )
+        if selected_delivery == "online":
+            check(
+                "delivery-high-water",
+                max_event_seq
+                == int(receipt_high_water or 0)
+                == int(receipt.drain["metric_segment_high_water"])
+                and int(remote_high_water or 0) >= max_event_seq,
+                {"high_water": max_event_seq},
+            )
+        else:
+            check(
+                "local-journal-high-water",
+                receipt.drain["metric_segment_high_water"] > 0
+                and receipt.drain["journal_archive"]["retention"] == "durable",
+                {"high_water": receipt.drain["metric_segment_high_water"]},
+            )
 
         promotion = authority.control.get_json(f"runs/{run_id}/promotion.json")
         accepted = [row for row in eval_rows if str(row["status"]) == "accepted"]
@@ -901,7 +951,9 @@ class LifecycleVerifier:
         check(
             "scientific-terminal-receipt",
             terminal == receipt.to_dict()
-            and terminal["state"] == "succeeded"
+            and terminal["state"] == (
+                "complete_local" if selected_delivery == "local_only" else "succeeded"
+            )
             and terminal["stop_reason"] == "eval_acceptance",
             {"state": terminal["state"], "stop_reason": terminal["stop_reason"]},
         )
@@ -943,6 +995,8 @@ class LifecycleVerifier:
 
 def _finalize_success(prepared: PreparedSupervisor) -> TerminalReceipt:
     supervisor = prepared.supervisor
+    selected_backend = (supervisor.manifest.tracking or {}).get("backend", "wandb")
+    selected_delivery = (supervisor.manifest.tracking or {}).get("delivery", "online")
     supervisor._seal_metrics(supervisor.clock.monotonic(), force=True)
     while supervisor._publish_wandb():
         pass
@@ -950,34 +1004,55 @@ def _finalize_success(prepared: PreparedSupervisor) -> TerminalReceipt:
     if promotion is None:
         raise AssertionError("successful certification has no accepted checkpoint")
     supervisor._publish_promotion(promotion)
-    wandb_high_water = supervisor._finish_wandb()
-    supervisor._wait_for_remote_delivery(wandb_high_water)
-    supervisor._wait_for_remote_promotion(promotion)
-    journal = supervisor.authority.archive_metric_journals(run_id=supervisor.manifest.run_id)
+    wandb_high_water = (
+        supervisor._finish_wandb() if selected_delivery == "online" else 0
+    )
+    if selected_delivery == "online":
+        supervisor._wait_for_remote_delivery(wandb_high_water)
+        supervisor._wait_for_remote_promotion(promotion)
+    journal = (
+        supervisor.authority.retain_metric_journals(run_id=supervisor.manifest.run_id)
+        if selected_backend == "mlflow" or selected_delivery == "local_only"
+        else supervisor.authority.archive_metric_journals(run_id=supervisor.manifest.run_id)
+    )
     checkpoints, evals = supervisor._terminal_inventory()
     receipt = TerminalReceipt(
         run_id=supervisor.manifest.run_id,
         attempt_id=supervisor.manifest.attempt_id,
-        state="succeeded",
+        state="complete_local" if selected_delivery == "local_only" else "succeeded",
         acceptance_required=True,
         stop_reason=supervisor.stop_reason,
         final_step=max(int(row["step"]) for row in checkpoints),
         checkpoint_inventory=checkpoints,
         eval_inventory=evals,
-        wandb_high_water_mark=wandb_high_water,
+        wandb_high_water_mark=wandb_high_water if selected_backend == "wandb" else 0,
+        tracking=(
+            supervisor.manifest.tracking
+            if selected_backend == "mlflow" or selected_delivery == "local_only"
+            else None
+        ),
+        service_high_water_mark=(
+            wandb_high_water
+            if selected_backend == "mlflow" or selected_delivery == "local_only"
+            else None
+        ),
         drain={
             "complete": True,
             "metric_segment_high_water": supervisor.store.metric_segment_high_water(),
             "eval_terminal_count": supervisor.store.terminal_eval_count(),
             "journal_archive": journal,
             "journal_expires_at": (
-                supervisor.clock.utc_datetime() + timedelta(days=METRIC_JOURNAL_RETENTION_DAYS)
-            )
-            .isoformat()
-            .replace("+00:00", "Z"),
+                (
+                    supervisor.clock.utc_datetime() + timedelta(days=METRIC_JOURNAL_RETENTION_DAYS)
+                ).isoformat().replace("+00:00", "Z")
+                if selected_backend == "wandb" and selected_delivery == "online" else None
+            ),
             "wandb_remote_high_water_mark": int(
                 prepared.runtime.summary.get(ORCHESTRATION_EVENT_SEQUENCE) or 0
-            ),
+            ) if selected_backend == "wandb" and selected_delivery == "online" else 0,
+            "service_remote_high_water_mark": int(
+                prepared.runtime.summary.get(ORCHESTRATION_EVENT_SEQUENCE) or 0
+            ) if selected_backend == "mlflow" and selected_delivery == "online" else 0,
             "publication_capacity_ratio": None,
             "failure": None,
         },
@@ -994,9 +1069,13 @@ def _finalize_success(prepared: PreparedSupervisor) -> TerminalReceipt:
     return receipt
 
 
-def _scenario_full_lifecycle(root: Path) -> dict[str, Any]:
-    recorder = ScenarioRecorder("full-lifecycle", [])
-    fixture = CertificationFixture(root)
+def _scenario_full_lifecycle(
+    root: Path, *, tracking_backend: str = "wandb", tracking_delivery: str = "online"
+) -> dict[str, Any]:
+    recorder = ScenarioRecorder(f"{tracking_backend}-{tracking_delivery}-full-lifecycle", [])
+    fixture = CertificationFixture(
+        root, tracking_backend=tracking_backend, tracking_delivery=tracking_delivery
+    )
     prepared = fixture.prepare(run_number=1)
     supervisor = prepared.supervisor
     supervisor.store.append_metrics(
@@ -1046,6 +1125,27 @@ def _scenario_full_lifecycle(root: Path) -> dict[str, Any]:
     fixture.clock.advance(2)
     supervisor.active_iteration()
     receipt = _finalize_success(prepared)
+    if tracking_backend == "mlflow":
+        recorder.require(
+            "selected-service-receipt-retains-journal",
+            receipt.tracking is not None
+            and receipt.tracking["backend"] == "mlflow"
+            and receipt.wandb_high_water_mark == 0
+            and receipt.service_high_water_mark == receipt.drain["metric_segment_high_water"]
+            and receipt.drain["journal_archive"]["retention"] == "durable",
+            evidence={
+                "service_high_water": receipt.service_high_water_mark,
+                "journal_count": receipt.drain["journal_archive"]["segment_count"],
+            },
+        )
+    if tracking_delivery == "local_only":
+        recorder.require(
+            "complete-local-keeps-scientific-promotion-and-durable-journal",
+            receipt.state == "complete_local"
+            and receipt.service_high_water_mark == 0
+            and receipt.drain["journal_archive"]["retention"] == "durable",
+            evidence={"state": receipt.state},
+        )
     verifier_checks = LifecycleVerifier().verify_success(
         prepared=prepared,
         receipt=receipt,
@@ -1058,7 +1158,9 @@ def _scenario_full_lifecycle(root: Path) -> dict[str, Any]:
     recorder.require(
         "already-submitted-rejection-does-not-displace-earlier-acceptance",
         prepared.supervisor.store.evals()[-1]["status"] == "rejected"
-        and receipt.state == "succeeded",
+        and receipt.state == (
+            "complete_local" if tracking_delivery == "local_only" else "succeeded"
+        ),
         evidence={
             "final_status": prepared.supervisor.store.evals()[-1]["status"],
             "terminal_state": receipt.state,
@@ -1072,6 +1174,8 @@ def _scenario_full_lifecycle(root: Path) -> dict[str, Any]:
             "checkpoint_count": len(supervisor.store.checkpoint_publications()),
             "eval_statuses": [row["status"] for row in supervisor.store.evals()],
             "wandb_event_count": len(prepared.runtime.wandb_events),
+            "tracking_backend": tracking_backend,
+            "tracking_delivery": tracking_delivery,
             "terminal_state": receipt.state,
             "stop_reason": receipt.stop_reason,
             "final_step": receipt.final_step,
@@ -1079,9 +1183,19 @@ def _scenario_full_lifecycle(root: Path) -> dict[str, Any]:
     }
 
 
-def _scenario_parallel_run_isolation(root: Path) -> dict[str, Any]:
-    recorder = ScenarioRecorder("parallel-run-isolation", [])
-    fixture = CertificationFixture(root)
+def _scenario_mlflow_full_lifecycle(root: Path) -> dict[str, Any]:
+    return _scenario_full_lifecycle(root, tracking_backend="mlflow")
+
+
+def _scenario_local_only_full_lifecycle(root: Path) -> dict[str, Any]:
+    return _scenario_full_lifecycle(root, tracking_delivery="local_only")
+
+
+def _scenario_parallel_run_isolation(
+    root: Path, *, tracking_backend: str = "wandb"
+) -> dict[str, Any]:
+    recorder = ScenarioRecorder(f"{tracking_backend}-parallel-run-isolation", [])
+    fixture = CertificationFixture(root, tracking_backend=tracking_backend)
     first = fixture.prepare(run_number=11)
     second = fixture.prepare(run_number=12)
     for index, prepared in enumerate((first, second), start=1):
@@ -1118,7 +1232,7 @@ def _scenario_parallel_run_isolation(root: Path) -> dict[str, Any]:
         evidence={"first_keys": len(first_keys), "second_keys": len(second_keys)},
     )
     recorder.require(
-        "parallel-wandb-writers-isolated",
+        f"parallel-{tracking_backend}-writers-isolated",
         {row["writer_id"] for row in first.runtime.wandb_events} == {first.runtime.writer_id}
         and {row["writer_id"] for row in second.runtime.wandb_events} == {second.runtime.writer_id},
         evidence={"writers": [first.runtime.writer_id, second.runtime.writer_id]},
@@ -1145,6 +1259,10 @@ def _scenario_parallel_run_isolation(root: Path) -> dict[str, Any]:
             ]
         },
     }
+
+
+def _scenario_mlflow_parallel_run_isolation(root: Path) -> dict[str, Any]:
+    return _scenario_parallel_run_isolation(root, tracking_backend="mlflow")
 
 
 def _scenario_same_run_lease_fencing(root: Path) -> dict[str, Any]:
@@ -1195,9 +1313,11 @@ def _scenario_same_run_lease_fencing(root: Path) -> dict[str, Any]:
     return {"invariants": recorder.invariants, "evidence": {"run_id": manifest.run_id}}
 
 
-def _scenario_wandb_retry_deduplication(root: Path) -> dict[str, Any]:
-    recorder = ScenarioRecorder("wandb-retry-deduplication", [])
-    fixture = CertificationFixture(root)
+def _scenario_wandb_retry_deduplication(
+    root: Path, *, tracking_backend: str = "wandb"
+) -> dict[str, Any]:
+    recorder = ScenarioRecorder(f"{tracking_backend}-retry-deduplication", [])
+    fixture = CertificationFixture(root, tracking_backend=tracking_backend)
     prepared = fixture.prepare(run_number=31, publish_failures=1)
     supervisor = prepared.supervisor
     supervisor.store.append_metrics(
@@ -1209,7 +1329,7 @@ def _scenario_wandb_retry_deduplication(root: Path) -> dict[str, Any]:
     supervisor.active_iteration()
     pending = supervisor.store.pending_metric_frames()
     recorder.require(
-        "wandb-failure-remains-retryable",
+        f"{tracking_backend}-failure-remains-retryable",
         len(pending) == 1 and int(pending[0]["attempts"]) == 1,
         evidence={"pending": len(pending)},
     )
@@ -1222,7 +1342,7 @@ def _scenario_wandb_retry_deduplication(root: Path) -> dict[str, Any]:
             ]
         )
     recorder.require(
-        "wandb-retry-publishes-once",
+        f"{tracking_backend}-retry-publishes-once",
         attempts == 2
         and len(prepared.runtime.wandb_events) == 1
         and supervisor.store.metric_outbox_stats()["frames"] == 0,
@@ -1237,9 +1357,15 @@ def _scenario_wandb_retry_deduplication(root: Path) -> dict[str, Any]:
     }
 
 
-def _scenario_wandb_visibility_gating(root: Path) -> dict[str, Any]:
-    recorder = ScenarioRecorder("wandb-visibility-gating", [])
-    fixture = CertificationFixture(root)
+def _scenario_mlflow_retry_deduplication(root: Path) -> dict[str, Any]:
+    return _scenario_wandb_retry_deduplication(root, tracking_backend="mlflow")
+
+
+def _scenario_wandb_visibility_gating(
+    root: Path, *, tracking_backend: str = "wandb"
+) -> dict[str, Any]:
+    recorder = ScenarioRecorder(f"{tracking_backend}-visibility-gating", [])
+    fixture = CertificationFixture(root, tracking_backend=tracking_backend)
     prepared = fixture.prepare(run_number=36)
     supervisor = prepared.supervisor
     supervisor.store.append_metrics(
@@ -1268,6 +1394,10 @@ def _scenario_wandb_visibility_gating(root: Path) -> dict[str, Any]:
         "invariants": recorder.invariants,
         "evidence": {"virtual_timeout_seconds": 300},
     }
+
+
+def _scenario_mlflow_visibility_gating(root: Path) -> dict[str, Any]:
+    return _scenario_wandb_visibility_gating(root, tracking_backend="mlflow")
 
 
 def _scenario_checkpoint_upload_retry(root: Path) -> dict[str, Any]:
@@ -2721,10 +2851,15 @@ def _scenario_delivery_drain_progress(root: Path) -> dict[str, Any]:
 
 SCENARIOS: dict[str, Callable[[Path], dict[str, Any]]] = {
     "full-lifecycle": _scenario_full_lifecycle,
+    "mlflow-full-lifecycle": _scenario_mlflow_full_lifecycle,
+    "local-only-full-lifecycle": _scenario_local_only_full_lifecycle,
     "parallel-run-isolation": _scenario_parallel_run_isolation,
+    "mlflow-parallel-run-isolation": _scenario_mlflow_parallel_run_isolation,
     "same-run-lease-fencing": _scenario_same_run_lease_fencing,
     "wandb-retry-deduplication": _scenario_wandb_retry_deduplication,
     "wandb-visibility-gating": _scenario_wandb_visibility_gating,
+    "mlflow-retry-deduplication": _scenario_mlflow_retry_deduplication,
+    "mlflow-visibility-gating": _scenario_mlflow_visibility_gating,
     "checkpoint-upload-retry": _scenario_checkpoint_upload_retry,
     "blocking-publication-lease-renewal": _scenario_blocking_publication_lease_renewal,
     "state-archive-lease-fencing": _scenario_state_archive_lease_fencing,

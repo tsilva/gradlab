@@ -1,6 +1,12 @@
 defaults:
 - ../_gymnasium-discrete-common@_global_
 - _self_
+objective:
+  # Gymnasium registry threshold for a successful landing.
+  training_success:
+    metric: train/return/mean
+    operator: '>='
+    threshold: 200
 title: Gymnasium LunarLander landing benchmark
 train:
   checkpoint_freq: 100000

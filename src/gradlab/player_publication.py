@@ -427,8 +427,14 @@ def generated_metadata(
         f"return {capture.get('return')}, {capture.get('steps')} policy steps. "
         "This replay is not evaluation evidence."
     )
-    wandb_url = (
-        f"https://wandb.ai/tsilva/{source_value.get('wandb_project')}/runs/{source_value.get('run_id')}"
+    wandb_project = str(source_value.get("wandb_project") or "").strip()
+    run_id = str(source_value.get("run_id") or "").strip()
+    from gradlab.model_sources import DEFAULT_PUBLIC_MODELS_BASE_URL
+
+    run_link = (
+        f"W&B: https://wandb.ai/tsilva/{wandb_project}/runs/{run_id}"
+        if wandb_project
+        else f"GradLab Run: {DEFAULT_PUBLIC_MODELS_BASE_URL.rstrip('/')}/runs/{run_id}/index.json"
     )
     model_tag_url = f"https://huggingface.co/{repo_id}/tree/{release_version}"
     source_commit = str(source_value.get("commit") or "")
@@ -454,7 +460,7 @@ def generated_metadata(
             replay_result,
             "",
             f"Immutable model: {model_tag_url}",
-            f"W&B: {wandb_url}",
+            run_link,
             f"R2 manifest: {r2_manifest}",
             f"Source/recipe: https://github.com/tsilva/gradlab/tree/{source_commit} ({recipe_name})",
             "GitHub: https://github.com/tsilva/gradlab",
@@ -1156,6 +1162,20 @@ class PlayerPublicationService:
         bundle: PolicyBundle,
         evidence: Mapping[str, Any],
     ) -> Path:
+        recipe = bundle.recipe.get("recipe")
+        train_config = recipe.get("train_config") if isinstance(recipe, Mapping) else None
+        if isinstance(train_config, Mapping) and isinstance(train_config.get("tracking"), Mapping):
+            run_id = str(capture["run_id"])
+            load_repository_operator_environment(self.repo_root)
+            authority = RunAuthority(RunStorageConfig.from_env())
+            manifest = authority.manifest(run_id)
+            if manifest is None:
+                raise ValueError("new-schema Release requires a durable GradLab Run manifest")
+            # Publication is the public boundary for new-schema telemetry. The
+            # public index is updated only after the retained journal verifies.
+            authority.publish_run_telemetry(
+                run_id, verified_checkpoint_id=str(capture["checkpoint_id"])
+            )
         fingerprint = str(request["request_fingerprint"])
         destination = self.requests_root / fingerprint
         if destination.exists():

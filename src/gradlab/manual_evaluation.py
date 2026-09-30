@@ -495,9 +495,14 @@ class ManualEvaluationSupervisor:
         )
 
     def _projection_key(self, context: _EvaluationContext) -> str:
+        name = (
+            "selected-service-projection.json"
+            if context.manifest.tracking is not None
+            else "wandb-projection.json"
+        )
         return (
             f"runs/{context.manifest.run_id}/manual-evals/"
-            f"{context.intent.idempotency_key}/wandb-projection.json"
+            f"{context.intent.idempotency_key}/{name}"
         )
 
     def _request_key(self, context: _EvaluationContext) -> str:
@@ -511,16 +516,23 @@ class ManualEvaluationSupervisor:
         manifest: RunManifest,
         training_terminal: Mapping[str, Any],
     ) -> int:
-        high_water = int(training_terminal.get("wandb_high_water_mark") or 0)
+        high_water = int(
+            (training_terminal.get("drain") or {}).get("metric_segment_high_water")
+            or training_terminal.get("wandb_high_water_mark") or 0
+        )
         for key in self.authority.control.iter_keys(f"runs/{manifest.run_id}/manual-evals"):
-            if not (key.endswith("/wandb-projection.json") or key.endswith("/terminal.json")):
+            if not (
+                key.endswith("/wandb-projection.json")
+                or key.endswith("/selected-service-projection.json")
+                or key.endswith("/terminal.json")
+            ):
                 continue
             document = self.authority.control.get_json(key)
             if str(document.get("run_id") or "") != manifest.run_id:
                 raise ValueError("manual evaluation projection belongs to another run")
             high_water = max(
                 high_water,
-                int(document.get("wandb_high_water_mark") or 0),
+                int(document.get("journal_high_water_mark") or document.get("wandb_high_water_mark") or 0),
             )
         return high_water
 
@@ -585,6 +597,73 @@ class ManualEvaluationSupervisor:
                 source=f"eval:manual:{context.intent.idempotency_key}:by_start",
             )
         ledger.reset_interrupted_metric_frames()
+        tracking = context.manifest.tracking or {"backend": "wandb", "delivery": "online"}
+        if context.manifest.tracking is not None:
+            while events := ledger.next_metric_events():
+                adjusted = [
+                    {**event, "event_seq": event_seq_offset + int(event["event_seq"])}
+                    for event in events
+                ]
+                key, digest = self.authority.seal_metric_segment(
+                    run_id=context.manifest.run_id,
+                    attempt_id=context.manifest.attempt_id,
+                    events=adjusted,
+                )
+                ledger.record_metric_segment(events=events, object_key=key, sha256=digest)
+        with ledger.connection() as connection:
+            row = connection.execute("SELECT COALESCE(MAX(id), 0) FROM metric_frames").fetchone()
+        high_water = event_seq_offset + int(row[0] if row else 0)
+        if tracking["delivery"] == "local_only":
+            self.authority.control.put_json(
+                projection_key,
+                {
+                    "schema_version": 1,
+                    "run_id": context.manifest.run_id,
+                    "checkpoint_id": context.checkpoint.checkpoint_id,
+                    "idempotency_key": context.intent.idempotency_key,
+                    "status": result.status,
+                    "journal_high_water_mark": high_water,
+                    "service_high_water_mark": 0,
+                    "projected_at": self.clock.utc_now(),
+                },
+                create_only=True,
+            )
+            return True
+        if tracking["backend"] == "mlflow":
+            binding = self.authority.control.get_json(
+                f"runs/{context.manifest.run_id}/metrics-binding.json"
+            )
+            service = self.runtime.start_mlflow(
+                {
+                    "game_family": context.recipe_document["recipe"]["train_config"]["game_family"],
+                    "wandb_run_id": context.manifest.run_id,
+                },
+                created_at=context.manifest.created_at,
+            )
+            if service.run_id != binding["service_run_id"]:
+                raise ValueError("manual evaluation MLflow binding changed")
+            while ledger.pending_metric_frames(limit=1):
+                if self.runtime.publish_frames(
+                    ledger, service, limit=100, event_seq_offset=event_seq_offset
+                ) <= 0:
+                    return False
+            if service.remote_high_water() < high_water:
+                return False
+            self.authority.control.put_json(
+                projection_key,
+                {
+                    "schema_version": 1,
+                    "run_id": context.manifest.run_id,
+                    "checkpoint_id": context.checkpoint.checkpoint_id,
+                    "idempotency_key": context.intent.idempotency_key,
+                    "status": result.status,
+                    "journal_high_water_mark": high_water,
+                    "service_high_water_mark": high_water,
+                    "projected_at": self.clock.utc_now(),
+                },
+                create_only=True,
+            )
+            return True
         projector = self.runtime.resume_wandb(
             {
                 "wandb_run_id": context.manifest.run_id,
@@ -614,9 +693,6 @@ class ManualEvaluationSupervisor:
                     return False
         finally:
             self.runtime.close_wandb(projector, timeout_seconds=300)
-        with ledger.connection() as connection:
-            row = connection.execute("SELECT COALESCE(MAX(id), 0) FROM metric_frames").fetchone()
-        high_water = event_seq_offset + int(row[0] if row else 0)
         remote = self.runtime.remote_summary(self._wandb_run_path(context.manifest))
         if wandb_delivery_high_water(remote) < high_water:
             return False
@@ -629,6 +705,7 @@ class ManualEvaluationSupervisor:
                 "idempotency_key": context.intent.idempotency_key,
                 "status": result.status,
                 "wandb_high_water_mark": high_water,
+                "journal_high_water_mark": high_water,
                 "projected_at": self.clock.utc_now(),
             },
             create_only=True,
@@ -666,7 +743,14 @@ class ManualEvaluationSupervisor:
     ) -> None:
         if not self.project_results:
             return
-        run_path = self._wandb_run_path(context.manifest)
+        tracking = context.manifest.tracking or {"backend": "wandb", "delivery": "online"}
+        if tracking["delivery"] == "local_only":
+            return
+        run_path = (
+            self._wandb_run_path(context.manifest)
+            if tracking["backend"] == "wandb"
+            else ""
+        )
         metrics_schema_version = metrics_schema_version_from_recipe_document(
             context.recipe_document
         )
@@ -677,6 +761,43 @@ class ManualEvaluationSupervisor:
                 "checkpoint recipe has no train_config for promotion ranking"
             )
         selection_rank = train_config.get("selection_rank") or ()
+        if tracking["backend"] == "mlflow":
+            try:
+                service = self.runtime.start_mlflow(
+                    {
+                        "game_family": train_config["game_family"],
+                        "wandb_run_id": context.manifest.run_id,
+                    },
+                    created_at=context.manifest.created_at,
+                )
+                binding = self.authority.control.get_json(
+                    f"runs/{context.manifest.run_id}/metrics-binding.json"
+                )
+                if service.run_id != binding["service_run_id"]:
+                    raise ValueError("manual promotion MLflow binding changed")
+                service.publish_promotion(
+                    checkpoint_step=receipt.checkpoint_step,
+                    checkpoint_url=context.checkpoint.public_url,
+                    metrics=result.aggregates,
+                    updated_at=receipt.promoted_at,
+                    selection_rank=selection_rank,
+                    evaluation_source="modal:manual",
+                )
+                remote = service.remote_summary()
+                if not promotion_summary_matches(
+                    remote,
+                    checkpoint_step=receipt.checkpoint_step,
+                    checkpoint_url=context.checkpoint.public_url,
+                    updated_at=receipt.promoted_at,
+                    selection_rank=selection_rank,
+                    metrics_schema_version=metrics_schema_version,
+                ):
+                    raise ValueError("MLflow promotion is not remotely visible")
+                return
+            except Exception as exc:
+                raise EvaluationProjectionPending(
+                    f"MLflow promotion projection is not yet complete: {exc}"
+                ) from exc
         try:
             remote = self.runtime.remote_summary(run_path)
             if promotion_summary_matches(
@@ -766,7 +887,7 @@ class ManualEvaluationSupervisor:
             except Exception as exc:
                 projection_error = str(exc)
         elif not projected:
-            projection_error = "waiting for training terminal before W&B projection"
+            projection_error = "waiting for training terminal before metrics projection"
         return {
             "checkpoint_id": context.checkpoint.checkpoint_id,
             "state": result.status if projected else "awaiting_projection",
@@ -1027,7 +1148,12 @@ class ManualEvaluationSupervisor:
             )
             projection = self.authority.control.get_json_optional(self._projection_key(context))
             if projection is not None:
-                projection_high_waters.append(int(projection.get("wandb_high_water_mark") or 0))
+                projection_high_waters.append(
+                    int(
+                        projection.get("service_high_water_mark")
+                        or projection.get("wandb_high_water_mark") or 0
+                    )
+                )
         document = {
             "schema_version": 1,
             "job_id": job_id,
@@ -1037,6 +1163,7 @@ class ManualEvaluationSupervisor:
             "subjects": [dict(item) for item in statuses],
             "promotion": None if promotion is None else dict(promotion),
             "wandb_high_water_mark": max(projection_high_waters, default=0),
+            "service_high_water_mark": max(projection_high_waters, default=0),
             "completed_at": self.clock.utc_now(),
         }
         existing = self.authority.control.get_json_optional(key)

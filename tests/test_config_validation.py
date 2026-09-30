@@ -423,8 +423,10 @@ class ConfigValidationTests(unittest.TestCase):
                 )
         self.assertEqual(ppo["train_config"]["timesteps"], 50000000)
         self.assertEqual(a2c["train_config"]["timesteps"], 50000000)
-        self.assertEqual(ppo["train_config"]["wandb_mode"], "online")
-        self.assertEqual(a2c["train_config"]["wandb_mode"], "online")
+        self.assertEqual(ppo["train_config"]["tracking"]["backend"], "wandb")
+        self.assertEqual(ppo["train_config"]["tracking"]["delivery"], "online")
+        self.assertEqual(a2c["train_config"]["tracking"]["backend"], "wandb")
+        self.assertEqual(a2c["train_config"]["tracking"]["delivery"], "online")
 
     def test_every_actor_critic_recipe_declares_explicit_policy_model(self) -> None:
         recipes = sorted(Path("experiments/goals").glob("**/recipes/*.yaml"))
@@ -432,11 +434,7 @@ class ConfigValidationTests(unittest.TestCase):
 
         for recipe_path in recipes:
             goal_path = recipe_path.parent.parent / "_goal.yaml"
-            try:
-                document = compose_train_document(goal_path, recipe_path)
-            except ValueError as exc:
-                self.assertIn("objective.training_success is required", str(exc))
-                continue
+            document = compose_train_document(goal_path, recipe_path)
             backend_id = document["train_config"]["training_backend"]["id"]
             if backend_id not in {"gradlab.ppo", "sb3.ppo", "sb3.a2c"}:
                 continue
@@ -455,7 +453,7 @@ class ConfigValidationTests(unittest.TestCase):
                     },
                 )
 
-        self.assertEqual(actor_critic_recipes, 41)
+        self.assertEqual(actor_critic_recipes, 53)
 
     def test_every_mario_recipe_disables_eval_and_stops_at_perfect_clear_window(self) -> None:
         mario_root = Path("experiments/goals/SuperMarioBros-Nes-v0")
@@ -564,17 +562,10 @@ class ConfigValidationTests(unittest.TestCase):
                 label="goal",
             )
 
-    def test_checked_in_experiment_tree_reports_goals_without_success_criteria(self) -> None:
+    def test_checked_in_experiment_tree_has_complete_goal_contracts(self) -> None:
         report = validate_experiment_tree(Path("."))
 
-        self.assertTrue(report.issues)
-        self.assertTrue(all(
-            "objective.training_success is required" in issue.message
-            for issue in report.issues
-        ))
-        self.assertEqual(sum(
-            issue.path.endswith("_goal.yaml") for issue in report.issues
-        ), 12)
+        self.assertEqual(report.issues, ())
         self.assertEqual(report.counts["json_files"], 0)
         self.assertGreaterEqual(report.counts["yaml_files"], 15)
         self.assertGreaterEqual(report.counts["goals"], 1)
@@ -582,7 +573,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertGreaterEqual(report.counts["env_configs"], 0)
         self.assertEqual(report.counts["benchmark_profiles"], 4)
         self.assertEqual(report.counts["workspace_manifests"], 1)
-        self.assertEqual(report.counts["workspace_projects"], 0)
+        self.assertEqual(report.counts["workspace_projects"], 25)
 
     def test_recipe_cannot_be_launched_for_a_different_goal(self) -> None:
         with self.assertRaisesRegex(ValueError, "does not belong to goal"):
@@ -743,11 +734,12 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertNotIn("checkpoint_eval_environment", train_config)
 
     def test_mspacman_recipe_requires_training_success(self) -> None:
+        path = Path("experiments/goals/alepy__mspacman/_goal.yaml").resolve()
+        document = load_goal_contract(path)
+        self.assertEqual(document["objective"]["training_success"]["threshold"], 100)
+        del document["objective"]["training_success"]
         with self.assertRaisesRegex(ValueError, "objective.training_success is required"):
-            compose_train_document(
-                Path("experiments/goals/alepy__mspacman/_goal.yaml"),
-                Path("experiments/goals/alepy__mspacman/recipes/ppo.yaml"),
-            )
+            validate_goal_contract_document(document, path, Path.cwd())
 
     def test_goal_validator_rejects_noncurrent_eval_driven_early_stop(self) -> None:
         path = self.MARIO_L11_GOAL.resolve()
@@ -1141,13 +1133,13 @@ class ConfigValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "marker-only"):
             validate_goal_contract_document(document, path, Path(".").resolve())
 
-    def test_validate_cli_reports_missing_training_success(self) -> None:
+    def test_validate_cli_accepts_complete_checked_in_goals(self) -> None:
         stderr = io.StringIO()
         with patch("sys.stderr", stderr):
             exit_code = validate_main([])
 
-        self.assertEqual(exit_code, 1)
-        self.assertIn("objective.training_success is required", stderr.getvalue())
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(stderr.getvalue(), "")
 
     def test_validate_cli_load_goal_emits_composed_json(self) -> None:
         stdout = io.StringIO()

@@ -39,6 +39,7 @@ class TrainImageTests(unittest.TestCase):
         self.assertIn("containers/train/vizdoom_smoke.py", RUNTIME_INPUT_PATHS)
         self.assertIn("experiments/goals", RUNTIME_INPUT_PATHS)
         self.assertIn("experiments/recipes", RUNTIME_INPUT_PATHS)
+        self.assertIn("experiments/tracking.yaml", RUNTIME_INPUT_PATHS)
         self.assertIn("src", RUNTIME_INPUT_PATHS)
         self.assertIn("pyproject.toml", RUNTIME_INPUT_PATHS)
         self.assertNotIn("uv.lock", RUNTIME_INPUT_PATHS)
@@ -345,6 +346,7 @@ class TrainImageTests(unittest.TestCase):
         self.assertIn("env-gradoom-turbo-torch==0.2.1", dependencies)
         self.assertIn("env-breakoutatari2600-turbo-native==0.5.13", dependencies)
         self.assertIn("box2d-py==2.3.5", dependencies)
+        self.assertIn("mlflow-skinny==3.16.1", dependencies)
         self.assertNotIn("wandb-workspaces==", gpu + dependencies)
         self.assertIn("torch==2.13.0", gpu)
         gpu_lines = set(gpu.splitlines())
@@ -352,7 +354,7 @@ class TrainImageTests(unittest.TestCase):
         self.assertFalse(gpu_lines & dependency_lines)
         self.assertEqual(
             train_plan_sha256(root),
-            "a2aab4698340a2f2810429ee73d3e958e53e788545262fa5fecef4e92c3ac433",
+            "cbdc0cb460e7a30563e196764b187f36acb63890fa7f4cea541ce6ac83cfdb6e",
         )
         for line in gpu.splitlines():
             name = line.split("==", maxsplit=1)[0]

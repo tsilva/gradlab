@@ -201,15 +201,22 @@ explicitly authorized. See [COMPUTE.md](COMPUTE.md) and the
 - GradLab requires Python 3.14 and uses `uv` with a committed lockfile and a
   seven-day dependency age gate. Supported binary targets are macOS arm64 and
   Linux x86_64.
-- Local `gradlab train` Runs publish metrics to W&B and checkpoints to R2 by
-  default, using the same project routing and playback catalog as queued Runs.
+- Local `gradlab train` Runs use online W&B and R2 by default; inherited
+  `tracking.backend` can select MLflow. The bundled bandit recipe explicitly
+  selects credential-free `tracking.delivery: local_only` and completes with a
+  durable local metric journal and a `complete_local` outcome.
+  `gradlab publish-local <run-directory>` uploads a completed local-only Run's
+  checkpoints and journal and creates its public telemetry without tracker sync.
   Online runs retain periodic checkpoints and follow the recipe budget and
   early-stop rules. Use `gradlab sync <run-directory>` to recover publication of a
-  finished local run without retraining. Use `--no-wandb` for credential-free execution, or
-  `--set logging.wandb_mode=offline` to retain an offline W&B run. Acceptance
+  finished local-only run to its frozen tracker without retraining. `--no-wandb`
+  explicitly selects local-only delivery for other local recipes. Acceptance
   evaluation remains disabled for local training.
   They can establish Training Success but cannot establish Acceptance or
   Promotion.
+- Queued `complete_local` Runs seal the journal to private R2. An operator can
+  later run `gradlab sync-run <run-id>` to project that journal to the Run's
+  frozen backend without changing its terminal receipt.
 - `gradlab.ppo` is the opt-in tensor-native PPO backend. It accepts the
   `sb3.ppo` configuration surface plus `precision` (`fp32`, `amp-fp16`, or
   `amp-bf16`) and an `execution_profile`. `sb3-parity` preserves SB3's eager,

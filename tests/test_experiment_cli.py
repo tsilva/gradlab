@@ -10,7 +10,7 @@ from unittest import mock
 
 import pytest
 
-from gradlab.dstack_backend import DstackResources, DstackTask
+from gradlab.dstack_backend import ComputeRequest, DstackResources, DstackTask
 from gradlab.metric_names import METRICS_SCHEMA_VERSION
 from gradlab.experiment_cli import (
     _bind_launch_contract,
@@ -27,6 +27,8 @@ from gradlab.experiment_cli import (
     _manifest_rom_asset,
     _manifest_vizdoom_iwad,
     _operator_preflight,
+    _preflight_mlflow_compute_route,
+    _preflight_mlflow_service_uri,
     _poll_status,
     _project_reconciled_terminal,
     _public_dstack_state,
@@ -616,7 +618,9 @@ def test_operator_preflight_reports_resolved_project_fleet_and_sources(
             "gradlab.experiment_cli.wandb_entity_from_env",
             return_value="example-entity",
         ),
+        mock.patch("wandb.Api") as wandb_api,
     ):
+        wandb_api.return_value.projects.return_value = []
         _storage, _authority, backend, report = _operator_preflight(
             tmp_path,
             checkpoint_eval_backend="none",
@@ -694,6 +698,7 @@ def test_launch_operator_preflight_runs_before_runtime_readiness(
                     "train_config": {
                         "checkpoint_eval_backend": "modal",
                         "env_provider": "gradlab",
+                        "tracking": {"backend": "wandb", "delivery": "online"},
                     }
                 },
             ),
@@ -1159,7 +1164,7 @@ def _pre_submit_authority(tmp_path: Path):
 def test_pre_submit_failure_records_typed_attempt_evidence(tmp_path: Path) -> None:
     manifest = _manifest_only_run()
     authority = _pre_submit_authority(tmp_path)
-    authority.create_attempt_manifest(manifest)
+    authority.create_manifest(manifest)
 
     _record_pre_submit_failure(authority, manifest)
 
@@ -1172,13 +1177,103 @@ def test_pre_submit_failure_records_typed_attempt_evidence(tmp_path: Path) -> No
     assert receipt["drain"]["complete"] is False
 
 
+def test_retry_cannot_change_frozen_tracking_or_service_identity(tmp_path: Path) -> None:
+    manifest = _manifest_only_run()
+    authority = _pre_submit_authority(tmp_path)
+    authority.create_manifest(manifest)
+    attempt_id = new_attempt_id()
+    tracking = {
+        "backend": "mlflow",
+        "delivery": "online",
+        "sources": {"backend": "launch override", "delivery": "built-in default"},
+    }
+    with pytest.raises(ValueError, match="tracking selection"):
+        authority.create_attempt_manifest(replace(manifest, attempt_id=attempt_id, tracking=tracking, wandb={}))
+    with pytest.raises(ValueError, match="service identity"):
+        authority.create_attempt_manifest(
+            replace(manifest, attempt_id=attempt_id, wandb={**manifest.wandb, "entity": "other"})
+        )
+
+
+def test_mlflow_private_route_rejects_unapproved_fleet(monkeypatch) -> None:
+    monkeypatch.setenv("MLFLOW_OPERATOR_PROFILE", "pilot-profile")
+    monkeypatch.setenv("MLFLOW_ALLOWED_FLEETS", "private-gpu")
+    local = ComputeRequest(
+        kind="local", target="private-gpu", max_price=None, max_cost_usd=None,
+        allow_on_demand=False, max_duration_seconds=3600,
+    )
+    assert _preflight_mlflow_compute_route(local) == "pilot-profile"
+    with pytest.raises(RuntimeError, match="approved private route"):
+        _preflight_mlflow_compute_route(replace(local, target="other-gpu"))
+    with pytest.raises(RuntimeError, match="approved private route"):
+        _preflight_mlflow_compute_route(replace(local, kind="spot"))
+    assert _preflight_mlflow_service_uri("https://private.example.test/mlflow") == (
+        "https://private.example.test/mlflow"
+    )
+    with pytest.raises(RuntimeError, match="HTTPS service URI"):
+        _preflight_mlflow_service_uri("http://private.example.test/mlflow")
+
+
+def test_local_only_mlflow_launch_requires_storage_but_no_service_credentials() -> None:
+    required = _required_operator_environment(
+        "training-container", {"backend": "mlflow", "delivery": "local_only"}
+    )
+    assert "GRADLAB_CONTROL_R2_URI" in required
+    assert not any(name.startswith("MLFLOW_") for name in required)
+    assert "WANDB_API_KEY" not in required
+
+
+def test_private_mlflow_ca_is_frozen_as_required_task_secret() -> None:
+    tracking = {
+        "backend": "mlflow",
+        "delivery": "online",
+        "private_tls_ca": True,
+    }
+    required = _required_operator_environment("none", tracking)
+    assert "GRADLAB_MLFLOW_TLS_CA_B64" in required
+    assert "GRADLAB_MLFLOW_TLS_CA_B64" not in _required_operator_environment(
+        "none", {"backend": "mlflow", "delivery": "online"}
+    )
+    assert "GRADLAB_MLFLOW_TLS_CA_B64" not in _required_operator_environment(
+        "none", {"backend": "wandb", "delivery": "online"}
+    )
+
+    manifest = SimpleNamespace(
+        run_id=new_run_id(),
+        image_digest="docker:example/gradlab@sha256:" + "a" * 64,
+        compute={
+            "selected": {
+                "kind": "local", "target": "private-gpu", "max_price": None,
+                "max_cost_usd": None, "allow_on_demand": False,
+                "max_duration_seconds": 3600,
+            },
+            "dstack_task": "private-mlflow-ca",
+        },
+        modal={"enabled": False, "environment_name": "gradlab-eval"},
+        tracking=tracking,
+    )
+    task = _task_request(manifest, manifest_uri="s3://control/run/manifest.json")
+    assert "GRADLAB_MLFLOW_TLS_CA_B64" in task.secret_env
+
+    run = _manifest_only_run()
+    tracking = {
+        **tracking,
+        "sources": {"backend": "launch override", "delivery": "launch override"},
+        "operator_profile": "pilot",
+    }
+    private_run = replace(run, tracking=tracking, wandb={})
+    private_run.validate()
+    with pytest.raises(ValueError, match="private_tls_ca"):
+        replace(private_run, tracking={**tracking, "private_tls_ca": "yes"}).validate()
+
+
 @pytest.mark.parametrize("invalid", ["activity", "binding_hash", "missing_binding"])
 def test_pre_submit_failure_rejects_activity_or_invalid_binding(
     tmp_path: Path, invalid: str
 ) -> None:
     manifest = _manifest_only_run()
     authority = _pre_submit_authority(tmp_path)
-    authority.create_attempt_manifest(manifest)
+    authority.create_manifest(manifest)
     prefix = f"runs/{manifest.run_id}/attempts/{manifest.attempt_id}"
     if invalid == "activity":
         authority.control.put_json(f"{prefix}/activity.json", {"started": True})
@@ -1312,7 +1407,10 @@ def test_reconcile_acquires_lease_writes_r2_before_wandb_and_releases(
 def test_reconciled_failure_closes_wandb_with_nonzero_exit() -> None:
     manifest = _manifest_only_run()
     projector = mock.MagicMock()
-    receipt = SimpleNamespace(state="resumable_failure")
+    receipt = SimpleNamespace(
+        state="resumable_failure", stop_reason="supervisor_startup_failure",
+        final_step=0, checkpoint_inventory=(),
+    )
 
     with (
         mock.patch(
@@ -1333,6 +1431,7 @@ def test_reconciled_failure_closes_wandb_with_nonzero_exit() -> None:
             "wandb_group": manifest.wandb.get("group"),
             "metrics_schema_version": METRICS_SCHEMA_VERSION,
         },
+        allow_create=True,
         update_finish_state=True,
     )
     publish.assert_called_once_with(projector.run, receipt)
@@ -1342,18 +1441,22 @@ def test_reconciled_failure_closes_wandb_with_nonzero_exit() -> None:
 def test_reconciled_stopped_run_closes_wandb_with_zero_exit() -> None:
     manifest = _manifest_only_run()
     projector = mock.MagicMock()
-    receipt = SimpleNamespace(state="stopped")
+    receipt = SimpleNamespace(
+        state="stopped", stop_reason="training_plateau", final_step=17,
+        checkpoint_inventory=({"step": 17},),
+    )
 
     with (
         mock.patch(
             "gradlab.experiment_cli.WandbProjector.resume",
             return_value=projector,
-        ),
+        ) as resume,
         mock.patch("gradlab.experiment_cli.publish_terminal_summary"),
     ):
         _project_reconciled_terminal(manifest, receipt)
 
     projector.close.assert_called_once_with(timeout_seconds=300, exit_code=0)
+    assert resume.call_args.kwargs["allow_create"] is False
 
 
 def test_resume_submit_recovers_only_the_original_manifest(

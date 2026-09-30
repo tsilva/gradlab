@@ -193,8 +193,6 @@ train:
     - 50-75% of first wall
     - 75-100% of first wall
     window_transitions: 65536
-logging:
-  wandb_mode: online
 recipe_id: a2c-monitoring-validation
 description: Bounded SB3 A2C validation of immutable native Breakout FirstWall checkpoint
   monitoring. Monitoring is enabled only with explicit measured campaign settings
