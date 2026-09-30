@@ -358,3 +358,32 @@ def test_neutral_early_stop_remains_neutral_in_catalog(local_run):
     assert terminal["state"] == "stopped"
     assert terminal["early_stop"]["outcome"] == "neutral"
     assert terminal["stop_reason"] == "early_stop_neutral:return_plateau"
+
+
+@pytest.mark.parametrize("local_run", [{"delivery": "local_only"}], indirect=True)
+@pytest.mark.parametrize("published_owner", [False, True])
+def test_earlier_video_joins_immutable_intent_instead_of_a_shared_step(local_run, published_owner):
+    import hashlib
+    from gradlab.run_contracts import checkpoint_id
+
+    directory, config, store, authority, env = local_run
+    run_id = config['wandb_run_id']
+    digest = hashlib.sha256(b'checkpoint').hexdigest() if published_owner else 'b' * 64
+    owner = checkpoint_id(step=1000, sha256=digest)
+    evaluation_id = 'f' * 64
+    prefix = f'runs/{run_id}/evals/{evaluation_id}'
+    authority.evaluation.put_json(prefix + '/intent.json', {'checkpoint_id': owner})
+    video = b'earlier-verified-video'
+    key = prefix + '/video/episode.mp4'
+    authority.evaluation.put_bytes(key, video)
+    store.enqueue_event(
+        kind='evaluation_video', step=1000, source=f'eval:{evaluation_id}:video',
+        payload={'bucket_uri': authority.evaluation.config.uri, 'key': key,
+                 'bytes': len(video), 'sha256': hashlib.sha256(video).hexdigest(),
+                 'episode_id': 'recorded-episode'},
+    )
+    with LocalRunPublication(directory, config, store, env, authority=authority) as publication:
+        publication.finish()
+    reference = authority.publish_run_telemetry(run_id)
+    document = authority.models.get_json(f'runs/{run_id}/telemetry/{reference["sha256"]}.json')
+    assert [item['checkpoint_id'] for item in document['media']] == ([owner] if published_owner else [])
