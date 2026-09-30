@@ -61,7 +61,7 @@ from gradlab.metric_names import (
     require_current_metrics_schema,
 )
 from gradlab.model_sources import DEFAULT_PUBLIC_MODELS_BASE_URL, _public_json
-from gradlab.metric_journal import JournalHistory, PublicJournalHistory, read_control_journal
+from gradlab.metric_journal import JournalHistory, PublicJournalHistory, ScientificEvidence, read_control_journal
 from gradlab.policy_bundle import canonical_json_sha256, validate_recipe_document
 from gradlab.ranking import (
     RankCriterion,
@@ -762,7 +762,7 @@ def filter_checkpoint_summaries(
 
 
 def _checkpoint_training_metric_history(
-    run: Any,
+    run: ScientificEvidence,
     columns: Sequence[Mapping[str, Any]],
     on_metric: Callable[[str, tuple[tuple[int, float], ...]], None] | None = None,
 ) -> dict[str, tuple[tuple[int, float], ...]]:
@@ -773,10 +773,7 @@ def _checkpoint_training_metric_history(
         if column.get("evidence") != "training" or metric == TRAIN_GLOBAL_STEP:
             continue
         samples: dict[int, float] = {}
-        rows = run.scan_history(
-            keys=[TRAIN_GLOBAL_STEP, source_metric],
-            page_size=10_000,
-        )
+        rows = run.read([TRAIN_GLOBAL_STEP, source_metric])
         for raw in rows:
             if not isinstance(raw, Mapping):
                 continue
@@ -3220,7 +3217,7 @@ class PlayCatalog:
 
     @staticmethod
     def _monitoring_history(
-        run: Any,
+        run: ScientificEvidence,
         metric_contract: CheckpointMetricContract,
         *,
         expected_episodes: int | None = None,
@@ -3240,10 +3237,7 @@ class PlayCatalog:
         )
         optional_metrics = tuple(metric for metric in monitoring_metrics if metric not in core_metrics)
         evaluations = {}
-        for raw in run.scan_history(
-            keys=[EVAL_CHECKPOINT_STEP, marker, "eval/episodes/count", *core_metrics],
-            page_size=10_000,
-        ):
+        for raw in run.read([EVAL_CHECKPOINT_STEP, marker, "eval/episodes/count", *core_metrics]):
             if not isinstance(raw, Mapping):
                 continue
             step = _safe_int(raw.get(EVAL_CHECKPOINT_STEP))
@@ -3268,7 +3262,7 @@ class PlayCatalog:
         # Older completed monitoring rows lack newer observational measures.
         # Fetch those independently so their absence cannot hide verified evidence.
         for metric in optional_metrics:
-            for raw in run.scan_history(keys=[EVAL_CHECKPOINT_STEP, metric], page_size=10_000):
+            for raw in run.read([EVAL_CHECKPOINT_STEP, metric]):
                 if not isinstance(raw, Mapping):
                     continue
                 step = _safe_int(raw.get(EVAL_CHECKPOINT_STEP))
@@ -3335,7 +3329,7 @@ class PlayCatalog:
                 )
             return config
 
-        def validate_wandb_config(config: Mapping[str, Any]) -> None:
+        def validate_evidence_config(config: Mapping[str, Any]) -> None:
             schema_version = require_current_metrics_schema(config.get("metrics_schema_version"))
             if schema_version != metric_contract.metrics_schema_version:
                 raise ValueError("W&B metrics schema disagrees with the immutable recipe")
@@ -3487,112 +3481,61 @@ class PlayCatalog:
             training_metric_history = {}
             warning = None
             training_seed = _safe_int(manifest.get("seed"))
-            if manifest.get("tracking") is not None:
-                try:
-                    recipe_document = self._control_recipe_document(str(manifest["recipe_sha256"]))
-                    if recipe_document is None:
-                        raise ValueError("frozen Run recipe is unavailable")
-                    config = frozen_journal_config(recipe_document["recipe"]["train_config"])
-                    validate_wandb_config(config)
-                    history_run = JournalHistory(
-                        read_control_journal(self.control_bucket, run_id)
-                    )
-                    training_metric_history = _checkpoint_training_metric_history(
-                        history_run, metric_contract.columns, on_training_metric
-                    )
-                    if not metric_contract.acceptance and monitoring_states:
-                        history = self._monitoring_history(
-                            history_run, metric_contract,
-                            expected_episodes=monitoring_episodes,
-                        )
-                        complete_steps = [
-                            int(state["step"])
-                            for state in monitoring_states.values()
-                            if state["status"] == "complete"
-                        ]
-                        for checkpoint_id, checkpoint_state in monitoring_states.items():
-                            step = int(checkpoint_state["step"])
-                            if (
-                                checkpoint_state["status"] == "complete"
-                                and complete_steps.count(step) == 1
-                                and step in history
-                            ):
-                                evaluations[checkpoint_id] = history[step]
-                except Exception as exc:
-                    warning = {
-                        "code": "journal_contract_mismatch" if isinstance(exc, ValueError)
-                                else "journal_unavailable",
-                        "message": f"GradLab metric journal is unavailable: {exc}",
-                        "retryable": isinstance(exc, (TimeoutError, OSError)),
-                        "source": "gradlab-journal",
-                    }
-                media = ()
-                if isinstance(public_telemetry, Mapping):
-                    try:
-                        media = tuple(self._public_journal_history(run_id, public_telemetry).media)
-                    except Exception as exc:
-                        warning = {"code": "public_media_unavailable", "source": "public-telemetry",
-                                   "message": f"Published media is unavailable: {exc}",
-                                   "retryable": isinstance(exc, (TimeoutError, OSError))}
-                return _CheckpointEvaluationData(
-                    evaluations=evaluations,
-                    training_seed=training_seed,
-                    evaluation_seed=evaluation_seed,
-                    training_metric_history=training_metric_history,
-                    warning=warning,
-                    media=media,
-                )
+            use_journal = manifest.get("tracking") is not None
             wandb = manifest.get("wandb")
             entity = str(wandb.get("entity") or "").strip() if isinstance(wandb, Mapping) else ""
             project = str(wandb.get("project") or "").strip() if isinstance(wandb, Mapping) else ""
-            if include_wandb and entity and project:
+            if use_journal or (include_wandb and entity and project):
                 try:
-                    run = self._wandb_api().run(f"{entity}/{project}/{run_id}")
-                    config = dict(getattr(run, "config", {}) or {})
-                    validate_wandb_config(config)
-                    if training_seed is None:
-                        training_seed = _safe_int(config.get("seed"))
+                    if use_journal:
+                        recipe = self._control_recipe_document(str(manifest["recipe_sha256"]))
+                        if recipe is None:
+                            raise ValueError("frozen Run recipe is unavailable")
+                        evidence = ScientificEvidence.journal(
+                            JournalHistory(read_control_journal(self.control_bucket, run_id)),
+                            frozen_journal_config(recipe["recipe"]["train_config"]),
+                        )
+                    else:
+                        evidence = ScientificEvidence.historical_wandb(
+                            self._wandb_api().run(f"{entity}/{project}/{run_id}")
+                        )
+                    validate_evidence_config(evidence.config)
+                    if not use_journal and training_seed is None:
+                        training_seed = _safe_int(evidence.config.get("seed"))
                     training_metric_history = _checkpoint_training_metric_history(
-                        run,
-                        metric_contract.columns,
-                        on_training_metric,
+                        evidence, metric_contract.columns, on_training_metric,
                     )
                     if not metric_contract.acceptance and monitoring_states:
                         history = self._monitoring_history(
-                            run,
-                            metric_contract,
-                            expected_episodes=monitoring_episodes,
+                            evidence, metric_contract, expected_episodes=monitoring_episodes,
                         )
-                        complete_steps = [
-                            int(state["step"])
-                            for state in monitoring_states.values()
-                            if state["status"] == "complete"
-                        ]
+                        complete_steps = [int(state["step"]) for state in monitoring_states.values()
+                                          if state["status"] == "complete"]
                         for checkpoint_id, state in monitoring_states.items():
                             step = int(state["step"])
-                            if (
-                                state["status"] == "complete"
-                                and complete_steps.count(step) == 1
-                                and step in history
-                            ):
+                            if state["status"] == "complete" and complete_steps.count(step) == 1 and step in history:
                                 evaluations[checkpoint_id] = history[step]
                 except Exception as exc:
                     warning = {
-                        "code": (
-                            "wandb_contract_mismatch"
-                            if isinstance(exc, ValueError)
-                            else "wandb_enrichment_unavailable"
-                        ),
-                        "message": f"Optional W&B training history is unavailable: {exc}",
+                        "code": ("journal_contract_mismatch" if isinstance(exc, ValueError) else "journal_unavailable")
+                                if use_journal else ("wandb_contract_mismatch" if isinstance(exc, ValueError) else "wandb_enrichment_unavailable"),
+                        "message": f"GradLab metric journal is unavailable: {exc}" if use_journal
+                                   else f"Optional W&B training history is unavailable: {exc}",
                         "retryable": isinstance(exc, (TimeoutError, OSError)),
-                        "source": "wandb",
+                        "source": "gradlab-journal" if use_journal else "wandb",
                     }
+            media = ()
+            if use_journal and isinstance(public_telemetry, Mapping):
+                try:
+                    media = tuple(self._public_journal_history(run_id, public_telemetry).media)
+                except Exception as exc:
+                    warning = {"code": "public_media_unavailable", "source": "public-telemetry",
+                               "message": f"Published media is unavailable: {exc}",
+                               "retryable": isinstance(exc, (TimeoutError, OSError))}
             return _CheckpointEvaluationData(
-                evaluations=evaluations,
-                training_seed=training_seed,
-                evaluation_seed=evaluation_seed,
-                training_metric_history=training_metric_history,
-                warning=warning,
+                evaluations=evaluations, training_seed=training_seed,
+                evaluation_seed=evaluation_seed, training_metric_history=training_metric_history,
+                warning=warning, media=media,
             )
         wandb_location = self._wandb_run_locations.get(run_id)
         entity = str(wandb_location.entity or "").strip() if wandb_location else ""
@@ -3603,14 +3546,17 @@ class PlayCatalog:
         run = None
         try:
             if use_public:
-                run = self._public_journal_history(run_id, public_telemetry)
-                media = tuple(run.media)
-                config = frozen_journal_config(public_recipe_config or {})
+                run = ScientificEvidence.journal(
+                    self._public_journal_history(run_id, public_telemetry),
+                    frozen_journal_config(public_recipe_config or {}),
+                )
+                media = run.media
+                config = run.config
             else:
-                run = self._wandb_api().run(f"{entity}/{project}/{run_id}")
-                media = ()
-                config = dict(getattr(run, "config", {}) or {})
-            validate_wandb_config(config)
+                run = ScientificEvidence.historical_wandb(self._wandb_api().run(f"{entity}/{project}/{run_id}"))
+                media = run.media
+                config = run.config
+            validate_evidence_config(config)
             require_current_metrics_schema(metric_contract.metrics_schema_version)
             training_seed = _safe_int(config.get("seed"))
             contract = config.get("checkpoint_eval_contract")
@@ -3628,7 +3574,7 @@ class PlayCatalog:
                     EVAL_ACCEPTANCE_EPISODE_COMPLETED_COUNT,
                 }
                 evaluations = {}
-                for raw in run.scan_history(keys=sorted(result_keys), page_size=10_000):
+                for raw in run.read(sorted(result_keys)):
                     if not isinstance(raw, Mapping):
                         continue
                     step = _safe_int(raw.get(EVAL_CHECKPOINT_STEP))
@@ -3668,44 +3614,39 @@ class PlayCatalog:
                 # W&B returns no rows when scan_history requests a key that is absent
                 # from some history records, so fetch each optional criterion
                 # independently and merge it into the authoritative verdict rows.
-                for rule_index, rule in enumerate(rules):
-                    metric = str(rule["metric"])
-                    for raw in run.scan_history(
-                        keys=[EVAL_CHECKPOINT_STEP, metric],
-                        page_size=10_000,
-                    ):
-                        if not isinstance(raw, Mapping):
-                            continue
+                criteria_by_metric: dict[str, list[int]] = {}
+                for index, rule in enumerate(rules):
+                    criteria_by_metric.setdefault(str(rule["metric"]), []).append(index)
+                evaluation_metrics = {
+                    str(column["metric"])
+                    for column in metric_contract.columns
+                    if column.get("evidence") == "evaluation"
+                }
+                metric_names = dict.fromkeys([
+                    *criteria_by_metric,
+                    *(str(column["metric"]) for column in metric_contract.columns
+                      if column.get("evidence") == "evaluation"),
+                ])
+                for metric in metric_names:
+                    if metric == LEADER_CHECKPOINT_STEP and metric not in criteria_by_metric:
+                        continue
+                    for raw in run.read([EVAL_CHECKPOINT_STEP, metric]):
                         step = _safe_int(raw.get(EVAL_CHECKPOINT_STEP))
                         value = _safe_float(raw.get(metric))
                         evaluation = evaluations.get(step) if step is not None else None
                         if evaluation is None or value is None:
                             continue
-                        criterion = evaluation["criteria"][rule_index]
-                        criterion["value"] = value
-                        criterion["passed"] = bool(
-                            EARLY_STOP_OPERATORS[str(rule["operator"])](
-                                value,
-                                float(rule["threshold"]),
-                            )
-                        )
-                evaluation_metric_names = dict.fromkeys(
-                    str(column["metric"])
-                    for column in metric_contract.columns
-                    if column.get("evidence") == "evaluation"
-                )
-                evaluation_metric_names.pop(LEADER_CHECKPOINT_STEP, None)
-                for metric in evaluation_metric_names:
-                    for raw in run.scan_history(
-                        keys=[EVAL_CHECKPOINT_STEP, metric],
-                        page_size=10_000,
-                    ):
-                        if not isinstance(raw, Mapping):
-                            continue
-                        step = _safe_int(raw.get(EVAL_CHECKPOINT_STEP))
-                        value = _safe_float(raw.get(metric))
-                        evaluation = evaluations.get(step) if step is not None else None
-                        if evaluation is not None and value is not None:
+                        if metric in criteria_by_metric:
+                            for index in criteria_by_metric[metric]:
+                                criterion = evaluation["criteria"][index]
+                                criterion["value"] = value
+                                rule = rules[index]
+                                criterion["passed"] = bool(
+                                    EARLY_STOP_OPERATORS[str(rule["operator"])](
+                                        value, float(rule["threshold"])
+                                    )
+                                )
+                        if metric in evaluation_metrics and metric != LEADER_CHECKPOINT_STEP:
                             evaluation["metrics"][metric] = value
             training_metric_history = _checkpoint_training_metric_history(
                 run,

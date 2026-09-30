@@ -103,7 +103,7 @@ def test_same_owner_recovers_committed_state_after_lost_ack(tmp_path, monkeypatc
     prepared = fixture.prepare(run_number=94)
     owner = prepared.supervisor
     owner.evaluation_required = False
-    owner.eval_admission_closed = True
+    owner.automatic_evaluation.closed = True
     fixture.record_checkpoint(prepared, step=100, kind="periodic")
     owner._publish_checkpoints()
     owner.train_config["checkpoint_monitoring"] = asdict(MonitoringConfig(enabled=True))

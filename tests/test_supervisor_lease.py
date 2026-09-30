@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -36,8 +36,7 @@ def test_lease_loss_during_wandb_start_does_not_publish_writer_receipt(tmp_path)
         return WandbProjector(object())
 
     with (
-        patch("gradlab.run_supervisor.load_materialized_train_config", return_value={}),
-        patch("gradlab.run_supervisor.env_config_from_mapping"),
+        patch("gradlab.run_supervisor.load_materialized_train_config", return_value=Mock(to_document=lambda: {}, environment=Mock())),
         patch("gradlab.run_supervisor.resolve_env_config"),
         patch.object(prepared.runtime, "start_wandb", side_effect=start),
         patch.object(supervisor.authority, "renew_lease", side_effect=LeaseUnavailable("lost")),

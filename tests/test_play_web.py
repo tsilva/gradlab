@@ -20,32 +20,8 @@ from gradlab.dataset_cli import build_parser as build_dataset_parser
 from gradlab.play_catalog import CatalogPage, CheckpointPage
 from gradlab.play_debug import PolicyDecision
 from gradlab.play_session import _PlaybackSession, _PlaybackTransition
-from gradlab.play_web import (
-    FRAME_ATTRIBUTION,
-    FRAME_CNN_INSPECTION,
-    FRAME_CODEC_PNG,
-    FRAME_GAME,
-    FRAME_HEADER,
-    FRAME_MAGIC,
-    FRAME_OBSERVATION,
-    DatasetPlaybackRunner,
-    FrameEncoder,
-    HumanRecordingRunner,
-    PlaybackCommand,
-    PlaybackWebServer,
-    WebClient,
-    WebPlaybackRunner,
-    _decision_payload,
-    _json_value,
-    _session_environment_id,
-    annotate_realized_returns,
-    history_point_payload,
-    reward_accounting_contract,
-    run_web_playback,
-    run_web_player_application,
-    source_browser_path,
-    transition_payload,
-)
+from gradlab.play_engine import FRAME_ATTRIBUTION, FRAME_CNN_INSPECTION, FRAME_CODEC_PNG, FRAME_GAME, FRAME_HEADER, FRAME_MAGIC, FRAME_OBSERVATION, DatasetPlaybackRunner, FrameEncoder, HumanRecordingRunner, PlaybackCommand, WebPlaybackRunner, _decision_payload, _json_value, _session_environment_id, annotate_realized_returns, history_point_payload, reward_accounting_contract, transition_payload
+from gradlab.play_web import PlaybackWebServer, WebClient, run_web_playback, run_web_player_application, source_browser_path
 
 
 class FakeHumanSession:
@@ -123,6 +99,21 @@ def test_json_projection_preserves_bounded_scalars_at_the_depth_limit() -> None:
 
     assert projected["a"]["b"]["c"]["d"]["label"] == "turn right"
     assert projected["a"]["b"]["c"]["d"]["items"] == "<list>"
+
+
+def test_cancelled_preparation_restores_lower_revision_playback_snapshot() -> None:
+    client = WebClient("client", Mock(), {"telemetry"}, "workspace", "main")
+    for epoch, phase, revision, sequence in [
+        (4, "loading", 40, 0), (4, "active", 3, 103),
+        (4, "active", 2, 102), (3, "loading", 50, 0),
+    ]:
+        client.offer_snapshot({
+            "session_epoch": epoch, "revision": revision, "sequence": sequence,
+            "app": {"phase": phase},
+        })
+    phases = [json.loads(snapshot)["app"]["phase"] for _, snapshot in client.pending_snapshots]
+    assert phases == ["loading", "active"]
+    assert client.latest_snapshot_key[:3] == (4, 3, 103)
 
 
 def test_action_program_decision_payload_omits_probability_diagnostics() -> None:
@@ -1587,10 +1578,10 @@ def test_transition_payload_skips_disabled_panel_processors() -> None:
     )
 
     with (
-        patch("gradlab.play_web.model_input_lines", side_effect=AssertionError),
-        patch("gradlab.play_web._numeric_signals", side_effect=AssertionError),
-        patch("gradlab.play_web._reward_accounting_payload", side_effect=AssertionError),
-        patch("gradlab.play_web._decision_payload", side_effect=AssertionError),
+        patch("gradlab.play_engine.model_input_lines", side_effect=AssertionError),
+        patch("gradlab.play_engine._numeric_signals", side_effect=AssertionError),
+        patch("gradlab.play_engine._reward_accounting_payload", side_effect=AssertionError),
+        patch("gradlab.play_engine._decision_payload", side_effect=AssertionError),
     ):
         payload = transition_payload(transition, processing=())
 
@@ -3144,7 +3135,7 @@ def test_sampling_temperature_changes_without_reset():
     runner.capture.abort.assert_called_once()
 
 def test_rgb_visibility_bypasses_fps_without_overwriting_configuration() -> None:
-    from gradlab.play_web import _PlaybackRunnerProtocol
+    from gradlab.play_engine import _PlaybackRunnerProtocol
 
     runner = _PlaybackRunnerProtocol.__new__(_PlaybackRunnerProtocol)
     runner.target_fps = 30.0
@@ -3158,7 +3149,7 @@ def test_rgb_visibility_bypasses_fps_without_overwriting_configuration() -> None
 
 
 def test_web_client_drops_queued_rgb_after_unsubscribe() -> None:
-    from gradlab.play_web import _frame_packet
+    from gradlab.play_engine import _frame_packet
 
     class Socket:
         closed = False

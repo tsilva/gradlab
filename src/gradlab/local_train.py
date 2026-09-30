@@ -17,8 +17,7 @@ from urllib.parse import unquote, urlparse
 
 from gradlab.cli_parser import ExactArgumentParser
 from gradlab.local_paths import default_runs_dir
-from gradlab.local_wandb import local_wandb_writer
-from gradlab.local_mlflow import local_mlflow_writer
+from gradlab.local_metrics import local_metrics_writer
 from gradlab.clock import utc_now as _utc_now
 from gradlab.config_loader import RECIPE_TEMPLATE_VALUES, render_template_vars
 from gradlab.env import task_termination
@@ -98,7 +97,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--wandb",
         action=argparse.BooleanOptionalAction,
         default=True,
-        help="Sync metrics to W&B and checkpoints to R2 by default; --no-wandb keeps the run local.",
+        help=(
+            "Sync metrics to the selected backend and checkpoints to R2; "
+            "--no-wandb keeps the run local."
+        ),
     )
     parser.add_argument(
         "--rom-path",
@@ -296,7 +298,7 @@ def main(argv: list[str] | None = None) -> int:
     run_name = args.run_name or _default_run_name(goal_id, recipe_id, args.seed)
     run_dir = _safe_run_dir(args.runs_dir, run_name)
 
-    config = dict(document["train_config"])
+    config = resolved_documents.effective_training.to_document()
     local_run_id = f"gradlab-{uuid4().hex}"
     config.update(
         {
@@ -343,7 +345,7 @@ def main(argv: list[str] | None = None) -> int:
             config["rom_asset_manifest"] = rom_asset_manifest_for_game(str(config["game"]))
     document["train_config"] = config
     document["description"] = description
-    base_config = dict(resolved_documents.base["train_config"])
+    base_config = resolved_documents.base_training.to_document()
     if "rom_asset_manifest" in config:
         base_config["rom_asset_manifest"] = config["rom_asset_manifest"]
     resolved_documents.base["train_config"] = base_config
@@ -417,19 +419,7 @@ def main(argv: list[str] | None = None) -> int:
                 kwargs = {"runtime_rom_binding": runtime_rom_binding}
                 if runtime_control is not None:
                     kwargs["runtime_control"] = runtime_control
-                from contextlib import nullcontext
-
-                tracking = config["tracking"]
-                writer = (
-                    nullcontext(None)
-                    if tracking["delivery"] == "local_only"
-                    else (
-                        local_mlflow_writer(run_dir, config)
-                        if tracking["backend"] == "mlflow"
-                        else local_wandb_writer(run_dir, config)
-                    )
-                )
-                with writer as wandb_url:
+                with local_metrics_writer(run_dir, config) as wandb_url:
                     if wandb_url:
                         receipt["wandb_url"] = wandb_url
                         _write_receipt(run_dir, receipt)

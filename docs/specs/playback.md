@@ -32,6 +32,7 @@ The stop-condition editor belongs as the final section of the existing Playback 
 - Checkpoint lists must show the exact Goal Variant's Acceptance and ranking measures with applicable Training Success proxies.
 - Training Success proxies must remain visibly distinct from authoritative checkpoint-evaluation evidence.
 - Checkpoint tables must group Train and Eval measures under metric names without their redundant `train/` and `eval/` prefixes, identify each Checkpoint by step with a Final badge where applicable, show evaluation status, and leave unavailable evaluation values visibly empty.
+- Checkpoint table Status must show evaluation execution state; completed Acceptance evaluations show Finished regardless of whether they satisfy Acceptance.
 - Breakout checkpoint tables must pair Train and Eval measures by the same metric suffix and display brick progress in normalized units, including equivalent normalized views of historical raw-brick ranks.
 - Interactive Playback must provide independently arranged and synchronized views of frames, Policy inputs and decisions, transition facts, and bounded histories.
 - Selecting a step in the reward panel, Events panel, or playbar must move the shared Playback cursor and synchronize the frame and matching row highlights; Events must highlight only an event at the exact cursor step.

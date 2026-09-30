@@ -144,7 +144,7 @@ def test_supervisor_retains_all_checkpoints_and_expands_monitoring_after_learner
     prepared = fixture.prepare(run_number=85)
     supervisor = prepared.supervisor
     supervisor.evaluation_required = False
-    supervisor.eval_admission_closed = True
+    supervisor.automatic_evaluation.closed = True
     supervisor.monitor_backend = CPU()
     supervisor.train_config["checkpoint_monitoring"] = {
         "enabled": True,
@@ -185,7 +185,7 @@ def test_supervisor_drains_monitoring_only_after_metrics_and_media_delivery(tmp_
     prepared = fixture.prepare(run_number=86, publish_failures=1)
     supervisor = prepared.supervisor
     supervisor.evaluation_required = False
-    supervisor.eval_admission_closed = True
+    supervisor.automatic_evaluation.closed = True
     settings = dict(
         enabled=True,
         episodes=2,

@@ -17,6 +17,11 @@ uvx gradlab@0.2.2 train gradlab__bandit/ppo
 
 The run writes a directly playable policy below `~/.config/gradlab/runs/`.
 
+Goals and recipes default to MLflow through `experiments/tracking.yaml`.
+Select W&B explicitly with `--set tracking.backend=wandb` for local training or
+`--override tracking.backend=wandb` for experiment launches. The bundled smoke
+recipe uses `local_only` delivery and requires no tracking service.
+
 ## Install
 
 [Install uv](https://docs.astral.sh/uv/getting-started/installation/) and Node 22.12+

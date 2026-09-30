@@ -16,7 +16,7 @@ from aiohttp import ClientSession, WSMsgType
 
 from gradlab.play_debug import PolicyDecision
 from gradlab.play_session import _PlaybackTransition
-from gradlab.play_web import PlaybackCommand, WebPlaybackRunner
+from gradlab.play_engine import PlaybackCommand, WebPlaybackRunner
 from tests.test_policy_bundle import write_bundle
 
 
@@ -378,7 +378,7 @@ def test_server_download_is_pinned_and_import_requires_control(tmp_path):
                     assert response.status == 200, await response.text()
                 assert host.snapshot()["mode"] == "trajectory"
                 assert host.snapshot()["trajectory"]["last_step"] == 2
-                from gradlab.play_web import FRAME_HEADER, FRAME_GAME
+                from gradlab.play_engine import FRAME_HEADER, FRAME_GAME
 
                 for step in (2, 1):
                     await socket.send_json(
@@ -463,7 +463,7 @@ def test_storage_backpressure_pauses_without_losing_a_transition(tmp_path, fail)
 def test_episode_longer_than_live_history_retains_its_first_transition(tmp_path):
     from gradlab.play_trajectory import export_trajectory
     from gradlab.play_trajectory_runner import TrajectoryPlaybackRunner
-    from gradlab.play_web import HISTORY_LIMIT
+    from gradlab.play_engine import HISTORY_LIMIT
 
     runner = live_runner(tmp_path, length=HISTORY_LIMIT + 5)
     runner.target_fps = 0

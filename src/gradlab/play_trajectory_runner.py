@@ -8,14 +8,7 @@ from typing import Any
 
 from gradlab.play_session import render_obs_stack
 from gradlab.play_trajectory import ImportedTrajectory
-from gradlab.play_web import (
-    DatasetPlaybackRunner,
-    FRAME_GAME,
-    FRAME_OBSERVATION,
-    PROTOCOL_VERSION,
-    _frame_packet,
-    history_point_payload,
-)
+from gradlab.play_engine import DatasetPlaybackRunner, FRAME_GAME, FRAME_OBSERVATION, PROTOCOL_VERSION, _frame_packet, history_point_payload
 
 
 class TrajectoryPlaybackRunner(DatasetPlaybackRunner):

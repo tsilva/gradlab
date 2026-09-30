@@ -158,7 +158,7 @@ def test_live_return_estimate_uses_full_suffix_and_pre_action_tail(tmp_path):
         transition=lambda step: dict(presentation=data[step]),
     )
     runner = SimpleNamespace(recording=recording, history=[])
-    with patch("gradlab.play_web.history_point_payload", side_effect=lambda point: point):
+    with patch("gradlab.play_engine.history_point_payload", side_effect=lambda point: point):
         result = chart_history(runner, "live", 1, 1)
         assert result["points"][0]["estimated_return"] == 5.5
         assert result["points"][0]["return_estimate_step"] == 3
@@ -188,7 +188,7 @@ def test_incremental_returns_match_exact_suffixes_and_stop_at_invalid_transition
             status=lambda: dict(last_step=end),
             transition=lambda step: dict(presentation=data[step]))
         runner = SimpleNamespace(recording=recording, history=[])
-        with patch("gradlab.play_web.history_point_payload", side_effect=lambda point: point):
+        with patch("gradlab.play_engine.history_point_payload", side_effect=lambda point: point):
             for current_end in (513,514):
                 end = current_end
                 full = chart_history(runner, "test", None, None)

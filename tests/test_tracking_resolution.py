@@ -29,6 +29,27 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path]:
     return goal, recipe
 
 
+def test_external_recipe_defaults_to_mlflow_without_project_tracking(tmp_path: Path) -> None:
+    goal, recipe = _fixture(tmp_path)
+    tracking = compose_train_document(goal, recipe)["train_config"]["tracking"]
+    assert tracking["backend"] == "mlflow"
+    assert tracking["delivery"] == "online"
+    assert tracking["sources"]["backend"] == "built-in default"
+
+
+@pytest.mark.parametrize(
+    "recipe",
+    sorted((ROOT / "experiments/goals").glob("**/recipes/*.yaml")),
+    ids=lambda path: path.relative_to(ROOT / "experiments/goals").as_posix(),
+)
+def test_every_checked_in_recipe_defaults_to_mlflow(recipe: Path) -> None:
+    goal = recipe.parent.parent / "_goal.yaml"
+    document = compose_train_document(goal, recipe)
+    tracking = document["train_config"]["tracking"]
+    assert tracking["backend"] == "mlflow"
+    assert tracking["sources"]["backend"] == "experiments/tracking.yaml"
+
+
 def test_tracking_precedence_and_scientific_identity(tmp_path: Path) -> None:
     goal, recipe = _fixture(tmp_path)
     (tmp_path / "experiments/tracking.yaml").write_text(

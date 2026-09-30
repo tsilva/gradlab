@@ -633,68 +633,44 @@ class ManualEvaluationSupervisor:
             binding = self.authority.control.get_json(
                 f"runs/{context.manifest.run_id}/metrics-binding.json"
             )
-            service = self.runtime.start_mlflow(
+            projector = self.runtime.start_mlflow(
                 {
                     "game_family": context.recipe_document["recipe"]["train_config"]["game_family"],
                     "wandb_run_id": context.manifest.run_id,
                 },
                 created_at=context.manifest.created_at,
             )
-            if service.run_id != binding["service_run_id"]:
+            if projector.run_id != binding["service_run_id"]:
                 raise ValueError("manual evaluation MLflow binding changed")
-            while ledger.pending_metric_frames(limit=1):
-                if self.runtime.publish_frames(
-                    ledger, service, limit=100, event_seq_offset=event_seq_offset
-                ) <= 0:
-                    return False
-            if service.remote_high_water() < high_water:
-                return False
-            self.authority.control.put_json(
-                projection_key,
+        else:
+            projector = self.runtime.resume_wandb(
                 {
-                    "schema_version": 1,
-                    "run_id": context.manifest.run_id,
-                    "checkpoint_id": context.checkpoint.checkpoint_id,
-                    "idempotency_key": context.intent.idempotency_key,
-                    "status": result.status,
-                    "journal_high_water_mark": high_water,
-                    "service_high_water_mark": high_water,
-                    "projected_at": self.clock.utc_now(),
+                    "wandb_run_id": context.manifest.run_id,
+                    "wandb_entity": context.manifest.wandb["entity"],
+                    "wandb_project": context.manifest.wandb["project"],
+                    "wandb_mode": "online",
+                    "game": environment["game"],
+                    "env_provider": environment["env_provider"],
+                    "run_name": context.manifest.wandb.get("display_name"),
+                    "wandb_group": context.manifest.wandb.get("group"),
+                    "metrics_schema_version": metrics_schema_version,
                 },
-                create_only=True,
+                allow_create=False,
+                update_finish_state=False,
             )
-            return True
-        projector = self.runtime.resume_wandb(
-            {
-                "wandb_run_id": context.manifest.run_id,
-                "wandb_entity": context.manifest.wandb["entity"],
-                "wandb_project": context.manifest.wandb["project"],
-                "wandb_mode": "online",
-                "game": environment["game"],
-                "env_provider": environment["env_provider"],
-                "run_name": context.manifest.wandb.get("display_name"),
-                "wandb_group": context.manifest.wandb.get("group"),
-                "metrics_schema_version": metrics_schema_version,
-            },
-            allow_create=False,
-            update_finish_state=False,
-        )
         try:
             while ledger.pending_metric_frames(limit=1):
-                if (
-                    self.runtime.publish_frames(
-                        ledger,
-                        projector,
-                        limit=100,
-                        event_seq_offset=event_seq_offset,
-                    )
-                    <= 0
-                ):
+                if self.runtime.publish_frames(ledger, projector, limit=100,
+                                               event_seq_offset=event_seq_offset) <= 0:
                     return False
         finally:
-            self.runtime.close_wandb(projector, timeout_seconds=300)
-        remote = self.runtime.remote_summary(self._wandb_run_path(context.manifest))
-        if wandb_delivery_high_water(remote) < high_water:
+            if tracking["backend"] == "wandb":
+                self.runtime.close_wandb(projector, timeout_seconds=300)
+        visible_high_water = (
+            projector.remote_high_water() if tracking["backend"] == "mlflow"
+            else wandb_delivery_high_water(self.runtime.remote_summary(self._wandb_run_path(context.manifest)))
+        )
+        if visible_high_water < high_water:
             return False
         self.authority.control.put_json(
             projection_key,
@@ -704,8 +680,8 @@ class ManualEvaluationSupervisor:
                 "checkpoint_id": context.checkpoint.checkpoint_id,
                 "idempotency_key": context.intent.idempotency_key,
                 "status": result.status,
-                "wandb_high_water_mark": high_water,
                 "journal_high_water_mark": high_water,
+                "service_high_water_mark" if tracking["backend"] == "mlflow" else "wandb_high_water_mark": high_water,
                 "projected_at": self.clock.utc_now(),
             },
             create_only=True,

@@ -7,7 +7,7 @@ import pytest
 from gradlab.batch_runtime import ProviderDescriptor, SignalSpec
 from gradlab.callbacks import RewardStatsAccumulator
 from gradlab.env_identity import task_config_from_train_config, validate_task_config
-from gradlab.play_web import _reward_accounting_payload
+from gradlab.play_engine import _reward_accounting_payload
 from gradlab.task_kernels import IdentityTaskDefinition, with_event_rewards, with_reward_transform
 from gradlab.training.sb3_on_policy import active_reward_components
 

@@ -6,7 +6,7 @@ import threading
 import pytest
 
 from gradlab.play_session import build_parser
-from gradlab.play_web import WebPlaybackRunner
+from gradlab.play_engine import WebPlaybackRunner
 
 
 def test_default_display_fps():
@@ -36,8 +36,8 @@ def test_policy_loop_does_not_wait_for_display_clock():
             runner._stop.set()
 
     runner._step_once = step
-    with patch("gradlab.play_web.time.perf_counter", return_value=0), patch(
-        "gradlab.play_web.time.sleep", side_effect=AssertionError("inference was paced")
+    with patch("gradlab.play_engine.time.perf_counter", return_value=0), patch(
+        "gradlab.play_engine.time.sleep", side_effect=AssertionError("inference was paced")
     ):
         runner._run()
     assert len(steps) == 10
@@ -54,8 +54,8 @@ def test_presentation_pacing_preserves_history_and_forces_final_frame():
     runner._snapshot_lock = threading.Lock()
     runner._snapshot_updates = deque()
     transition = SimpleNamespace(sequence=1, boundary=False, after_frame=object(), before_frames=())
-    with patch("gradlab.play_web.time.perf_counter", return_value=1.0), patch(
-        "gradlab.play_web.history_point_payload", side_effect=lambda current: current
+    with patch("gradlab.play_engine.time.perf_counter", return_value=1.0), patch(
+        "gradlab.play_engine.history_point_payload", side_effect=lambda current: current
     ):
         runner._publish(transition, current={"sequence": 1}, paced=True)
         transition.sequence = 2
@@ -83,7 +83,7 @@ def presentation_runner():
 @pytest.mark.parametrize("step_ms", [5, 10, 20, 25])
 def test_live_publication_sustains_target_rate_without_deadline_drift(step_ms):
     runner, transition = presentation_runner()
-    with patch("gradlab.play_web.time.perf_counter") as clock:
+    with patch("gradlab.play_engine.time.perf_counter") as clock:
         for step in range(10_000 // step_ms):
             # A fixed, repeating jitter pattern must not accumulate either.
             clock.return_value = 1 + (step * step_ms + (step % 3) * 0.2) / 1000
@@ -94,7 +94,7 @@ def test_live_publication_sustains_target_rate_without_deadline_drift(step_ms):
 
 def test_live_publication_skips_missed_deadlines_without_bursting():
     runner, transition = presentation_runner()
-    with patch("gradlab.play_web.time.perf_counter") as clock:
+    with patch("gradlab.play_engine.time.perf_counter") as clock:
         for now in [1, 10, 10, 10.001, 10.002]:
             clock.return_value = now
             runner._publish(transition, current={}, paced=True)
@@ -106,7 +106,7 @@ def test_live_publication_skips_missed_deadlines_without_bursting():
 
 def test_live_unpaced_updates_rebase_rate_changes_and_resume():
     runner, transition = presentation_runner()
-    with patch("gradlab.play_web.time.perf_counter") as clock:
+    with patch("gradlab.play_engine.time.perf_counter") as clock:
         clock.return_value = 1
         runner._publish(transition, current={}, paced=True)
         # Commands, including resume and rate changes, publish immediately.
@@ -127,7 +127,7 @@ def test_live_unpaced_updates_rebase_rate_changes_and_resume():
 
 def test_slow_live_producer_publishes_each_available_transition():
     runner, transition = presentation_runner()
-    with patch("gradlab.play_web.time.perf_counter") as clock:
+    with patch("gradlab.play_engine.time.perf_counter") as clock:
         for step in range(100):
             clock.return_value = 1 + step * 0.1
             transition.sequence = step + 1

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from gradlab.metric_journal import ScientificEvidence
+
 from collections.abc import Iterable
 from copy import deepcopy
 from pathlib import Path
@@ -1883,7 +1885,7 @@ def test_breakout_checkpoint_table_reads_paired_monitoring_metrics() -> None:
                 }]
             return []
 
-    evaluation = PlayCatalog._monitoring_history(Run(), contract)[500_000]
+    evaluation = PlayCatalog._monitoring_history(ScientificEvidence.historical_wandb(Run()), contract)[500_000]
     assert evaluation["metrics"]["eval/progress/bricks_destroyed_normalized/max"] == 0.5
     assert evaluation["metrics"]["eval/episode_steps/mean"] == 1200.0
 
@@ -2225,6 +2227,7 @@ def test_progressive_goals_do_not_read_remote_evidence_until_enrichment(
 
 
 def test_checkpoint_training_history_publishes_each_metric_before_fetching_next():
+    from gradlab.metric_journal import ScientificEvidence
     from gradlab.play_catalog import _checkpoint_training_metric_history
 
     published = []
@@ -2242,7 +2245,7 @@ def test_checkpoint_training_history_publishes_each_metric_before_fetching_next(
             ]
 
     _checkpoint_training_metric_history(
-        Run(),
+        ScientificEvidence.historical_wandb(Run()),
         [{"metric": first, "evidence": "training"}, {"metric": second, "evidence": "training"}],
         lambda metric, samples: published.append((metric, samples)),
     )

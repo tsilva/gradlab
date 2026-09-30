@@ -13,7 +13,7 @@ def finite(value):
 
 def reward_history(runner, episode_id, first=None, last=None):
     """First is the selected step; last is an optional forward page cursor."""
-    from gradlab.play_web import history_point_payload
+    from gradlab.play_engine import history_point_payload
 
     recording = runner.recording
     if recording is None or recording.metadata["episode_id"] != episode_id:

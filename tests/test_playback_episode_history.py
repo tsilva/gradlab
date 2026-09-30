@@ -11,7 +11,8 @@ from aiohttp import ClientSession
 from PIL import Image
 
 from gradlab.play_trajectory import HEADER, INDEX, MAX_RECORD_BYTES
-from gradlab.play_web import HISTORY_LIMIT, PlaybackWebServer
+from gradlab.play_engine import HISTORY_LIMIT
+from gradlab.play_web import PlaybackWebServer
 from tests.test_play_trajectory import command, live_runner, wait_step
 
 
@@ -53,7 +54,7 @@ def test_completed_episode_retains_initial_state_and_rejects_replaced_recording(
 def test_recording_reuses_full_projection_even_when_live_inspection_is_filtered(
     tmp_path, monkeypatch, filtered
 ):
-    import gradlab.play_web as player
+    import gradlab.play_engine as player
 
     runner = live_runner(tmp_path, length=2)
     project = player.transition_payload

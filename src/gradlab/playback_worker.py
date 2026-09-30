@@ -17,7 +17,7 @@ from typing import Any
 from gradlab.play_diagnostics import DiagnosticRead
 from gradlab.operator_credentials import PROTECTED_ENV_NAMES
 from gradlab.play_runtime import PlaySourceSpec
-from gradlab.play_web import idle_playback_snapshot
+from gradlab.play_engine import idle_playback_snapshot
 
 
 PLAYBACK_RPC_TIMEOUT_SECONDS = 30.0
@@ -124,7 +124,7 @@ def _worker_main(
             if operation == "start":
                 value = host.start()
             elif operation == "playback_updates":
-                from gradlab.play_web import playback_updates
+                from gradlab.play_engine import playback_updates
                 value = playback_updates(host)
             elif operation == "snapshot":
                 value = host.snapshot()

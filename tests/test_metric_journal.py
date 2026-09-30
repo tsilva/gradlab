@@ -42,7 +42,7 @@ def test_playback_reads_verified_journal_without_a_service(tmp_path: Path) -> No
     )
     control = _Control(key, payload)
     view = JournalHistory(read_control_journal(control, run_id))
-    rows = list(view.scan_history(keys=["train/step", "train/return/mean"], page_size=100))
+    rows = list(view.read(["train/step", "train/return/mean"]))
     assert rows == [
         {"train/step": 64.0, "train/return/mean": 0.25},
         {"train/step": 128.0, "train/return/mean": 0.5},

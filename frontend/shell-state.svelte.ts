@@ -1,6 +1,15 @@
 // Small UI projections only. Image buffers, exact histories and controller
 // state remain owned by the existing Playback controllers.
 export const shellState = $state({
+  pageTitle: "Environment",
+  switchWindow: {visible: false, label: "Stats"},
+  panelMenu: {title: "Panel", dockMain: false, telemetry: false, removable: false},
+  publication: {
+    enabled: false, status: "Checking the completed episode…", capture: [] as any[],
+    generated: [] as any[], credentials: "", youtubeReady: true,
+    job: null as any, submitDisabled: true, videoUrl: "",
+    privacy: "public", thumbnailTime: 10, tags: "", note: "",
+  },
   savedLayouts: [] as string[],
   loadLayout: (_name: string) => {},
   deleteLayout: (_name: string) => {},

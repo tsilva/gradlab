@@ -12,7 +12,8 @@ from aiohttp import web
 from gradlab.play_application import PlaybackHost
 from gradlab.play_catalog import CatalogPage, CheckpointPage
 from gradlab.play_runtime import ActivePlayback
-from gradlab.play_web import PlaybackCommand, PlaybackWebServer, WebPlaybackRunner
+from gradlab.play_engine import PlaybackCommand, WebPlaybackRunner
+from gradlab.play_web import PlaybackWebServer
 from gradlab.policy_bundle import load_policy_bundle
 from tests.test_play_application import FakeCandidate
 from tests.test_policy_bundle import write_bundle

@@ -134,19 +134,40 @@ class MlflowDelivery:
         ]
         self.client.log_batch(self.run_id, metrics=metrics, synchronous=True)
 
-    def _artifact(self, *, sequence: int, name: str, content: bytes) -> None:
+    def _artifact(self, *, sequence: int, name: str, content: bytes, step: int = 0) -> None:
+        """Publish immutable asset bytes to R2 and only their references to MLflow."""
+        from gradlab.r2_store import BucketConfig, R2Bucket
+
+        digest = hashlib.sha256(content).hexdigest()
+        bucket = R2Bucket(BucketConfig.from_env("GRADLAB_MODELS_R2", public=True))
+        key = f"runs/{self.gradlab_run_id}/telemetry/{sequence}/{digest}/{name}"
         with tempfile.TemporaryDirectory(prefix="gradlab-mlflow-") as temporary:
             path = Path(temporary) / name
             path.write_bytes(content)
-            artifact_path = f"journal/{sequence}"
-            self.client.log_artifact(self.run_id, str(path), artifact_path=artifact_path)
-            remote = Path(
-                self.client.download_artifacts(
-                    self.run_id, f"{artifact_path}/{name}", dst_path=temporary
-                )
+            bucket.put_file(
+                key, path, sha256=digest,
+                content_type="video/mp4" if name.endswith(".mp4") else "application/json",
             )
-            if hashlib.sha256(remote.read_bytes()).digest() != hashlib.sha256(content).digest():
-                raise RuntimeError("MLflow media read-back disagrees with the journal")
+            bucket.download_verified(key, Path(temporary) / "verified", size=len(content), sha256=digest)
+        reference = {"url": bucket.public_url(key), "object_uri": bucket.uri(key),
+                     "sha256": digest, "bytes": len(content), "name": name, "step": step}
+        tag = f"gradlab.asset.{sequence:012d}"
+        self.client.set_tag(self.run_id, tag, json.dumps(reference, sort_keys=True))
+        run = self.client.get_run(self.run_id)
+        references = [json.loads(value) for key, value in sorted(run.data.tags.items())
+                      if key.startswith("gradlab.asset.")]
+        # Keep every immutable reference in tags and a bounded, clickable list in
+        # the native MLflow Run description. Replays replace the same tag/list.
+        start, end = "<!-- gradlab-r2-assets -->", "<!-- /gradlab-r2-assets -->"
+        notes = re.sub(re.escape(start) + r".*?" + re.escape(end), "",
+                       run.data.tags.get("mlflow.note.content", ""), flags=re.S).strip()
+        links = [f"- [{item['name']} · step {item['step']:,}]({item['url']})"
+                 for item in references[-10:]]
+        section = start + "\n### R2 assets\n\n" + "\n".join(links) + "\n" + end
+        if len(notes + section) <= 5000:
+            self.client.set_tag(self.run_id, "mlflow.note.content", (notes + "\n\n" + section).strip())
+        if self.client.get_run(self.run_id).data.tags.get(tag) != json.dumps(reference, sort_keys=True):
+            raise RuntimeError("MLflow asset reference read-back disagrees with R2")
 
     def publish_frame(
         self,
@@ -184,11 +205,12 @@ class MlflowDelivery:
                     sequence=sequence,
                     video={**video, "bucket_uri": payload["bucket_uri"]},
                     name="representative.mp4",
+                    step=step,
                 )
             self._metric_batch(metrics, sequence=sequence, step=step)
             return
         if kind == "evaluation_video":
-            self._r2_artifact(sequence=sequence, video=payload, name="episode.mp4")
+            self._r2_artifact(sequence=sequence, video=payload, name="episode.mp4", step=step)
             self._metric_batch({EVAL_CHECKPOINT_STEP: float(step)}, sequence=sequence, step=step)
             return
         if kind in {"curriculum_distribution", "occupancy", "eval_by_start"}:
@@ -197,12 +219,13 @@ class MlflowDelivery:
                 sequence=sequence,
                 name=f"{kind}.json",
                 content=json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(),
+                step=step,
             )
             self._metric_batch({axis: float(step)}, sequence=sequence, step=step)
             return
         raise ValueError(f"unsupported supervisor telemetry frame kind: {kind}")
 
-    def _r2_artifact(self, *, sequence: int, video: Mapping[str, Any], name: str) -> None:
+    def _r2_artifact(self, *, sequence: int, video: Mapping[str, Any], name: str, step: int) -> None:
         from gradlab.r2_store import BucketConfig, R2Bucket
 
         bucket_uri = str(video["bucket_uri"])
@@ -223,7 +246,7 @@ class MlflowDelivery:
             R2Bucket(config).download_verified(
                 str(video["key"]), path, size=size, sha256=str(video["sha256"])
             )
-            self._artifact(sequence=sequence, name=name, content=path.read_bytes())
+            self._artifact(sequence=sequence, name=name, content=path.read_bytes(), step=step)
 
     def remote_high_water(self) -> int:
         run = self.client.get_run(self.run_id)

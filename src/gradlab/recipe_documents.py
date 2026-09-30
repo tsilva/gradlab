@@ -4,6 +4,8 @@ import copy
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from functools import cached_property
+from gradlab.resolved_training import ResolvedTrainConfig
 from pathlib import Path
 from typing import Any
 
@@ -1038,6 +1040,14 @@ class ResolvedTrainDocuments:
     canonical_goal: dict[str, Any]
     base: dict[str, Any]
     effective: dict[str, Any]
+
+    @cached_property
+    def base_training(self) -> ResolvedTrainConfig:
+        return ResolvedTrainConfig.from_validated(self.base["train_config"])
+
+    @cached_property
+    def effective_training(self) -> ResolvedTrainConfig:
+        return ResolvedTrainConfig.from_validated(self.effective["train_config"])
 
 
 def compose_resolved_train_documents(

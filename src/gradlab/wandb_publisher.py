@@ -229,7 +229,9 @@ class WandbProjector:
         flush = getattr(api, "flush", None)
         if callable(flush):
             flush()
-        return dict(getattr(api.run(self.run.path), "summary", {}) or {})
+        path = self.run.path
+        run_path = "/".join(path) if isinstance(path, (list, tuple)) else str(path)
+        return dict(getattr(api.run(run_path), "summary", {}) or {})
 
     def remote_high_water(self) -> int:
         return wandb_delivery_high_water(self.remote_summary())
@@ -537,39 +539,13 @@ def publish_pending_frames(
     heartbeat: Callable[[], None] | None = None,
     should_continue: Callable[[], bool] | None = None,
 ) -> int:
-    published = 0
-    for row in store.pending_metric_frames(limit=limit):
-        if should_continue is not None and not should_continue():
-            break
-        if heartbeat is not None:
-            heartbeat()
-        frame_id = int(row["id"])
-        if not store.claim_metric_frame(frame_id):
-            continue
-        try:
-            _publish_frame(
-                run,
-                row,
-                event_seq_offset=event_seq_offset,
-                metrics_schema_version=metrics_schema_version,
-                occupancy_page=(
-                    store.occupancy_page(json.loads(str(row["payload_json"])))
-                    if row["kind"] == "occupancy"
-                    else None
-                ),
-            )
-        except Exception as exc:
-            store.mark_metric_frame_failed(frame_id, repr(exc))
-            print(f"W&B frame publish failed id={frame_id}: {exc}", flush=True)
-            break
-        store.mark_metric_frame_published(
-            frame_id,
-            step=int(row["step"]) if row.get("step") is not None else None,
-        )
-        published += 1
-        if heartbeat is not None:
-            heartbeat()
-    return published
+    from gradlab.selected_delivery import publish_outbox
+
+    return publish_outbox(
+        store, WandbProjector(run, metrics_schema_version=metrics_schema_version),
+        limit=limit, event_seq_offset=event_seq_offset, heartbeat=heartbeat,
+        should_continue=should_continue,
+    )
 
 
 def publish_promotion_summary(

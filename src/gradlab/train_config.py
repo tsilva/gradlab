@@ -5,7 +5,10 @@ import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from gradlab.resolved_training import ResolvedTrainConfig
 
 from gradlab.environment_fields import (
     ENVIRONMENT_FIELD_SPECS,
@@ -179,7 +182,7 @@ def add_env_config_args(
     )
 
 
-def load_materialized_train_config(path: Path) -> dict[str, Any]:
+def load_materialized_train_config(path: Path) -> ResolvedTrainConfig:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError(f"train config file must contain a JSON object: {path}")
@@ -190,7 +193,9 @@ def load_materialized_train_config(path: Path) -> dict[str, Any]:
         required_keys=("training_backend",),
         enforce_early_stop_policy=True,
     )
-    return {**defaults, **normalized}
+    from gradlab.resolved_training import ResolvedTrainConfig
+
+    return ResolvedTrainConfig.from_validated({**defaults, **normalized})
 
 
 def train_config_field_for_key(key: str) -> TrainConfigField | None:

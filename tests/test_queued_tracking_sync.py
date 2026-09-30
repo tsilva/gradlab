@@ -38,7 +38,7 @@ def test_queued_local_only_mlflow_sync_replays_r2_journal_without_changing_recei
     uri = f"sqlite:///{tmp_path / 'tracking.db'}"
     monkeypatch.setenv("MLFLOW_TRACKING_URI", uri)
     monkeypatch.setattr(
-        "gradlab.local_mlflow.load_repository_operator_environment", lambda *a, **k: None
+        "gradlab.local_metrics.load_repository_operator_environment", lambda *a, **k: None
     )
     first = sync_queued_run(authority, run_id)
     second = sync_queued_run(authority, run_id)

@@ -22,11 +22,9 @@ from gradlab.cli_parser import ExactArgumentParser
 from gradlab.env import (
     assert_provider_runtime_available,
     default_run_dir,
-    resolve_env_config,
     resolve_mixed_state_config,
     task_termination,
 )
-from gradlab.env_config import env_config_from_mapping
 from gradlab.metric_store import MetricStore, metric_store_path
 from gradlab.policy_bundle import load_recipe_document
 from gradlab.provider_config import provider_num_envs
@@ -43,13 +41,11 @@ from gradlab.rom_runtime import (
 )
 from gradlab.seeds import validate_training_seed
 from gradlab.train_config import load_materialized_train_config
+from gradlab.resolved_training import ResolvedTrainConfig
 from gradlab.training_backend import (
     BackendContext,
     GracefulStopFlag,
-    load_training_backend,
-    training_backend_config,
     training_backend_config_hash,
-    training_backend_id,
     training_backend_runtime_metadata,
 )
 from gradlab.training_lifecycle import (
@@ -101,14 +97,14 @@ def effective_n_envs(config: Mapping[str, object]) -> int:
 
 def parse_train_invocation(
     argv: Sequence[str] | None = None,
-) -> tuple[dict[str, object], TrainingExecutionMode]:
+) -> tuple[ResolvedTrainConfig, TrainingExecutionMode]:
     parser = build_parser()
     parsed = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
     config = load_materialized_train_config(Path(parsed.train_config_json))
     validate_training_seed(
         config["seed"],
         label="train_config.seed",
-        seed_span=effective_n_envs(config),
+        seed_span=config.n_envs,
     )
     return config, TrainingExecutionMode(parsed.execution_mode)
 
@@ -161,23 +157,22 @@ def main(
             "gradlab.train is an internal learner entrypoint; use `gradlab experiment launch` to launch "
             "a dstack training task"
         )
-    train_config, execution_mode = parse_train_invocation(argv)
+    resolved, execution_mode = parse_train_invocation(argv)
+    train_config = resolved.to_document()
     execution_policy = TrainingExecutionPolicy.for_mode(execution_mode)
     recipe_json_path = Path(str(train_config.get("recipe_json_path") or ""))
     if not recipe_json_path.is_file():
         raise RuntimeError("training requires the canonical versioned recipe.json")
     load_recipe_document(recipe_json_path)
-    backend_id = training_backend_id(train_config)
-    backend_config = training_backend_config(train_config)
-    backend = load_training_backend(backend_id)
-    backend.validate(train_config, backend_config)
+    backend = resolved.backend
+    backend_id = backend.backend_id
+    backend_config = resolved.backend_config
     train_config.update(training_backend_runtime_metadata(backend_id, backend_config))
     train_config["training_backend_config_hash"] = training_backend_config_hash(train_config)
     train_config["training_execution"] = execution_policy.to_document()
 
-    environment = resolve_env_config(env_config_from_mapping(train_config))
-    n_envs = effective_n_envs(train_config)
-    environment = resolve_mixed_state_config(environment, n_envs=n_envs)
+    n_envs = resolved.n_envs
+    environment = resolve_mixed_state_config(resolved.environment, n_envs=n_envs)
     manifest = manifest_from_train_config(train_config, expected_game=environment.game)
     if runtime_rom_binding is not None:
         if manifest is None:

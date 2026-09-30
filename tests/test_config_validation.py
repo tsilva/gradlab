@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import io
 import inspect
+import io
 import json
 import os
 import tempfile
@@ -13,10 +13,12 @@ from unittest.mock import patch
 from gradlab import experiment_contracts
 from gradlab.config_validation import (
     main as validate_main,
+)
+from gradlab.config_validation import (
     validate_experiment_tree,
 )
-from gradlab.experiment_contracts import validate_goal_contract_document
 from gradlab.env_registry import resolve_env_provider, validate_provider_constructor_args
+from gradlab.experiment_contracts import validate_goal_contract_document
 from gradlab.main import COMMANDS
 from gradlab.recipe_documents import (
     _load_rendered_goal_composition,
@@ -24,6 +26,7 @@ from gradlab.recipe_documents import (
     load_goal_contract,
 )
 from gradlab.recipe_schema import validate_materialized_train_recipe
+from gradlab.resolved_training import ResolvedTrainConfig
 
 
 class ConfigValidationTests(unittest.TestCase):
@@ -36,6 +39,16 @@ class ConfigValidationTests(unittest.TestCase):
     MARIO_SINGLE_RECIPES = MARIO_L11_GOAL.parent / "recipes"
     VIZDOOM_BASIC_GOAL = Path("experiments/goals/VizdoomBasic-v1/_goal.yaml")
     VIZDOOM_BASIC_RECIPE = VIZDOOM_BASIC_GOAL.parent / "recipes/ppo.yaml"
+
+    def test_resolved_execution_choices_preserve_and_isolate_wire_document(self) -> None:
+        document = compose_train_document(self.BREAKOUT_GOAL, self.BREAKOUT_RECIPE)["train_config"]
+        resolved = ResolvedTrainConfig.from_validated(document)
+        self.assertEqual(resolved.to_document(), document)
+        self.assertEqual(dict(resolved), document)
+        resolved.to_document()["env_args"]["test_only"] = True
+        resolved["env_args"]["test_only"] = True
+        document["env_args"]["test_only"] = True
+        self.assertNotIn("test_only", resolved["env_args"])
 
     def test_provider_reward_transforms_are_rejected_in_favor_of_task_reward(self) -> None:
         for key in (
@@ -150,10 +163,11 @@ class ConfigValidationTests(unittest.TestCase):
     def test_explicit_goal_arg_contract_covers_provider_signatures(self) -> None:
         from ale_py.vector_env import AtariVectorEnv
         from env_breakoutatari2600_turbo_native import BreakoutVecEnv
-        from gradlab.bandit_env import BanditVectorEnv
         from env_stableretro_turbo import RetroVecEnv
         from env_supermariobrosnes_turbo_emu import EnvSuperMarioBrosNesTurboEmuVecEnv
         from env_vizdoom_turbo import EnvViZDoomTurboVecEnv
+
+        from gradlab.bandit_env import BanditVectorEnv
         from gradlab.reward_transform import PROVIDER_REWARD_TRANSFORM_KEYS
 
         constructors = {
@@ -423,9 +437,9 @@ class ConfigValidationTests(unittest.TestCase):
                 )
         self.assertEqual(ppo["train_config"]["timesteps"], 50000000)
         self.assertEqual(a2c["train_config"]["timesteps"], 50000000)
-        self.assertEqual(ppo["train_config"]["tracking"]["backend"], "wandb")
+        self.assertEqual(ppo["train_config"]["tracking"]["backend"], "mlflow")
         self.assertEqual(ppo["train_config"]["tracking"]["delivery"], "online")
-        self.assertEqual(a2c["train_config"]["tracking"]["backend"], "wandb")
+        self.assertEqual(a2c["train_config"]["tracking"]["backend"], "mlflow")
         self.assertEqual(a2c["train_config"]["tracking"]["delivery"], "online")
 
     def test_every_actor_critic_recipe_declares_explicit_policy_model(self) -> None:

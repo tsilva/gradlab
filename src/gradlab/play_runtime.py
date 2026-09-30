@@ -40,7 +40,7 @@ from gradlab.play_termination import (
     configured_termination_ids,
     with_enabled_termination_conditions,
 )
-from gradlab.play_web import WebPlaybackRunner
+from gradlab.play_engine import WebPlaybackRunner
 from gradlab.play_capture import player_source_provenance
 from gradlab.file_utils import file_sha256
 from gradlab.run_contracts import checkpoint_id
