@@ -1574,7 +1574,7 @@ canvas { display: block; max-width: 100%; }
 .game-frame-boundary,
 .game-frame-detail { color: var(--color-inverse-text); }
 .game-overlay-tools { position: absolute; top: .58rem; right: .58rem; z-index: 5; display: grid; justify-items: end; gap: .35rem; }
-.game-render-speed { width: 8.6rem; box-sizing: border-box; padding: .35rem .4rem; border: 1px solid var(--color-border-translucent); border-radius: .36rem; background: #11172ded; color: #70f3f5; font: 700 10px/1.4 var(--font-family-mono); font-variant-numeric: tabular-nums; }
+.game-render-speed { width: 8.6rem; box-sizing: border-box; padding: .35rem .4rem; border: 1px solid var(--color-border-translucent); border-radius: .36rem; background: var(--color-inverse-overlay); color: var(--color-series-aqua); font-family: var(--font-family-mono); font-size: var(--font-size-xs); font-weight: var(--font-weight-bold); line-height: var(--line-height-default); font-variant-numeric: tabular-nums; }
 .game-render-speed svg { display: block; width: 100%; height: 2rem; margin-top: .2rem; background: #1d3448; }
 .game-render-speed path { fill: currentColor; }
 .game-frame-detail.outcome-success,
@@ -3012,13 +3012,13 @@ body.recording #timeline { opacity: .72; }
   border-radius: 6px;
   background: var(--color-surface-secondary);
   color: var(--color-text);
-  box-shadow: 0 3px 12px #0006;
-  font-size: 12px;
+  box-shadow: 0 3px 12px var(--color-shadow-soft);
+  font-size: var(--font-size-xs);
 }
 .chart-tooltip[hidden] { display: none; }
 .chart-tooltip-row { display: grid; grid-template-columns: 8px minmax(0, 1fr) auto; gap: 8px; align-items: center; margin-top: 5px; }
 .chart-tooltip-swatch { width: 8px; height: 8px; border-radius: 50%; }
-.chart-tooltip-value { font-family: monospace; font-variant-numeric: tabular-nums; }
+.chart-tooltip-value { font-family: var(--font-family-mono); font-variant-numeric: tabular-nums; }
 
 .button-tooltip {
   position: fixed;
@@ -3031,8 +3031,8 @@ body.recording #timeline { opacity: .72; }
   border-radius: 6px;
   background: var(--color-surface-secondary);
   color: var(--color-text);
-  box-shadow: 0 4px 14px #0008;
-  font-size: 12px;
+  box-shadow: 0 4px 14px var(--color-shadow-strong);
+  font-size: var(--font-size-xs);
   line-height: 1.35;
   text-align: center;
   pointer-events: none;

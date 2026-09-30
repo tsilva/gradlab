@@ -588,7 +588,7 @@ test("environment success is rendered as table status columns", async () => {
   assert.doesNotMatch(styles, /\.environment-table th\.environment-heading/);
   assert.match(
     styles,
-    /\.environment-goals-column,\s*\.environment-row td:nth-child\(3\) \{ width: 7rem; text-align: left; \}/,
+    /\.environment-goals-column,\s*\.environment-row td:nth-child\(3\) \{ width: 7rem; text-align: right; \}/,
   );
   assert.match(
     styles,
