@@ -3295,6 +3295,10 @@ class PlayCatalog:
         media = tuple(run.media)
         for item in media:
             media_digest = str(item.get("sha256") or "")
+            identity = re.fullmatch(r"checkpoint-(\d+)-[0-9a-f]{16}",
+                                    str(item.get("checkpoint_id") or ""))
+            if identity is None or int(identity.group(1)) != item["step"]:
+                raise ValueError("public telemetry media checkpoint identity is invalid")
             if (SHA256_PATTERN.fullmatch(media_digest) is None
                     or item.get("url") != (
                         f"{self.public_models_base_url}/runs/{run_id}/media/"

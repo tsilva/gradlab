@@ -1463,13 +1463,22 @@ class RunAuthority:
                 continue
             identifier = payload.get("checkpoint_id")
             if not identifier:
-                # Earlier journal frames omitted identity. A unique published step
-                # is sufficient; ambiguous frames must never label another Policy.
-                matches = [name for name, row in checkpoints.items()
-                           if int(row["step"]) == int(event["step"])]
-                if len(matches) != 1:
-                    continue
-                identifier = matches[0]
+                # Resolve immutable earlier frames through their evaluation evidence,
+                # never through a step that distinct Policies may share.
+                if kind == "evaluation_video":
+                    match = re.fullmatch(r"eval:([0-9a-f]{64}):video", str(event["source"]))
+                    if match is None:
+                        raise ValueError("public video has no immutable evaluation identity")
+                    evidence = self.evaluation.get_json(
+                        f"{prefix}/evals/{match.group(1)}/intent.json"
+                    )
+                else:
+                    evidence = self.models.get_json(
+                        f"monitoring/{run_id}/{payload['evaluation_id']}/result.json"
+                    )
+                identifier = evidence.get("checkpoint_id")
+                if not identifier:
+                    raise ValueError("public video evidence has no checkpoint identity")
             if identifier not in checkpoints:
                 continue
             if int(checkpoints[identifier]["step"]) != int(event["step"]):
