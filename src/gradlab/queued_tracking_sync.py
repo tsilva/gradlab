@@ -137,7 +137,7 @@ def _project_queued_outcome(
             "evaluation_source": "synced:journal",
         }
     if manifest.tracking["backend"] == "mlflow":
-        from gradlab.mlflow_delivery import MlflowDelivery
+        from gradlab.mlflow_delivery import MlflowDelivery, mlflow_experiment_name
 
         created_at_ms = int(
             datetime.fromisoformat(manifest.created_at.replace("Z", "+00:00")).timestamp()
@@ -146,7 +146,7 @@ def _project_queued_outcome(
         check_lease()
         service = MlflowDelivery.open(
             tracking_uri=str(os.environ["MLFLOW_TRACKING_URI"]),
-            experiment_name=f"gradlab-{config.get('game_family') or config['game']}",
+            experiment_name=mlflow_experiment_name(config),
             gradlab_run_id=manifest.run_id,
             created_at_ms=created_at_ms,
         )

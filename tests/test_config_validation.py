@@ -549,15 +549,28 @@ class ConfigValidationTests(unittest.TestCase):
                 )
                 self.assertEqual(plateau["action"], expected_action)
 
-    def test_every_vizdoom_recipe_uses_one_million_step_checkpoint_cadence(self) -> None:
-        recipes = sorted(Path("experiments/goals").glob("Vizdoom*/recipes/*.yaml"))
+    def test_vizdoom_recipe_checkpoint_plans_match_their_training_budgets(self) -> None:
+        from gradlab.checkpoint_schedule import checkpoint_plan
 
+        recipes = sorted(Path("experiments/goals").glob("Vizdoom*/recipes/*.yaml"))
+        counts = {
+            "VizdoomBasic-v1": 8, "VizdoomBasic-Plus-v1": 8,
+            "VizdoomDeadlyCorridor-v1": 12, "VizdoomHealthGatheringSupreme-v1": 10,
+            "VizdoomPredictPosition-v1": 5,
+        }
         self.assertGreaterEqual(len(recipes), 11)
         for recipe_path in recipes:
             with self.subTest(recipe=recipe_path):
                 goal_path = recipe_path.parent.parent / "_goal.yaml"
                 document = compose_train_document(goal_path, recipe_path)
-                self.assertEqual(document["train_config"]["checkpoint_freq"], 1_000_000)
+                config = document["train_config"]
+                steps, candidates = checkpoint_plan(config)
+                expected = counts.get(goal_path.parent.name, 10)
+                if goal_path.parent.name == "VizdoomDeathmatch-v1":
+                    expected = 12 if recipe_path.name == "gradoom-ppo.yaml" else 19
+                self.assertEqual(len(steps), expected)
+                self.assertLessEqual(candidates, 3)
+                self.assertEqual(steps[-1], config["timesteps"])
 
     def test_removed_provider_lifecycle_args_are_rejected(self) -> None:
         for provider_id in ("env-stableretro-turbo", "env-supermariobrosnes-turbo-emu"):

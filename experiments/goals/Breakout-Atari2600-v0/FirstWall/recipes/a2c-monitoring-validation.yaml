@@ -1,4 +1,5 @@
 train:
+  checkpoint_freq: 327680
   timesteps: 1310720
   policy_model:
     schema_version: 2

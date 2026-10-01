@@ -135,7 +135,7 @@ test("the built-in policy panel uses the decision-first layout only for its cano
   }), false);
 });
 
-test("policy decision presentation keeps selection, probability, and window frequency distinct", () => {
+test("policy decision presentation keeps selection, probability, and episode frequency distinct", () => {
   const entries = ["noop", "button", "right", "left"].map((label, value) => ({
     value,
     semantic_id: label,
@@ -198,7 +198,7 @@ test("policy decision presentation keeps selection, probability, and window freq
   );
   assert.deepEqual(
     presentation.rows.map(({ policyFrequency }) => policyFrequency),
-    [0, 0, 22 / 64, 42 / 64],
+    [0.10, 0.26, 0.22, 0.42],
   );
   assert.deepEqual(
     presentation.stats.map(({ label, value }) => [label, value]),
@@ -488,7 +488,7 @@ test("action history normalizes vector scalars and never renders undefined selec
   assert.equal(histogramSelectedLabel(["noop", "move left"], 1), "move left");
 });
 
-test("action comparison aligns window frequencies with selected-step probabilities", () => {
+test("action comparison aligns episode frequencies with selected-step probabilities", () => {
   const entries = ["noop", "left", "right", "attack"].map((label, value) => ({
     value,
     semantic_id: label,
@@ -578,7 +578,7 @@ test("legal-tuple action comparison aligns the joint categorical support", () =>
   assert.equal(presentation.rows[2].executed, true);
 });
 
-test("action window stays fixed when only the supplied distribution changes", () => {
+test("action episode prefix stays fixed when only the supplied distribution changes", () => {
   const snapshot = {
     transition: { episode: 1, step: 2, sequence: 2, executed_action: 0 },
     session: {
@@ -816,7 +816,7 @@ test("the timeline shows the displayed episode and step across a boundary", () =
       session: { episode: 4, step: 1228 },
       transition: { episode: 3, step: 763 },
     }),
-    "EPISODE 3 · STEP 763",
+    "EPISODE 3 · STEP 763 / 763",
   );
 });
 
@@ -1130,36 +1130,61 @@ test("value comparison omits its redundant explanatory label", () => {
   assert.equal(presentation.warning, false);
 });
 
-test("action frequencies use a stable trailing window and separate policy from overrides and human inputs", () => {
+test("action frequencies cover the episode to cursor and separate overrides and human input", () => {
   const source = { transition: { episode: 1, step: 70, sequence: 70 }, session: {
     action_contract: { policy: { space: { type: "discrete", n: 2, start: 0 } } },
   } };
   const history = Array.from({ length: 100 }, (_, index) => ({
     episode: 1, step: index + 1, sequence: index + 1,
     action_source: index === 69 ? "human" : "policy",
-    policy_action: index === 69 ? null : 1, executed_action: 1,
+    policy_action: index === 69 ? null : index < 6 ? 0 : 1, executed_action: 1,
     effective_action: index === 6 ? 0 : 1, native_action: 99,
   }));
   const decision = { probabilities: [0.2, 0.8], selected_action: 1 };
   const render = (points) => actionComparisonPresentation(source, points, decision);
   const first = render(history);
-  assert.equal(first.history.firstStep, 7);
+  assert.equal(first.history.firstStep, 1);
   assert.equal(first.history.lastStep, 70);
-  assert.equal(first.history.sampleCount, 64);
-  assert.equal(first.history.policy.sampleCount, 63);
-  assert.equal(first.history.environment.sampleCount, 64);
-  assert.deepEqual(first.rows.map((row) => row.policyFrequency), [0, 1]);
-  assert.deepEqual(first.rows.map((row) => row.environmentFrequency), [1 / 64, 63 / 64]);
-  assert.deepEqual(render(history.slice(6, 70)), first);
+  assert.equal(first.history.sampleCount, 70);
+  assert.equal(first.history.policy.sampleCount, 69);
+  assert.equal(first.history.environment.sampleCount, 70);
+  assert.deepEqual(first.rows.map((row) => row.policyFrequency), [6 / 69, 63 / 69]);
+  assert.deepEqual(first.rows.map((row) => row.environmentFrequency), [1 / 70, 69 / 70]);
+  assert.deepEqual(render(history.slice(0, 70)), first);
   assert.deepEqual(render([...history, { ...history[9], episode: 2 }]), first);
-  assert.equal(render(history.slice(7)).history.status, "partial-history");
+  assert.equal(render(history.slice(6)).history.status, "partial-history");
   const missing = history.map((point) => point.step === 7 ? { ...point, effective_action: null } : point);
   assert.equal(render(missing).history.environment.status, "unavailable");
   assert.ok(render(missing).rows.every((row) => row.environmentFrequency === null));
-  assert.deepEqual(render(missing).rows.map((row) => row.policyFrequency), [0, 1]);
+  assert.deepEqual(render(missing).rows.map((row) => row.policyFrequency), [6 / 69, 63 / 69]);
   const unknownSource = history.map((point) => ({ ...point, action_source: undefined }));
   assert.equal(render(unknownSource).history.policy.status, "unavailable");
   assert.ok(render(unknownSource).rows.every((row) => row.policyFrequency === null));
+});
+
+test("frozen episode counts survive eviction and arbitrary scrubbing without future leakage", () => {
+  const snapshot = { transition: { episode: 1, step: 488, sequence: 488 }, session: {
+    action_contract: { policy: { space: { type: "discrete", n: 2, start: 0 } } },
+  } };
+  const totals = (step, counts) => ({ episode: 1, step, sequence: step, status: "available",
+    policy: { counts, population_count: step, missing_count: 0, unmappable_count: 0 },
+    environment: { counts, population_count: step, missing_count: 0, unmappable_count: 0 },
+  });
+  const decision = { probabilities: [0.99, 0.01], selected_action: 0 };
+  const future = [{ episode: 1, step: 999, policy_action: 0, effective_action: 0 }];
+  const render = (step, counts) => actionComparisonPresentation({ ...snapshot,
+    transition: { episode: 1, step, sequence: step }, episode_actions: totals(step, counts),
+  }, future, decision);
+  const end = render(488, [64, 424]);
+  assert.deepEqual(end.rows.map((row) => row.policyFrequency), [64 / 488, 424 / 488]);
+  assert.deepEqual(render(10, [0, 10]).rows.map((row) => row.policyFrequency), [0, 1]);
+  assert.deepEqual(render(488, [64, 424]), end);
+  const stale = actionComparisonPresentation({ ...snapshot, episode_actions: totals(10, [0, 10]) }, [], decision);
+  assert.equal(stale.history.status, "protocol-error");
+  assert.ok(stale.rows.every((row) => row.policyFrequency === null));
+  const corrupt = actionComparisonPresentation({ ...snapshot, episode_actions: totals(488, [488, 488]) }, [], decision);
+  assert.equal(corrupt.history.status, "protocol-error");
+  assert.ok(corrupt.rows.every((row) => row.policyFrequency === null));
 });
 
 test("late-opened value legend uses recorded calibration at the exact cursor", () => {

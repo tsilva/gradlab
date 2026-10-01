@@ -42,6 +42,13 @@ export async function runChecks() {
   try {
     await control('reset');
     await list();
+    const importButton = $('#trajectory-import');
+    const importBounds = importButton.getBoundingClientRect();
+    assert(!importButton.disabled && importBounds.width > 0 && importBounds.height > 0,
+      'episode import unavailable before selecting a checkpoint');
+    assert(importButton.contains(document.elementFromPoint(
+      importBounds.x + importBounds.width / 2, importBounds.y + importBounds.height / 2,
+    )), 'episode import is covered on source selection');
     await wait(() => $('#source-browser button[aria-label="Refresh"]'), 'initial catalog refresh not settled');
     const path = location.pathname;
     await control('catalog-fail');
@@ -189,14 +196,16 @@ export async function runAdditionalChecks() {
     click('[data-checkpoint-next]');
     await waitStatus(status => status.phase === 'loading', 'cancel test preparation not admitted');
     const cancel = [...document.querySelectorAll('#source-browser button')].find(button => button.textContent === 'Back to current run');
-    assert(cancel && mask(), 'expected covered cancellation control');
-    // Programmatic DOM activation characterizes the existing command. The mask covers it for pointer users.
+    assert(cancel && mask(), 'expected cancellation control');
+    const bounds = cancel.getBoundingClientRect();
+    const hit = document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+    assert(hit && cancel.contains(hit), 'loading mask covers the cancellation control');
     cancel.click();
     await wait(() => !mask(), 'cancel did not release applicable presentation');
     await control('succeed');
     await waitStatus(status => !status.preparing, 'cancelled worker did not drain');
     assert((await control('status')).epoch === beforeCancel.epoch, 'cancel discarded previous runner');
-    pass('covered Cancel control retains the previous runner and presentation behavior');
+    pass('pointer-accessible Cancel retains the previous runner and presentation behavior');
     click('[aria-label="Start recording episode"]');
     await wait(() => $('[aria-label="Stop recording episode"]'), 'recording did not start');
     click('#trajectory-next');

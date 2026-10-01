@@ -42,7 +42,7 @@ def test_campaign_uses_elapsed_training_time_and_requires_concurrent_capture(
     identity, settings, commands = campaign_plan(campaign)
     goal = Path("experiments/goals/Breakout-Atari2600-v0/FirstWall")
     train = compose_train_document(goal / "_goal.yaml", goal / "recipes/ppo.yaml")["train_config"]
-    train.update(timesteps=400, checkpoint_freq=100)
+    train.update(timesteps=400, checkpoint_freq=100, checkpoint_steps=[], checkpoint_candidates=None)
     control = R2Bucket(BucketConfig(uri=f"file://{tmp_path}/control"))
     models = R2Bucket(BucketConfig(uri=f"file://{tmp_path}/models"))
     manifests, recipes, runs = {}, {}, {}

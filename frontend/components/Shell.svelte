@@ -392,7 +392,7 @@
   aria-busy={shellState.timeline.busy}
 >
   <div class="timeline-labels">
-    <strong id="timeline-label">{shellState.timeline.label}</strong>
+    <strong id="timeline-label" title="Displayed step / latest captured step in this episode">{shellState.timeline.label}</strong>
     <button
       id="timeline-zoom"
       type="button"

@@ -205,6 +205,7 @@ export function createPlaybackInspection({
     const episodeId = snapshot.trajectory?.episode_id ?? null;
     if ((state.retainedEpisode !== null && state.retainedEpisode !== episode)
         || (state.recordedEpisodeId !== null && state.recordedEpisodeId !== episodeId)) {
+      resumeEpisodeReplay = resumeEpisodeReplay || replayFollowsInference;
       clearRetainedEpisode();
       state.history = [];
       state.snapshot = null;
@@ -481,7 +482,8 @@ export function createPlaybackInspection({
       return;
     }
     if (step < (trajectory.initial_step ?? trajectory.first_step) || step > trajectory.last_step) return;
-    if (step === trajectory.last_step && step === Number(state.liveSnapshot?.transition?.step)) {
+    if (!(preserveReplay && replayFollowsInference)
+        && step === trajectory.last_step && step === Number(state.liveSnapshot?.transition?.step)) {
       returnToLive();
       return;
     }
@@ -556,6 +558,9 @@ export function createPlaybackInspection({
   let replayGeneration = 0;
   let nextReplayAt = null;
   let replayFps = null;
+  let replayFollowsInference = false;
+  let replayPlayCommandId = null;
+  let resumeEpisodeReplay = false;
 
   function canReplayInspection() {
     if (state.liveSnapshot?.trajectory?.imported) return false;
@@ -571,6 +576,8 @@ export function createPlaybackInspection({
     replayGeneration += 1;
     nextReplayAt = null;
     replayFps = null;
+    replayFollowsInference = false;
+    replayPlayCommandId = null;
     if (state.replayingInspection) {
       recordedStepReader.invalidate();
       state.seekingStep = null;
@@ -600,9 +607,17 @@ export function createPlaybackInspection({
       // and read work still consume the current interval instead of adding one.
       const startedAt = now();
       if (startedAt - nextReplayAt >= interval) nextReplayAt = startedAt;
-      if (state.liveSnapshot?.trajectory?.transitions > 0) {
+      if (state.liveSnapshot?.trajectory?.episode_id
+          && (replayFollowsInference || state.liveSnapshot.trajectory.transitions > 0)) {
         const nextStep = Number(state.snapshot.transition?.step ?? state.snapshot.session?.step) + 1;
         if (nextStep > state.liveSnapshot.trajectory.last_step) {
+          // A fresh episode can still be preparing its first transition, and a
+          // slow producer can be behind the display clock. Keep the cursor pinned.
+          if (replayFollowsInference && (replayPlayCommandId !== null
+              || RUNNING_STATES.has(state.liveSnapshot.run_state))) {
+            scheduleInspectionReplay();
+            return;
+          }
           returnToLive();
           return;
         }
@@ -631,12 +646,27 @@ export function createPlaybackInspection({
       return;
     }
     if (state.replayingInspection) return;
-    if (canReplayInspection()) {
+    const live = state.liveSnapshot;
+    const playLiveHead = (state.inspectionSequence === null
+      || state.inspectionSequence === Number(live?.sequence))
+      && hasIndependentInference(live) && live.trajectory?.episode_id
+      && !live.session?.awaiting_next_episode && !live.trajectory.error
+      && state.rgbEnabled;
+    if (canReplayInspection() || playLiveHead) {
+      if (playLiveHead) {
+        // Playback starts at the visible cursor even before history exists.
+        // Inference keeps its own clock; its snapshots must not skip display steps.
+        setInspectionCursor(Number(state.snapshot.sequence), { announce: false });
+        replayFollowsInference = true;
+      }
       // Resume an explicitly paused producer too, without jumping to its head.
       if (hasIndependentInference(state.liveSnapshot)
           && (state.liveSnapshot.run_state === "paused" || state.inspectionPauseCommandId !== null)
           && !state.liveSnapshot.session?.awaiting_next_episode
-          && !state.liveSnapshot.trajectory?.error) command("play");
+          && !state.liveSnapshot.trajectory?.error) {
+        const id = command("play");
+        if (replayFollowsInference) replayPlayCommandId = id;
+      }
       replayGeneration += 1;
       state.replayingInspection = true;
       publish();
@@ -644,11 +674,17 @@ export function createPlaybackInspection({
       return;
     }
     if (state.inspectionSequence !== null) returnToLive();
+    if (hasIndependentInference(live) && live.trajectory?.episode_id
+        && live.session?.awaiting_next_episode && state.rgbEnabled) resumeEpisodeReplay = true;
     if (!RUNNING_STATES.has(state.liveSnapshot?.run_state)
-        || state.inspectionPauseCommandId !== null) command("play");
+        || state.inspectionPauseCommandId !== null) {
+      const id = command("play");
+      if (resumeEpisodeReplay) replayPlayCommandId = id;
+    }
   }
 
   function pauseCurrentPlayback() {
+    resumeEpisodeReplay = false;
     recordedStepReader.invalidate();
     state.seekingStep = null;
     if (state.replayingInspection) {
@@ -669,6 +705,7 @@ export function createPlaybackInspection({
   function reset(epoch = state.sessionEpoch) {
     cancelInspectionFrameRequest();
     stopInspectionReplay({ render: false });
+    resumeEpisodeReplay = false;
     clearRetainedEpisode();
     state.sessionEpoch = Number(epoch) || 0;
     state.retainedEpisode = null;
@@ -696,8 +733,24 @@ export function createPlaybackInspection({
     },
     present: ({ snapshot, ticket }) => {
       state.liveSnapshot = snapshot;
+      if (RUNNING_STATES.has(snapshot.run_state)
+          || snapshot.sequence > state.snapshot?.sequence
+          || snapshot.session?.awaiting_next_episode || snapshot.trajectory?.error) replayPlayCommandId = null;
       if (snapshot.run_state === 'paused') state.inspectionPauseCommandId = null;
       if (snapshot.mode === 'trajectory') state.inspectionSequence = null;
+      // Episode replacement clears the previous cursor. Start the new episode's
+      // display clock from its first visible state instead of following inference.
+      if (resumeEpisodeReplay && state.inspectionSequence === null && snapshot.run_state === 'playing'
+          && hasIndependentInference(snapshot) && snapshot.trajectory?.episode_id
+          && state.rgbEnabled) {
+        if (!state.snapshot) state.snapshot = snapshot;
+        setInspectionCursor(Number(state.snapshot.sequence), { announce: false });
+        replayFollowsInference = true;
+        resumeEpisodeReplay = false;
+        state.replayingInspection = true;
+        replayGeneration += 1;
+        scheduleInspectionReplay();
+      }
       if (state.inspectionSequence === null) state.snapshot = snapshot;
       publish();
       const currentLifetime = lifetime;
@@ -824,6 +877,14 @@ export function createPlaybackInspection({
     admitSnapshot, reset: intent(reset), receiveFrame, receiveHistory, receivePeer, setFrameDemand, updateConnection,
     commandResult({ id, ok }) {
       if (!disposed && id === state.inspectionPauseCommandId && !ok) state.inspectionPauseCommandId = null;
+      if (!disposed && id === replayPlayCommandId) {
+        // Success can arrive before the playing snapshot. Keep waiting for that
+        // authoritative state; rejection must stop the local display clock.
+        if (!ok) {
+          resumeEpisodeReplay = false;
+          stopInspectionReplay();
+        }
+      }
     },
     selectStep: intent(step => inspectStep(step)), selectSequence: intent(inspectSequence),
     play: intent(playFromCurrentPosition), pause: intent(pauseCurrentPlayback), returnToLive: intent(() => returnToLive()),

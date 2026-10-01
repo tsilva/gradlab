@@ -3,8 +3,18 @@ defaults:
 - _self_
 recipe_id: ppo
 description: Default Breakout PPO with scheduled learning-rate reductions, gamma 0.999, and a +20 first-wall completion bonus. The seed123 reference run reached 95/100 stochastic research clears from scratch; held-out 100/100 remains unverified.
-# Training settings from gradlab-7d0a6b7fd44d3720c1a82daad90f639d; checkpoint cadence remains goal-owned.
+# Training settings from gradlab-7d0a6b7fd44d3720c1a82daad90f639d; phase checkpoints are recipe-owned.
 train:
+  checkpoint_freq: 0
+  checkpoint_steps: [5000000, 10000000, 20000000, 40000000, 60000000, 100000000, 140000000, 160000000, 171000000, 173000000, 176500000, 179000000, 185000000]
+  checkpoint_candidates:
+    metric: train/progress/bricks_destroyed_normalized/mean
+    direction: maximize
+    min_delta: 0.025
+    delta_mode: absolute
+    start_after_steps: 5000000
+    min_interval_steps: 10000000
+    max_checkpoints: 3
   timesteps: 191561728
   checkpoint_monitoring:
     enabled: false

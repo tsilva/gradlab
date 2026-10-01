@@ -57,6 +57,8 @@ def calibration_binding(train, settings):
         "torch_threads",
         "timesteps",
         "checkpoint_freq",
+        "checkpoint_steps",
+        "checkpoint_candidates",
         "effective_goal_contract_sha256",
         "state",
         "states",

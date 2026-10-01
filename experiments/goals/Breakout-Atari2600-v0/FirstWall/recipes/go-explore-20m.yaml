@@ -3,6 +3,7 @@ defaults:
 recipe_id: go-explore-20m
 description: 20M-transition Go-Explore search for {{ goal_id }}.
 train:
+  checkpoint_freq: 2000000
   timesteps: 20000000
   state_archive:
     semantic_id: state-archive-v1

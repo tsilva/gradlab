@@ -635,9 +635,13 @@ class ImportedTrajectory:
                     raise ValueError("excessive or incompatible trajectory row group")
             if expanded_size > MAX_ARCHIVE_BYTES:
                 raise ValueError("excessive expanded trajectory data")
+            from gradlab.play_action_summary import EpisodeActionSummary
             from gradlab.play_reward_summary import EpisodeRewardSummary
 
             rewards = EpisodeRewardSummary()
+            actions = EpisodeActionSummary(
+                self.metadata["initial_snapshot"]["session"].get("action_contract")
+            )
             reward_contract = self.metadata["initial_snapshot"]["session"].get(
                 "reward_accounting", {}
             )
@@ -653,6 +657,8 @@ class ImportedTrajectory:
                 # the existing streaming import, including archives without totals.
                 rewards.append(row["presentation"], reward_contract)
                 row["presentation"]["episode_rewards"] = rewards.payload(row["presentation"])
+                actions.append(row["presentation"])
+                row["presentation"]["episode_actions"] = actions.payload(row["presentation"])
                 classifications.add(row["classification"])
                 EpisodeRecording._append(self.root, pack_record(row))
                 previous = row

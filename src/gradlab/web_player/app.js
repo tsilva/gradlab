@@ -803,6 +803,7 @@ function updateControlState() {
 function renderWorkspaceStatus() {
   shellState.timeline.label = timelineLabel(
     inspection.view.snapshot || inspection.view.liveSnapshot,
+    inspection.view.liveSnapshot,
   );
 }
 

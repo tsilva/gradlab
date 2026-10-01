@@ -35,9 +35,20 @@ from gradlab.metric_names import (
     validate_metric_payload,
 )
 from gradlab.ranking import require_objective_rank
+from gradlab.wandb_utils import resolve_wandb_project
 
 
 RUN_ID_TAG = "gradlab.run_id"
+
+
+def mlflow_experiment_name(train_config: Mapping[str, Any]) -> str:
+    """Use the same provider-neutral project routing as W&B."""
+    project = resolve_wandb_project(
+        train_config.get("wandb_project"),
+        train_config.get("game"),
+        env_provider=train_config.get("env_provider"),
+    )
+    return f"gradlab-{project}"
 
 
 class MlflowDelivery:
@@ -83,6 +94,32 @@ class MlflowDelivery:
         if not tracking_uri or not experiment_name:
             raise ValueError("MLflow tracking URI and experiment name are required")
         client = MlflowClient(tracking_uri=tracking_uri)
+        # Run identity survives experiment naming changes. Reuse its service
+        # binding before creating an experiment or another scientific record.
+        experiment_ids = []
+        page_token = None
+        while True:
+            experiments = client.search_experiments(page_token=page_token)
+            experiment_ids.extend(experiment.experiment_id for experiment in experiments)
+            page_token = experiments.token
+            if not page_token:
+                break
+        matches = client.search_runs(
+            experiment_ids,
+            filter_string=f"tags.`{RUN_ID_TAG}` = '{gradlab_run_id}'",
+            max_results=2,
+        ) if experiment_ids else []
+        if len(matches) > 1:
+            raise RuntimeError("MLflow has multiple bindings for one GradLab Run")
+        if matches:
+            return cls(
+                client,
+                run_id=matches[0].info.run_id,
+                gradlab_run_id=gradlab_run_id,
+                created_at_ms=created_at_ms,
+                tracking_uri=tracking_uri,
+                experiment_id=matches[0].info.experiment_id,
+            )
         experiment = client.get_experiment_by_name(experiment_name)
         if experiment is None:
             try:
@@ -94,22 +131,10 @@ class MlflowDelivery:
                 experiment_id = experiment.experiment_id
         else:
             experiment_id = experiment.experiment_id
-        # The lease gives this Run one writer. Searching by immutable GradLab ID
-        # also reconciles a create that committed before its reply was lost.
-        matches = client.search_runs(
-            [experiment_id],
-            filter_string=f"tags.`{RUN_ID_TAG}` = '{gradlab_run_id}'",
-            max_results=2,
-        )
-        if len(matches) > 1:
-            raise RuntimeError("MLflow has multiple bindings for one GradLab Run")
-        if matches:
-            run_id = matches[0].info.run_id
-        else:
-            run_id = client.create_run(
-                experiment_id,
-                tags={RUN_ID_TAG: gradlab_run_id, "mlflow.runName": gradlab_run_id},
-            ).info.run_id
+        run_id = client.create_run(
+            experiment_id,
+            tags={RUN_ID_TAG: gradlab_run_id, "mlflow.runName": gradlab_run_id},
+        ).info.run_id
         return cls(
             client,
             run_id=run_id,

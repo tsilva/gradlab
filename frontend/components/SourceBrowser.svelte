@@ -990,7 +990,7 @@
         {@render loading(v.app.message || "Preparing playback…")}
         {#if v.app.has_active_runner}<button
             type="button"
-            class="quiet button-with-icon"
+            class="quiet button-with-icon source-cancel"
             disabled={!v.hasControl}
             onclick={() => c.command("cancel_source")}
             ><SourceIcon name="arrow-left" /><span>Back to current run</span

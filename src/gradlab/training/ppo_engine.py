@@ -35,7 +35,7 @@ from gradlab.ppo import GradLabPPO
 from gradlab.training.sb3_on_policy import (
     active_reward_components,
     checkpoint_prefix,
-    checkpoint_save_frequency,
+    LearnedPolicyCheckpoints,
     policy_kwargs_from_config,
     policy_type_for_config,
     save_model_bundle,
@@ -1196,11 +1196,7 @@ def run_gradlab_ppo(
         throughput = _ThroughputTracker(context, runtime, device)
         episode_starts = torch.ones(n_envs, dtype=torch.bool, device=device)
         dones = torch.zeros(n_envs, dtype=torch.bool, device=device)
-        checkpoint_calls = checkpoint_save_frequency(
-            int(common_config["checkpoint_freq"]),
-            n_envs,
-        )
-        calls_since_start = 0
+        scheduled_checkpoints = LearnedPolicyCheckpoints(model, context, algorithm_id="ppo")
         context.mark_ready()
 
         while int(model.num_timesteps) < budget.execution_total:
@@ -1273,7 +1269,6 @@ def run_gradlab_ppo(
                     dones.copy_(torch.as_tensor(done_array))
                 episode_starts = dones
                 model.num_timesteps += n_envs
-                calls_since_start += 1
                 records = [] if device_resident else runtime.drain_records()
                 episodes: list[Any] = []
                 for record in records:
@@ -1289,20 +1284,6 @@ def run_gradlab_ppo(
                     step=int(model.num_timesteps),
                     records=episodes,
                 )
-                if (
-                    checkpoint_calls is not None
-                    and calls_since_start % checkpoint_calls == 0
-                    and int(model.num_timesteps) < int(common_config["timesteps"])
-                ):
-                    step = int(model.num_timesteps)
-                    save_model_bundle(
-                        model=model,
-                        context=context,
-                        model_path=context.checkpoint_dir
-                        / f"{checkpoint_prefix(config.game, algorithm_id='ppo')}_{step}_steps.zip",
-                        kind="checkpoint",
-                        step=step,
-                    )
 
             if device_resident:
                 episodes = runtime.drain_records()
@@ -1379,6 +1360,7 @@ def run_gradlab_ppo(
                 step=int(model.num_timesteps),
                 metrics=rollout_metrics,
             )
+            scheduled_checkpoints.after_update()
             if context.stop_flag.requested:
                 graceful_stop.acknowledge_safe_boundary(num_timesteps=int(model.num_timesteps))
                 break
@@ -1387,7 +1369,10 @@ def run_gradlab_ppo(
         reason = context.session.terminal_reason()
         if (
             context.session.should_persist_interrupted_checkpoint(reason)
-            and int(common_config["checkpoint_freq"]) > 0
+            and (int(common_config["checkpoint_freq"]) > 0
+                 or common_config.get("checkpoint_steps")
+                 or common_config.get("checkpoint_candidates")
+                 or backend_config["checkpoint_update_steps"])
         ):
             step = int(model.num_timesteps)
             save_model_bundle(

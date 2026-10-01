@@ -15,7 +15,7 @@ from typing import Any, Protocol
 from gradlab.clock import Clock, SystemClock
 from gradlab.metric_names import METRICS_SCHEMA_VERSION
 from gradlab.metric_store import MetricStore
-from gradlab.mlflow_delivery import MlflowDelivery
+from gradlab.mlflow_delivery import MlflowDelivery, mlflow_experiment_name
 from gradlab.run_contracts import TerminalReceipt
 from gradlab.runtime_contract import runtime_contract
 from gradlab.selected_delivery import DeliveryAdapter, MetricsWriter
@@ -104,7 +104,7 @@ class SupervisorRuntime:
         created_at_ms = int(datetime.fromisoformat(created_at.replace("Z", "+00:00")).timestamp() * 1000)
         return MlflowDelivery.open(
             tracking_uri=uri,
-            experiment_name=f"gradlab-{train_config['game_family']}",
+            experiment_name=mlflow_experiment_name(train_config),
             gradlab_run_id=str(train_config["wandb_run_id"]),
             created_at_ms=created_at_ms,
         )

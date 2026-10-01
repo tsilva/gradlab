@@ -55,6 +55,8 @@ def _unavailable_action_metrics(config: Mapping[str, Any]) -> frozenset[str]:
 
 def required_metric_names(config: Mapping[str, Any]) -> frozenset[str]:
     names = {item.metric for item in parse_objective_rank(config.get("selection_rank"))}
+    if config.get("checkpoint_candidates"):
+        names.add(str(config["checkpoint_candidates"]["metric"]))
     names.update(str(rule["metric"]) for rule in config.get("checkpoint_eval_acceptance", ()) or ())
     names.update(
         str(rule["metric"])

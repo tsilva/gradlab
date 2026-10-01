@@ -51,6 +51,8 @@ def test_queued_local_only_mlflow_sync_replays_r2_journal_without_changing_recei
     )
     assert [(point.value, point.step) for point in history] == [(0.5, 1000)]
     service_run = MlflowClient(tracking_uri=uri).get_run(first["service_run_id"])
+    experiment = MlflowClient(tracking_uri=uri).get_experiment_by_name("gradlab-Bandit-v0")
+    assert service_run.info.experiment_id == experiment.experiment_id
     assert service_run.data.tags["ops/state"] == "complete_local"
     public = authority.models.get_json(f"runs/{run_id}/index.json")
     assert public["telemetry"]["tracking"]["tracker_sync_status"] == "delivered"

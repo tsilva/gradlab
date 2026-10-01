@@ -233,8 +233,9 @@ def run_jerk(context: BackendContext) -> TrainingResult:
         )
         throughput = DeltaThroughputTracker(env, initial_step=search.global_step)
         next_log = int(backend_config["log_interval_steps"])
-        checkpoint_freq = int(common_config["checkpoint_freq"])
-        next_checkpoint = checkpoint_freq if checkpoint_freq > 0 else None
+        from gradlab.checkpoint_schedule import CheckpointSchedule
+
+        checkpoint_schedule = CheckpointSchedule(common_config)
         configured_starts = tuple(
             str(start)
             for start in (
@@ -308,20 +309,18 @@ def run_jerk(context: BackendContext) -> TrainingResult:
                     },
                 )
                 next_log += int(backend_config["log_interval_steps"])
-            while next_checkpoint is not None and step >= next_checkpoint:
-                if step < budget.execution_total:
-                    checkpoint_path = context.checkpoint_dir / (
-                        f"{_checkpoint_prefix(config.game)}_{step}_steps.zip"
-                    )
-                    _save_policy_bundle(
-                        search=search,
-                        context=context,
-                        model_path=checkpoint_path,
-                        kind="checkpoint",
-                        step=step,
-                        env=env,
-                    )
-                next_checkpoint += checkpoint_freq
+            if checkpoint_schedule.due(step):
+                checkpoint_path = context.checkpoint_dir / (
+                    f"{_checkpoint_prefix(config.game)}_{step}_steps.zip"
+                )
+                _save_policy_bundle(
+                    search=search,
+                    context=context,
+                    model_path=checkpoint_path,
+                    kind="checkpoint",
+                    step=step,
+                    env=env,
+                )
             if early_stopped:
                 break
 
@@ -338,7 +337,7 @@ def run_jerk(context: BackendContext) -> TrainingResult:
             TerminalReason.TRAINING_ACCEPTANCE if accepted else TerminalReason.RESOURCE_EXHAUSTION
         )
         reason = context.session.terminal_reason(default_reason)
-        if context.session.should_persist_interrupted_checkpoint(reason) and checkpoint_freq > 0:
+        if context.session.should_persist_interrupted_checkpoint(reason) and checkpoint_schedule.enabled:
             _save_policy_bundle(
                 search=search,
                 context=context,

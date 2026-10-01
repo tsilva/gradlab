@@ -44,26 +44,42 @@ test("missing discount and reward stay unavailable while zero is a value", () =>
   assert.deepEqual(rewardInspectionRows([], null, .99), []);
 });
 
-test("scrubbing preserves reference rows and discounts while moving only the highlight", () => {
+test("scrubbing follows the cursor while preserving the independent discount reference", () => {
   const history = Array.from({ length: 100 }, (_, step) => ({ step, reward_shaped: step % 10 === 0 ? 1 : 0 }));
-  const baseline = rewardInspectionRows(history, history[40], .99, 5, 40);
-  const withoutHighlight = rows => rows.map(({ inspected, ...row }) => row);
-  for (const cursor of [80, 60, 20, 45, 99, 40]) {
+  const expected = new Map([
+    [80, [80, 90]], [60, [60, 70, 80, 90]], [20, [40, 50, 60, 70, 80]],
+    [45, [45, 50, 60, 70, 80]], [99, [99]], [40, [40, 50, 60, 70, 80]],
+  ]);
+  for (const [cursor, steps] of expected) {
     const rows = rewardInspectionRows(history, history[cursor], .99, 5, 40);
-    assert.deepEqual(rows.map(row => row.step), [40, 50, 60, 70, 80]);
-    assert.deepEqual(withoutHighlight(rows), withoutHighlight(baseline));
-    assert.equal(rows.find(row => row.inspected)?.step,
-      [40, 50, 60, 70, 80].includes(cursor) ? cursor : undefined);
+    assert.deepEqual(rows.map(row => row.step), steps);
+    assert.equal(rows.find(row => row.inspected)?.step, cursor >= 40 ? cursor : undefined);
+    for (const row of rows) {
+      assert.equal(row.delay, row.step - 40);
+      assert.equal(row.weight, .99 ** (row.step - 40));
+    }
   }
   const changedReference = rewardInspectionRows(history, history[60], .99, 5, 60);
   assert.deepEqual(changedReference.map(row => row.step), [60, 70, 80, 90]);
   assert.equal(changedReference[0].delay, 0);
 });
 
-test("seeking to a sample omitted from chart history does not insert a row", () => {
+test("an omitted cursor sample is restored without changing the discount reference", () => {
   const history = [10, 30, 50].map(step => ({ step, reward_shaped: 1 }));
   const rows = rewardInspectionRows(history, { step: 20, reward_shaped: 2 }, .99, 5, 10);
-  assert.deepEqual(rows.map(row => row.step), [10, 30, 50]);
+  assert.deepEqual(rows.map(row => row.step), [20, 30, 50]);
+  assert.equal(rows[0].inspected, true);
+  assert.equal(rows[0].delay, 10);
+  assert.equal(rows[0].contribution, 2 * .99 ** 10);
+});
+
+test("late episode inspection includes the exact cursor and no earlier rows", () => {
+  const history = [1, 3, 6, 8, 9, 520, 528].map(step => ({ step, reward_shaped: -0.001 }));
+  const rows = rewardInspectionRows(history, { step: 527, reward_shaped: 0 }, .9, 5, 0);
+  assert.deepEqual(rows.map(row => row.step), [527, 528]);
+  assert.equal(rows[0].inspected, true);
+  assert.equal(rows[0].delay, 527);
+  assert.equal(rows[0].contribution, 0);
 });
 
 test("return reference 564 excludes earlier reward events", () => {
@@ -74,6 +90,17 @@ test("return reference 564 excludes earlier reward events", () => {
   assert.deepEqual(rows.map(row => row.step), [564, 647, 741]);
   assert.equal(rows[0].weight, 1);
   assert.equal(rows[1].delay, 83);
+});
+
+test("an exact pinned reference survives sampled gaps when the cursor is earlier", () => {
+  const history = [1, 298, 300].map(step => ({ step, reward_shaped: .5 }));
+  const reference = { step: 299, reward_shaped: .5 };
+  const rows = rewardInspectionRows(history, history[1], .9, 5, 299, reference);
+  assert.deepEqual(rows.map(row => row.step), [299, 300]);
+  assert.equal(rows[0].delay, 0);
+  assert.equal(rows[0].weight, 1);
+  assert.equal(rows[1].delay, 1);
+  assert.equal(rows.some(row => row.inspected), false);
 });
 
 test("selected reward samples retain full-episode return and critic evidence", () => {

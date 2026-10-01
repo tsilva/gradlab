@@ -6,6 +6,16 @@ description: Single-player ViZDoom Deathmatch custom PPO with 128-environment, 3
 # Preserve native rewards by default; launch overrides may select sample-factory-v0.
 reward_shape: native-v1
 train:
+  checkpoint_freq: 0
+  checkpoint_steps: [5000000, 10000000, 15000000, 20000000, 25000000, 30000000, 35000000, 40000000, 45000000, 50000000, 100000000, 150000000, 200000000, 250000000, 300000000, 350000000, 400000000, 450000000]
+  checkpoint_candidates:
+    metric: train/progress/kills/mean
+    direction: maximize
+    min_delta: 0.05
+    delta_mode: relative
+    start_after_steps: 5000000
+    min_interval_steps: 25000000
+    max_checkpoints: 3
   checkpoint_eval_backend: none
   timesteps: 500000000
   # Keep the frame-skip-2 aiming contract and exclude redundant HUD pixels.

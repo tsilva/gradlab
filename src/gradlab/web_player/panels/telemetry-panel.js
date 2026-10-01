@@ -224,7 +224,7 @@ export function policyDecisionPresentation(snapshot, history, view) {
       semantics.reason || "the provider did not declare them"
     }.`);
   }
-  for (const state of [comparison.step]) {
+  for (const state of [comparison.history, comparison.step]) {
     if (state.message) footMessages.push(state.message);
   }
   return {
@@ -241,6 +241,7 @@ export function policyDecisionPresentation(snapshot, history, view) {
     stepProbability: selected?.stepProbability ?? null,
     selectedIsHighest: selected?.highest ?? null,
     rows: comparison.rows,
+    history: comparison.history,
     stats: POLICY_DECISION_FOOTER_METRICS
       .map((key) => policyDecisionMetric(key, snapshot, point))
       .filter(({ availability: metricAvailability }) => (
@@ -307,43 +308,71 @@ export function actionComparisonPresentation(snapshot, history, decision) {
     : null;
   const cursor = snapshot?.transition;
   const lastStep = Number(cursor?.step);
-  const firstStep = Math.max(1, lastStep - 63);
-  const points = [...new Map((history || []).filter((point) => (
+  const firstStep = 1;
+  const summary = snapshot?.episode_actions ?? cursor?.episode_actions;
+  const useSummary = summary && summary.status !== "unsupported";
+  const points = useSummary ? [] : [...new Map((history || []).filter((point) => (
     Number(point.episode) === Number(cursor?.episode)
     && Number(point.step) >= firstStep && Number(point.step) <= lastStep
   )).map((point) => [Number(point.step), point])).values()]
     .sort((a, b) => Number(a.step) - Number(b.step));
-  const complete = Number.isInteger(lastStep) && lastStep >= 1
-    && points.length === lastStep - firstStep + 1
-    && points.every((point, index) => Number(point.step) === firstStep + index);
-  function frequencies(field, eligible, label) {
-    const population = points.filter(eligible);
-    const counts = Array.from({ length: count }, () => 0);
+  const summaryMatches = useSummary && ["episode", "step", "sequence"].every(
+    (key) => summary[key] === cursor?.[key],
+  );
+  const complete = useSummary
+    ? summaryMatches && summary.status === "available"
+    : Number.isInteger(lastStep) && lastStep >= 1
+      && points.length === lastStep
+      && points.every((point, index) => Number(point.step) === index + 1);
+  function frequencies(field, eligible, label, summaryKey) {
+    let counts = Array.from({ length: count }, () => 0);
     let missing = 0;
     let unmappable = 0;
-    for (const point of population) {
-      if (point[field] == null || (field === "policy_action" && point.action_source !== "policy")) {
-        missing += 1;
-        continue;
+    let populationCount = 0;
+    let malformed = false;
+    if (useSummary && complete) {
+      const totals = summary[summaryKey];
+      counts = totals?.counts;
+      missing = totals?.missing_count;
+      unmappable = totals?.unmappable_count;
+      populationCount = totals?.population_count;
+      malformed = !Array.isArray(counts) || counts.length !== count
+        || [...(counts || []), missing, unmappable, populationCount]
+          .some((value) => !Number.isSafeInteger(value) || value < 0)
+        || counts.reduce((sum, value) => sum + value, 0) + missing + unmappable !== populationCount
+        || populationCount > lastStep
+        || (summaryKey === "environment" && populationCount !== lastStep);
+    } else if (!useSummary) {
+      const population = points.filter(eligible);
+      populationCount = population.length;
+      for (const point of population) {
+        if (point[field] == null || (field === "policy_action" && point.action_source !== "policy")) {
+          missing += 1;
+          continue;
+        }
+        const offset = discreteActionOffset(point[field], start, count, snapshot);
+        if (offset === null) unmappable += 1;
+        else counts[offset] += 1;
       }
-      const offset = discreteActionOffset(point[field], start, count, snapshot);
-      if (offset === null) unmappable += 1;
-      else counts[offset] += 1;
     }
-    const sampleCount = population.length - missing;
-    const status = !complete ? "partial-history" : unmappable ? "contract-incomparable"
+    const sampleCount = malformed ? 0 : populationCount - missing;
+    const status = malformed || (useSummary && !summaryMatches) ? "protocol-error"
+      : !complete ? "partial-history" : unmappable ? "contract-incomparable"
       : missing ? "unavailable" : !sampleCount ? "not-yet-observed" : "available";
-    const message = `${label}: n=${sampleCount}` + (unmappable
-      ? `; ${unmappable} of ${population.length} actions do not map to the policy action space.`
+    const message = `${label}: n=${sampleCount}` + (malformed
+      ? "; episode counts are invalid."
+      : unmappable ? `; ${unmappable} of ${populationCount} actions do not map to the policy action space.`
       : missing ? `; ${missing} actions not recorded.` : ".");
-    return { sampleCount, status, message, values: counts.map((value) => status === "available" ? value / sampleCount : null) };
+    return { sampleCount, status, message,
+      values: Array.from({ length: count }, (_, index) => status === "available" ? counts[index] / sampleCount : null) };
   }
-  const policy = frequencies("policy_action", (point) => point.action_source !== "human", "Policy choices");
-  const environment = frequencies("effective_action", () => true, "Environment actions");
-  const historyStatus = !complete ? "partial-history"
-    : [policy, environment].find((item) => item.status === "contract-incomparable")?.status || "available";
+  const policy = frequencies("policy_action", (point) => point.action_source !== "human", "Policy choices", "policy");
+  const environment = frequencies("effective_action", () => true, "Environment actions", "environment");
+  const historyStatus = [policy, environment].find((item) => item.status === "protocol-error")?.status
+    || (!complete ? "partial-history"
+      : [policy, environment].find((item) => item.status === "contract-incomparable")?.status || "available");
   const historyMessage = [
-    !complete ? "Complete window unavailable." : "",
+    !complete ? "Complete episode prefix unavailable." : "",
     ...[policy, environment]
       .filter((state) => state.status !== "available")
       .map((state) => state.message),
@@ -357,7 +386,7 @@ export function actionComparisonPresentation(snapshot, history, decision) {
   );
   return {
     history: {
-      sampleCount: points.length,
+      sampleCount: complete ? lastStep : points.length,
       firstStep, lastStep, policy, environment,
       status: historyStatus,
       message: historyMessage,

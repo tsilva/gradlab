@@ -33,6 +33,8 @@
         `Action semantics unavailable: ${semantics.reason || "the provider did not declare them"}.`,
       );
     if (available && comparison)
+      messages.push(`Episode to cursor · steps 1–${comparison.history.lastStep} · Policy n=${comparison.history.policy.sampleCount} · Env n=${comparison.history.environment.sampleCount}`);
+    if (available && comparison)
       for (const state of [comparison.history, comparison.step])
         if (state.message) messages.push(state.message);
     return messages.filter(Boolean).join(" ");
@@ -55,8 +57,8 @@
     <div class="action-comparison-legend" hidden={!available || !comparison}>
       <div class="action-comparison-legend-series">
         <span class="step">Step action probability</span><span class="episode"
-          >Window: policy choices</span
-        ><span class="environment">Window: environment actions</span>
+          >Episode to cursor: policy choices</span
+        ><span class="environment">Episode to cursor: environment actions</span>
       </div>
     </div>
     {#if !available}<div

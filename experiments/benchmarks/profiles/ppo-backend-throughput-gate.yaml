@@ -15,6 +15,8 @@ require_clean_source: true
 required_cuda_device_name: NVIDIA GeForce RTX 4090
 recipe_overrides:
 - train.checkpoint_freq=0
+- train.checkpoint_steps=[]
+- train.checkpoint_candidates=null
 cases:
 - name: mario
   goal_file: experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml

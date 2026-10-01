@@ -292,6 +292,49 @@ def save_model_bundle(
     )
 
 
+class LearnedPolicyCheckpoints:
+    """One scheduled/candidate publication opportunity per completed update."""
+
+    def __init__(self, model: Any, context: BackendContext, *, algorithm_id: str):
+        from gradlab.checkpoint_schedule import CheckpointSchedule
+        from gradlab.metric_store import MetricStore, metric_store_path
+
+        self.model = model
+        self.context = context
+        self.algorithm_id = algorithm_id
+        self.schedule = CheckpointSchedule(context.train_config,
+                                           initial_step=int(model.num_timesteps))
+        self.store = MetricStore(metric_store_path(context.run_dir))
+
+    def after_update(self) -> None:
+        context = self.context
+        if not context.session.checkpoints.persist_intermediate or context.stop_flag.requested:
+            return
+        step = int(self.model.num_timesteps)
+        due = self.schedule.due(step)
+        rule = self.schedule.candidate
+        sample = (
+            self.store.latest_metric_sample(rule["metric"])
+            if rule and self.schedule.candidate_count < rule["max_checkpoints"] else None
+        )
+        candidate = self.schedule.candidate_due(step, sample)
+        if not (due or candidate):
+            return
+        save_model_bundle(
+            model=self.model, context=context,
+            model_path=context.checkpoint_dir
+            / f"{checkpoint_prefix(context.environment.game, algorithm_id=self.algorithm_id)}"
+              f"_{step}_steps.zip",
+            kind="checkpoint", step=step,
+        )
+        if candidate:
+            context.session.event(
+                f"training-proxy candidate ready: step={step} metric={rule['metric']} "
+                f"value={sample[0]} metric_step={sample[1]} "
+                f"budget={self.schedule.candidate_count}/{rule['max_checkpoints']}"
+            )
+
+
 def run_sb3_on_policy(
     context: BackendContext,
     *,
@@ -304,7 +347,6 @@ def run_sb3_on_policy(
     from gradlab.callbacks import (
         ArchiveCurriculumFeedbackHelper,
         GradLabCallback,
-        LedgerCheckpointHelper,
         MetricStoreLoggerHelper,
         RolloutDiagnosticsHelper,
         RuntimeMetricsHelper,
@@ -387,6 +429,8 @@ def run_sb3_on_policy(
         install_on_policy_safe_boundary_stop(
             model,
             graceful_stop=graceful_stop,
+            after_update=LearnedPolicyCheckpoints(model, context,
+                                                  algorithm_id=algorithm_id).after_update,
         )
         if (
             common_config.get("occupancy") is not None
@@ -438,23 +482,6 @@ def run_sb3_on_policy(
                 ),
             ]
         )
-        checkpoint_save_freq = checkpoint_save_frequency(
-            int(common_config["checkpoint_freq"]),
-            n_envs,
-        )
-        if checkpoint_save_freq is not None:
-            components.append(
-                LedgerCheckpointHelper(
-                    train_config=common_config,
-                    config=config,
-                    save_freq=checkpoint_save_freq,
-                    save_path=str(context.checkpoint_dir),
-                    name_prefix=checkpoint_prefix(config.game, algorithm_id=algorithm_id),
-                    metric_store_path=store_path,
-                    eval_required=common_config["checkpoint_eval_backend"] != "none",
-                    checkpoint_coordinator=context.session.checkpoints,
-                )
-            )
         components.append(GammaScheduleHelper(backend_config, int(common_config["timesteps"])))
         if backend_config["ent_coef_final"] is not None:
             components.append(
@@ -508,7 +535,9 @@ def run_sb3_on_policy(
         reason = context.session.terminal_reason()
         if (
             context.session.should_persist_interrupted_checkpoint(reason)
-            and int(common_config["checkpoint_freq"]) > 0
+            and (int(common_config["checkpoint_freq"]) > 0
+                 or common_config.get("checkpoint_steps")
+                 or common_config.get("checkpoint_candidates"))
         ):
             step = int(model.num_timesteps)
             save_model_bundle(
