@@ -908,6 +908,8 @@ class RunSupervisor:
         learner_pid = getattr(self.learner, "pid", None)
         if isinstance(learner_pid, bool) or not isinstance(learner_pid, int) or learner_pid <= 0:
             raise RuntimeError("spawned learner has no valid pid")
+        self.learner_state.pid = learner_pid
+        self.learner_state.started_at = self.clock.monotonic()
         print(
             f"learner started pid={learner_pid} log={self.learner_log_path}",
             flush=True,
