@@ -7,6 +7,8 @@ import binascii
 import os
 import ssl
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 
@@ -47,3 +49,22 @@ def configure_private_mlflow_ca() -> Path | None:
     os.environ["SSL_CERT_FILE"] = str(bundle)
     os.environ.pop("GRADLAB_MLFLOW_TLS_CA_B64", None)
     return bundle
+
+
+@contextmanager
+def private_mlflow_ca_context() -> Iterator[None]:
+    """Trust the supplied CA during operator preflight without consuming its binding."""
+    names = ("REQUESTS_CA_BUNDLE", "SSL_CERT_FILE", "GRADLAB_MLFLOW_TLS_CA_B64")
+    previous = {name: os.environ.get(name) for name in names}
+    bundle = None
+    try:
+        bundle = configure_private_mlflow_ca()
+        yield
+    finally:
+        for name, value in previous.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+        if bundle is not None:
+            bundle.unlink(missing_ok=True)

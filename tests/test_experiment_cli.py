@@ -450,10 +450,10 @@ def test_auto_without_cloud_budget_uses_operator_local_fleet() -> None:
     assert compute.bounded_duration_seconds == 3600
 
 
-def test_operator_preflight_parser_defaults_to_modal() -> None:
+def test_operator_preflight_parser_defers_eval_mode_to_recipe() -> None:
     args = build_parser().parse_args(["operator-preflight", "--json"])
 
-    assert args.checkpoint_eval_backend == "modal"
+    assert args.checkpoint_eval_backend is None
     assert args.target is None
     assert args.json is True
 
@@ -553,7 +553,8 @@ def test_operator_preflight_reports_resolved_project_fleet_and_sources(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    for name in _required_operator_environment("none"):
+    tracking = {"backend": "wandb", "delivery": "online"}
+    for name in _required_operator_environment("none", tracking):
         monkeypatch.setenv(name, "operator-value")
     coordinator = SimpleNamespace(
         coordinator_id="primary",
@@ -624,6 +625,7 @@ def test_operator_preflight_reports_resolved_project_fleet_and_sources(
         _storage, _authority, backend, report = _operator_preflight(
             tmp_path,
             checkpoint_eval_backend="none",
+            tracking=tracking,
         )
 
     assert backend.project == "research"
@@ -1228,6 +1230,7 @@ def test_private_mlflow_ca_is_frozen_as_required_task_secret() -> None:
         "backend": "mlflow",
         "delivery": "online",
         "private_tls_ca": True,
+        "auth_mode": "network",
     }
     required = _required_operator_environment("none", tracking)
     assert "GRADLAB_MLFLOW_TLS_CA_B64" in required
@@ -1254,6 +1257,8 @@ def test_private_mlflow_ca_is_frozen_as_required_task_secret() -> None:
     )
     task = _task_request(manifest, manifest_uri="s3://control/run/manifest.json")
     assert "GRADLAB_MLFLOW_TLS_CA_B64" in task.secret_env
+    assert "MLFLOW_AUTH_MODE" in task.secret_env
+    assert "MLFLOW_TRACKING_PASSWORD" not in task.secret_env
 
     run = _manifest_only_run()
     tracking = {
@@ -1263,6 +1268,9 @@ def test_private_mlflow_ca_is_frozen_as_required_task_secret() -> None:
     }
     private_run = replace(run, tracking=tracking, wandb={})
     private_run.validate()
+    assert RunManifest.from_dict(private_run.to_dict()).tracking["auth_mode"] == "network"
+    with pytest.raises(ValueError, match="auth_mode"):
+        replace(private_run, tracking={**tracking, "auth_mode": "anonymous"}).validate()
     with pytest.raises(ValueError, match="private_tls_ca"):
         replace(private_run, tracking={**tracking, "private_tls_ca": "yes"}).validate()
 

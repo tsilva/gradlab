@@ -43,3 +43,33 @@ def test_private_mlflow_ca_rejects_invalid_input(monkeypatch) -> None:
     monkeypatch.setenv("GRADLAB_MLFLOW_TLS_CA_B64", "not-base64")
     with pytest.raises(ValueError, match="one PEM certificate"):
         configure_private_mlflow_ca()
+
+
+@pytest.mark.parametrize('fail', [False, True])
+def test_preflight_ca_context_restores_binding_and_removes_bundle(monkeypatch, tmp_path, fail):
+    from gradlab.mlflow_tls import private_mlflow_ca_context
+
+    bundle = tmp_path / 'temporary.pem'
+    bundle.write_bytes(b'test trust bundle')
+    monkeypatch.setenv('REQUESTS_CA_BUNDLE', 'original.pem')
+    monkeypatch.delenv('SSL_CERT_FILE', raising=False)
+    monkeypatch.setenv('GRADLAB_MLFLOW_TLS_CA_B64', 'public-ca-binding')
+
+    def configure():
+        os.environ['REQUESTS_CA_BUNDLE'] = str(bundle)
+        os.environ['SSL_CERT_FILE'] = str(bundle)
+        os.environ.pop('GRADLAB_MLFLOW_TLS_CA_B64')
+        return bundle
+
+    monkeypatch.setattr('gradlab.mlflow_tls.configure_private_mlflow_ca', configure)
+    try:
+        with private_mlflow_ca_context():
+            assert os.environ['REQUESTS_CA_BUNDLE'] == str(bundle)
+            if fail:
+                raise RuntimeError('service unavailable')
+    except RuntimeError:
+        assert fail
+    assert os.environ['REQUESTS_CA_BUNDLE'] == 'original.pem'
+    assert 'SSL_CERT_FILE' not in os.environ
+    assert os.environ['GRADLAB_MLFLOW_TLS_CA_B64'] == 'public-ca-binding'
+    assert not bundle.exists()

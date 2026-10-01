@@ -10,7 +10,20 @@ Use MLflow's `basic-auth` app with a private server environment file (`0600`). I
 
 Before enabling a compute fleet, verify its private route and exact credentials from inside that fleet's training image, and perform an artifact upload/download round trip through the MLflow server. Set `MLFLOW_OPERATOR_PROFILE` to one logical destination name and `MLFLOW_ALLOWED_FLEETS` to the comma-separated exact dstack fleet IDs verified for that route. Launch preflight rejects other compute targets and records the profile in the immutable Run manifest. An unreachable or unauthenticated selected service also fails preflight. Keep the MLflow artifact bucket distinct from GradLab's control, evaluation, and public-model buckets. The GradLab journal remains the scientific authority if MLflow disagrees.
 
-For a private CA, place its single PEM certificate in operator configuration as base64 `GRADLAB_MLFLOW_TLS_CA_B64`, and trust that CA on the operator machine for launch preflight. The queued task receives the CA through dstack secrets, appends it to the system trust bundle, and passes that bundle to MLflow's HTTP client. The Run manifest records that a private CA is required so retries cannot silently omit it. The CA certificate is public material; keep its private signing key only on the operator-controlled host.
+Application authentication is the default (`MLFLOW_AUTH_MODE=basic`). An operator
+may explicitly select `MLFLOW_AUTH_MODE=network` for a service whose writer route
+is protected by private network enrollment and firewall rules. In this mode,
+omit both username and password entries; never supply placeholder credentials.
+The endpoint must use HTTPS and resolve exclusively to non-loopback private
+addresses, including private VPN address space. Permit only the approved
+operator connector and training-container sources at the host boundary, retain
+MLflow's Host and Origin allowlists, and keep public routes separately protected.
+GradLab cannot prove those external network controls; verify them before fleet
+enrollment. The Run freezes this explicit mode so retries cannot silently change
+it. Anonymous public inspection below still requires the separate authenticated
+reader/writer setup described there.
+
+For a private CA, place its single PEM certificate in operator configuration as base64 `GRADLAB_MLFLOW_TLS_CA_B64`. Operator preflight temporarily extends its trust bundle without consuming the CA binding. The queued task receives the CA through dstack secrets, appends it to the system trust bundle, and passes that bundle to MLflow's HTTP client. The Run manifest records that a private CA is required so retries cannot silently omit it. The CA certificate is public material; keep its private signing key only on the operator-controlled host.
 
 ## Optional public inspection
 

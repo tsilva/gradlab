@@ -385,11 +385,9 @@ def main(argv: list[str] | None = None) -> int:
         from gradlab.experiment_cli import _preflight_mlflow_service_uri
 
         _preflight_mlflow_service_uri(os.environ.get("MLFLOW_TRACKING_URI", ""))
-        if not all(
-            str(os.environ.get(name) or "").strip()
-            for name in ("MLFLOW_TRACKING_USERNAME", "MLFLOW_TRACKING_PASSWORD")
-        ):
-            raise RuntimeError("queued MLflow sync requires private service credentials")
+        from gradlab.mlflow_access import validate_mlflow_access
+
+        validate_mlflow_access(os.environ.get("MLFLOW_TRACKING_URI", ""), manifest.tracking)
         profile = str(os.environ.get("MLFLOW_OPERATOR_PROFILE") or "mlflow-default").strip()
         if profile != (manifest.tracking or {}).get("operator_profile"):
             raise RuntimeError("queued MLflow sync operator profile differs from the frozen Run")
