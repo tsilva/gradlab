@@ -14,30 +14,15 @@
     context.snapshot?.session?.value_discount ??
       context.snapshot?.session?.critic_comparison?.discount,
   );
-  let referenceSample = $state.raw<any>(null);
   let rows = $derived.by(() => {
-    const sample = context.view?.rewardReference?.sample;
-    const retained =
-      referenceSample?.step === reference ? referenceSample : null;
-    const exact =
-      sample?.step === reference
-        ? sample
-        : selected?.step === reference
-          ? selected
-          : retained;
     return rewardInspectionRows(
       chartPoints(context.history, context.view),
-      exact,
+      selected,
       gamma,
       5,
       reference,
+      context.view?.rewardReference?.sample,
     ).map((point) => ({ ...point, inspected: point.step === selected?.step }));
-  });
-  $effect(() => {
-    const sample = context.view?.rewardReference?.sample;
-    if (referenceSample?.step !== reference) referenceSample = null;
-    if (sample?.step === reference) referenceSample = sample;
-    else if (selected?.step === reference) referenceSample = selected;
   });
   const returnTitle = (point: any) =>
     point.value_comparison_reasons?.join("; ") ||

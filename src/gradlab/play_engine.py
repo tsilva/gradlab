@@ -893,9 +893,11 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         self.session = session
         self.args = args
         self.config_text = ANSI_PATTERN.sub("", config_text)
+        from gradlab.play_action_summary import EpisodeActionSummary
         from gradlab.play_reward_summary import EpisodeRewardSummary
 
         self.episode_rewards = EpisodeRewardSummary()
+        self.episode_actions = EpisodeActionSummary(_session_action_contract_payload(session))
         self.reward_accounting = reward_accounting_contract(session.config)
         self.run_state = "paused"
         self.driver = "policy"
@@ -1310,6 +1312,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         presentation = {**full, "after": dict(full["after"])}
         reasons = self._critic_comparison_reasons(transition)
         presentation["episode_rewards"] = self.episode_rewards.payload(full)
+        presentation["episode_actions"] = self.episode_actions.payload(full)
         presentation["recorded_session"] = {
             "sampling_mode": self.sampling_mode,
             "sampling_temperature": getattr(self, "sampling_temperature", 1.0),
@@ -1651,6 +1654,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             "transition": current,
             "history_point": current_history,
             "episode_rewards": self.episode_rewards.payload(current),
+            "episode_actions": self.episode_actions.payload(current),
         }
 
     def _publish(
@@ -2058,6 +2062,7 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
                 )
             )
             self.episode_rewards.append(full, self.reward_accounting)
+            self.episode_actions.append(full)
             self._record_transition(transition, full=full)
         except Exception as exc:
             self._set_state("paused", message=str(exc))

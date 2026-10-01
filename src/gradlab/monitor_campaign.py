@@ -272,6 +272,8 @@ def collect_campaign(campaign, runs, authority):
                 warmup_excluded=True,
                 comparable_host_load=comparable,
                 checkpoint_freq=on["train"]["checkpoint_freq"],
+                checkpoint_steps=on["train"].get("checkpoint_steps", []),
+                checkpoint_candidates=on["train"].get("checkpoint_candidates"),
                 equivalent_workload=off["terminal"]["final_step"] == on["terminal"]["final_step"],
                 nonzero_capture=_concurrent_capture(authority, inventory, on["intervals"]),
                 off_run=off["manifest"]["run_id"],

@@ -10,7 +10,7 @@ import time
 from uuid import uuid4
 
 from gradlab.metric_journal import read_control_journal
-from gradlab.mlflow_delivery import MlflowDelivery
+from gradlab.mlflow_delivery import MlflowDelivery, mlflow_experiment_name
 from gradlab.operator_environment import load_repository_operator_environment
 from gradlab.r2_store import RunStorageConfig
 from gradlab.run_authority import RunAuthority
@@ -65,10 +65,9 @@ def replace_mlflow_binding(
             * 1000
         )
         recipe = authority.recipe_document(manifest.recipe_sha256)
-        game = str(recipe["recipe"]["train_config"]["game_family"])
         service = MlflowDelivery.open(
             tracking_uri=tracking_uri,
-            experiment_name=f"gradlab-{game}",
+            experiment_name=mlflow_experiment_name(recipe["recipe"]["train_config"]),
             gradlab_run_id=run_id,
             created_at_ms=created_at_ms,
         )

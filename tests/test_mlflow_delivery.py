@@ -20,7 +20,9 @@ from mlflow.tracking import MlflowClient
 
 from gradlab.metric_store import MetricStore
 from gradlab.metric_names import METRICS_SCHEMA_VERSION
-from gradlab.mlflow_delivery import MlflowDelivery
+from gradlab.mlflow_delivery import MlflowDelivery, RUN_ID_TAG, mlflow_experiment_name
+from gradlab.supervisor_runtime import SupervisorRuntime
+from gradlab.wandb_utils import resolve_wandb_project
 from gradlab.wandb_publisher import _publish_frame
 from gradlab.local_metrics import local_metrics_writer, sync_local_run
 from gradlab.mlflow_rebind import replace_mlflow_binding
@@ -71,6 +73,74 @@ def _free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
         return int(sock.getsockname()[1])
+
+
+@pytest.mark.parametrize(
+    ("provider", "game", "expected"),
+    [
+        ("env-stableretro-turbo", "SuperMarioBros-Nes-v0", "SuperMarioBros-Nes-v0"),
+        ("env-supermariobrosnes-turbo-emu", "SuperMarioBros-Nes-v0", "SuperMarioBros-Nes-v0"),
+        ("ale-py", "breakout", "Breakout-Atari2600-v0"),
+        ("env-breakoutatari2600-turbo-native", "Breakout-Atari2600-v0", "Breakout-Atari2600-v0"),
+        ("gradlab", "Bandit-v0", "Bandit-v0"),
+    ],
+)
+@pytest.mark.parametrize("explicit_project", [None, "custom-project"])
+def test_mlflow_routes_to_the_same_project_as_wandb(provider, game, expected, explicit_project):
+    config = {
+        "env_provider": provider, "game": game, "wandb_project": explicit_project,
+        "game_family": "metadata-only-family",
+    }
+    project = resolve_wandb_project(explicit_project, game, env_provider=provider)
+    assert project == (explicit_project or expected)
+    assert mlflow_experiment_name(config) == f"gradlab-{project}"
+
+
+def test_supervisor_mlflow_reuses_existing_canonical_mario_experiment(tmp_path, monkeypatch):
+    uri = f"sqlite:///{tmp_path / 'tracking.db'}"
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", uri)
+    client = MlflowClient(tracking_uri=uri)
+    experiment_id = client.create_experiment("gradlab-SuperMarioBros-Nes-v0")
+    delivery = SupervisorRuntime().start_mlflow(
+        {"env_provider": "env-supermariobrosnes-turbo-emu", "game": "SuperMarioBros-Nes-v0",
+         "game_family": "NES-SuperMarioBros", "wandb_run_id": "gradlab-" + "2" * 32},
+        created_at="2026-09-29T12:00:00Z",
+    )
+    assert delivery.experiment_id == experiment_id
+    assert client.get_experiment_by_name("gradlab-NES-SuperMarioBros") is None
+
+
+def test_experiment_routing_change_preserves_existing_mlflow_binding(tmp_path):
+    uri = f"sqlite:///{tmp_path / 'tracking.db'}"
+    run_id = "gradlab-" + "3" * 32
+    old = MlflowDelivery.open(
+        tracking_uri=uri, experiment_name="gradlab-NES-SuperMarioBros",
+        gradlab_run_id=run_id, created_at_ms=1_800_000_000_000,
+    )
+    old.publish_frame({"id": 1, "kind": "history", "step": 128, "source": "train",
+                       "payload_json": json.dumps({"train/return/mean": 0.75})})
+    recovered = MlflowDelivery.open(
+        tracking_uri=uri, experiment_name="gradlab-SuperMarioBros-Nes-v0",
+        gradlab_run_id=run_id, created_at_ms=1_800_000_000_000,
+    )
+    assert recovered.run_id == old.run_id
+    assert recovered.experiment_id == old.experiment_id
+    assert recovered.remote_high_water() == 1
+    assert recovered.client.get_experiment_by_name("gradlab-SuperMarioBros-Nes-v0") is None
+
+
+def test_mlflow_rejects_duplicate_run_bindings_across_experiments(tmp_path):
+    uri = f"sqlite:///{tmp_path / 'tracking.db'}"
+    client = MlflowClient(tracking_uri=uri)
+    run_id = "gradlab-" + "4" * 32
+    for name in ("gradlab-NES-SuperMarioBros", "gradlab-SuperMarioBros-Nes-v0"):
+        experiment_id = client.create_experiment(name)
+        client.create_run(experiment_id, tags={RUN_ID_TAG: run_id})
+    with pytest.raises(RuntimeError, match="multiple bindings"):
+        MlflowDelivery.open(
+            tracking_uri=uri, experiment_name="gradlab-SuperMarioBros-Nes-v0",
+            gradlab_run_id=run_id, created_at_ms=1_800_000_000_000,
+        )
 
 
 def test_replayed_frame_has_one_visible_scientific_point(tmp_path: Path) -> None:
@@ -223,7 +293,7 @@ def test_direct_local_online_writer_drains_to_real_mlflow_store(
     monkeypatch.setattr("gradlab.local_metrics.env_config_from_mapping", lambda _c: None)
     monkeypatch.setattr(
         "gradlab.local_metrics.resolve_env_config",
-        lambda _c: SimpleNamespace(game="bandit"),
+        lambda _c: SimpleNamespace(game="SuperMarioBros-Nes-v0"),
     )
     monkeypatch.setattr("gradlab.local_metrics.local_publication", lambda *a: nullcontext(None))
     run_id = "gradlab-" + "c" * 32
@@ -232,7 +302,12 @@ def test_direct_local_online_writer_drains_to_real_mlflow_store(
     )
     store = MetricStore(tmp_path / "gradlab.sqlite")
     store.init()
-    with local_metrics_writer(tmp_path, {"wandb_run_id": run_id, "tracking": {"backend": "mlflow", "delivery": "online"}}) as url:
+    config = {
+        "env_provider": "env-stableretro-turbo", "game": "SuperMarioBros-Nes-v0",
+        "game_family": "NES-SuperMarioBros", "wandb_run_id": run_id,
+        "tracking": {"backend": "mlflow", "delivery": "online"},
+    }
+    with local_metrics_writer(tmp_path, config) as url:
         assert url.startswith("mlflow:")
         store.append_metrics({"train/return/mean": 0.5}, step=64, source="train")
         (tmp_path / "training-result.json").write_text(
@@ -241,6 +316,9 @@ def test_direct_local_online_writer_drains_to_real_mlflow_store(
     delivery = json.loads((tmp_path / "metrics-delivery.json").read_text())
     assert delivery["high_water"] == 1
     client = MlflowClient(tracking_uri=uri)
+    experiment = client.get_experiment_by_name("gradlab-SuperMarioBros-Nes-v0")
+    assert client.get_run(delivery["service_run_id"]).info.experiment_id == experiment.experiment_id
+    assert client.get_experiment_by_name("gradlab-NES-SuperMarioBros") is None
     history = client.get_metric_history(delivery["service_run_id"], "train/return/mean")
     assert [(point.value, point.step) for point in history] == [(0.5, 64)]
 
@@ -266,13 +344,17 @@ def test_later_mlflow_sync_preserves_original_local_receipt(
     store = MetricStore(tmp_path / "gradlab.sqlite")
     store.init()
     store.append_metrics({"train/return/mean": 0.75}, step=256, source="train", publish=False)
-    config = {"wandb_run_id": run_id, "tracking": {"backend": "mlflow", "delivery": "local_only"}}
+    config = {"env_provider": "gradlab", "game": "Bandit-v0", "game_family": "Bandit",
+              "wandb_run_id": run_id, "tracking": {"backend": "mlflow", "delivery": "local_only"}}
     (tmp_path / "train-config.json").write_text(json.dumps(config))
     first = sync_local_run(tmp_path)
     second = sync_local_run(tmp_path)
     assert first == second
     assert receipt.read_bytes() == original_bytes
     evidence = json.loads((tmp_path / "tracker-sync.json").read_text())
+    client = MlflowClient(tracking_uri=uri)
+    experiment = client.get_experiment_by_name("gradlab-Bandit-v0")
+    assert client.get_run(evidence["service_run_id"]).info.experiment_id == experiment.experiment_id
     history = MlflowClient(tracking_uri=uri).get_metric_history(
         evidence["service_run_id"], "train/return/mean"
     )
@@ -344,7 +426,10 @@ def test_irrecoverable_mlflow_replacement_replays_journal_without_rewriting_rece
     authority.control.put_json(terminal_key, terminal)
     monkeypatch.setattr(
         authority, "recipe_document",
-        lambda _digest: {"recipe": {"train_config": {"game_family": "bandit", "selection_rank": []}}},
+        lambda _digest: {"recipe": {"train_config": {
+            "env_provider": "env-supermariobrosnes-turbo-emu", "game": "SuperMarioBros-Nes-v0",
+            "game_family": "NES-SuperMarioBros", "selection_rank": [],
+        }}},
     )
     old = MlflowDelivery.open(
         tracking_uri=f"sqlite:///{tmp_path / 'old.db'}", experiment_name="gradlab-bandit",
@@ -364,7 +449,10 @@ def test_irrecoverable_mlflow_replacement_replays_journal_without_rewriting_rece
     assert authority.control.get_json(terminal_key) == terminal
     assert authority.control.get_json(binding_key)["audit_key"] == result["audit_key"]
     assert authority.control.get_json(result["audit_key"])["journal_high_water"] == 1
-    history = MlflowClient(tracking_uri=f"sqlite:///{tmp_path / 'replacement.db'}").get_metric_history(
+    client = MlflowClient(tracking_uri=f"sqlite:///{tmp_path / 'replacement.db'}")
+    experiment = client.get_experiment_by_name("gradlab-SuperMarioBros-Nes-v0")
+    assert client.get_run(result["service_run_id"]).info.experiment_id == experiment.experiment_id
+    history = client.get_metric_history(
         result["service_run_id"], "train/return/mean"
     )
     assert [(point.value, point.step) for point in history] == [(0.75, 128)]

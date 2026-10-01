@@ -334,6 +334,7 @@ body.checkpoint-loading { overflow: hidden; cursor: progress; }
 
 body.checkpoint-loading .app-header { z-index: 201; pointer-events: none; }
 body.checkpoint-loading #trajectory-import { pointer-events: auto; }
+body.checkpoint-loading .source-cancel { position: relative; z-index: 201; }
 
 .checkpoint-loading-mask {
   position: fixed;
@@ -1340,6 +1341,8 @@ body.source-selection #timeline,
 body.source-selection .floating-menu,
 body.source-selection #layouts-toggle,
 body.source-selection #panels-toggle,
+body.source-selection #switch-window,
+body.source-selection #trajectory-download,
 body.source-selection #new-window { display: none !important; }
 
 .dashboard {

@@ -71,16 +71,16 @@ Use **Run selection checks** for catalog Retry, observer refusal, command reject
 keyboard selection, initial failure and preparation Retry, adjacent navigation,
 loading-mask accessibility, delayed frames, local browsing, and failed replacement.
 Use **Run history and window checks** for Back/Forward, repeated selection,
-inspection, RGB settings, cancellation characterization, and imported recordings.
+inspection, RGB settings, pointer-accessible cancellation, and imported recordings.
 Each assertion reports PASS or a failing condition in the fixture controls.
 Run these suites on a fresh fixture. Imported Playback is the final case.
 
 The fixture's buttons can release or fail preparation, withhold/release frames,
 refuse a command, change control ownership, fail/recover catalog reads, delay the
 source-browser module, and disconnect the socket. Fixture controls sit above the
-production loading mask. The cancellation check activates the real DOM button
-programmatically because the production mask covers it for pointer users; it
-characterizes the existing command without changing its accessibility policy.
+production loading mask. The cancellation check verifies that pointer hit-testing
+reaches the real cancellation button before activating it. Source selection also
+checks that Import episode is visible and reachable before a Checkpoint is loaded.
 Preparation and frame release are explicit gates. Polling observes mounted DOM or
 server status; elapsed time alone never proves a race assertion. Activation cleanup
 must finish before an independent replacement case begins, as the production host

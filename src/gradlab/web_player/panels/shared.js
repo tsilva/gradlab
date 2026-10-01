@@ -39,8 +39,13 @@ export function displayedEpisode(snapshot) {
   return snapshot?.transition?.episode ?? snapshot?.session?.episode;
 }
 
-export function timelineLabel(snapshot) {
-  return `EPISODE ${text(displayedEpisode(snapshot))} · STEP ${text(displayedStep(snapshot))}`;
+export function timelineLabel(snapshot, liveSnapshot = snapshot) {
+  const sameEpisode = displayedEpisode(snapshot) === displayedEpisode(liveSnapshot)
+    && (!snapshot?.trajectory?.episode_id || !liveSnapshot?.trajectory?.episode_id
+      || snapshot.trajectory.episode_id === liveSnapshot.trajectory.episode_id);
+  const head = sameEpisode ? liveSnapshot : snapshot;
+  const latestStep = head?.trajectory?.last_step ?? displayedStep(head);
+  return `EPISODE ${text(displayedEpisode(snapshot))} · STEP ${text(displayedStep(snapshot))} / ${text(latestStep)}`;
 }
 
 export function setSvgUseHref(element, href) {

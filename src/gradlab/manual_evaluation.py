@@ -618,7 +618,7 @@ class ManualEvaluationSupervisor:
             )
             projector = self.runtime.start_mlflow(
                 {
-                    "game_family": context.recipe_document["recipe"]["train_config"]["game_family"],
+                    **context.recipe_document["recipe"]["train_config"],
                     "wandb_run_id": context.manifest.run_id,
                 },
                 created_at=context.manifest.created_at,
@@ -724,7 +724,7 @@ class ManualEvaluationSupervisor:
             try:
                 service = self.runtime.start_mlflow(
                     {
-                        "game_family": train_config["game_family"],
+                        **train_config,
                         "wandb_run_id": context.manifest.run_id,
                     },
                     created_at=context.manifest.created_at,

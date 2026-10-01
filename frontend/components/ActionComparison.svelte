@@ -14,7 +14,7 @@
   <div
     class={`action-comparison-track ${series}`}
     role="progressbar"
-    aria-label={`${name} ${series === "episode" ? "window policy-choice frequency" : series === "environment" ? "window environment-action frequency" : "step action probability"}`}
+    aria-label={`${name} ${series === "episode" ? "episode-to-cursor policy-choice frequency" : series === "environment" ? "episode-to-cursor environment-action frequency" : "step action probability"}`}
     aria-valuemin="0"
     aria-valuemax="100"
     aria-valuenow={value === null ? undefined : value * 100}

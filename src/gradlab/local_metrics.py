@@ -14,7 +14,7 @@ from gradlab.clock import parse_utc_datetime
 from gradlab.env import resolve_env_config
 from gradlab.env_config import env_config_from_mapping
 from gradlab.local_publication import local_publication
-from gradlab.mlflow_delivery import MlflowDelivery
+from gradlab.mlflow_delivery import MlflowDelivery, mlflow_experiment_name
 from gradlab.operator_environment import load_repository_operator_environment
 from gradlab.policy_bundle import write_canonical_json
 from gradlab.selected_delivery import MetricsWriter
@@ -33,7 +33,7 @@ def _open_delivery(run_dir, config, environment, publication, *, backfill):
         started_at = json.loads((run_dir / "local-run.json").read_text())["started_at"]
         delivery = MlflowDelivery.open(
             tracking_uri=uri,
-            experiment_name=f"gradlab-{config.get('game_family') or environment.game}",
+            experiment_name=mlflow_experiment_name(config),
             gradlab_run_id=config["wandb_run_id"],
             created_at_ms=int(parse_utc_datetime(started_at).timestamp() * 1000),
         )

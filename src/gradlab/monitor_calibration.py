@@ -14,6 +14,7 @@ import statistics
 
 from gradlab.json_utils import canonical_json_sha256
 from gradlab.monitor_config import calibration_binding
+from gradlab.checkpoint_schedule import checkpoint_plan
 
 ROLES = {"early", "intermediate", "stronger", "long-episode"}
 PHASES = {
@@ -88,6 +89,8 @@ def assess_calibration(measurements):
             not pair.get("warmup_excluded")
             or not pair.get("comparable_host_load")
             or pair.get("checkpoint_freq") != train["checkpoint_freq"]
+            or pair.get("checkpoint_steps", []) != train.get("checkpoint_steps", [])
+            or pair.get("checkpoint_candidates") != train.get("checkpoint_candidates")
             or not pair.get("equivalent_workload")
             or not pair.get("nonzero_capture")
         ):
@@ -114,7 +117,21 @@ def assess_calibration(measurements):
     # loading, waiting and finalization; never divide this speedup a second time.
     duration = max(s["seconds"] * s.get("execution_workers", 1) for s in samples) * 1.25
     retained = max(s["retained_bytes"] for s in samples) * 1.25
-    checkpoints = math.ceil(train["timesteps"] / train["checkpoint_freq"]) + 1
+    checkpoint_steps, candidate_count = checkpoint_plan(train)
+    backend = train.get("training_backend") or {}
+    if backend.get("id") in {"sb3.ppo", "sb3.a2c", "gradlab.ppo"}:
+        quantum = int(train["n_envs"]) * int(backend["config"]["n_steps"])
+        cap = int(train["timesteps"])
+        rounded = {math.ceil(step / quantum) * quantum for step in checkpoint_steps if step < cap}
+        checkpoint_steps = sorted(step for step in rounded if step < cap)
+        checkpoint_steps.append(math.ceil(cap / quantum) * quantum)
+    # Reserve one additional interrupted artifact, preserving the recovery budget.
+    checkpoints = len(checkpoint_steps) + candidate_count + 1
+    minimum_spacing = min(
+        b - a for a, b in zip([0, *checkpoint_steps], checkpoint_steps)
+    )
+    if train.get("checkpoint_candidates"):
+        minimum_spacing = 0  # Metric-triggered candidates can coincide with phase saves.
     training_seconds = train["timesteps"] / min(p["on_rate"] for p in pairs)
     final_tail = math.ceil(checkpoints / settings["task_cpus"]) * duration
     total_seconds = max(
@@ -145,7 +162,7 @@ def assess_calibration(measurements):
         and total_seconds <= settings["whole_run_seconds"]
         and report["peak_worker_memory_bytes"] * 1.25 <= settings["worker_memory_bytes"]
         and report["peak_worker_spool_bytes"] * 1.25 <= settings["worker_spool_bytes"]
-        and train["checkpoint_freq"] >= recommended_spacing
+        and minimum_spacing >= recommended_spacing
     )
     report["status"] = (
         "infeasible" if not feasible else "unproven" if loss_upper > 0.02 else "supported"

@@ -880,7 +880,8 @@ def test_breakout_recipe_freezes_disabled_100_50_and_30gb():
     assert settings["episodes"] == 100 and settings["record_episodes"] == 50
     assert settings["contribution_bytes"] == 30_000_000_000
     assert train["checkpoint_eval_backend"] == "none"
-    assert train["checkpoint_freq"] == 10_000_000
+    assert train["checkpoint_freq"] == 0
+    assert len(train["checkpoint_steps"]) == 13
     assert calibration_binding(train, settings) != calibration_binding(train, {**settings, "record_episodes": 49})
     assert resolve_monitoring(dict(episodes=100), {})["record_episodes"] is None
     assert all(e.get("record", True) for e in episode_manifest(100))

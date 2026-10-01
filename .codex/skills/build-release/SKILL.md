@@ -5,6 +5,13 @@ description: Cut, publish, monitor, verify, build, or inspect GradLab Python rel
 
 # Build Release
 
+Read and apply the shared `$release-workflow` skill at
+`/Users/tsilva/.codex/skills/release-workflow/SKILL.md` before execution.
+It owns common preflight, publication safeguards, `$push` integration,
+workflow monitoring, verification, and reporting. The rules below are this
+project's adapter; they retain its invocation default and required gates.
+If the shared skill is unavailable, stop and report the missing dependency.
+
 Use this skill to run the repo-owned GradLab release flow and monitor it until
 the package is visible on PyPI. A bare `$build-release` invocation means
 **publish the next release**, not merely build local artifacts. Use the
@@ -19,9 +26,6 @@ surface, run the complete local source gates, build and audit a local candidate,
 create an annotated tag, and atomically push the branch and tag. The tag triggers
 `.github/workflows/release.yml`, which rebuilds and audits the distributions,
 publishes with PyPI trusted publishing, and creates the GitHub Release.
-
-Do not manually upload with Twine, use a local PyPI token, republish an existing
-version, move a release tag, bypass a failed gate, or create/switch branches.
 
 ## Publish the next release
 
@@ -58,33 +62,13 @@ version, move a release tag, bypass a failed gate, or create/switch branches.
    sdist before creating the release commit and annotated tag. Failed
    preparation restores changed release files and preserves candidate evidence.
 
-4. Capture the pushed tag and release commit, then monitor the tag-triggered
-   workflow:
+4. Follow the shared monitoring and verification procedure for the `release.yml`
+tag-push run at the full `vX.Y.Z` commit SHA. A `workflow_dispatch` run
+validates artifacts but never publishes. Verify PyPI project `gradlab` and
+the GitHub Release for the same tag.
 
-   ```bash
-   release_sha="$(git rev-list -n 1 vX.Y.Z)"
-   gh run list --workflow release.yml --commit "$release_sha" --limit 5 \
-     --json databaseId,status,conclusion,event,headBranch,headSha,displayTitle,url
-   gh run watch <run-id> --exit-status
-   ```
-
-   If the commit-filtered query is initially empty, list the recent Release runs
-   and select the tag-push run for `vX.Y.Z`. A `workflow_dispatch` run validates
-   but never publishes.
-
-5. After workflow success, poll
-   `https://pypi.org/pypi/gradlab/X.Y.Z/json` until both expected files appear:
-
-   - `gradlab-X.Y.Z-py3-none-any.whl`
-   - `gradlab-X.Y.Z.tar.gz`
-
-   Also verify the GitHub Release and its attached artifacts. If trusted
-   publishing fails, report the run and failing step; do not attempt manual
-   recovery unless the user explicitly requests it.
-
-6. Report the PyPI version URL first, followed by the tag, release commit,
-   workflow URL and conclusion, GitHub Release URL, published filenames, and
-   digests when available.
+Require `gradlab-X.Y.Z-py3-none-any.whl` and `gradlab-X.Y.Z.tar.gz`
+on PyPI and as matching GitHub Release assets.
 
 ## Build a local candidate only
 
@@ -99,18 +83,3 @@ uv run python .codex/skills/build-release/scripts/release_build.py build --auto-
 This path may advance a used patch version and update the four release surfaces,
 but it never commits, tags, pushes, or publishes. Report the selected version,
 changed sources, artifacts, SHA-256 digests, and every completed gate.
-
-## Useful inspection commands
-
-```bash
-gh run view <run-id> --log-failed
-gh release view vX.Y.Z --json tagName,url,publishedAt,assets
-git describe --tags --exact-match HEAD
-```
-
-The final package URLs are:
-
-```text
-https://pypi.org/project/gradlab/X.Y.Z/
-https://pypi.org/project/gradlab/
-```

@@ -415,6 +415,9 @@ def validate_and_normalize_train_config(
 
     normalized = dict(train_config)
     validate_train_config_fields(normalized, label=label, required_keys=required_keys)
+    from gradlab.checkpoint_schedule import normalize_checkpoint_config
+
+    normalize_checkpoint_config(normalized, metric_validator=metric_validator)
     from gradlab.occupancy import resolve_cell_spaces
 
     resolve_cell_spaces(normalized)
@@ -591,8 +594,11 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         type_name="int",
         default=500_000,
         validation_min=0,
-        source_section="goal_train",
+        source_section="train",
     ),
+    _field("checkpoint_steps", type_name="json", default=(), source_section="train"),
+    _field("checkpoint_candidates", type_name="json", default=None,
+           source_section="train"),
     _field(
         "post_train_eval_episodes",
         type_name="int",

@@ -181,7 +181,14 @@ def _stop_aware_model_class(original_class: type) -> type:
         return [
             *original_class._excluded_save_params(model),
             "_gradlab_graceful_stop",
+            "_gradlab_after_update",
         ]
+
+    def train(model: Any) -> None:
+        original_class.train(model)
+        after_update = getattr(model, "_gradlab_after_update", None)
+        if after_update is not None:
+            after_update()
 
     stop_aware_class = type(
         f"GradLabStopAware{original_class.__name__}",
@@ -191,6 +198,7 @@ def _stop_aware_model_class(original_class: type) -> type:
             "__slots__": (),
             "_gradlab_stop_aware": True,
             "collect_rollouts": collect_rollouts,
+            "train": train,
             "_excluded_save_params": excluded_save_params,
         },
     )
@@ -202,11 +210,13 @@ def install_on_policy_safe_boundary_stop(
     model: Any,
     *,
     graceful_stop: GracefulStopHelper,
+    after_update: Callable[[], None] | None = None,
 ) -> Any:
-    """Make the next SB3 rollout collection stop before stepping the environment."""
+    """Stop before the next rollout and optionally publish after complete updates."""
 
     if not getattr(type(model), "_gradlab_stop_aware", False):
         original_class = type(model)
         model.__class__ = _stop_aware_model_class(original_class)
     model._gradlab_graceful_stop = graceful_stop
+    model._gradlab_after_update = after_update
     return model

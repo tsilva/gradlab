@@ -33,7 +33,7 @@ export const shellState = $state({
     busy: false,
     progress: 0,
     zoom: null as { first: number; last: number } | null,
-    label: "EPISODE — · STEP —",
+    label: "EPISODE — · STEP — / —",
     markerKey: "",
     markers: [] as any[],
   },

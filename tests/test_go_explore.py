@@ -635,6 +635,7 @@ class GoExploreSearchTests(unittest.TestCase):
                     "id": "gradlab.go-explore",
                     "config": {
                         "compaction_interval_steps": 100,
+                        "improvement_checkpoints": 3,
                         "explore_steps": 1,
                         "fallback_action": "noop",
                         "log_interval_steps": 100,

@@ -10,6 +10,111 @@ async function player(options = {}) {
 }
 const names = h => h.commands.map(command => command.name);
 
+test('first Play advances an empty live episode at the configured FPS without following inference jumps', async () => {
+  const h = harness();
+  const trajectory = { episode_id: 'episode-a', transitions: 0, initial_step: 0, first_step: 1, last_step: 0 };
+  await h.inspection.admitSnapshot(snapshot(0, { transition: null, trajectory,
+    session: { episode: 1, step: 0, target_fps: 30 } }));
+  h.inspection.play();
+  assert.deepEqual(names(h), ['play']);
+  assert.equal(h.inspection.view.running, true);
+  assert.equal(h.timers.size, 1);
+  // The producer can finish before the first display interval elapses.
+  await h.inspection.admitSnapshot(snapshot(100, {
+    session: { episode: 1, step: 100, target_fps: 30, awaiting_next_episode: true } }));
+  assert.equal(h.inspection.view.snapshot.session.step, 0);
+  assert.equal(h.timers.values().next().value.delay, 1000 / 30);
+  await h.tick();
+  assert.equal(h.inspection.view.snapshot.transition.step, 1);
+  await h.tick();
+  assert.equal(h.inspection.view.snapshot.transition.step, 2);
+  assert.deepEqual(names(h), ['play']);
+  h.inspection.pause();
+  assert.equal(h.timers.size, 0);
+  assert.deepEqual(names(h), ['play', 'pause']);
+  h.inspection.dispose();
+});
+
+test('first Play waits for new recorded steps at the live head and respects FPS changes', async () => {
+  const h = harness();
+  const trajectory = { episode_id: 'episode-a', transitions: 0, initial_step: 0, first_step: 1, last_step: 0 };
+  await h.inspection.admitSnapshot(snapshot(0, { transition: null, trajectory,
+    session: { episode: 1, step: 0, target_fps: 30 } }));
+  h.inspection.play();
+  h.inspection.commandResult({ id: 'command-1', ok: true });
+  await h.tick(); // Play acknowledgement/first transition has not arrived yet.
+  assert.equal(h.inspection.view.snapshot.session.step, 0);
+  assert.equal(h.timers.size, 1);
+  await h.inspection.admitSnapshot(snapshot(1, { run_state: 'playing',
+    trajectory: { ...trajectory, transitions: 1, last_step: 1 } }));
+  await h.tick();
+  assert.equal(h.inspection.view.snapshot.transition.step, 1);
+  await h.tick(); // A slow producer must not make the cursor follow the head.
+  assert.equal(h.inspection.view.snapshot.transition.step, 1);
+  await h.inspection.admitSnapshot(snapshot(20, { run_state: 'playing',
+    trajectory: { ...trajectory, transitions: 20, last_step: 20 },
+    session: { episode: 1, target_fps: 10 } }));
+  assert.equal(h.inspection.view.snapshot.transition.step, 1);
+  await h.tick();
+  assert.equal(h.inspection.view.snapshot.transition.step, 2);
+  assert.ok(Math.abs(h.timers.values().next().value.delay - 100) < 1e-8);
+  h.inspection.dispose();
+});
+
+test('a rejected first Play stops its display clock and a retry can start it again', async () => {
+  const h = harness();
+  const trajectory = { episode_id: 'episode-a', transitions: 0, initial_step: 0, first_step: 1, last_step: 0 };
+  await h.inspection.admitSnapshot(snapshot(0, { transition: null, trajectory,
+    session: { episode: 1, step: 0, target_fps: 30 } }));
+  h.inspection.play();
+  h.inspection.commandResult({ id: 'command-1', ok: false });
+  assert.equal(h.inspection.view.running, false);
+  assert.equal(h.timers.size, 0);
+  h.inspection.play();
+  assert.deepEqual(names(h), ['play', 'play']);
+  assert.equal(h.inspection.view.running, true);
+  assert.equal(h.timers.size, 1);
+  h.inspection.dispose();
+});
+
+test('fresh live playback drains the terminal step and stops without restarting inference', async () => {
+  const h = harness();
+  const trajectory = { episode_id: 'episode-a', transitions: 0, initial_step: 0, first_step: 1, last_step: 0 };
+  await h.inspection.admitSnapshot(snapshot(0, { transition: null, trajectory,
+    session: { episode: 1, step: 0, target_fps: 30 } }));
+  h.inspection.play();
+  await h.inspection.admitSnapshot(snapshot(2, { trajectory: { ...trajectory, transitions: 2, last_step: 2 },
+    session: { episode: 1, step: 2, target_fps: 30, awaiting_next_episode: true } }));
+  await h.tick(); await h.tick();
+  assert.equal(h.inspection.view.snapshot.transition.step, 2);
+  await h.tick();
+  assert.equal(h.inspection.view.running, false);
+  assert.equal(h.timers.size, 0);
+  assert.deepEqual(names(h), ['play']);
+  h.inspection.dispose();
+});
+
+for (const nextEpisode of [false, true]) test(`episode replacement preserves pacing with explicit next Play: ${nextEpisode}`, async () => {
+  const trajectory = { episode_id: 'episode-b', transitions: 0, initial_step: 0, first_step: 1, last_step: 0 };
+  const h = await player({ fetchStep: async ({ step }) => recorded(step, {
+    episode: 2, sequence: 101 + step, trajectory: { ...trajectory, transitions: 100, last_step: 100 } }) });
+  if (nextEpisode) await h.inspection.admitSnapshot(snapshot(100, {
+    session: { episode: 1, step: 100, target_fps: 30, awaiting_next_episode: true } }));
+  h.inspection.play();
+  await h.inspection.admitSnapshot(snapshot(101, { episode: 2, episodeId: 'episode-b',
+    run_state: 'playing', transition: null, trajectory,
+    session: { episode: 2, step: 0, target_fps: 30 } }));
+  await h.inspection.admitSnapshot(snapshot(201, { episode: 2, episodeId: 'episode-b',
+    trajectory: { ...trajectory, transitions: 100, last_step: 100 },
+    session: { episode: 2, step: 100, target_fps: 30, awaiting_next_episode: true } }));
+  assert.equal(h.inspection.view.snapshot.session.step, 0);
+  await h.tick();
+  assert.equal(h.inspection.view.snapshot.transition.step, 1);
+  assert.equal(h.timers.values().next().value.delay, 1000 / 30);
+  assert.deepEqual(names(h), ['play']);
+  h.inspection.dispose();
+});
+
 test('completed episodes seek and replay from the initial state after cache eviction', async () => {
   const trajectory = { episode_id: 'episode-a', transitions: 100,
     initial_step: 0, first_step: 1, last_step: 100 };

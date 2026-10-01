@@ -43,6 +43,12 @@ authority for that decision.
   checkpoint bytes remain in R2. Local-only training needs no R2 or tracker credentials.
 - The learner writes structured events only to its embedded SQLite WAL outbox. It performs no
   network I/O for metrics, checkpoint publication, or evaluation dispatch.
+- MLflow experiments use `gradlab-` followed by the same resolved project name as W&B: an explicit
+  `wandb_project` when supplied, otherwise the environment registry's canonical provider-neutral
+  project (for example, `gradlab-SuperMarioBros-Nes-v0` for either Mario provider). `game_family`
+  remains a metadata dimension, not the experiment name. Existing service bindings are reused
+  by immutable GradLab Run ID across experiments; changing routing does not move existing Runs
+  or duplicate their scientific record.
 - Local-only runs retain history frames in SQLite with `local_only` delivery status so bounded
   benchmarks can evaluate every rollout rather than only the latest scalar; those frames never
   enter the publisher retry queue.
@@ -237,8 +243,9 @@ resuming as its cause without a matched uninterrupted continuation.
   otherwise it follows the selected playback transition. In inspection, that transition
   can precede the end of the recorded curve, so its legend need not equal the last value.
   The independent Reward table follows the shared cursor and chart window. Its bounded rows
-  start at the explicitly selected return reference; seeking changes the row highlight without
-  moving that reference. Delay is the row step minus the reference step, weight is `gamma^delay`,
+  start at the later of the selected cursor and the explicitly pinned return reference;
+  seeking updates the rows and highlight without moving that reference.
+  Delay is the row step minus the reference step, weight is `gamma^delay`,
   and contribution is that weight times the recorded shaped reward. The table's `G(s)` and `V(s)`
   retain their per-row state semantics; the contribution is not a causal attribution.
   A partial window does not establish a realized full-episode critic return.
@@ -291,13 +298,14 @@ resuming as its cause without a matched uninterrupted continuation.
   negative activity and per-component absolute activity accumulate before cancellation; scaling,
   unattributed task reward, and clip adjustments reconcile to the recorded shaped episode return.
   A missing prefix, accounting error, or cursor mismatch remains explicitly unavailable.
-- Playback action frequencies use the selected episode's trailing 64 transitions through the
-  cursor (or steps 1 through the cursor for shorter prefixes), with step range and sample counts
-  displayed. “STEP” is the selected decision's probability distribution. “POLICY” counts recorded
+- Playback action frequencies use the selected episode from step 1 through the selected
+  cursor, with step range and sample counts displayed. Exact cumulative action counts are frozen
+  at each recorded step, so scrubbing and bounded history retention do not change the population.
+  “STEP” is the selected decision's probability distribution. “POLICY” counts recorded
   Policy choices on Policy-driven transitions, excluding human input. “ENV” counts recorded
   effective actions after overrides in Policy action space, including human input. Missing actions
-  or an incomplete window withhold the affected frequencies; future steps and other episodes are
-  excluded. These inspection statistics are local diagnostics, not W&B metrics.
+  or an incomplete episode prefix withhold the affected frequencies; future steps and other
+  episodes are excluded. These inspection statistics are local diagnostics, not W&B metrics.
 - Mario recipes disable automatic checkpoint evaluation and stop when
   `train/success/min` first reaches one. For a single start,
   that means 100 consecutive genuine target-origin clears; for multiple starts, every configured
@@ -607,6 +615,15 @@ resuming as its cause without a matched uninterrupted continuation.
   terminal state `stopped`, and `early_stop_neutral:<condition_id>`; historical immutable
   `failed`/`early_stop_failure:<condition_id>` plateau receipts retain the same neutral diagnostic
   interpretation without being rewritten. Threshold-based failure conditions remain failures.
+- Optional `checkpoint_candidates` watches a declared registered `train/*` metric without adding
+  a metric series or changing early-stop rules. The first eligible sample establishes its baseline;
+  later meaningful improvements may save an immutable candidate at the next completed update,
+  subject to the declared cooldown and finite per-Attempt candidate budget. Relative improvement
+  uses `min_delta * max(abs(reference), 1)`; absolute improvement uses `min_delta` directly.
+  Scheduled and candidate saves at one boundary coalesce. The candidate log identifies both the
+  metric sample's step/value and the saved Policy step. Rolling training windows may include older
+  Policies: this is a selection proxy, not a score of that frozen Checkpoint. Candidates do not
+  restore an earlier Policy, grant Acceptance or Promotion, or consume monitoring scores.
 
 ## Full-evaluation table
 

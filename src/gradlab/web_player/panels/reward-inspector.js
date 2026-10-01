@@ -1,15 +1,19 @@
 import { rewardContribution } from "./reward-discount.js";
 
 // Keep the table bounded even when the episode chart contains thousands of samples.
-// Anchor row membership to the return reference; seeking only changes highlights.
-// Restore the exact reference transition when chart downsampling omitted it.
-export function rewardInspectionRows(history, selected, gamma, limit = 5, referenceStep = selected?.step) {
+// Follow the inspection cursor without changing the independent return reference.
+// Restore the exact selected transition when chart downsampling omitted it.
+export function rewardInspectionRows(history, selected, gamma, limit = 5, referenceStep = selected?.step, referenceSample = null) {
   const points = new Map(history.map((point) => [point.step, point]));
-  if (selected && selected.step === referenceStep && history.length && selected.step >= history[0].step
+  if (referenceSample?.step === referenceStep && history.length
+      && referenceStep >= history[0].step && referenceStep <= history.at(-1).step) {
+    points.set(referenceStep, { ...points.get(referenceStep), ...referenceSample });
+  }
+  if (selected && history.length && selected.step >= history[0].step
       && selected.step <= history.at(-1).step) points.set(selected.step, { ...points.get(selected.step), ...selected });
-  const firstStep = referenceStep ?? -Infinity;
+  const firstStep = Math.max(selected?.step ?? -Infinity, referenceStep ?? -Infinity);
   const candidates = [...points.values()].filter((point) => (
-    point.step >= firstStep && (point.step === referenceStep
+    point.step >= firstStep && (point.step === selected?.step || point.step === referenceStep
     || [point.reward_provider, point.reward_shaped].some((value) => Number.isFinite(value) && value !== 0))
   )).sort((a, b) => a.step - b.step);
   if (!candidates.length) return [];

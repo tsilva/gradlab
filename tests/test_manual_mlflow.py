@@ -64,7 +64,9 @@ def test_manual_evaluation_retains_and_projects_to_frozen_mlflow(
                 "environment": {"game": "Bandit-v0"}, "episodes": 1, "acceptance": [],
             },
         ),
-        recipe_document={"recipe": {"train_config": {"game_family": "Bandit-v0"}}},
+        recipe_document={"recipe": {"train_config": {
+            "env_provider": "gradlab", "game": "Bandit-v0", "game_family": "Bandit",
+        }}},
     )
     ledger = SupervisorLedger(tmp_path / "manual.sqlite")
     ledger.init()

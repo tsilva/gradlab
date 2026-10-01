@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -11,6 +12,13 @@ from gradlab.mlflow_delivery import MlflowDelivery
 from gradlab.r2_store import BucketConfig, R2Bucket
 from gradlab.selected_delivery import DeliveryAdapter, publish_outbox
 from gradlab.wandb_publisher import WandbProjector
+
+
+@pytest.fixture(autouse=True)
+def public_assets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    uri = (tmp_path / "public-assets").as_uri()
+    monkeypatch.setenv("GRADLAB_MODELS_R2_URI", uri)
+    monkeypatch.setenv("GRADLAB_MODELS_R2_PUBLIC_BASE_URL", uri)
 
 
 class _WandbRun:
@@ -79,10 +87,11 @@ def test_selected_service_adapter_contract_has_same_scientific_projection(
     summary = adapter.remote_summary()
     assert summary["train/return/mean"] == 0.75
     if backend == "mlflow":
-        artifacts = adapter.client.list_artifacts(adapter.run_id, "journal/2")
-        assert [(row.path, row.file_size) for row in artifacts] == [
-            ("journal/2/episode.mp4", len(video))
-        ]
+        assert adapter.client.list_artifacts(adapter.run_id) == []
+        reference = json.loads(summary["gradlab.asset.000000000002"])
+        assert reference["bytes"] == len(video)
+        assert reference["sha256"] == hashlib.sha256(video).hexdigest()
+        assert Path(reference["url"].removeprefix("file://")).read_bytes() == video
         assert adapter.client.get_metric_history(adapter.run_id, "train/return/mean")[0].step == 128
     else:
         assert run.frames[1][1]["eval/video"] == video
@@ -140,4 +149,7 @@ def test_mlflow_media_failure_keeps_frame_unacknowledged_for_replay(
     assert publish_outbox(store, delivery, limit=10) == 1
     assert delivery.remote_high_water() == 1
     assert delivery.client.get_metric_history(delivery.run_id, "ops/sequence")[0].value == 1
-    assert len(delivery.client.list_artifacts(delivery.run_id, "journal/1")) == 1
+    assert delivery.client.list_artifacts(delivery.run_id) == []
+    reference = json.loads(delivery.remote_summary()["gradlab.asset.000000000001"])
+    assert reference["sha256"] == payload["sha256"]
+    assert Path(reference["url"].removeprefix("file://")).read_bytes() == b"mp4"

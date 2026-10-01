@@ -89,10 +89,15 @@
           {data.environmentActionNote || ""}
         </div>
       </div>
+      <div class="policy-decision-context-label">
+        Episode to cursor · steps 1–{data.history.lastStep}
+        · Policy n={data.history.policy.sampleCount}
+        · Env n={data.history.environment.sampleCount}
+      </div>
       <div
         class="policy-decision-comparison"
         role="table"
-        aria-label="Selected-step probabilities and trailing-window policy and environment action frequencies"
+        aria-label="Selected-step probabilities and episode-to-cursor policy and environment action frequencies"
       >
         <div class="policy-decision-comparison-header" role="row">
           {#each [["Action", "action"], ["", "bars"], ["STEP", "step"], ["POLICY", "episode"], ["ENV", "environment"]] as [label, className]}<span

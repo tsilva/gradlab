@@ -60,6 +60,7 @@ class TrajectoryPlaybackRunner(DatasetPlaybackRunner):
             status_message=self._status_message,
             transition=current,
             episode_rewards=getattr(self, "_episode_rewards", None) if current else None,
+            episode_actions=current.get("episode_actions") if current else None,
             history_point=dict(self.history[-1]) if self.history else None,
             trajectory={
                 "imported": True,
