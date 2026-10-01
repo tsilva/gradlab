@@ -43,6 +43,7 @@ from gradlab.goal_variants import (
 from gradlab.goal_catalog import GOAL_CATALOG_ROOT
 from gradlab.json_utils import canonical_json_text, json_safe
 from gradlab.metric_names import METRICS_SCHEMA_VERSION
+from gradlab.mlflow_access import mlflow_auth_mode, mlflow_service_environment, validate_mlflow_access
 from gradlab.model_sources import public_checkpoint_manifest
 from gradlab.modal_eval_config import load_modal_eval_config
 from gradlab.operator_credentials import (
@@ -87,6 +88,7 @@ from gradlab.runtime_refs import (
     current_git_branch,
     runtime_release_from_args,
 )
+from gradlab.tracking_config import DEFAULT_TRACKING, resolve_tracking
 from gradlab.wandb_utils import (
     canonical_wandb_environment,
     wandb_entity_from_env,
@@ -126,13 +128,6 @@ STORAGE_SECRET_ENV = (
     "GRADLAB_MODELS_R2_PUBLIC_BASE_URL",
 )
 WANDB_SERVICE_ENV = ("WANDB_API_KEY", "WANDB_ENTITY")
-MLFLOW_SERVICE_ENV = (
-    "MLFLOW_TRACKING_URI",
-    "MLFLOW_TRACKING_USERNAME",
-    "MLFLOW_TRACKING_PASSWORD",
-    "MLFLOW_OPERATOR_PROFILE",
-    "MLFLOW_ALLOWED_FLEETS",
-)
 MLFLOW_PRIVATE_CA_ENV = "GRADLAB_MLFLOW_TLS_CA_B64"
 
 
@@ -162,7 +157,7 @@ def _preflight_mlflow_service_uri(uri: str) -> str:
         or parsed.password is not None
     ):
         raise OperatorConfigurationError(
-            "queued MLflow delivery requires a private authenticated HTTPS service URI"
+            "queued MLflow delivery requires a private HTTPS service URI"
         )
     return str(uri).strip()
 
@@ -272,11 +267,11 @@ def _required_operator_environment(
     checkpoint_eval_backend: str,
     tracking: Mapping[str, Any] | None = None,
 ) -> tuple[str, ...]:
-    selected = tracking or {"backend": "wandb", "delivery": "online"}
+    selected = tracking or DEFAULT_TRACKING
     service = (
         WANDB_SERVICE_ENV
         if selected["backend"] == "wandb"
-        else MLFLOW_SERVICE_ENV
+        else mlflow_service_environment(selected)
     ) if selected["delivery"] == "online" else ()
     private_ca = (
         (MLFLOW_PRIVATE_CA_ENV,)
@@ -316,6 +311,10 @@ def _operator_preflight(
     dict[str, Any],
 ]:
     environment_report = _load_environment(root)
+    if tracking is None:
+        tracking = resolve_tracking(
+            experiments_root=root / "experiments", goal_sources=(), recipe_sources=(),
+        )
     required = _required_operator_environment(checkpoint_eval_backend, tracking)
     missing = [name for name in required if not str(os.environ.get(name) or "").strip()]
     if missing:
@@ -331,7 +330,7 @@ def _operator_preflight(
             f"{sorted(truncated)[0]} is visibly truncated; use the exact "
             "machine-readable value, not human-formatted command output"
         )
-    selected_tracking = tracking or {"backend": "wandb", "delivery": "online"}
+    selected_tracking = tracking
     if selected_tracking["delivery"] == "online":
         if selected_tracking["backend"] == "mlflow" and os.environ.get(MLFLOW_PRIVATE_CA_ENV):
             from gradlab.mlflow_tls import validate_private_mlflow_ca_b64
@@ -342,13 +341,17 @@ def _operator_preflight(
             if selected_tracking["backend"] == "mlflow"
             else ""
         )
+        if selected_tracking["backend"] == "mlflow":
+            validate_mlflow_access(mlflow_uri, selected_tracking)
         try:
             if selected_tracking["backend"] == "mlflow":
                 from mlflow.tracking import MlflowClient
+                from gradlab.mlflow_tls import private_mlflow_ca_context
 
-                MlflowClient(
-                    tracking_uri=mlflow_uri
-                ).get_experiment_by_name("gradlab-preflight")
+                with private_mlflow_ca_context():
+                    MlflowClient(
+                        tracking_uri=mlflow_uri
+                    ).get_experiment_by_name("gradlab-preflight")
             else:
                 import wandb
 
@@ -377,6 +380,11 @@ def _operator_preflight(
         fleet = dstack_config.fleet()
         selected_coordinator_id = str(coordinator_id or dstack_config.default_coordinator)
     coordinator = dstack_config.coordinator(selected_coordinator_id)
+    if selected_tracking["backend"] == "mlflow" and selected_tracking["delivery"] == "online":
+        _preflight_mlflow_compute_route(ComputeRequest(
+            kind="local", target=fleet.name, max_price=None, max_cost_usd=None,
+            allow_on_demand=False, max_duration_seconds=DEFAULT_MAX_DURATION_SECONDS,
+        ))
     connection = _ensure_coordinator_connection(coordinator)
     token, token_source = resolve_dstack_token(coordinator)
     dstack_backend = DstackBackend(
@@ -428,7 +436,12 @@ def _operator_preflight(
             "resources": local_resources.as_manifest(),
             "resources_source": "operator-config",
         },
-        "tracking": dict(tracking or {"backend": "wandb", "delivery": "online"}),
+        "tracking": {
+            **selected_tracking,
+            **({"auth_mode": mlflow_auth_mode(selected_tracking)}
+               if selected_tracking["backend"] == "mlflow" and selected_tracking["delivery"] == "online"
+               else {}),
+        },
         "modal": {
             "credentials": ("resolved" if checkpoint_eval_backend == "modal" else "not-required")
         },
@@ -1017,6 +1030,9 @@ def cmd_launch(args: argparse.Namespace) -> int:
         tracking={
             **config["tracking"],
             "operator_profile": metrics_profile,
+            **({"auth_mode": mlflow_auth_mode()}
+               if config["tracking"]["backend"] == "mlflow"
+               and config["tracking"]["delivery"] == "online" else {}),
             "private_tls_ca": (
                 bool(str(os.environ.get(MLFLOW_PRIVATE_CA_ENV) or "").strip())
                 if config["tracking"]["backend"] == "mlflow"
@@ -1109,10 +1125,33 @@ def cmd_launch(args: argparse.Namespace) -> int:
 
 def cmd_operator_preflight(args: argparse.Namespace) -> int:
     root = repository_root()
+    recipe = getattr(args, "recipe_file", None)
+    overrides = tuple(getattr(args, "recipe_overrides", None) or ())
+    if recipe is not None:
+        recipe_path = recipe if recipe.is_absolute() else root / recipe
+        documents = compose_resolved_train_documents(
+            _goal_path_for_recipe(root, recipe_path), recipe_path,
+            recipe_overrides=overrides,
+            prepare_materialized=partial(
+                prepare_checkpoint_eval_mode, checkpoint_eval_backend=args.checkpoint_eval_backend,
+            ),
+            source_sha=_git(root, "rev-parse", "HEAD"),
+        )
+        config = documents.effective["train_config"]
+        tracking = config["tracking"]
+        checkpoint_eval_backend = config["checkpoint_eval_backend"]
+    else:
+        if overrides:
+            raise ValueError("operator-preflight --set requires --recipe-file")
+        tracking = resolve_tracking(
+            experiments_root=root / "experiments", goal_sources=(), recipe_sources=(),
+        )
+        checkpoint_eval_backend = args.checkpoint_eval_backend or "modal"
     _storage_config, _authority, _dstack_backend, report = _operator_preflight(
         root,
-        checkpoint_eval_backend=str(args.checkpoint_eval_backend),
+        checkpoint_eval_backend=str(checkpoint_eval_backend),
         local_target=args.target,
+        tracking=tracking,
     )
     if args.json:
         print(json.dumps(report, sort_keys=True))
@@ -2262,8 +2301,10 @@ def build_parser() -> argparse.ArgumentParser:
     operator_preflight.add_argument(
         "--checkpoint-eval-backend",
         choices=("modal", "training-container", "none"),
-        default="modal",
+        default=None,
     )
+    operator_preflight.add_argument("--recipe-file", type=Path)
+    operator_preflight.add_argument("--set", dest="recipe_overrides", action="append", default=[])
     operator_preflight.add_argument(
         "--target",
         help="Optional local fleet to report instead of the configured default.",

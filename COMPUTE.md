@@ -22,6 +22,11 @@ before launching:
 gradlab experiment operator-preflight --json
 ```
 
+Preflight resolves the checked-in project metrics default. To check a launch's
+recipe, inherited evaluation mode, and overrides, use `--recipe-file <recipe>`
+and repeat the launch's `--set <key=value>` arguments. It never selects another
+metrics backend when the selected service is unavailable.
+
 An explicit `--target` overrides `dstack.default_fleet`. Local or automatic
 compute fails closed when the selected fleet is not configured.
 
@@ -109,6 +114,12 @@ Online MLflow Runs require an operator-declared private HTTPS route and an exact
 operator-local inventory and must pass service authentication preflight before
 runtime preparation or dstack submission. The private-service pilot procedure is in
 `ops/mlflow/README.md`.
+
+`MLFLOW_AUTH_MODE=basic` is the default and requires writer credentials.
+Explicit `network` mode requires private HTTPS and operator-enforced private
+network access controls, with no basic credentials. Its resolved authentication
+mode is frozen in the Run and required on retries. Private CA configuration is
+used for both operator preflight and the training task.
 
 ## Modal evaluation
 

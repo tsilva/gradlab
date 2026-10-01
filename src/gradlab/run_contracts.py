@@ -275,6 +275,12 @@ class RunManifest(_CurrentContract):
         if set(selected_tracking) != {"backend", "delivery"}:
             raise ValueError("run manifest must freeze tracking backend and delivery")
         if self.tracking is not None:
+            auth_mode = self.tracking.get("auth_mode")
+            if auth_mode is not None and (
+                selected_tracking != {"backend": "mlflow", "delivery": "online"}
+                or auth_mode not in ("basic", "network")
+            ):
+                raise ValueError("run manifest tracking auth_mode is invalid")
             private_tls_ca = self.tracking.get("private_tls_ca", False)
             if not isinstance(private_tls_ca, bool) or (
                 private_tls_ca

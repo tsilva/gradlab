@@ -11,6 +11,9 @@ MLFLOW_TRACKING_URI = "https://<private-mlflow-host>"
 MLFLOW_OPERATOR_PROFILE = "<private-mlflow-profile>"
 # Exact configured dstack fleet IDs permitted to reach the private service.
 MLFLOW_ALLOWED_FLEETS = "<approved-fleet-id>"
+# basic (default) requires the writer username/password references below.
+# network is explicit: private HTTPS, network access controls, no basic credentials.
+MLFLOW_AUTH_MODE = "basic"
 # Optional for a private CA: base64 of its single PEM certificate.
 # GRADLAB_MLFLOW_TLS_CA_B64 = "<base64-pem-ca-certificate>"
 GRADLAB_CONTROL_R2_URI = "s3://<control-bucket>"
@@ -65,6 +68,7 @@ disk = "50GB"
 service = "gradlab-wandb"
 account = "api-key"
 
+# Omit both MLflow credential entries when using network authentication.
 [keychain.MLFLOW_TRACKING_USERNAME]
 service = "gradlab-mlflow"
 account = "username"
