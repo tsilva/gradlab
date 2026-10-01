@@ -987,15 +987,25 @@ class RunSupervisorTests(unittest.TestCase):
 
     def test_supervisor_starts_learner_with_explicit_execution_mode(self) -> None:
         supervisor = self.supervisor()
-        with patch.object(
-            supervisor.runtime,
-            "start_learner",
-            return_value=MagicMock(pid=1234),
-        ) as start:
+        with (
+            patch.object(
+                supervisor.runtime,
+                "start_learner",
+                return_value=MagicMock(pid=1234),
+            ) as start,
+            patch.object(supervisor.clock, "monotonic", return_value=123.0),
+        ):
             supervisor._start_learner()
 
         command = start.call_args.args[0]
         self.assertEqual(command[-2:], ["--execution-mode", "supervised"])
+        self.assertEqual(supervisor.learner_state.pid, 1234)
+        self.assertEqual(supervisor.learner_state.started_at, 123.0)
+        self.assertIsNone(supervisor._observe_live_learner_state(123.0))
+        timeout = supervisor._liveness_seconds("startup_timeout_seconds")
+        self.assertIsNone(supervisor._observe_live_learner_state(123.0 + timeout - 0.25))
+        with self.assertRaises(LearnerStartupTimeout):
+            supervisor._observe_live_learner_state(123.0 + timeout)
 
     def test_fault_fixture_uses_dedicated_non_training_learner(self) -> None:
         supervisor = self.supervisor()
