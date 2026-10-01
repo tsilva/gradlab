@@ -65,7 +65,7 @@ def prepare(tmp_path, monkeypatch):
     hub.files["trajectories/base/publication.json"] = json.dumps(
         trajectory_schema_identity()
     ).encode()
-    monkeypatch.setattr("gradlab.dataset_split_publication.HfApi", lambda: hub)
+    monkeypatch.setattr("gradlab.dataset_publication.HfApi", lambda: hub)
     monkeypatch.setattr(
         "gradlab.operator_environment.load_repository_operator_environment", lambda root: None
     )
@@ -79,6 +79,7 @@ def prepare(tmp_path, monkeypatch):
         return str(p)
 
     monkeypatch.setattr("gradlab.dataset_split_publication.hf_hub_download", download)
+    monkeypatch.setattr("gradlab.dataset_publication.hf_hub_download", download)
     return queue, payload, hub
 
 

@@ -902,7 +902,53 @@ class BoundTaskKernel(Protocol):
     ) -> None: ...
 
 
-class RewardTransformTaskKernel:
+class _TaskKernelWrapper:
+    """Delegate unchanged task operations while wrappers implement their own transforms."""
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.kernel, name)
+
+    def map_actions(self, actions: Any) -> Any:
+        return self.kernel.map_actions(actions)
+
+    def encode_observations(self, observations: Any) -> Any:
+        return self.kernel.encode_observations(observations)
+
+    def on_reset(
+        self,
+        reset_observations: Any,
+        reset_signals: Mapping[str, Any],
+        mask: np.ndarray,
+    ) -> Any:
+        return self.kernel.on_reset(reset_observations, reset_signals, mask)
+
+    def validate_archive_signal(self, semantic_name: str) -> None:
+        return self.kernel.validate_archive_signal(semantic_name)
+
+    def archive_signal_values(
+        self,
+        semantic_name: str,
+        signals: Mapping[str, Any],
+        *,
+        mask: np.ndarray,
+    ) -> np.ndarray:
+        return self.kernel.archive_signal_values(semantic_name, signals, mask=mask)
+
+    def capture_lane_states(
+        self,
+        mask: np.ndarray,
+    ) -> tuple[TaskLaneState | None, ...]:
+        return self.kernel.capture_lane_states(mask)
+
+    def restore_lane_states(
+        self,
+        states: Sequence[TaskLaneState | None],
+        mask: np.ndarray,
+    ) -> None:
+        self.kernel.restore_lane_states(states, mask)
+
+
+class RewardTransformTaskKernel(_TaskKernelWrapper):
     """Apply the provider-neutral final reward transform to any bound task."""
 
     def __init__(
@@ -917,15 +963,6 @@ class RewardTransformTaskKernel:
         self._rewards = np.empty(self.num_envs, dtype=np.float32)
         self._metrics: dict[str, np.ndarray] | None = None
         self._task_step: TaskStep | None = None
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self.kernel, name)
-
-    def map_actions(self, actions: Any) -> Any:
-        return self.kernel.map_actions(actions)
-
-    def encode_observations(self, observations: Any) -> Any:
-        return self.kernel.encode_observations(observations)
 
     def process(
         self,
@@ -969,39 +1006,6 @@ class RewardTransformTaskKernel:
         assert self._task_step is not None
         return self._task_step
 
-    def on_reset(
-        self,
-        reset_observations: Any,
-        reset_signals: Mapping[str, Any],
-        mask: np.ndarray,
-    ) -> Any:
-        return self.kernel.on_reset(reset_observations, reset_signals, mask)
-
-    def validate_archive_signal(self, semantic_name: str) -> None:
-        return self.kernel.validate_archive_signal(semantic_name)
-
-    def archive_signal_values(
-        self,
-        semantic_name: str,
-        signals: Mapping[str, Any],
-        *,
-        mask: np.ndarray,
-    ) -> np.ndarray:
-        return self.kernel.archive_signal_values(semantic_name, signals, mask=mask)
-
-    def capture_lane_states(
-        self,
-        mask: np.ndarray,
-    ) -> tuple[TaskLaneState | None, ...]:
-        return self.kernel.capture_lane_states(mask)
-
-    def restore_lane_states(
-        self,
-        states: Sequence[TaskLaneState | None],
-        mask: np.ndarray,
-    ) -> None:
-        self.kernel.restore_lane_states(states, mask)
-
 
 def with_reward_transform(
     kernel: BoundTaskKernel,
@@ -1011,7 +1015,7 @@ def with_reward_transform(
     return kernel if not transform.active else RewardTransformTaskKernel(kernel, transform)
 
 
-class CellNoveltyTaskKernel:
+class CellNoveltyTaskKernel(_TaskKernelWrapper):
     """Add a bounded first-visit bonus for semantic cells within each episode."""
 
     def __init__(
@@ -1042,12 +1046,6 @@ class CellNoveltyTaskKernel:
         if name == "kernel":
             raise AttributeError(name)
         return getattr(self.kernel, name)
-
-    def map_actions(self, actions: Any) -> Any:
-        return self.kernel.map_actions(actions)
-
-    def encode_observations(self, observations: Any) -> Any:
-        return self.kernel.encode_observations(observations)
 
     def _cell_keys(
         self,
@@ -1145,15 +1143,6 @@ class CellNoveltyTaskKernel:
 
     def validate_archive_signal(self, semantic_name: str) -> None:
         self.kernel.validate_archive_signal(semantic_name)
-
-    def archive_signal_values(
-        self,
-        semantic_name: str,
-        signals: Mapping[str, Any],
-        *,
-        mask: np.ndarray,
-    ) -> np.ndarray:
-        return self.kernel.archive_signal_values(semantic_name, signals, mask=mask)
 
     def capture_lane_states(
         self,
@@ -1424,7 +1413,7 @@ class SignalBindings:
         )
 
 
-class EpisodeProgressTaskKernel:
+class EpisodeProgressTaskKernel(_TaskKernelWrapper):
     """Project declared task signals into reward-independent episode metrics."""
 
     def __init__(
@@ -1457,15 +1446,6 @@ class EpisodeProgressTaskKernel:
             self._values[field_name] = np.empty(self.num_envs, dtype=dtype)
         self._metrics: dict[str, np.ndarray] | None = None
         self._task_step: TaskStep | None = None
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self.kernel, name)
-
-    def map_actions(self, actions: Any) -> Any:
-        return self.kernel.map_actions(actions)
-
-    def encode_observations(self, observations: Any) -> Any:
-        return self.kernel.encode_observations(observations)
 
     def process(
         self,
@@ -1559,7 +1539,7 @@ class DeathmatchRewardConfig:
         )
 
 
-class DeathmatchRewardTaskKernel:
+class DeathmatchRewardTaskKernel(_TaskKernelWrapper):
     """Replace native reward with Sample Factory V0-style Deathmatch shaping."""
 
     _SCALAR_SIGNALS = (
@@ -1703,12 +1683,6 @@ class DeathmatchRewardTaskKernel:
         if name == "kernel":
             raise AttributeError(name)
         return getattr(self.kernel, name)
-
-    def map_actions(self, actions: Any) -> Any:
-        return self.kernel.map_actions(actions)
-
-    def encode_observations(self, observations: Any) -> Any:
-        return self.kernel.encode_observations(observations)
 
     def _read_signals(self, signals: Mapping[str, Any]) -> None:
         for name, target in self._current_scalars.items():
@@ -1885,15 +1859,6 @@ class DeathmatchRewardTaskKernel:
 
     def validate_archive_signal(self, semantic_name: str) -> None:
         self.kernel.validate_archive_signal(semantic_name)
-
-    def archive_signal_values(
-        self,
-        semantic_name: str,
-        signals: Mapping[str, Any],
-        *,
-        mask: np.ndarray,
-    ) -> np.ndarray:
-        return self.kernel.archive_signal_values(semantic_name, signals, mask=mask)
 
     def capture_lane_states(
         self,
@@ -2623,7 +2588,7 @@ class IdentityTaskKernel:
                 self._event_previous_valid[index][lane_index] = bool(valid[index])
 
 
-class EventRewardTaskKernel:
+class EventRewardTaskKernel(_TaskKernelWrapper):
     """Pay fixed or absolute-delta rewards when declared task events fire."""
 
     def __init__(
@@ -2670,12 +2635,6 @@ class EventRewardTaskKernel:
         if name == "kernel":
             raise AttributeError(name)
         return getattr(self.kernel, name)
-
-    def map_actions(self, actions: Any) -> Any:
-        return self.kernel.map_actions(actions)
-
-    def encode_observations(self, observations: Any) -> Any:
-        return self.kernel.encode_observations(observations)
 
     def process(
         self,
@@ -2750,39 +2709,6 @@ class EventRewardTaskKernel:
             )
         assert self._task_step is not None
         return self._task_step
-
-    def on_reset(
-        self,
-        reset_observations: Any,
-        reset_signals: Mapping[str, Any],
-        mask: np.ndarray,
-    ) -> Any:
-        return self.kernel.on_reset(reset_observations, reset_signals, mask)
-
-    def validate_archive_signal(self, semantic_name: str) -> None:
-        return self.kernel.validate_archive_signal(semantic_name)
-
-    def archive_signal_values(
-        self,
-        semantic_name: str,
-        signals: Mapping[str, Any],
-        *,
-        mask: np.ndarray,
-    ) -> np.ndarray:
-        return self.kernel.archive_signal_values(semantic_name, signals, mask=mask)
-
-    def capture_lane_states(
-        self,
-        mask: np.ndarray,
-    ) -> tuple[TaskLaneState | None, ...]:
-        return self.kernel.capture_lane_states(mask)
-
-    def restore_lane_states(
-        self,
-        states: Sequence[TaskLaneState | None],
-        mask: np.ndarray,
-    ) -> None:
-        self.kernel.restore_lane_states(states, mask)
 
 
 def with_event_rewards(

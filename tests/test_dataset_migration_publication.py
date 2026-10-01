@@ -111,7 +111,7 @@ def prepare(tmp_path, monkeypatch):
         return original_commit(**{**kwargs, "parent_commit": "0"})
 
     hub.create_commit = commit
-    monkeypatch.setattr("gradlab.dataset_migration_publication.HfApi", lambda: hub)
+    monkeypatch.setattr("gradlab.dataset_publication.HfApi", lambda: hub)
     monkeypatch.setattr(
         "gradlab.operator_environment.load_repository_operator_environment", lambda root: None
     )
@@ -124,7 +124,7 @@ def prepare(tmp_path, monkeypatch):
         path.write_bytes(value)
         return str(path)
 
-    monkeypatch.setattr("gradlab.dataset_migration_publication.hf_hub_download", download)
+    monkeypatch.setattr("gradlab.dataset_publication.hf_hub_download", download)
     return queue, payload, hub
 
 

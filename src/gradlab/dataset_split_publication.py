@@ -4,21 +4,21 @@ from pathlib import Path
 import hashlib
 import json
 import re
-import time
 
-from huggingface_hub import HfApi, CommitOperationAdd, hf_hub_download
-from huggingface_hub.errors import EntryNotFoundError
+from huggingface_hub import CommitOperationAdd, hf_hub_download
 
-from gradlab.dataset_shards import PublicationBudget, PublicationDeferred
-from gradlab.job_queue import HandlerResult, JobStore, SubjectUpdate, register_handler
+from gradlab.dataset_publication import AtomicDatasetPublication
+from gradlab.job_queue import JobStore, register_handler
 from gradlab.trajectory_format import open_trajectory_parquet, require_current_trajectory_schema
 
 JOB_TYPE = "dataset-split-publication"
 
 
-class SplitPublicationHandler:
+class SplitPublicationHandler(AtomicDatasetPublication):
     job_type = JOB_TYPE
-    version = 1
+    publication_kind = "split"
+    commit_message = "Add balanced grouped 80/10/10 trajectory splits"
+    parent_changed_message = "Dataset head changed; review split publication before retry"
 
     @classmethod
     def validate_payload(cls, payload):
@@ -55,35 +55,11 @@ class SplitPublicationHandler:
                 raise ValueError("Split publication paths must be absolute")
         return dict(payload)
 
-    def advance(self, job):
-        p = self.validate_payload(job["payload"])
-        try:
-            revision = self.publish(p, job["job_id"])
-            return HandlerResult(
-                state="succeeded",
-                message=f"Published split revision {revision}",
-                subjects=(
-                    SubjectUpdate("dataset", p["repo"], "succeeded", {"revision": revision}),
-                ),
-            )
-        except PublicationDeferred as exc:
-            return HandlerResult(state="retry_wait", available_at=exc.until, message=str(exc))
-        except ValueError, KeyError, TypeError:
-            raise
-        except Exception as exc:
-            return HandlerResult(
-                state="blocked" if job.get("attempts", 1) >= 8 else "retry_wait",
-                available_at=time.time() + 30,
-                message=f"{type(exc).__name__}: {exc}",
-            )
-
     def publish(self, p, job_id):
         from gradlab.operator_environment import load_repository_operator_environment
 
         load_repository_operator_environment(Path(p["repo_root"]))
         root = Path(p["root"])
-        api = HfApi()
-        budget = PublicationBudget(p["queue_root"])
         # Validate all prepared bytes before any remote write.
         for name, digest in p["files"].items():
             with (root / name).open("rb") as f:
@@ -110,67 +86,33 @@ class SplitPublicationHandler:
         if manifest.get("tables") != inventory:
             raise ValueError("Split manifest table inventory differs from prepared shards")
 
+        return self.commit(p, job_id, receipt)
+
+    def prepare_commit(self, api, budget, p, job_id, head):
+        root = Path(p["root"])
+
         def read_json(name, revision):
             return json.loads(Path(budget.call(
                 hf_hub_download, p["repo"], name, repo_type="dataset", revision=revision,
             )).read_bytes())
 
-        def read_receipt(revision):
-            try:
-                return Path(
-                    budget.call(
-                        hf_hub_download,
-                        p["repo"],
-                        p["receipt"],
-                        repo_type="dataset",
-                        revision=revision,
-                    )
-                ).read_bytes()
-            except EntryNotFoundError:
-                return None
-
-        with budget.writer(p["repo"]):
-            head = budget.call(api.repo_info, repo_id=p["repo"], repo_type="dataset").sha
-            previous = read_receipt(head)
-            if previous is not None:
-                if previous != receipt:
-                    raise ValueError("Conflicting immutable split receipt")
-                return head
-            if head != p["parent"]:
-                raise ValueError("Dataset head changed; review split publication before retry")
-            view = read_json("trajectory-view.json", head)
-            require_current_trajectory_schema(view)
-            require_current_trajectory_schema(read_json(view["publication"], head))
-            operations = []
-            for name in sorted(p["files"]):
-                if JobStore(p["queue_root"]).job(job_id)["cancel_requested"]:
-                    raise ValueError("Split publication canceled")
-                op = CommitOperationAdd(path_in_repo=name, path_or_fileobj=str(root / name))
-                budget.call(
-                    api.preupload_lfs_files,
-                    p["repo"],
-                    repo_type="dataset",
-                    additions=[op],
-                    num_threads=2,
-                )
-                operations.append(op)
-            budget.reserve("commit")
-            try:
-                return budget.call(
-                    api.create_commit,
-                    repo_id=p["repo"],
-                    repo_type="dataset",
-                    parent_commit=head,
-                    operations=operations,
-                    commit_message="Add balanced grouped 80/10/10 trajectory splits",
-                ).oid
-            except PublicationDeferred:
-                raise
-            except Exception:
-                current = budget.call(api.repo_info, repo_id=p["repo"], repo_type="dataset").sha
-                if read_receipt(current) == receipt:
-                    return current
-                raise
+        view = read_json("trajectory-view.json", head)
+        require_current_trajectory_schema(view)
+        require_current_trajectory_schema(read_json(view["publication"], head))
+        operations = []
+        for name in sorted(p["files"]):
+            if JobStore(p["queue_root"]).job(job_id)["cancel_requested"]:
+                raise ValueError("Split publication canceled")
+            op = CommitOperationAdd(path_in_repo=name, path_or_fileobj=str(root / name))
+            budget.call(
+                api.preupload_lfs_files,
+                p["repo"],
+                repo_type="dataset",
+                additions=[op],
+                num_threads=2,
+            )
+            operations.append(op)
+        return operations
 
 
 def register_job_handler():
