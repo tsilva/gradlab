@@ -33,7 +33,7 @@ from gradlab.goal_catalog import (
     validate_goal_catalog_pointer,
 )
 from gradlab.contract_inspection import inspection_document
-from gradlab.early_stop import EARLY_STOP_OPERATORS, normalize_metric_threshold_rules
+from gradlab.early_stop import EARLY_STOP_OPERATORS, metric_threshold_evidence, normalize_metric_threshold_rules
 from gradlab.goal_variants import (
     build_goal_variant_descriptor,
     goal_contract_diff,
@@ -3584,22 +3584,8 @@ class PlayCatalog:
                     criteria: list[dict[str, Any]] = []
                     for rule in rules:
                         metric = str(rule["metric"])
-                        operator = str(rule["operator"])
-                        threshold = float(rule["threshold"])
                         value = _safe_float(raw.get(metric))
-                        criteria.append(
-                            {
-                                "metric": metric,
-                                "operator": operator,
-                                "threshold": threshold,
-                                "value": value,
-                                "passed": (
-                                    None
-                                    if value is None
-                                    else bool(EARLY_STOP_OPERATORS[operator](value, threshold))
-                                ),
-                            }
-                        )
+                        criteria.append(metric_threshold_evidence(rule, value))
                     evaluations[step] = {
                         "status": "accepted" if accepted >= 0.5 else "rejected",
                         "pass": accepted >= 0.5,

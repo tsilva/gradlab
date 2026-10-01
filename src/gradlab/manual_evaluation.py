@@ -14,7 +14,7 @@ from typing import Any
 from gradlab.checkpoint_acceptance import requires_complete_evaluation
 from gradlab.checkpoint_contract import checkpoint_manifest_contract_sha256
 from gradlab.clock import Clock, SystemClock, parse_utc_datetime
-from gradlab.early_stop import EARLY_STOP_OPERATORS
+from gradlab.early_stop import metric_threshold_evidence
 from gradlab.eval_backend import EvalBackend
 from gradlab.evaluation_attempts import (
     build_modal_eval_payload,
@@ -124,24 +124,7 @@ def _evaluation_summary(
         numeric = (
             float(value) if not isinstance(value, bool) and isinstance(value, int | float) else None
         )
-        criteria.append(
-            {
-                "metric": metric,
-                "operator": str(rule["operator"]),
-                "threshold": float(rule["threshold"]),
-                "value": numeric,
-                "passed": (
-                    None
-                    if numeric is None
-                    else bool(
-                        EARLY_STOP_OPERATORS[str(rule["operator"])](
-                            numeric,
-                            float(rule["threshold"]),
-                        )
-                    )
-                ),
-            }
-        )
+        criteria.append(metric_threshold_evidence(rule, numeric))
     metrics = {
         metric: float(result.aggregates[metric])
         for metric in (

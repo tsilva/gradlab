@@ -20,7 +20,7 @@ from gradlab.clock import (
     parse_utc_datetime,
 )
 from gradlab.file_utils import atomic_write_bytes, atomic_write_json, file_sha256
-from gradlab.early_stop import EARLY_STOP_OPERATORS
+from gradlab.early_stop import EARLY_STOP_OPERATORS, metric_threshold_evidence
 from gradlab.json_utils import canonical_json_sha256
 from gradlab.r2_store import (
     BucketConfig,
@@ -1655,19 +1655,7 @@ class RunAuthority:
                 or not isinstance(threshold, int | float)
             ):
                 continue
-            criteria.append(
-                {
-                    "metric": metric,
-                    "operator": operator,
-                    "threshold": float(threshold),
-                    "value": value,
-                    "passed": (
-                        None
-                        if value is None
-                        else bool(EARLY_STOP_OPERATORS[operator](value, float(threshold)))
-                    ),
-                }
-            )
+            criteria.append(metric_threshold_evidence(raw_rule, value))
         event = (
             self._goal_catalog_enrichment_event(
                 manifest=manifest,
