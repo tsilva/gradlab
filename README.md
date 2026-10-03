@@ -145,6 +145,12 @@ Run `pnpm test:web` for controller and calculation tests. Browser fixture comman
 and performance workloads are documented in
 [the player fixture guide](tests/web_player/fixtures/README.md).
 
+GradLab package releases use [$build-release](.codex/skills/build-release/SKILL.md).
+`python3 scripts/release.py` prepares metadata and atomically pushes the branch
+and release tag; GitHub Actions runs the source checks, web build, Python package
+builds, artifact audits, and trusted publication. `python3 scripts/release.py --validate` builds committed remote `main` in Actions without publishing or
+changing local versions. Local candidate builds are available when explicitly requested.
+
 ## Research results
 
 Environment indexes:

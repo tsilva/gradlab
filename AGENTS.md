@@ -61,7 +61,7 @@ When changing dstack host behavior, preserve the root-owned runtime-image cleanu
 
 ## Package Releases
 
-When asked to build, cut, tag, publish, or verify a GradLab PyPI release, use the project-level `$build-release` skill in `.codex/skills/build-release`. Build and audit a local release candidate before publishing. Normal publication must use the tag-triggered trusted-publishing workflow; do not manually upload to PyPI.
+When asked to build, cut, tag, publish, or verify a GradLab PyPI release, use the project-level `$build-release` skill in `.codex/skills/build-release`. The project launcher prepares metadata and pushes the release tag; GitHub Actions owns source validation, all release builds, artifact audits, and trusted publication. Normal release or validation requests do not build locally. Do not manually upload to PyPI.
 
 ## Dependencies
 

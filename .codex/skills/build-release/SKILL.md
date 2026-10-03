@@ -1,85 +1,71 @@
 ---
 name: build-release
-description: Cut, publish, monitor, verify, build, or inspect GradLab Python releases. A bare $build-release invocation launches the full trusted-publishing workflow and follows it until the version is live on PyPI.
+description: Build, publish, inspect, or verify GradLab Python releases. A bare $build-release invocation publishes the next release through trusted publishing and follows verification.
 ---
 
 # Build Release
 
-Read and apply the shared `$release-workflow` skill at
-`/Users/tsilva/.codex/skills/release-workflow/SKILL.md` before execution.
-It owns common preflight, publication safeguards, `$push` integration,
-workflow monitoring, verification, and reporting. The rules below are this
-project's adapter; they retain its invocation default and required gates.
-If the shared skill is unavailable, stop and report the missing dependency.
+## When to use
 
-Use this skill to run the repo-owned GradLab release flow and monitor it until
-the package is visible on PyPI. A bare `$build-release` invocation means
-**publish the next release**, not merely build local artifacts. Use the
-local-candidate path only when the user explicitly asks for a local build,
-artifacts, validation, or a dry run. For status or diagnosis, inspect existing
-state without mutating it.
+Use for GradLab package releases. A bare `$build-release` means publish the next
+release. Normal publication and validation build only in GitHub Actions.
+Explicit local-build requests select the local candidate path. Status/diagnosis
+requests inspect existing state.
 
-The release launcher lives in `scripts/release.py`. It follows the same pattern
-as the SuperMarioBros-Nes-turbo release flow: require a clean synchronized tree
-and intended GitHub remote, select an unused version, update every version
-surface, run the complete local source gates, build and audit a local candidate,
-create an annotated tag, and atomically push the branch and tag. The tag triggers
-`.github/workflows/release.yml`, which rebuilds and audits the distributions,
-publishes with PyPI trusted publishing, and creates the GitHub Release.
+## Prepare
 
-## Publish the next release
+Apply the repository specification review once for this task. Read the shared
+[$release-workflow](/Users/tsilva/.codex/skills/release-workflow/SKILL.md), which
+owns common preflight, authorization, monitoring, verification, and `$push` use.
+If unavailable, report that dependency. Read the requested path in
+[operations.md](references/operations.md) for project-specific arguments and gates.
 
-1. Read `AGENTS.md`, use `$specs-author`, and confirm that publishing is within
-   the user's request. A bare `$build-release` invocation is explicit release
-   authorization under this skill.
+## Act
 
-2. Install the locked release environment:
+For publication:
 
-   ```bash
-   uv sync --frozen --group dev --group release
-   ```
+```bash
+python3 scripts/release.py
+```
 
-3. Launch the repo-owned release command:
+Use `--to X.Y.Z` or `--part minor|major` only when requested. The launcher owns
+version selection/surfaces, metadata checks, commit, annotated tag, and atomic
+branch/tag push. The operator needs Python 3.11+, Git, `uv`, and `gh`; no local
+package environment, web build, or source test suite is required. Tag-triggered
+`release.yml` owns the complete source checks, web and Python builds, candidate
+audits, installation smoke test, and trusted publication. Never manually upload
+to PyPI.
 
-   ```bash
-   uv run python scripts/release.py
-   ```
+For validation without publication:
 
-   With no version preference, an untagged unused project version is released;
-   otherwise the helper advances to the first unused patch version. For an
-   explicitly requested version or bump, use exactly one of:
+```bash
+python3 scripts/release.py --validate
+```
 
-   ```bash
-   uv run python scripts/release.py --to X.Y.Z
-   uv run python scripts/release.py --part minor
-   uv run python scripts/release.py --part major
-   ```
+This builds committed remote `main`, permits unrelated dirty local work, and
+changes no version surfaces. Follow the printed full source SHA and require the
+Actions build job and downloaded artifacts to pass; publication jobs must skip.
 
-   The launcher updates `pyproject.toml`, `src/gradlab/__init__.py`, `uv.lock`,
-   and the README's pinned one-command demo. It runs the workflow's Ruff, pytest,
-   configuration-validation, and simulated lifecycle-certification gates, then
-   builds, audits, checks, and dependency-free smoke-tests a local wheel and
-   sdist before creating the release commit and annotated tag. Failed
-   preparation restores changed release files and preserves candidate evidence.
-
-4. Follow the shared monitoring and verification procedure for the `release.yml`
-tag-push run at the full `vX.Y.Z` commit SHA. A `workflow_dispatch` run
-validates artifacts but never publishes. Verify PyPI project `gradlab` and
-the GitHub Release for the same tag.
-
-Require `gradlab-X.Y.Z-py3-none-any.whl` and `gradlab-X.Y.Z.tar.gz`
-on PyPI and as matching GitHub Release assets.
-
-## Build a local candidate only
-
-Use this path only when the user explicitly asks for a local candidate or
-validation without publication:
+For a requested local candidate:
 
 ```bash
 uv sync --frozen --group release
-uv run python .codex/skills/build-release/scripts/release_build.py build --auto-bump
+uv run python scripts/release_build.py build --auto-bump
 ```
 
-This path may advance a used patch version and update the four release surfaces,
-but it never commits, tags, pushes, or publishes. Report the selected version,
-changed sources, artifacts, SHA-256 digests, and every completed gate.
+This can update release version surfaces without publishing. Report those edits.
+
+## Recover
+
+Preserve candidate/failure evidence and inspect existing tags/workflows before
+repeating publication. The launcher restores preparation changes on failure;
+the shared skill owns publication recovery. `workflow_dispatch` validates only.
+
+## Finish
+
+Follow the tag-push workflow at the exact commit. Require the wheel and sdist on
+PyPI and matching GitHub Release assets for the same version/tag. After a push,
+use `$push` for default-branch README tagline reconciliation; report push and
+repository-description synchronization separately. Local candidates report
+version, changed sources, artifacts/hashes, and completed gates. Actions validation
+reports the source SHA, run URL, artifact checks, and that nothing was published.

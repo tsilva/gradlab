@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: Optional git ref to build
+        description: Full commit SHA on main to validate (empty uses the dispatch SHA)
         required: false
         type: string
 
@@ -28,13 +28,34 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.version.outputs.version }}
+      source-sha: ${{ steps.source.outputs.sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
           fetch-depth: 0
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+
+      - name: Verify source identity
+        id: source
+        shell: bash
+        env:
+          REQUESTED_REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            [[ "$GITHUB_REF" == "refs/heads/main" ]] || exit 1
+            if [[ -n "$REQUESTED_REF" ]]; then
+              [[ "$REQUESTED_REF" =~ ^[0-9a-f]{40}$ && "$sha" == "$REQUESTED_REF" ]] || exit 1
+            fi
+            git merge-base --is-ancestor "$sha" origin/main
+          else
+            [[ "$sha" == "$GITHUB_SHA" ]] || exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Building source $sha"
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -52,7 +73,9 @@ jobs:
           pnpm build:web
 
       - name: Install locked environments
-        run: uv sync --frozen --group dev --group release
+        run: |
+          uv lock --check
+          uv sync --frozen --group dev --group release
 
       - name: Resolve version
         id: version
@@ -76,14 +99,8 @@ jobs:
 
       - name: Check version consistency
         run: >-
-          uv run python .codex/skills/build-release/scripts/release_build.py
+          uv run python scripts/release_build.py
           check-version --version "${{ steps.version.outputs.version }}"
-
-      - name: Check PyPI version is unused
-        if: github.event_name == 'push' && github.ref_type == 'tag'
-        run: >-
-          uv run python .codex/skills/build-release/scripts/release_build.py
-          check-pypi --version "${{ steps.version.outputs.version }}"
 
       - name: Run source checks
         run: |
@@ -94,9 +111,10 @@ jobs:
 
       - name: Build and audit release distributions
         run: >-
-          uv run python .codex/skills/build-release/scripts/release_build.py build
+          uv run python scripts/release_build.py build
           --version "${{ steps.version.outputs.version }}"
           --out-dir dist/release-v${{ steps.version.outputs.version }}
+          ${{ github.event_name == 'workflow_dispatch' && '--allow-published' || '' }}
 
       - name: Upload audited distribution bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

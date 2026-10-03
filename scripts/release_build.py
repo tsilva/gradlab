@@ -348,9 +348,10 @@ def digest(path: Path) -> str:
     return hasher.hexdigest()
 
 
-def build(root: Path, version: str, out_dir: Path) -> None:
+def build(root: Path, version: str, out_dir: Path, *, allow_published: bool = False) -> None:
     check_version(root, version)
-    check_pypi(version)
+    if not allow_published:
+        check_pypi(version)
     if out_dir.exists() and any(out_dir.iterdir()):
         fail(f"release output directory is not empty: {out_dir}")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -406,12 +407,15 @@ def parser() -> argparse.ArgumentParser:
     version_source.add_argument("--version")
     version_source.add_argument("--auto-bump", action="store_true")
     build_parser.add_argument("--out-dir", type=Path)
+    build_parser.add_argument(
+        "--allow-published", action="store_true", help="rebuild an existing version for validation only"
+    )
     return result
 
 
 def main() -> int:
     args = parser().parse_args()
-    root = Path(__file__).resolve().parents[4]
+    root = Path(__file__).resolve().parents[1]
     try:
         if args.command == "check-version":
             check_version(root, args.version)
@@ -434,7 +438,7 @@ def main() -> int:
                     fail("--out-dir is required with --version")
                 version = args.version
                 out_dir = args.out_dir if args.out_dir.is_absolute() else root / args.out_dir
-            build(root, version, out_dir.resolve())
+            build(root, version, out_dir.resolve(), allow_published=args.allow_published)
         else:
             fail(f"unsupported command: {args.command}")
     except (ReleaseError, subprocess.CalledProcessError) as error:
