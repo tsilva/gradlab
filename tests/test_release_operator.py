@@ -2,6 +2,8 @@
 
 import argparse
 import importlib.util
+import os
+import tomllib
 import tempfile
 import unittest
 from pathlib import Path
@@ -22,6 +24,33 @@ builder = load('release_builder', ROOT / 'scripts/release_build.py')
 
 
 class ReleaseOperatorTests(unittest.TestCase):
+    def test_release_config_preserves_project_supply_chain_policy(self):
+        with (ROOT / 'pyproject.toml').open('rb') as handle:
+            project = tomllib.load(handle)['tool']['uv']
+        with (ROOT / 'uv-tool.toml').open('rb') as handle:
+            config = tomllib.load(handle)
+        for key in ('exclude-newer', 'exclude-newer-package', 'constraint-dependencies'):
+            self.assertEqual(config[key], project[key], key)
+        with (ROOT / 'uv.lock').open('rb') as handle:
+            locked = tomllib.load(handle)['options']['exclude-newer-package']
+        self.assertEqual(locked, config['exclude-newer-package'])
+
+    def test_operator_lock_check_ignores_inherited_global_config(self):
+        with patch.dict(os.environ, {'UV_CONFIG_FILE': '/unrelated/uv.toml'}), \
+             patch.object(launcher.subprocess, 'run') as run:
+            launcher.run(['uv', 'lock', '--check'])
+        self.assertEqual(
+            run.call_args.kwargs['env']['UV_CONFIG_FILE'], str(ROOT / 'uv-tool.toml')
+        )
+
+    def test_builder_uses_same_explicit_config_for_uv_commands(self):
+        with patch.dict(os.environ, {'UV_CONFIG_FILE': '/unrelated/uv.toml'}), \
+             patch.object(builder.subprocess, 'run') as run:
+            builder.run(['/operator/bin/uv', 'build'])
+        self.assertEqual(
+            run.call_args.kwargs['env']['UV_CONFIG_FILE'], str(ROOT / 'uv-tool.toml')
+        )
+
     def test_local_publication_gates_only_check_metadata(self):
         with patch.object(launcher, 'helper') as helper, patch.object(launcher, 'run') as run:
             launcher.run_release_gates('1.2.3')

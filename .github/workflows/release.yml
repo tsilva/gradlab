@@ -21,6 +21,7 @@ concurrency:
 env:
   PYTHON_VERSION: "3.14"
   UV_CACHE_DIR: .uv-cache
+  UV_CONFIG_FILE: ${{ github.workspace }}/uv-tool.toml
 
 jobs:
   build:

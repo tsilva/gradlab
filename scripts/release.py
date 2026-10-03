@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 import tomllib
@@ -24,7 +25,10 @@ EXPECTED_REPOSITORY = "tsilva/gradlab"
 
 def run(args: list[str]) -> None:
     print("+", " ".join(args), flush=True)
-    subprocess.run(args, cwd=REPO_ROOT, check=True)
+    env = None
+    if Path(args[0]).name == "uv":
+        env = {**os.environ, "UV_CONFIG_FILE": str(REPO_ROOT / "uv-tool.toml")}
+    subprocess.run(args, cwd=REPO_ROOT, check=True, env=env)
 
 
 def capture(args: list[str]) -> str:

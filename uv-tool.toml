@@ -2,6 +2,10 @@ exclude-newer = "7 days"
 constraint-dependencies = [
     "mistralai!=2.4.6",
     "guardrails-ai!=0.10.1",
+    "cryptography>=50",
+    "gitpython>=3.1.58",
+    "h2>=4.4.1",
+    "setuptools>=83",
 ]
 [exclude-newer-package]
 env-breakoutatari2600-turbo-native = false
