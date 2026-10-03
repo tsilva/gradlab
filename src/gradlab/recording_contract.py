@@ -4,7 +4,7 @@ import importlib.metadata
 from gradlab.json_utils import json_value
 
 PROVIDER = "env-breakoutatari2600-turbo-native"
-PROVIDER_VERSION = "0.5.13"
+PROVIDER_VERSION = "0.5.15"
 
 
 def verify_recording_provider(runtime) -> dict:
@@ -39,7 +39,10 @@ def verify_recording_provider(runtime) -> dict:
         "native_action_meanings": list(expected),
         "native_encoding": [expected.index(name) for name in table],
         "rgb_shape": [210, 160, 3],
-        "source": "https://github.com/tsilva/env-BreakoutAtari2600-turbo-native/blob/v0.5.13/src/lib.rs",
+        "source": (
+            "https://github.com/tsilva/env-BreakoutAtari2600-turbo-native/"
+            f"blob/v{PROVIDER_VERSION}/src/lib.rs"
+        ),
         "action_contract": json_value(runtime.action_contract),
         "signal_metadata": json_value(native.signal_metadata),
     }
