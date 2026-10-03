@@ -19,6 +19,8 @@ publishes with PyPI trusted publishing, and creates the GitHub Release.
 
 2. Use Python 3.11+, Git, `uv`, and authenticated `gh` on clean synchronized
    `main`. Build tools and package dependencies are installed in Actions.
+   Release commands use the checked-in `uv-tool.toml`, which must match
+   `[tool.uv]`, so operator-global configuration cannot contaminate the lockfile.
 
 3. Launch the repo-owned release command:
 

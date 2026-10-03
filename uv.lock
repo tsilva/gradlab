@@ -21,12 +21,9 @@ exclude-newer-span = "P7D"
 [options.exclude-newer-package]
 env-breakoutatari2600-turbo-native = false
 env-vizdoom-turbo = false
+env-stableretro-turbo = false
 env-supermariobrosnes-turbo-emu = false
 env-gradoom-turbo-torch = false
-unsloth-zoo = false
-env-stableretro-turbo = false
-unsloth = false
-gradlab = false
 
 [manifest]
 constraints = [

@@ -46,7 +46,11 @@ def fail(message: str) -> None:
 
 def run(command: list[str], *, cwd: Path | None = None) -> None:
     print("+", " ".join(command), flush=True)
-    subprocess.run(command, cwd=cwd, check=True)
+    env = None
+    if Path(command[0]).name == "uv":
+        config = Path(__file__).resolve().parents[1] / "uv-tool.toml"
+        env = {**os.environ, "UV_CONFIG_FILE": str(config)}
+    subprocess.run(command, cwd=cwd, check=True, env=env)
 
 
 def load_toml(path: Path) -> dict:
