@@ -20,31 +20,8 @@ from gradlab.dataset_cli import build_parser as build_dataset_parser
 from gradlab.play_catalog import CatalogPage, CheckpointPage
 from gradlab.play_debug import PolicyDecision
 from gradlab.play_session import _PlaybackSession, _PlaybackTransition
-from gradlab.play_web import (
-    FRAME_ATTRIBUTION,
-    FRAME_CNN_INSPECTION,
-    FRAME_CODEC_PNG,
-    FRAME_GAME,
-    FRAME_HEADER,
-    FRAME_MAGIC,
-    FRAME_OBSERVATION,
-    DatasetPlaybackRunner,
-    FrameEncoder,
-    HumanRecordingRunner,
-    PlaybackCommand,
-    PlaybackWebServer,
-    WebClient,
-    WebPlaybackRunner,
-    _decision_payload,
-    _json_value,
-    _session_environment_id,
-    annotate_realized_returns,
-    history_point_payload,
-    reward_accounting_contract,
-    run_web_playback,
-    source_browser_path,
-    transition_payload,
-)
+from gradlab.play_engine import FRAME_ATTRIBUTION, FRAME_CNN_INSPECTION, FRAME_CODEC_PNG, FRAME_GAME, FRAME_HEADER, FRAME_MAGIC, FRAME_OBSERVATION, DatasetPlaybackRunner, FrameEncoder, HumanRecordingRunner, PlaybackCommand, WebPlaybackRunner, _decision_payload, _json_value, _session_environment_id, annotate_realized_returns, history_point_payload, reward_accounting_contract, transition_payload
+from gradlab.play_web import PlaybackWebServer, WebClient, run_web_playback, run_web_player_application, source_browser_path
 
 
 class FakeHumanSession:
@@ -81,9 +58,7 @@ def test_web_client_preserves_intermediate_snapshots_while_a_send_is_blocked() -
         await socket.first_send_started.wait()
 
         for sequence in range(1, 334):
-            client.offer_snapshot(
-                {"session_epoch": 0, "revision": sequence, "sequence": sequence}
-            )
+            client.offer_snapshot({"session_epoch": 0, "revision": sequence, "sequence": sequence})
         socket.release_first_send.set()
         while len(socket.sequences) < 334:
             await asyncio.sleep(0)
@@ -126,6 +101,21 @@ def test_json_projection_preserves_bounded_scalars_at_the_depth_limit() -> None:
     assert projected["a"]["b"]["c"]["d"]["items"] == "<list>"
 
 
+def test_cancelled_preparation_restores_lower_revision_playback_snapshot() -> None:
+    client = WebClient("client", Mock(), {"telemetry"}, "workspace", "main")
+    for epoch, phase, revision, sequence in [
+        (4, "loading", 40, 0), (4, "active", 3, 103),
+        (4, "active", 2, 102), (3, "loading", 50, 0),
+    ]:
+        client.offer_snapshot({
+            "session_epoch": epoch, "revision": revision, "sequence": sequence,
+            "app": {"phase": phase},
+        })
+    phases = [json.loads(snapshot)["app"]["phase"] for _, snapshot in client.pending_snapshots]
+    assert phases == ["loading", "active"]
+    assert client.latest_snapshot_key[:3] == (4, 3, 103)
+
+
 def test_action_program_decision_payload_omits_probability_diagnostics() -> None:
     decision = PolicyDecision(
         raw_action=np.asarray([1], dtype=np.int64),
@@ -166,7 +156,7 @@ def test_web_playback_retains_step_zero_snapshot_and_frame() -> None:
 
     snapshot, frames = runner.episode_start_payload()
     assert snapshot["sequence"] == 0
-    assert snapshot["protocol"] == 8
+    assert snapshot["protocol"] == 9
     assert snapshot["session"]["step"] == 0
     assert snapshot["session"]["default_seed"] == 42
     assert snapshot["session"]["value_discount"] is None
@@ -457,71 +447,6 @@ def test_invalid_cnn_command_does_not_pause_playback() -> None:
     assert response["error"] == "no actor CNN"
 
 
-def test_next_episode_dispatches_sampling_and_driver_without_restarting() -> None:
-    transition = argparse.Namespace(boundary=False, events=())
-    session = argparse.Namespace(
-        config={"game": "Game-v0"},
-        episode=2,
-        last_transition=None,
-        step=Mock(return_value=transition),
-    )
-    runner = WebPlaybackRunner(session, human_args(episodes=0), config_text="")
-    runner._publish = Mock()
-    runner.awaiting_next_episode = True
-    runner.boundaries = 1
-    runner.driver = "human"
-
-    runner._apply(
-        PlaybackCommand(
-            "next",
-            "client",
-            "next_episode",
-            {
-                "sampling_mode": "deterministic",
-                "driver": "policy",
-            },
-            None,
-        )
-    )
-
-    assert runner.awaiting_next_episode is False
-    assert runner.sampling_mode == "deterministic"
-    assert runner.driver == "policy"
-    assert runner.run_state == "playing"
-
-    runner._step_once()
-
-    session.step.assert_called_once_with(deterministic=True)
-
-
-def test_next_episode_applies_selected_termination_conditions() -> None:
-    session = argparse.Namespace(
-        config={"game": "Game-v0"},
-        episode=2,
-        last_transition=None,
-        set_termination_conditions=Mock(),
-    )
-    runner = WebPlaybackRunner(session, human_args(episodes=0), config_text="")
-    runner._publish = Mock()
-    runner.awaiting_next_episode = True
-
-    runner._apply(
-        PlaybackCommand(
-            "next",
-            "client",
-            "next_episode",
-            {
-                "enabled_termination_conditions": ["event:life_loss"],
-            },
-            None,
-        )
-    )
-
-    session.set_termination_conditions.assert_called_once_with(["event:life_loss"])
-    assert runner.awaiting_next_episode is False
-    assert runner.run_state == "playing"
-
-
 def test_reset_episode_uses_visible_seed_and_pauses_at_step_zero() -> None:
     session = argparse.Namespace(
         config={"game": "Game-v0"},
@@ -553,7 +478,7 @@ def test_reset_episode_uses_visible_seed_and_pauses_at_step_zero() -> None:
     assert runner._status_message == "episode reset · seed 77"
 
 
-def test_reset_episode_applies_selected_termination_conditions() -> None:
+def test_reset_episode_resets_stop_condition_counters_without_rewriting_environment() -> None:
     session = argparse.Namespace(
         config={"game": "Game-v0"},
         active_seed=42,
@@ -569,16 +494,14 @@ def test_reset_episode_applies_selected_termination_conditions() -> None:
             "reset",
             "client",
             "reset_episode",
-            {
-                "seed": "77",
-                "enabled_termination_conditions": ["event:life_loss"],
-            },
+            {"seed": "77"},
             None,
         )
     )
 
     session.reset_episode.assert_called_once_with(77)
-    session.set_termination_conditions.assert_called_once_with(["event:life_loss"])
+    session.set_termination_conditions.assert_not_called()
+    assert runner.stop_conditions.payload()["values"]["episode.boundary"] == 0
     assert runner.awaiting_next_episode is False
     assert runner.run_state == "paused"
 
@@ -748,7 +671,7 @@ def test_action_selection_mode_rejects_unsupported_mode() -> None:
     assert "unsupported action-selection mode" in response["error"]
 
 
-def test_termination_conditions_can_change_before_first_step() -> None:
+def test_legacy_termination_condition_command_cannot_rewrite_environment() -> None:
     session = argparse.Namespace(
         config={"game": "Game-v0"},
         step_index=0,
@@ -768,77 +691,277 @@ def test_termination_conditions_can_change_before_first_step() -> None:
         )
     )
 
-    session.set_termination_conditions.assert_called_once_with(["event:life_loss"])
+    session.set_termination_conditions.assert_not_called()
+    response = runner.responses.get_nowait().payload
+    assert response["ok"] is False
+    assert response["error"] == "unknown playback command 'set_termination_conditions'"
+
+
+def test_web_playback_crosses_boundaries_until_stop_condition_matches() -> None:
+    from tests.test_play_trajectory import ScriptedSession
+
+    session = ScriptedSession(length=1)
+    runner = WebPlaybackRunner(session, human_args(episodes=0), config_text="")
+    runner._publish = Mock()
+    runner._begin_capture = Mock()
+    runner._begin_recording = Mock()
+
+    runner._apply(
+        PlaybackCommand(
+            "condition",
+            "client",
+            "set_stop_condition",
+            {"source": "episode.terminated == 2"},
+            None,
+        )
+    )
+    assert runner.responses.get_nowait().payload["ok"] is True
+    runner._apply(PlaybackCommand("play", "client", "play", {}, None))
+    assert runner.responses.get_nowait().payload["ok"] is True
+
+    runner._step_once()
+
+    assert runner.run_state == "playing"
     assert runner.awaiting_next_episode is False
+    assert runner.stop_conditions.payload()["values"]["episode.terminated"] == 1
+    # A completed publication capture remains available instead of being
+    # discarded when live playback crosses into the next episode.
+    runner._begin_capture.assert_not_called()
+    runner._begin_recording.assert_called_once_with()
+
+    runner._step_once()
+
     assert runner.run_state == "paused"
+    assert runner.awaiting_next_episode is True
+    assert runner.stop_conditions.payload()["values"]["episode.terminated"] == 2
+    assert runner.stop_conditions.payload()["matched"] == {
+        "source": "episode.terminated == 2",
+        "values": {"episode.terminated": 2},
+    }
+    snapshot = runner._snapshot_payload(session.last_transition)
+    assert snapshot["session"]["stop_condition"] == runner.stop_conditions.payload()
+    assert runner._status_message == "stop condition matched · episode.terminated = 2"
 
 
-def test_termination_conditions_cannot_change_mid_episode() -> None:
+def test_invalid_stop_condition_blocks_play_without_using_the_previous_program() -> None:
     session = argparse.Namespace(
         config={"game": "Game-v0"},
-        step_index=12,
         last_transition=None,
-        set_termination_conditions=Mock(),
     )
     runner = WebPlaybackRunner(session, human_args(episodes=0), config_text="")
     runner._publish = Mock()
 
     runner._apply(
         PlaybackCommand(
-            "termination",
+            "condition",
             "client",
-            "set_termination_conditions",
-            {"enabled": []},
+            "set_stop_condition",
+            {"source": "episode.boundary >="},
             None,
         )
     )
 
-    session.set_termination_conditions.assert_not_called()
-    response = runner.responses.get_nowait().payload
-    assert response["ok"] is False
-    assert "before the first step or between episodes" in response["error"]
+    configured = runner.responses.get_nowait().payload
+    assert configured["ok"] is True
+    assert runner.stop_conditions.payload()["valid"] is False
+
+    runner._apply(PlaybackCommand("play", "client", "play", {}, None))
+
+    blocked = runner.responses.get_nowait().payload
+    assert blocked["ok"] is False
+    assert blocked["error"] == "stop condition is invalid: expected a finite number"
+    assert runner.run_state == "paused"
 
 
-def test_web_playback_requires_explicit_command_after_episode_boundary() -> None:
-    transition = argparse.Namespace(boundary=True, events=(), episode=1)
-    session = argparse.Namespace(
-        config={"game": "Game-v0"},
-        episode=2,
-        last_transition=transition,
-        step=Mock(return_value=transition),
-    )
+def test_stop_condition_cannot_change_while_playback_is_running() -> None:
+    session = argparse.Namespace(config={"game": "Game-v0"}, last_transition=None)
     runner = WebPlaybackRunner(session, human_args(episodes=0), config_text="")
     runner._publish = Mock()
+    original = runner.stop_conditions.source
+    runner.run_state = "playing"
+
+    runner._apply(
+        PlaybackCommand(
+            "condition",
+            "client",
+            "set_stop_condition",
+            {"source": "episode.boundary >= 2"},
+            None,
+        )
+    )
+
+    assert runner.responses.get_nowait().payload["ok"] is False
+    assert runner.stop_conditions.source == original
+    assert runner.run_state == "paused"
+
+
+def test_web_playback_stops_on_the_first_matching_signal_transition() -> None:
+    from tests.test_play_trajectory import ScriptedSession
+
+    runner = WebPlaybackRunner(
+        ScriptedSession(length=5), human_args(episodes=0), config_text=""
+    )
+    runner._publish = Mock()
+    runner.stop_conditions.set_source("signal >= 2")
+    runner.run_state = "playing"
+
+    runner._step_once()
+    assert runner.run_state == "playing"
+    runner._step_once()
+
+    assert runner.run_state == "paused"
+    assert runner.awaiting_next_episode is False
+    assert runner.session.step_index == 2
+    assert runner._status_message == "stop condition matched · signal = 2"
+
+
+def test_manual_pause_and_resume_preserve_stop_condition_counts() -> None:
+    from tests.test_play_trajectory import ScriptedSession
+
+    runner = WebPlaybackRunner(
+        ScriptedSession(length=1), human_args(episodes=0), config_text=""
+    )
+    runner._publish = Mock()
+    runner._begin_capture = Mock()
+    runner._begin_recording = Mock()
+    runner._apply(
+        PlaybackCommand(
+            "condition",
+            "client",
+            "set_stop_condition",
+            {"source": "episode.terminated == 2"},
+            None,
+        )
+    )
+    assert runner.responses.get_nowait().payload["ok"] is True
+    runner._apply(PlaybackCommand("play", "client", "play", {}, None))
+    assert runner.responses.get_nowait().payload["ok"] is True
+
+    runner._step_once()
+    runner._apply(PlaybackCommand("pause", "client", "pause", {}, None))
+    assert runner.responses.get_nowait().payload["ok"] is True
+    runner._apply(PlaybackCommand("play", "client", "play", {}, None))
+    assert runner.responses.get_nowait().payload["ok"] is True
+    runner._step_once()
+
+    assert runner.run_state == "paused"
+    assert runner.stop_conditions.payload()["values"]["episode.terminated"] == 2
+
+
+def test_first_play_starts_a_fresh_generation_after_preflight_steps() -> None:
+    from tests.test_play_trajectory import ScriptedSession
+
+    runner = WebPlaybackRunner(
+        ScriptedSession(length=1), human_args(episodes=0), config_text=""
+    )
+    runner._publish = Mock()
+    runner._begin_capture = Mock()
+    runner._begin_recording = Mock()
+    runner._apply(
+        PlaybackCommand(
+            "condition",
+            "client",
+            "set_stop_condition",
+            {"source": "episode.terminated == 2"},
+            None,
+        )
+    )
+    assert runner.responses.get_nowait().payload["ok"] is True
+    runner._apply(PlaybackCommand("step", "client", "step", {"count": 1}, None))
+    assert runner.responses.get_nowait().payload["ok"] is True
+    runner._step_once()
+    assert runner.stop_conditions.payload()["values"]["episode.terminated"] == 1
+
+    runner._apply(PlaybackCommand("play", "client", "play", {}, None))
+
+    assert runner.responses.get_nowait().payload["ok"] is True
+    assert runner.run_state == "playing"
+    assert runner.stop_conditions.payload()["values"]["episode.terminated"] == 0
+
+
+def test_stop_condition_does_not_shorten_explicit_step() -> None:
+    from tests.test_play_trajectory import ScriptedSession
+
+    runner = WebPlaybackRunner(
+        ScriptedSession(length=5), human_args(episodes=0), config_text=""
+    )
+    runner._publish = Mock()
+    runner.stop_conditions.set_source("signal >= 1")
+    runner._apply(PlaybackCommand("step", "client", "step", {"count": 3}, None))
+    assert runner.responses.get_nowait().payload["ok"] is True
+
+    runner._step_once()
+    runner._step_once()
+    runner._step_once()
+
+    assert runner.session.sequence == 3
+    assert runner.run_state == "paused"
+    assert runner.stop_conditions.payload()["matched"] is None
+
+
+def test_stop_condition_does_not_supersede_explicit_continue_target() -> None:
+    from tests.test_play_trajectory import ScriptedSession
+
+    runner = WebPlaybackRunner(
+        ScriptedSession(length=3), human_args(episodes=0), config_text=""
+    )
+    runner._publish = Mock()
+    runner.stop_conditions.set_source("signal >= 1")
+    runner._apply(
+        PlaybackCommand("continue", "client", "continue", {"target": "done"}, None)
+    )
+    assert runner.responses.get_nowait().payload["ok"] is True
+
+    runner._step_once()
+    runner._step_once()
+    runner._step_once()
+
+    assert runner.session.sequence == 3
+    assert runner.run_state == "paused"
+    assert runner.stop_conditions.payload()["matched"] is None
+
+
+def test_dynamic_symbol_ambiguity_does_not_shorten_explicit_step() -> None:
+    from tests.test_play_trajectory import ScriptedSession
+
+    runner = WebPlaybackRunner(
+        ScriptedSession(length=5), human_args(episodes=0), config_text=""
+    )
+    runner._publish = Mock()
+    runner.stop_conditions.set_source("signal >= 10")
+    runner.stop_conditions.observe(events=("signal",), evaluate=False)
+    assert runner.stop_conditions.valid is False
+    runner._apply(PlaybackCommand("step", "client", "step", {"count": 2}, None))
+    assert runner.responses.get_nowait().payload["ok"] is True
+
+    runner._step_once()
+    runner._step_once()
+
+    assert runner.session.sequence == 2
+    assert runner.run_state == "paused"
+
+
+def test_episode_limit_remains_a_hard_stop_before_condition_matches() -> None:
+    from tests.test_play_trajectory import ScriptedSession
+
+    runner = WebPlaybackRunner(
+        ScriptedSession(length=1), human_args(episodes=1), config_text=""
+    )
+    runner._publish = Mock()
+    runner.stop_conditions.set_source("episode.terminated == 2")
     runner.run_state = "playing"
 
     runner._step_once()
 
     assert runner.run_state == "paused"
     assert runner.awaiting_next_episode is True
-    assert runner._can_start_next_episode() is True
-    assert runner.remaining_steps == 0
-
-    runner._apply(PlaybackCommand("play", "client", "play", {}, None))
-    blocked = runner.responses.get_nowait().payload
-    assert blocked["ok"] is False
-    assert blocked["error"] == "episode complete; choose Play next episode"
-    assert runner.awaiting_next_episode is True
-
-    runner._apply(PlaybackCommand("next", "client", "next_episode", {}, runner.revision))
-    accepted = runner.responses.get_nowait().payload
-    assert accepted["ok"] is True
-    assert runner.awaiting_next_episode is False
-    assert runner.run_state == "playing"
+    assert runner._status_message == "episode limit reached (1)"
 
 
 def test_web_playback_episode_limit_disables_next_episode() -> None:
-    transition = argparse.Namespace(boundary=True, events=(), episode=1)
-    session = argparse.Namespace(
-        config={"game": "Game-v0"},
-        episode=2,
-        last_transition=transition,
-        step=Mock(return_value=transition),
-    )
+    from tests.test_play_trajectory import ScriptedSession
+
+    session = ScriptedSession(length=1)
     runner = WebPlaybackRunner(session, human_args(episodes=1), config_text="")
     runner._publish = Mock()
     runner.run_state = "playing"
@@ -913,7 +1036,7 @@ def test_dataset_playback_uses_web_runner_and_preserves_recorded_telemetry() -> 
     assert snapshot["transition"]["reward"]["raw"] is None
 
 
-def test_run_web_playback_requests_one_browser_window_by_default() -> None:
+def test_run_web_playback_requests_two_browser_windows_by_default() -> None:
     args = human_args()
     runner = object()
     server = AsyncMock()
@@ -924,7 +1047,31 @@ def test_run_web_playback_requests_one_browser_window_by_default() -> None:
     ):
         assert run_web_playback(object(), args, config_text="config") == 0
 
-    server_type.assert_called_once_with(runner, args, paired_windows=False)
+    server_type.assert_called_once_with(runner, args, paired_windows=True)
+
+
+def test_player_application_requests_two_browser_windows_by_default(tmp_path) -> None:
+    args = human_args()
+    host, catalog = object(), object()
+    server = AsyncMock()
+    server.run.return_value = 0
+    with patch("gradlab.play_web.PlaybackWebServer", return_value=server) as server_type:
+        assert (
+            run_web_player_application(
+                host,
+                args,
+                catalog=catalog,
+                repo_root=tmp_path,
+            )
+            == 0
+        )
+    server_type.assert_called_once_with(
+        host,
+        args,
+        paired_windows=True,
+        catalog=catalog,
+        repo_root=tmp_path,
+    )
 
 
 def test_source_browser_paths_are_hierarchical_and_url_encoded() -> None:
@@ -938,13 +1085,16 @@ def test_source_browser_paths_are_hierarchical_and_url_encoded() -> None:
         source_browser_path({"environment_id": "Mario Bros", "goal_id": "Level 1-1"})
         == "/environments/Mario%20Bros/goals/Level%201-1"
     )
-    assert source_browser_path(
-        {
-            "environment_id": "Mario Bros",
-            "goal_id": "Level 1-1",
-            "goal_variant_id": variant_id,
-        }
-    ) == "/environments/Mario%20Bros/goals/Level%201-1"
+    assert (
+        source_browser_path(
+            {
+                "environment_id": "Mario Bros",
+                "goal_id": "Level 1-1",
+                "goal_variant_id": variant_id,
+            }
+        )
+        == "/environments/Mario%20Bros/goals/Level%201-1"
+    )
     assert source_browser_path(
         {
             "environment_id": "Mario Bros",
@@ -967,7 +1117,7 @@ def test_source_browser_paths_are_hierarchical_and_url_encoded() -> None:
     )
 
 
-def test_paired_playback_server_opens_play_and_stats_windows() -> None:
+def test_paired_playback_server_opens_only_player_window() -> None:
     async def scenario() -> None:
         runner = HumanRecordingRunner(FakeHumanSession(), human_args())
         server = PlaybackWebServer(
@@ -975,12 +1125,14 @@ def test_paired_playback_server_opens_play_and_stats_windows() -> None:
             human_args(no_open=False),
             paired_windows=True,
         )
-        with patch("gradlab.play_web.webbrowser.open") as open_browser:
+        with patch("gradlab.play_web.PlaybackBrowser") as browser_type:
+            open_browser = browser_type.return_value.open = AsyncMock()
+            browser_type.return_value.wait_closed = asyncio.Event().wait
             task = asyncio.create_task(server.run())
             try:
                 deadline = asyncio.get_running_loop().time() + 3.0
                 while (
-                    not server.origin or open_browser.call_count < 2
+                    not server.origin or open_browser.call_count < 1
                 ) and asyncio.get_running_loop().time() < deadline:
                     await asyncio.sleep(0.01)
                 urls = server.dashboard_urls()
@@ -988,14 +1140,12 @@ def test_paired_playback_server_opens_play_and_stats_windows() -> None:
                     f"{server.origin}/?workspace=paired#token={server.token}",
                     f"{server.origin}/workspace/stats?workspace=paired#token={server.token}",
                 )
-                assert [call.args[0] for call in open_browser.call_args_list] == list(urls)
-                assert all(
-                    call.kwargs == {"new": 1, "autoraise": True}
-                    for call in open_browser.call_args_list
-                )
+                await server._announce_session_change()
+                assert [call.args[0] for call in open_browser.call_args_list] == [urls[0]]
             finally:
                 runner.stop()
                 await asyncio.wait_for(task, timeout=3.0)
+            browser_type.return_value.close.assert_called_once()
 
     asyncio.run(scenario())
 
@@ -1190,150 +1340,123 @@ def test_frame_encoder_retains_every_rapidly_submitted_observation() -> None:
     assert all(frames[FRAME_OBSERVATION][0] == sequence for sequence, frames in enumerate(retained))
 
 
-def test_paired_auto_start_waits_for_both_workspace_windows() -> None:
-    class Runner:
-        session_epoch = 3
-        has_active_runner = True
-
-        def __init__(self) -> None:
-            self.commands = []
-
-        def submit(self, command) -> None:
-            self.commands.append(command)
-
+@pytest.mark.parametrize("paired", [False, True])
+@pytest.mark.parametrize("debug", [False, True])
+def test_player_connection_and_checkpoint_load_wait_for_explicit_play(paired, debug) -> None:
     async def scenario() -> None:
-        runner = Runner()
-        server = PlaybackWebServer(
-            runner,
-            human_args(debug=False),
-            paired_windows=True,
-        )
-        server.control_holder = "workspace"
-        server.clients["main-client"] = argparse.Namespace(
-            client_id="main-client",
-            workspace_id="workspace",
-            window_id="main",
-        )
-        server._maybe_auto_start("main-client")
-        assert runner.commands == []
-        assert server._auto_start_task is not None
+        args = human_args(debug=debug)
+        runner = HumanRecordingRunner(FakeHumanSession(), args)
+        runner.submit = Mock(wraps=runner.submit)
+        server = PlaybackWebServer(runner, args, paired_windows=paired)
+        task = asyncio.create_task(server.run())
 
-        server.clients["stats-client"] = argparse.Namespace(
-            client_id="stats-client",
-            workspace_id="workspace",
-            window_id="stats",
-        )
-        server._maybe_auto_start("stats-client")
-        await asyncio.sleep(0)
+        async def receive_type(socket, kind):
+            async with asyncio.timeout(2):
+                while True:
+                    message = await socket.receive()
+                    if message.type == WSMsgType.TEXT and message.json()["type"] == kind:
+                        return message.json()
 
-        assert [command.name for command in runner.commands] == ["play"]
-        assert server._auto_started_epoch == 3
+        try:
+            async with asyncio.timeout(3):
+                while not server.origin:
+                    await asyncio.sleep(0.01)
+            async with ClientSession() as client:
+
+                async def connect(window):
+                    socket = await client.ws_connect(f"{server.origin}/ws", origin=server.origin)
+                    await socket.send_json(
+                        {
+                            "type": "hello",
+                            "token": server.token,
+                            "workspace_id": "workspace",
+                            "window_id": window,
+                            "subscriptions": ["telemetry"],
+                        }
+                    )
+                    await receive_type(socket, "welcome")
+                    await receive_type(socket, "snapshot")
+                    return socket
+
+                main = await connect("main")
+                if paired:
+                    await connect("stats")
+                # Connecting an additional viewer must not start the prepared runner.
+                await connect("observer")
+                assert runner.run_state == "paused"
+                runner.submit.assert_not_called()
+
+                # Exercise the checkpoint-ready notification path in the real server pump.
+                runner.session_epoch = 1
+                runner.session_change = 1
+                await receive_type(main, "session_changed")
+                await receive_type(main, "history")
+                assert runner.run_state == "paused"
+                runner.submit.assert_not_called()
+
+                await main.send_json(
+                    {"type": "command", "id": "user-play", "name": "play", "payload": {}}
+                )
+                result = await receive_type(main, "command_result")
+                assert result["id"] == "user-play"
+                assert result["ok"] is True
+                assert [call.args[0].name for call in runner.submit.call_args_list] == ["play"]
+        finally:
+            server.stop_event.set()
+            await task
 
     asyncio.run(scenario())
 
 
-def test_paired_auto_start_falls_back_when_stats_window_is_missing() -> None:
-    class Runner:
-        session_epoch = 4
-        has_active_runner = True
-
-        def __init__(self) -> None:
-            self.commands = []
-
-        def submit(self, command) -> None:
-            self.commands.append(command)
-
+@pytest.mark.parametrize("cancel", [False, True])
+def test_shutdown_drains_disconnect_handlers_before_stopping_worker(cancel, caplog) -> None:
     async def scenario() -> None:
-        runner = Runner()
-        server = PlaybackWebServer(
-            runner,
-            human_args(debug=False),
-            paired_windows=True,
-        )
-        server.control_holder = "workspace"
-        server.clients["main-client"] = argparse.Namespace(
-            client_id="main-client",
-            workspace_id="workspace",
-            window_id="main",
-        )
-        with patch("gradlab.play_web.PAIRED_START_GRACE_SECONDS", 0.01):
-            server._maybe_auto_start("main-client")
-            await asyncio.sleep(0.03)
+        runner = HumanRecordingRunner(FakeHumanSession(), human_args())
+        runner.stop = Mock(wraps=runner.stop)
+        server = PlaybackWebServer(runner, human_args())
+        sync_processing = server._sync_player_processing
+        disconnected = asyncio.Event()
 
-        assert [command.name for command in runner.commands] == ["play"]
-        assert server._auto_started_epoch == 4
+        async def delayed_disconnect() -> None:
+            if not server.clients:
+                # Keep request cleanup alive after the websocket close handshake.
+                await asyncio.sleep(0.05)
+                assert not runner.stop.called
+                disconnected.set()
+            await sync_processing()
+
+        server._sync_player_processing = delayed_disconnect
+        task = asyncio.create_task(server.run())
+        try:
+            async with asyncio.timeout(3):
+                while not server.origin:
+                    await asyncio.sleep(0.01)
+                async with ClientSession() as client:
+                    socket = await client.ws_connect(f"{server.origin}/ws", origin=server.origin)
+                    await socket.send_json({"type": "hello", "token": server.token})
+                    while True:
+                        message = await socket.receive()
+                        if message.type == WSMsgType.TEXT and message.json()["type"] == "welcome":
+                            break
+                    if cancel:
+                        task.cancel()
+                    else:
+                        server.stop_event.set()
+                    while (await socket.receive()).type != WSMsgType.CLOSE:
+                        pass
+                    if cancel:
+                        with pytest.raises(asyncio.CancelledError):
+                            await task
+                    else:
+                        await task
+                    assert disconnected.is_set()
+                    runner.stop.assert_called_once()
+        finally:
+            server.stop_event.set()
+            await asyncio.gather(task, return_exceptions=True)
 
     asyncio.run(scenario())
-
-
-def test_non_paired_auto_start_is_immediate() -> None:
-    class Runner:
-        session_epoch = 5
-        has_active_runner = True
-
-        def __init__(self) -> None:
-            self.commands = []
-
-        def submit(self, command) -> None:
-            self.commands.append(command)
-
-    async def scenario() -> None:
-        runner = Runner()
-        server = PlaybackWebServer(
-            runner,
-            human_args(debug=False),
-            paired_windows=False,
-        )
-        server.clients["main-client"] = argparse.Namespace(
-            client_id="main-client",
-            workspace_id="workspace",
-            window_id="main",
-        )
-
-        server._maybe_auto_start("main-client")
-
-        assert [command.name for command in runner.commands] == ["play"]
-        assert server._auto_started_epoch == 5
-        assert server._auto_start_task is None
-
-    asyncio.run(scenario())
-
-
-def test_debug_mode_never_auto_starts_paired_workspace() -> None:
-    class Runner:
-        session_epoch = 6
-        has_active_runner = True
-
-        def __init__(self) -> None:
-            self.commands = []
-
-        def submit(self, command) -> None:
-            self.commands.append(command)
-
-    async def scenario() -> None:
-        runner = Runner()
-        server = PlaybackWebServer(
-            runner,
-            human_args(debug=True),
-            paired_windows=True,
-        )
-        server.control_holder = "workspace"
-        for window_id in ("main", "stats"):
-            client_id = f"{window_id}-client"
-            server.clients[client_id] = argparse.Namespace(
-                client_id=client_id,
-                workspace_id="workspace",
-                window_id=window_id,
-            )
-
-        server._maybe_auto_start("main-client")
-        await asyncio.sleep(0)
-
-        assert runner.commands == []
-        assert server._auto_started_epoch == -1
-        assert server._auto_start_task is None
-
-    asyncio.run(scenario())
+    assert "Error handling request" not in caplog.text
 
 
 def test_server_aggregates_processing_only_from_connected_windows() -> None:
@@ -1455,10 +1578,10 @@ def test_transition_payload_skips_disabled_panel_processors() -> None:
     )
 
     with (
-        patch("gradlab.play_web.model_input_lines", side_effect=AssertionError),
-        patch("gradlab.play_web._numeric_signals", side_effect=AssertionError),
-        patch("gradlab.play_web._reward_accounting_payload", side_effect=AssertionError),
-        patch("gradlab.play_web._decision_payload", side_effect=AssertionError),
+        patch("gradlab.play_engine.model_input_lines", side_effect=AssertionError),
+        patch("gradlab.play_engine._numeric_signals", side_effect=AssertionError),
+        patch("gradlab.play_engine._reward_accounting_payload", side_effect=AssertionError),
+        patch("gradlab.play_engine._decision_payload", side_effect=AssertionError),
     ):
         payload = transition_payload(transition, processing=())
 
@@ -1506,7 +1629,16 @@ def test_transition_payload_includes_policy_input_for_observation_processing() -
     ]
 
 
-def test_playback_transition_retains_policy_input_for_observation_processing() -> None:
+@pytest.mark.parametrize(
+    "processing,seeking",
+    [
+        (frozenset({"observation"}), False),
+        (frozenset(), True),
+    ],
+)
+def test_playback_transition_keeps_seek_frames_and_policy_input_without_raw_context(
+    processing, seeking
+) -> None:
     class Env:
         def step(self, action):
             self.action = action
@@ -1531,7 +1663,8 @@ def test_playback_transition_retains_policy_input_for_observation_processing() -
 
     model_obs = np.arange(16, dtype=np.uint8).reshape(1, 4, 2, 2)
     session = argparse.Namespace(
-        processing_features=frozenset({"observation"}),
+        processing_features=processing,
+        trajectory_seeking=seeking,
         model_obs=model_obs,
         active_task=None,
         current_frame=np.zeros((2, 2, 3), dtype=np.uint8),
@@ -1571,11 +1704,15 @@ def test_playback_transition_retains_policy_input_for_observation_processing() -
         action_source="policy",
     )
 
+    assert len(transition.before_frames) == 4
     assert np.array_equal(transition.model_obs, model_obs)
     assert transition.model_obs is not model_obs
+    assert transition.before_frame is None
+    assert transition.next_model_obs is None
 
 
-def test_playback_transition_bootstraps_truncation_from_exact_final_policy_input() -> None:
+@pytest.mark.parametrize("recording", [False, True])
+def test_playback_transition_bootstraps_truncation_from_exact_final_policy_input(recording) -> None:
     final_observation = np.asarray([9.0, 8.0, 7.0, 6.0], dtype=np.float32)
     reset_observation = np.zeros((1, 4), dtype=np.float32)
     observed: list[np.ndarray] = []
@@ -1587,11 +1724,13 @@ def test_playback_transition_bootstraps_truncation_from_exact_final_policy_input
                 reset_observation,
                 np.asarray([2.0]),
                 np.asarray([True]),
-                [{
-                    "TimeLimit.truncated": True,
-                    "terminal_observation": final_observation,
-                    "reset_info": {},
-                }],
+                [
+                    {
+                        "TimeLimit.truncated": True,
+                        "terminal_observation": final_observation,
+                        "reset_info": {},
+                    }
+                ],
             )
 
         @staticmethod
@@ -1611,7 +1750,8 @@ def test_playback_transition_bootstraps_truncation_from_exact_final_policy_input
             return np.asarray([7.5])
 
     session = argparse.Namespace(
-        processing_features=frozenset({"critic-calibration", "policy"}),
+        trajectory_recording=recording,
+        processing_features=frozenset() if recording else frozenset({"critic-calibration", "policy"}),
         model_obs=np.ones((1, 4), dtype=np.float32),
         model=argparse.Namespace(
             observation_space=argparse.Namespace(),
@@ -1910,6 +2050,7 @@ def test_youtube_oauth_callback_returns_to_authenticated_player(
 def test_loopback_server_requires_exact_origin_and_fragment_token() -> None:
     async def scenario() -> None:
         runner = HumanRecordingRunner(FakeHumanSession(), human_args())
+        runner.submit = Mock(wraps=runner.submit)
         server = PlaybackWebServer(runner, human_args())
         task = asyncio.create_task(server.run())
         try:
@@ -1947,10 +2088,10 @@ def test_loopback_server_requires_exact_origin_and_fragment_token() -> None:
                 assert font_response.status == 200
                 assert font_response.headers["Content-Type"] == "font/woff2"
                 assert "default-src 'self'" in font_response.headers["Content-Security-Policy"]
-                panel_response = await client.get(f"{server.origin}/assets/panels/catalog.js")
+                panel_response = await client.get(f"{server.origin}/assets/sources/browser.js")
                 assert panel_response.status == 200
                 assert "javascript" in panel_response.headers["Content-Type"]
-                assert "PANEL_TYPES" in await panel_response.text()
+                assert await panel_response.text()
                 try:
                     await client.ws_connect(f"{server.origin}/ws", origin="http://example.test")
                 except WSServerHandshakeError as exc:
@@ -2042,6 +2183,10 @@ def test_loopback_server_requires_exact_origin_and_fragment_token() -> None:
                 assert acquired_snapshot is not None
                 assert acquired_snapshot["control"]["has_control"] is True
                 assert acquired_snapshot["control_epoch"] > observer_snapshot["control_epoch"]
+                assert any(
+                    call.args[0].name == "pause"
+                    for call in runner.submit.call_args_list
+                )
 
                 sibling = await client.ws_connect(f"{server.origin}/ws", origin=server.origin)
                 await sibling.send_json(
@@ -2210,7 +2355,9 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
             )
 
         @staticmethod
-        def goals(*, environment_id, query, cursor):
+        def goals(*, environment_id, query, cursor, include_evidence, progressive):
+            assert include_evidence is True
+            assert progressive is False
             assert (environment_id, query, cursor) == (
                 "Mario",
                 "",
@@ -2377,14 +2524,31 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 next_cursor=None,
             )
 
+        training_continue = threading.Event()
+
         @classmethod
-        def checkpoints(cls, *, run_id, query, goal_variant_id, include_wandb):
+        def checkpoints(
+            cls, *, run_id, query, goal_variant_id, include_wandb, on_training_progress=None
+        ):
             assert (
                 run_id,
                 query,
                 goal_variant_id,
             ) == ("gradlab-" + "a" * 32, "", "")
             cls.checkpoint_modes.append(include_wandb)
+            if on_training_progress:
+                on_training_progress(
+                    {
+                        "type": "metrics",
+                        "items": [
+                            {
+                                "checkpoint_id": "checkpoint-1-" + "b" * 16,
+                                "metrics": {"train/return/mean": 120.0},
+                            }
+                        ],
+                    }
+                )
+                assert cls.training_continue.wait(timeout=5)
             return CheckpointPage(
                 items=(
                     {
@@ -2392,8 +2556,8 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                         "checkpoint_id": "checkpoint-1-" + "b" * 16,
                         "sha256": "b" * 64,
                         "metrics": {
-                            "train/target/progress/kills/mean": 8.5,
-                            "train/target/return_mean": 120.0,
+                            "train/progress/kills/mean": 8.5,
+                            "train/return/mean": 120.0,
                         },
                         "evaluation": {
                             "status": "accepted",
@@ -2426,7 +2590,7 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                         ],
                     },
                     {
-                        "metric": "train/target/progress/kills/mean",
+                        "metric": "train/progress/kills/mean",
                         "direction": "max",
                         "label": "Recent target kills mean",
                         "evidence": "training",
@@ -2442,7 +2606,7 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                         "rank_index": 1,
                     },
                     {
-                        "metric": "train/target/return_mean",
+                        "metric": "train/return/mean",
                         "direction": "max",
                         "label": "Recent target return mean",
                         "evidence": "training",
@@ -2634,7 +2798,7 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                         ],
                     },
                     {
-                        "metric": "train/target/progress/kills/mean",
+                        "metric": "train/progress/kills/mean",
                         "direction": "max",
                         "label": "Recent target kills mean",
                         "evidence": "training",
@@ -2650,7 +2814,7 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                         "rank_index": 1,
                     },
                     {
-                        "metric": "train/target/return_mean",
+                        "metric": "train/return/mean",
                         "direction": "max",
                         "label": "Recent target return mean",
                         "evidence": "training",
@@ -2659,15 +2823,15 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 ]
                 assert checkpoint_payload["items"][0]["metrics"] == {
                     "eval/progress/kills/mean": 11.0,
-                    "train/target/progress/kills/mean": 8.5,
+                    "train/progress/kills/mean": 8.5,
                     "eval/progress/kills/max": 16.0,
-                    "train/target/return_mean": 120.0,
+                    "train/return/mean": 120.0,
                 }
                 assert checkpoint_payload["items"][0]["best_metrics"] == [
                     "eval/progress/kills/mean",
-                    "train/target/progress/kills/mean",
+                    "train/progress/kills/mean",
                     "eval/progress/kills/max",
-                    "train/target/return_mean",
+                    "train/return/mean",
                 ]
                 training = await client.get(
                     (f"{server.origin}/api/catalog/runs/gradlab-{'a' * 32}/checkpoint-training"),
@@ -2676,6 +2840,21 @@ def test_catalog_http_api_requires_the_fragment_session_token() -> None:
                 assert training.status == 200
                 assert (await training.json())["training_enrichment"] == "complete"
                 assert FakeCatalog.checkpoint_modes == [False, True]
+                streamed = await client.get(
+                    f"{server.origin}/api/catalog/runs/gradlab-{'a' * 32}/checkpoint-training?stream=1",
+                    headers={"Authorization": f"Bearer {server.token}"},
+                )
+                assert streamed.status == 200
+                first_record = json.loads(
+                    await asyncio.wait_for(streamed.content.readline(), timeout=2)
+                )
+                FakeCatalog.training_continue.set()
+                records = [
+                    first_record,
+                    *[json.loads(line) for line in (await streamed.text()).splitlines()],
+                ]
+                assert [record["type"] for record in records] == ["metrics", "complete"]
+                assert records[0]["items"][0]["metrics"]["train/return/mean"] == 120.0
                 run_inspection = await client.get(
                     f"{server.origin}/api/catalog/runs/gradlab-{'a' * 32}/inspection",
                     headers={"Authorization": f"Bearer {server.token}"},
@@ -2819,189 +2998,200 @@ def test_player_binds_before_initial_catalog_work() -> None:
 
 
 def test_web_dashboard_assets_are_packaged_beside_server() -> None:
-    root = Path(__file__).parents[1] / "src" / "gradlab" / "web_player"
-    panel_root = root / "panels"
-    font_root = root / "fonts"
-    expected_assets = (
-        root / "index.html",
-        root / "oauth_complete.html",
-        root / "oauth_complete.js",
-        root / "playback-settings.js",
-        root / "player-presentation.js",
-        root / "synchronized-presentation.js",
-        root / "favicon.svg",
-        root / "styles.css",
-        root / "tabler-icons.svg",
-        root / "tabler-chevron-down.svg",
-        root / "vendor" / "gridstack" / "gridstack-all.js",
-        root / "vendor" / "gridstack" / "gridstack.min.css",
-        root / "sources" / "browser.js",
-        root / "documents" / "diff.js",
-        root / "documents" / "viewer.js",
-        root / "documents" / "syntax.js",
-        font_root / "ChivoVariable.woff2",
-        font_root / "InterVariable.woff2",
-        font_root / "InterVariable-Italic.woff2",
-        font_root / "JetBrainsMonoVariable.woff2",
-        font_root / "JetBrainsMonoVariable-Italic.woff2",
-        panel_root / "catalog.js",
-        panel_root / "diagnostic-overlays.js",
-        panel_root / "layout-sizing.js",
-        panel_root / "manager.js",
-        panel_root / "runtime.js",
-        panel_root / "shared.js",
-        panel_root / "telemetry.js",
-        panel_root / "telemetry-panel.js",
-        panel_root / "workspace.js",
+    """The server serves the built entry and every static dependency locally."""
+    root = Path(__file__).parents[1] / "src/gradlab/web_player/dist"
+    required = (
+        "index.html", "app.js", "styles.css", "sources/browser.js",
+        "oauth_complete.html", "oauth_complete.js", "favicon.svg",
+        "tabler-icons.svg", "tabler-chevron-down.svg",
+        "vendor/gridstack/gridstack-all.js", "vendor/gridstack/gridstack.min.css",
+        "fonts/ChivoVariable.woff2", "fonts/InterVariable.woff2",
+        "fonts/InterVariable-Italic.woff2", "fonts/JetBrainsMonoVariable.woff2",
+        "fonts/JetBrainsMonoVariable-Italic.woff2",
     )
-    assert all(path.is_file() for path in expected_assets)
-    specialized_panels = {
-        "game",
-        "controls",
-        "observation",
-        "attribution",
-        "events",
-        "raw",
-    }
-    assert all((panel_root / f"{name}.js").is_file() for name in specialized_panels)
-    removed_metric_panels = {"policy", "reward", "actions", "signals"}
-    assert all(not (panel_root / f"{name}.js").exists() for name in removed_metric_panels)
-
-    markup = (root / "index.html").read_text(encoding="utf-8")
-    styles = (root / "styles.css").read_text(encoding="utf-8")
-    for name in (
-        "ChivoVariable.woff2",
-        "InterVariable.woff2",
-        "JetBrainsMonoVariable.woff2",
-        "JetBrainsMonoVariable-Italic.woff2",
-    ):
-        assert f'url("/assets/fonts/{name}") format("woff2")' in styles
-    script = (root / "app.js").read_text(encoding="utf-8")
-    oauth_script = (root / "oauth_complete.js").read_text(encoding="utf-8")
-    source_browser = (root / "sources" / "browser.js").read_text(encoding="utf-8")
-    contract_viewer = (root / "documents" / "viewer.js").read_text(encoding="utf-8")
-    contract_diff = (root / "documents" / "diff.js").read_text(encoding="utf-8")
-    contract_syntax = (root / "documents" / "syntax.js").read_text(encoding="utf-8")
-    catalog = (panel_root / "catalog.js").read_text(encoding="utf-8")
-    controls = (panel_root / "controls.js").read_text(encoding="utf-8")
-    playback_settings = (root / "playback-settings.js").read_text(encoding="utf-8")
-    manager = (panel_root / "manager.js").read_text(encoding="utf-8")
-    runtime = (panel_root / "runtime.js").read_text(encoding="utf-8")
-    telemetry = (panel_root / "telemetry.js").read_text(encoding="utf-8")
-    telemetry_panel = (panel_root / "telemetry-panel.js").read_text(encoding="utf-8")
-    workspace = (panel_root / "workspace.js").read_text(encoding="utf-8")
-    icons = (root / "tabler-icons.svg").read_text(encoding="utf-8")
-
-    assert '<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">' in markup
-    assert '<main id="dashboard" class="dashboard grid-stack"></main>' in markup
-    assert 'href="/assets/vendor/gridstack/gridstack.min.css"' in markup
+    assert all((root / name).is_file() for name in required)
+    assert list((root / "chunks").glob("*.js"))
+    markup = (root / "index.html").read_text()
+    assert 'src="/assets/app.js"' in markup
+    assert 'href="/assets/styles.css"' in markup
     assert 'src="/assets/vendor/gridstack/gridstack-all.js"' in markup
-    assert '<main id="source-browser" class="source-browser" hidden></main>' in markup
-    assert '<h1 id="page-title" hidden>Environment</h1>' in markup
-    assert '<span class="app-wordmark eyebrow">GRADLAB</span>' in markup
-    assert "GRADLAB PLAYER" not in markup
-    assert 'id="source-breadcrumbs"' in markup
-    assert '$("#source-breadcrumbs")' in script
-    assert "snapshot?.publication_capture?.ready === true" in script
-    assert "Boolean(snapshot?.publication_capture?.latest)" not in script
-    assert 'await publicationApi("/api/publication/render", { method: "POST" });' in script
-    assert "gradlab-youtube-oauth-complete" in script
-    assert "event.source !== youtubeOAuthPopup" in script
-    assert "gradlab-youtube-oauth-complete" in oauth_script
-    assert "window.opener.postMessage(message, location.origin)" in oauth_script
-    assert "location.replace(`/#token=${encodeURIComponent(token)}`)" in oauth_script
-    assert '$("#player-home")' not in script
-    assert '$("#page-title").hidden = Boolean(state.sourceMode || activeRecordingRoute);' in script
-    assert 'id="more-toggle"' in markup
-    assert 'id="playback-settings-menu"' in markup
-    assert '$("#page-title").textContent = "Select checkpoint"' not in script
-    assert "approval_required" not in source_browser
-    assert "approve_source" not in source_browser
-    assert "Approve executable model" not in source_browser
-    assert 'id="panel-add"' in markup
-    assert 'id="panel-edit"' in markup
-    assert 'id="panel-duplicate"' in markup
-    assert 'id="panel-remove"' in markup
-    assert 'id="panel-editor"' in markup
-    for icon in ("ti-plus", "ti-edit", "ti-copy", "ti-trash"):
-        assert f'id="{icon}"' in icons
+    assert 'https://' not in markup
+    assert not (root / "node_modules").exists()
 
-    assert "PANEL_TYPES" in catalog
-    assert "BUILTIN_PANEL_PRESETS" in catalog
-    assert 'module: "./telemetry-panel.js"' in catalog
-    assert '"policy/value"' in catalog
-    assert '"reward/shaped"' in catalog
-    assert 'title: "Action history"' not in catalog
-    assert '"namespace-explorer"' in catalog
-    assert 'data-driver-option="human"' not in controls
-    assert 'data-driver-option="policy"' not in controls
-    assert 'driver: "policy"' in script
-    assert 'data-command="set-fps"' not in playback_settings
-    assert 'fps.addEventListener("input"' in playback_settings
-    assert 'services.command("set_fps", { fps: Number(fps.value) })' in playback_settings
-    assert "mountPlaybackSettings" in controls
-    assert "WORKSPACE_VERSION = 8" in workspace
-    assert "createTelemetryInstance" in workspace
-    assert "![7, WORKSPACE_VERSION].includes(value.version)" in workspace
-    assert "compareWorkspaceRevisions" in workspace
-    assert "class PanelManager" in manager
-    assert "compatibleMetricKeys" in manager
-    assert "class PanelRuntime" in runtime
-    assert "this.definitionFor(workspace, id)" in runtime
-    assert "import(definition.module)" in runtime
-    assert "makeLineBlock" in telemetry_panel
-    assert "makeHistogramBlock" in telemetry_panel
-    assert "makeDistributionBlock" in telemetry_panel
-    assert "actionComparisonPresentation" in telemetry_panel
-    assert "makeNamespaceBlock" in telemetry_panel
-    assert '"action/policy"' in telemetry
-    assert '"action/executed"' in telemetry
-    assert "dynamicDescriptorKey" in telemetry
-    assert "function hideGoExploreValuePanel(snapshot)" in script
-    assert 'search_algorithm_id !== "go-explore"' in script
-    assert "hideGoExploreValuePanel(snapshot)" in script
-    assert 'features.add("rewards")' in script
-    assert "state.backgroundPlaybackSnapshot = message" in script
-    assert 'this.activeBreadcrumbRoute = ""' in source_browser
-    assert 'type: "inspection_frames"' in script
-    assert "sequence < (state.receivedFrameSequence" not in script
 
-    assert '"gradlab.player.workspace.v7.paired"' in script
-    assert '"gradlab.player.workspace.v7.single"' in script
-    assert "createTelemetryPanel" in script
-    assert "updateTelemetryPanel" in script
-    assert "snapshot.history_point" in script
-    assert "historyFromTransition" not in script
-    assert "window.GridStack.init" in script
-    assert "column: 12" in script
-    assert "viewportGridCellHeight" in script
-    assert "cellHeight: DEFAULT_GRID_CELL_HEIGHT" in script
-    assert "min-height: 0;" in styles
-    assert "var(--grid-row)" not in styles
-    assert 'gridStack.on("dragstop"' in script
-    assert 'gridStack.on("resizestop"' in script
-    assert "panel-drag-target" not in script
-    assert ".telemetry-blocks" in styles
-    assert ".panel-editor" in styles
-    assert ".syntax-key" in styles
-    assert "contractSyntaxTokens(value, this.view)" in contract_viewer
-    assert "buildSideBySideRows" in contract_viewer
-    assert "sideBySideSearchCounts" in contract_viewer
-    assert "export function buildSideBySideRows" in contract_diff
-    assert 'id="contract-diff-base-scroll"' in markup
-    assert 'id="contract-diff-resolved-scroll"' in markup
-    assert ".contract-diff-content" in styles
-    assert ".contract-diff-inline" in styles
-    assert "export function contractSyntaxTokens(value, view)" in contract_syntax
-    assert "export function contractSearchRanges(value, query)" in contract_syntax
+def test_player_uses_compiled_assets_without_hot_reload() -> None:
+    runner = HumanRecordingRunner(FakeHumanSession(), human_args())
+    server = PlaybackWebServer(runner, human_args())
+    assert server.dev_assets is None
+    response = asyncio.run(server.page(None))
+    assert isinstance(response, web.FileResponse)
 
-    assert "export function sourceRouteFromPath(" in source_browser
-    assert "export function sourceRoutePath(" in source_browser
-    assert "export function formatDate(value, nowValue = Date.now())" in source_browser
-    assert "export function recipeVariantPresentation(item)" in source_browser
-    assert '{ label: "Recipe / variant" }' in source_browser
-    assert "item.description || item.name || item.run_id" in source_browser
-    assert 'history.pushState(null, "", target);' in source_browser
-    assert 'window.addEventListener("popstate", this.onPopState);' in source_browser
-    assert "goHome()" in source_browser
-    assert "hydrateInitialEnvironments()" in source_browser
+
+def test_web_server_rejects_missing_player_assets_before_binding(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = HumanRecordingRunner(FakeHumanSession(), human_args())
+    server = PlaybackWebServer(runner, human_args())
+    monkeypatch.setattr(PlaybackWebServer, "asset_root", property(lambda _self: tmp_path))
+
+    with pytest.raises(RuntimeError, match="Player web assets are missing"):
+        asyncio.run(asyncio.wait_for(server.run(), timeout=0.3))
+
+    assert server.origin == ""
+
+
+def test_source_player_uses_vite_assets_and_keeps_api_on_player_origin() -> None:
+    async def scenario() -> None:
+        runner = HumanRecordingRunner(FakeHumanSession(), human_args())
+        server = PlaybackWebServer(runner, human_args(hot_reload=True))
+        assert server.dev_assets is not None
+        task = asyncio.create_task(server.run())
+        try:
+            deadline = asyncio.get_running_loop().time() + 20.0
+            while not server.origin and asyncio.get_running_loop().time() < deadline:
+                if task.done():
+                    await task
+                await asyncio.sleep(0.02)
+            assert server.origin
+            vite_url = server.dev_assets.url
+            assert vite_url is not None
+            async with ClientSession() as client:
+                response = await client.get(server.origin)
+                assert response.status == 200
+                markup = await response.text()
+                assert '<body data-hot-reload="true">' in markup
+                assert f'{vite_url}/@vite/client' in markup
+                assert f'{vite_url}/frontend/main.ts' in markup
+                assert '/assets/app.js' not in markup
+                assert vite_url in response.headers["Content-Security-Policy"]
+                source_asset = await client.get(f"{server.origin}/assets/tabler-icons.svg")
+                assert source_asset.status == 200
+                vite_module = await client.get(
+                    f"{vite_url}/frontend/main.ts", headers={"Origin": server.origin}
+                )
+                assert vite_module.status == 200
+                assert vite_module.headers["Access-Control-Allow-Origin"] == server.origin
+                try:
+                    await client.ws_connect(f"{server.origin}/ws", origin=vite_url)
+                except WSServerHandshakeError as exc:
+                    assert exc.status == 403
+                else:
+                    raise AssertionError("Vite origin unexpectedly accessed player websocket")
+        finally:
+            runner.stop()
+            await asyncio.wait_for(task, timeout=5.0)
+        assert server.dev_assets.process is None
+
+    asyncio.run(scenario())
+
+
+def test_scheduled_critic_disables_stationary_calibration():
+    config = {"game": "Game-v0", "task": {"termination": {}}}
+    session = argparse.Namespace(
+        model=argparse.Namespace(gamma=0.945),
+        config=config,
+        termination_base_config=config,
+    )
+    runner = WebPlaybackRunner(
+        session,
+        human_args(),
+        config_text="",
+        contract_details={"comparison_reasons": []},
+        value_contract={
+            "discount": None,
+            "discount_schedule": {
+                "initial": 0.9,
+                "final": 0.99,
+                "timesteps": 100,
+            },
+        },
+    )
+    assert runner.value_discount == 0.945
+    assert runner._critic_comparison_reasons() == [
+        "critic was trained with a changing discount; fixed-discount calibration is unavailable"
+    ]
+
+
+def test_sampling_temperature_changes_without_reset():
+    session = argparse.Namespace(
+        config={"game": "Game-v0"},
+        step_index=12,
+        last_transition=None,
+        reset_episode=Mock(),
+    )
+    runner = WebPlaybackRunner(session, human_args(episodes=0), config_text="")
+    runner._publish = Mock()
+    runner.capture.abort = Mock()
+    runner.run_state = "playing"
+    runner._apply(
+        PlaybackCommand(
+            "temperature", "client", "set_sampling_temperature", {"temperature": 0.5}, None
+        )
+    )
+    assert runner.sampling_temperature == 0.5
+    assert runner.temperature_changed
+    assert runner.run_state == "playing"
+    session.reset_episode.assert_not_called()
+    runner.capture.abort.assert_called_once()
+
+def test_rgb_visibility_bypasses_fps_without_overwriting_configuration() -> None:
+    from gradlab.play_engine import _PlaybackRunnerProtocol
+
+    runner = _PlaybackRunnerProtocol.__new__(_PlaybackRunnerProtocol)
+    runner.target_fps = 30.0
+    assert runner.effective_fps == 30.0
+    runner.rgb_enabled = False
+    assert runner.effective_fps == 0.0
+    runner.target_fps = 12.0
+    assert runner.effective_fps == 0.0
+    runner.rgb_enabled = True
+    assert runner.effective_fps == 12.0
+
+
+def test_web_client_drops_queued_rgb_after_unsubscribe() -> None:
+    from gradlab.play_engine import _frame_packet
+
+    class Socket:
+        closed = False
+
+        def __init__(self) -> None:
+            self.frames = []
+
+        async def send_bytes(self, value) -> None:
+            self.frames.append(value)
+
+    async def scenario() -> None:
+        socket = Socket()
+        client = WebClient("client", socket, {"telemetry"}, "workspace", "main")
+        game = _frame_packet(FRAME_GAME, 1, np.zeros((2, 2, 3), dtype=np.uint8))
+        client.offer_reliable(game)
+        client.offer_frame(FRAME_GAME, 1, game)
+        writer = asyncio.create_task(client.write())
+        await asyncio.sleep(0)
+        client.closed = True
+        client.event.set()
+        await writer
+        assert socket.frames == []
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("recording,seeking", [(False, False), (False, True), (True, False)])
+def test_policy_recording_retains_scalar_diagnostics_without_subscribers(recording, seeking):
+    decision = PolicyDecision(np.array([1]), np.array([1]), "stochastic", value=2.5)
+    runtime = argparse.Namespace(decide=Mock(return_value=argparse.Namespace(decisions=[decision])))
+    session = argparse.Namespace(
+        policy_runtime=runtime,
+        trajectory_recording=recording,
+        trajectory_seeking=seeking,
+        processing_features=frozenset(),
+        model_obs=np.array([0]),
+        env=argparse.Namespace(),
+        _advance=Mock(),
+    )
+
+    _PlaybackSession.step(session)
+
+    runtime.decide.assert_called_once()
+    assert runtime.decide.call_args.kwargs["include_diagnostics"] is (recording or seeking)
+    assert session._advance.call_args.kwargs["decision"] is decision

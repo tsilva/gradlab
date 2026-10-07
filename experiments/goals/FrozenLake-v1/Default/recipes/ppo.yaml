@@ -1,0 +1,5 @@
+defaults:
+- ../../../../recipes/_presets/frozenlake-ppo@_global_
+- _self_
+recipe_id: ppo
+description: Deterministic FrozenLake default 4x4 map PPO baseline.

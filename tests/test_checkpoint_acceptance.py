@@ -39,7 +39,7 @@ def contract(
         acceptance=acceptance
         or [
             {
-                "metric": "eval/success/start_rate_min",
+                "metric": "eval/success/min",
                 "operator": ">=",
                 "threshold": 1.0,
             }
@@ -103,6 +103,66 @@ def test_manifest_has_exact_count_unique_identities_and_fixed_quotas() -> None:
     assert {entry["start_state"] for entry in manifest["episodes"]} == {"Level1-1"}
 
 
+def test_full_evaluation_provides_return_max_without_partial_rank_inputs() -> None:
+    value = contract(episodes=3, n_envs=1)
+    rows = [
+        row(entry, episode_return=score)
+        for entry, score in zip(value["manifest"]["episodes"], [2.0, 8.0, -1.0], strict=True)
+    ]
+    partial = acceptance_aggregates(rows[:2], contract=value)
+    assert "eval/return/max" not in partial
+    assert "eval/return/mean" not in partial
+    complete = acceptance_aggregates(rows, contract=value)
+    assert complete["eval/return/max"] == 8.0
+    assert complete["eval/return/mean"] == 3.0
+
+
+def test_full_evaluation_projects_episode_length_only_from_complete_evidence() -> None:
+    value = contract(episodes=3, n_envs=1)
+    rows = [
+        {**row(entry), "steps": steps}
+        for entry, steps in zip(value["manifest"]["episodes"], (10, 20, 30), strict=True)
+    ]
+
+    assert "eval/episode_steps/mean" not in acceptance_aggregates(rows[:2], contract=value)
+    assert acceptance_aggregates(rows, contract=value)["eval/episode_steps/mean"] == 20.0
+
+
+def test_two_walls_acceptance_uses_complete_normalized_brick_progress() -> None:
+    value = build_checkpoint_eval_contract(
+        environment={
+            "game": "Breakout-Atari2600-v0",
+            "env_provider": "env-breakoutatari2600-turbo-native",
+            "state": "Start",
+        },
+        episodes=2,
+        n_envs=1,
+        watchdog_steps=54_000,
+        seed=10_000,
+        seed_protocol="vector-lane-v1",
+        acceptance=[
+            {
+                "metric": "eval/progress/bricks_destroyed_normalized/mean",
+                "operator": ">=",
+                "threshold": 1.0,
+            }
+        ],
+    )
+    assert value["evidence_policy"]["fail_fast"] == "disabled"
+    rows = [
+        {**row(entry), "steps": 100, "bricks_destroyed_normalized": progress}
+        for entry, progress in zip(value["manifest"]["episodes"], (1.0, 0.5), strict=True)
+    ]
+
+    aggregates = acceptance_aggregates(rows, contract=value)
+    assert aggregates["eval/progress/bricks_destroyed_normalized/mean"] == 0.75
+    assert aggregates["eval/progress/bricks_destroyed_normalized/max"] == 1.0
+    assert aggregates["eval/episode_steps/mean"] == 100.0
+    assert evaluate_acceptance(aggregates, contract=value)[0] is False
+    rows[1]["bricks_destroyed_normalized"] = 1.0
+    assert evaluate_acceptance(acceptance_aggregates(rows, contract=value), contract=value)[0]
+
+
 def test_rejection_is_valid_partial_evidence_only_through_first_failure() -> None:
     value = contract(episodes=4, n_envs=2)
     entries = value["manifest"]["episodes"]
@@ -135,7 +195,7 @@ def test_mean_return_acceptance_requires_and_uses_every_episode(
         n_envs=2,
         acceptance=[
             {
-                "metric": "eval/return_mean",
+                "metric": "eval/return/mean",
                 "operator": ">=",
                 "threshold": 2.5,
             }
@@ -154,7 +214,7 @@ def test_mean_return_acceptance_requires_and_uses_every_episode(
 
     assert aggregates["episodes_completed"] == 4
     assert aggregates["failure_count"] == 2
-    assert aggregates["eval/return_mean"] == sum(returns) / 4
+    assert aggregates["eval/return/mean"] == sum(returns) / 4
     accepted, _observed = evaluate_acceptance(aggregates, contract=value)
     assert accepted is (verdict == "accepted")
 
@@ -169,7 +229,7 @@ def test_vizdoom_basic_perfect_success_acceptance_requires_every_episode() -> No
         seed_protocol="vector-lane-v1",
         acceptance=[
             {
-                "metric": "eval/success/start_rate_min",
+                "metric": "eval/success/min",
                 "operator": ">=",
                 "threshold": 1.0,
             }
@@ -187,7 +247,7 @@ def test_vizdoom_basic_perfect_success_acceptance_requires_every_episode() -> No
 
     assert aggregates["episodes_completed"] == 4
     assert aggregates["failure_count"] == 1
-    assert aggregates["eval/success/start_rate_min"] == 0.75
+    assert aggregates["eval/success/min"] == 0.75
     accepted, _observed = evaluate_acceptance(aggregates, contract=value)
     assert accepted is False
 
@@ -232,7 +292,7 @@ def test_modal_protocol_accepts_complete_mean_return_rejection() -> None:
         n_envs=1,
         acceptance=[
             {
-                "metric": "eval/return_mean",
+                "metric": "eval/return/mean",
                 "operator": ">=",
                 "threshold": 1.0,
             }
@@ -282,9 +342,72 @@ def test_modal_protocol_normalizes_failed_attempt_identity() -> None:
         "duration_seconds": 3.5,
         "evidence_sha256": [],
         "error": "deadline reached",
+        "video": None,
     }
     with pytest.raises(ValueError, match="attempt id mismatch"):
         normalize_attempt_result(result, contract=value, attempt_id="different-attempt")
+
+
+def test_recorded_episode_video_must_belong_to_evaluation_manifest() -> None:
+    value = modal_contract(episodes=2, n_envs=1)
+    value["record_episode"] = True
+    attempt_id = "attempt-video"
+    rows = [row(entry, success=True, episode_return=1.0) for entry in value["manifest"]["episodes"]]
+    video = {
+        "episode_id": "lane-00-episode-000",
+        "frames": 2,
+        "bytes": 1024,
+        "content_type": "video/mp4",
+        "source": "native_rgb",
+        "object_uri": "s3://evaluation/runs/example/video.mp4",
+        "sha256": "a" * 64,
+    }
+    result = {
+        **result_identity(value, attempt_id=attempt_id),
+        "status": "succeeded",
+        "verdict": "accepted",
+        "episode_results": rows,
+        "duration_seconds": 1.0,
+        "video": video,
+    }
+    assert validate_attempt_result(result, contract=value, attempt_id=attempt_id)["verdict"] == "accepted"
+    with pytest.raises(ValueError, match="selected manifest episode"):
+        validate_attempt_result(
+            {**result, "video": {**video, "episode_id": "lane-00-episode-001"}},
+            contract=value,
+            attempt_id=attempt_id,
+        )
+    with pytest.raises(ValueError, match="missing its required episode video"):
+        validate_attempt_result({**result, "video": None}, contract=value, attempt_id=attempt_id)
+
+
+def test_fail_fast_video_may_finish_after_scientific_rejection() -> None:
+    value = modal_contract(episodes=2, n_envs=2)
+    value["record_episode"] = True
+    attempt_id = "attempt-fail-fast-video"
+    failed = next(entry for entry in value["manifest"]["episodes"] if entry["lane"] == 1)
+    result = {
+        **result_identity(value, attempt_id=attempt_id),
+        "status": "succeeded",
+        "verdict": "rejected",
+        "episode_results": [row(failed, success=False)],
+        "duration_seconds": 1.0,
+        "video": {
+            "episode_id": "lane-00-episode-000",
+            "frames": 722,
+            "bytes": 243619,
+            "content_type": "video/mp4",
+            "source": "native_rgb",
+            "object_uri": "s3://evaluation/runs/example/video.mp4",
+            "sha256": "a" * 64,
+        },
+    }
+
+    normalized = normalize_attempt_result(result, contract=value, attempt_id=attempt_id)
+
+    assert normalized["status"] == "rejected"
+    assert len(normalized["episode_results"]) == 1
+    assert normalized["video"]["episode_id"] == "lane-00-episode-000"
 
 
 def test_complete_evidence_requires_every_identity_once() -> None:

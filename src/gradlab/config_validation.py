@@ -69,6 +69,21 @@ def validate_experiment_tree(repo_root: Path | str = Path(".")) -> ValidationRep
             counts={},
         )
 
+    from gradlab.config_loader import load_mapping_document
+    from gradlab.tracking_config import validate_tracking
+
+    tracking_path = experiments_dir / "tracking.yaml"
+    if tracking_path.is_file():
+        _capture_issue(
+            issues,
+            tracking_path,
+            repo_root,
+            lambda: validate_tracking(
+                load_mapping_document(tracking_path, label="project tracking"),
+                label="project tracking",
+            ),
+        )
+
     yaml_files = sorted(experiments_dir.rglob("*.yaml")) + sorted(
         experiments_dir.rglob("*.yml")
     )

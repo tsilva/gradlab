@@ -16,7 +16,7 @@ from aiohttp import ClientSession, WSMsgType
 
 from gradlab.play_debug import PolicyDecision
 from gradlab.play_session import _PlaybackTransition
-from gradlab.play_web import PlaybackCommand, WebPlaybackRunner
+from gradlab.play_engine import PlaybackCommand, WebPlaybackRunner
 from tests.test_policy_bundle import write_bundle
 
 
@@ -31,11 +31,21 @@ class ScriptedSession:
         self.total_reward = 0.0
         self.max_x_pos = 0
         self.action_names = ("noop", "right")
+        self.info_vars = ("signal",)
         self.interactive = False
         self.last_transition = None
         self.current_frame = np.zeros((2, 3, 3), dtype=np.uint8)
         self.frames = ()
         self.model = Namespace(gamma=0.9)
+
+    def reset_episode(self, seed=None):
+        if seed is not None:
+            self.active_seed = seed
+        self.step_index = 0
+        self.total_reward = 0.0
+        self.max_x_pos = 0
+        self.last_transition = None
+        self.current_frame = np.zeros((2, 3, 3), dtype=np.uint8)
 
     def step(self, *, deterministic):
         self.sequence += 1
@@ -114,7 +124,7 @@ def wait_step(runner, step):
     raise AssertionError(f"Player did not reach step {step}: {runner.snapshot()}")
 
 
-def live_runner(tmp_path, length=3, **options):
+def live_runner(tmp_path, length=3, *, record=True, **options):
     from gradlab.policy_bundle import load_policy_bundle
 
     write_bundle(tmp_path)
@@ -126,7 +136,109 @@ def live_runner(tmp_path, length=3, **options):
         **options,
     )
     runner.start()
+    if record:
+        command(runner, "set_recording", enabled=True)
     return runner
+
+
+def test_full_recording_is_off_by_default_while_seek_remains_available(tmp_path):
+    runner = live_runner(tmp_path, record=False)
+    seek_root = runner.seek_recording.root
+    checkpoint_root = runner._checkpoint_root
+    try:
+        assert runner.recording is None
+        assert runner.recording_status()["enabled"] is False
+        assert runner.session.trajectory_seeking is True
+        assert runner.session.trajectory_recording is False
+        runner._step_once()
+        runner._step_once()
+        status = runner.recording_status()
+        assert status["transitions"] == 2
+        assert status["recorded_transitions"] == 0
+        assert runner.seek_recording.transition(1)["inspection_snapshot"]["transition"]["step"] == 1
+        assert "observation" not in runner.seek_recording.transition(1)
+        inspected = runner.inspect_recorded_step(status["episode_id"], 1)
+        assert inspected["snapshot"]["transition"]["step"] == 1
+        with pytest.raises(ValueError, match="start recording"):
+            runner.freeze_trajectory()
+        assert seek_root.exists()
+    finally:
+        runner.stop()
+    assert not seek_root.exists()
+    assert not checkpoint_root.exists()
+
+
+def test_seek_records_compress_exact_array_bytes():
+    from gradlab.play_trajectory import pack_record, unpack_record
+
+    frame = np.zeros((210, 160, 3), dtype=np.uint8)
+    row = {"frame": frame}
+    encoded = pack_record(row, compress=True)
+    assert len(encoded) < frame.nbytes // 10
+    np.testing.assert_array_equal(unpack_record(encoded)["frame"], frame)
+
+
+def test_back_purges_seek_and_recording_files(tmp_path):
+    from gradlab.model_sources import ResolvedModelSource
+    from gradlab.play_application import PlaybackHost
+    from gradlab.play_runtime import ActivePlayback, PlaybackLoader, PlaySourceSpec
+    from gradlab.policy_bundle import load_policy_bundle
+
+    runner = live_runner(tmp_path)
+    runner._step_once()
+    roots = (runner.seek_recording.root, runner.recording.root, runner._checkpoint_root)
+    host = PlaybackHost(PlaybackLoader(runner.args, argv=[], explicit_seed=False))
+    host._active = ActivePlayback(
+        runner, Namespace(close=lambda: None), PlaySourceSpec("local", "fixture"),
+        ResolvedModelSource(tmp_path / "model.zip", load_policy_bundle(tmp_path)),
+    )
+    host._phase = "active"
+    try:
+        assert all(root.exists() for root in roots)
+        host.submit(PlaybackCommand("back", "test", "browse_sources", {}, None))
+        assert all(not root.exists() for root in roots)
+    finally:
+        host.stop()
+
+
+def test_player_shutdown_purges_seek_and_recording_files(tmp_path):
+    from gradlab.play_web import PlaybackWebServer
+    from gradlab.policy_bundle import load_policy_bundle
+
+    write_bundle(tmp_path)
+    args = Namespace(fps=240, episodes=0, port=0, no_open=True)
+    runner = WebPlaybackRunner(
+        ScriptedSession(), args, config_text="game: Game-v0",
+        trajectory_bundle=load_policy_bundle(tmp_path),
+    )
+    server = PlaybackWebServer(runner, args)
+    roots = (runner.seek_recording.root, runner._checkpoint_root)
+
+    async def scenario():
+        task = asyncio.create_task(server.run())
+        try:
+            deadline = time.monotonic() + 3
+            while not server.origin and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+            assert server.origin
+            while not runner._thread.is_alive() and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+            assert runner._thread.is_alive()
+            runner.submit(PlaybackCommand("record", "test", "set_recording", {"enabled": True}, None))
+            while not runner.recording_enabled and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+            assert runner.recording_enabled, (runner.stopped, runner.snapshot()["status_message"])
+            runner.submit(PlaybackCommand("step", "test", "step", {"count": 1}, None))
+            await asyncio.to_thread(wait_step, runner, 1)
+            assert runner.recording is not None
+            archive_root = runner.recording.root
+            assert all(root.exists() for root in (*roots, archive_root))
+        finally:
+            server.stop_event.set()
+            await task
+        assert all(not root.exists() for root in (*roots, archive_root))
+
+    asyncio.run(scenario())
 
 
 def test_current_episode_download_import_preserves_exact_inputs_and_checkpoint(tmp_path):
@@ -139,6 +251,7 @@ def test_current_episode_download_import_preserves_exact_inputs_and_checkpoint(t
         assert runner.recording_status()["enabled"] is True
         command(runner, "step", count=3)
         wait_step(runner, 3)
+        assert runner.seek_recording.status()["storage_bytes"] < runner.recording.status()["storage_bytes"]
         frozen = runner.freeze_trajectory()
         archive = export_trajectory(frozen, tmp_path / "episode.trj")
         imported = TrajectoryPlaybackRunner(archive, runner.args)
@@ -146,6 +259,9 @@ def test_current_episode_download_import_preserves_exact_inputs_and_checkpoint(t
         command(imported, "seek", step=2)
         snapshot = imported.snapshot()
         assert snapshot["transition"]["reward"]["return"] == 1.0
+        assert snapshot["episode_rewards"]["final"] == 1.0
+        assert snapshot["episode_rewards"]["step"] == 2
+        assert [point["step"] for point in imported.history] == [1, 2]
         assert snapshot["transition"]["decision"]["value"] == 2.5
         assert snapshot["trajectory"]["complete"] is True
         assert snapshot["trajectory"]["scientific_evidence"] is False
@@ -178,7 +294,7 @@ def test_unfinished_download_survives_replacement_and_opens_in_isolated_worker(t
         frozen = runner.freeze_trajectory()
         command(runner, "step", count=2)
         wait_step(runner, 4)
-        command(runner, "next_episode")
+        command(runner, "reset_episode", seed="")
         runner.stop()
         archive = export_trajectory(frozen, tmp_path / "prefix.trj")
         host.start()
@@ -262,7 +378,7 @@ def test_server_download_is_pinned_and_import_requires_control(tmp_path):
                     assert response.status == 200, await response.text()
                 assert host.snapshot()["mode"] == "trajectory"
                 assert host.snapshot()["trajectory"]["last_step"] == 2
-                from gradlab.play_web import FRAME_HEADER, FRAME_GAME
+                from gradlab.play_engine import FRAME_HEADER, FRAME_GAME
 
                 for step in (2, 1):
                     await socket.send_json(
@@ -325,9 +441,7 @@ def test_storage_backpressure_pauses_without_losing_a_transition(tmp_path, fail)
         assert "Recording storage" in snapshot["status_message"]
         assert snapshot["transition"]["step"] == 1
         if fail:
-            archive = export_trajectory(
-                runner.freeze_trajectory(), tmp_path / "failed-prefix.trj"
-            )
+            archive = export_trajectory(runner.freeze_trajectory(), tmp_path / "failed-prefix.trj")
             imported = TrajectoryPlaybackRunner(archive, runner.args)
             assert imported.recorded_transition(1)["reward"] == 0.5
             assert imported.metadata["transition_count"] == 1
@@ -349,7 +463,7 @@ def test_storage_backpressure_pauses_without_losing_a_transition(tmp_path, fail)
 def test_episode_longer_than_live_history_retains_its_first_transition(tmp_path):
     from gradlab.play_trajectory import export_trajectory
     from gradlab.play_trajectory_runner import TrajectoryPlaybackRunner
-    from gradlab.play_web import HISTORY_LIMIT
+    from gradlab.play_engine import HISTORY_LIMIT
 
     runner = live_runner(tmp_path, length=HISTORY_LIMIT + 5)
     runner.target_fps = 0
@@ -484,14 +598,14 @@ def test_capture_owns_hidden_policy_inputs_and_never_records_autoreset_as_termin
         imported = None
         try:
             command(runner, "set_recording", enabled=enabled)
+            assert session.trajectory_recording is enabled
+            assert session.trajectory_seeking is True
             command(runner, "step", count=1)
             wait_step(runner, 1)
             actions.append(provider.actions[0])
             assert runtime.calls == 1
             if enabled:
-                archive = export_trajectory(
-                    runner.freeze_trajectory(), tmp_path / "terminal.trj"
-                )
+                archive = export_trajectory(runner.freeze_trajectory(), tmp_path / "terminal.trj")
                 imported = TrajectoryPlaybackRunner(archive, runner.args)
                 row = imported.recorded_transition(1)
                 np.testing.assert_array_equal(
@@ -731,29 +845,25 @@ def test_evaluation_reproduction_requires_the_recorded_evaluation_seed(
             imported.stop()
 
 
-def test_pre_episode_boundary_edits_are_recorded_and_one_transition_can_replay(tmp_path):
+def test_stop_condition_edits_do_not_rewrite_recorded_environment(tmp_path):
     from gradlab.play_trajectory import export_trajectory
     from gradlab.play_trajectory_runner import TrajectoryPlaybackRunner
 
     runner = live_runner(tmp_path, length=1)
-    session = runner.session
-    session.termination_base_config = dict(session.config)
-
-    def change_conditions(enabled):
-        session.config = {**session.config, "task": {"termination": enabled}}
-
-    session.set_termination_conditions = change_conditions
+    original_config = dict(runner.session.config)
     imported = None
     try:
-        command(runner, "set_termination_conditions", enabled=["custom_boundary"])
+        command(runner, "set_stop_condition", source="episode.boundary >= 1")
         command(runner, "step", count=1)
         wait_step(runner, 1)
         archive = export_trajectory(runner.freeze_trajectory(), tmp_path / "boundary.trj")
         imported = TrajectoryPlaybackRunner(archive, runner.args)
-        assert imported.metadata["resolved_environment"]["task"]["termination"] == [
-            "custom_boundary"
-        ]
-        assert imported.metadata["classification"] == "counterfactual"
+        assert imported.metadata["resolved_environment"] == original_config
+        assert imported.metadata["classification"] == "faithful"
+        assert (
+            imported.metadata["initial_snapshot"]["session"]["stop_condition"]["source"]
+            == "episode.boundary >= 1"
+        )
         imported.start()
         command(imported, "seek", step=1)
         command(imported, "replay")
@@ -856,6 +966,52 @@ def test_cancelled_download_keeps_its_files_until_freeze_finishes(tmp_path):
         runner.stop()
 
 
+def test_session_change_revokes_prepared_and_inflight_downloads(tmp_path):
+    from gradlab.play_trajectory_http import TrajectoryTransfers
+
+    runner = live_runner(tmp_path)
+    entered, release = threading.Event(), threading.Event()
+    freeze = runner.freeze_trajectory
+
+    def delayed_freeze():
+        entered.set()
+        assert release.wait(5)
+        return freeze()
+
+    async def scenario():
+        transfers = TrajectoryTransfers(
+            Namespace(freeze_trajectory=delayed_freeze), lambda request: None, lambda request: None
+        )
+        prepared = tmp_path / "prepared" / "episode.trj"
+        prepared.parent.mkdir()
+        prepared.write_bytes(b"prepared")
+        transfers.downloads["old"] = (prepared, time.monotonic())
+        request = asyncio.create_task(transfers.prepare(None))
+        try:
+            deadline = time.monotonic() + 2
+            while not entered.is_set() and time.monotonic() < deadline:
+                await asyncio.sleep(0.01)
+            assert entered.is_set()
+            transfers.revoke()
+            assert not prepared.parent.exists()
+            assert not transfers.downloads
+            release.set()
+            response = await request
+            assert response.status == 400
+            assert not transfers.downloads
+            assert not list(tmp_path.glob("prepared/*"))
+        finally:
+            release.set()
+            transfers.close()
+
+    try:
+        command(runner, "step", count=1)
+        wait_step(runner, 1)
+        asyncio.run(scenario())
+    finally:
+        runner.stop()
+
+
 def test_checkpoint_activation_keeps_download_available_after_candidate_cleanup(
     tmp_path, monkeypatch
 ):
@@ -916,6 +1072,7 @@ def test_checkpoint_activation_keeps_download_available_after_candidate_cleanup(
         assert not candidate.staged.root.exists()
         active.runner.start()
         assert active.runner.snapshot()["trajectory"]["available"] is True
+        command(active.runner, "set_recording", enabled=True)
         command(active.runner, "step", count=1)
         wait_step(active.runner, 1)
         archive = export_trajectory(active.runner.freeze_trajectory(), tmp_path / "loaded.trj")
@@ -960,7 +1117,9 @@ def test_cli_opens_recording_without_a_checkpoint_or_catalog(tmp_path, monkeypat
     monkeypatch.setattr(
         "gradlab.play_catalog_authority.start_catalog_authority_helper", unavailable_catalog
     )
-    monkeypatch.setattr("gradlab.play_catalog.PlayCatalog.initial_environments", unavailable_catalog)
+    monkeypatch.setattr(
+        "gradlab.play_catalog.PlayCatalog.initial_environments", unavailable_catalog
+    )
     monkeypatch.setattr("gradlab.play_web.run_web_player_application", inspect_player)
     assert main(["play", "--recording", str(archive), "--no-open"]) == 0
 
@@ -1006,3 +1165,28 @@ def test_download_filename_tracks_content_not_file_timestamps(tmp_path):
         assert changed.name != outputs[0].name
     finally:
         runner.stop()
+
+
+def test_import_rebuilds_reward_totals_from_transition_evidence(tmp_path, monkeypatch):
+    from gradlab.play_trajectory import export_trajectory
+    from gradlab.play_trajectory_runner import TrajectoryPlaybackRunner
+
+    runner = live_runner(tmp_path)
+    imported = None
+    try:
+        # Stored derived totals are not authoritative input during archive import.
+        monkeypatch.setattr(runner.episode_rewards, "payload", lambda _: {"final": 999})
+        command(runner, "step", count=3)
+        wait_step(runner, 3)
+        archive = export_trajectory(runner.freeze_trajectory(), tmp_path / "rebuild.trj")
+        imported = TrajectoryPlaybackRunner(archive, runner.args)
+        imported.start()
+        command(imported, "seek", step=2)
+        totals = imported.snapshot()["episode_rewards"]
+        assert totals["status"] == "available"
+        assert totals["final"] == 1
+        assert totals["step"] == 2
+    finally:
+        runner.stop()
+        if imported is not None:
+            imported.stop()

@@ -7,10 +7,11 @@ import re
 import secrets
 import threading
 import time
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 from urllib.parse import unquote, urlparse
@@ -32,7 +33,7 @@ from gradlab.goal_catalog import (
     validate_goal_catalog_pointer,
 )
 from gradlab.contract_inspection import inspection_document
-from gradlab.early_stop import EARLY_STOP_OPERATORS, normalize_metric_threshold_rules
+from gradlab.early_stop import EARLY_STOP_OPERATORS, metric_threshold_evidence, normalize_metric_threshold_rules
 from gradlab.goal_variants import (
     build_goal_variant_descriptor,
     goal_contract_diff,
@@ -49,7 +50,6 @@ from gradlab.evaluation_fence import evaluation_selection_fence
 from gradlab.metric_names import (
     EVAL_ACCEPTANCE_PASS,
     EVAL_ACCEPTANCE_EPISODE_COMPLETED_COUNT,
-    EVAL_ACCEPTANCE_EPISODE_PLANNED_COUNT,
     EVAL_CHECKPOINT_STEP,
     LEADER_CHECKPOINT_STEP,
     TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN,
@@ -61,6 +61,7 @@ from gradlab.metric_names import (
     require_current_metrics_schema,
 )
 from gradlab.model_sources import DEFAULT_PUBLIC_MODELS_BASE_URL, _public_json
+from gradlab.metric_journal import JournalHistory, PublicJournalHistory, ScientificEvidence, read_control_journal
 from gradlab.policy_bundle import canonical_json_sha256, validate_recipe_document
 from gradlab.ranking import (
     RankCriterion,
@@ -75,7 +76,12 @@ from gradlab.recipe_documents import (
     load_recipe_source_document,
 )
 from gradlab.reward_programs import goal_for_contract_validation
-from gradlab.run_contracts import CheckpointManifest, RUN_ID_PATTERN, RunManifest
+from gradlab.run_contracts import (
+    CheckpointManifest,
+    RUN_ID_PATTERN,
+    SHA256_PATTERN,
+    RunManifest,
+)
 from gradlab.run_authority import RunAuthority
 from gradlab.wandb_utils import load_wandb_env
 
@@ -111,11 +117,11 @@ LIVE_TRAINING_METRICS = (
 )
 CHECKPOINT_STRUCTURAL_METRICS = frozenset({LEADER_CHECKPOINT_STEP, TRAIN_GLOBAL_STEP})
 CHECKPOINT_COLUMN_ROLES = frozenset(
-    {"objective", "tie_breaker", "acceptance", "training_proxy", "optimization"}
+    {"objective", "tie_breaker", "acceptance", "training_proxy", "optimization", "observation"}
 )
 _EVAL_PROGRESS_METRIC_RE = re.compile(r"^eval/progress/([A-Za-z0-9_.-]+)/(mean|max)$")
 _TRAIN_PROGRESS_METRIC_RE = re.compile(
-    r"^train/target/progress/([A-Za-z0-9_.-]+)/mean$"
+    r"^train/progress/([A-Za-z0-9_.-]+)/mean$"
 )
 
 
@@ -159,7 +165,7 @@ class CatalogPage:
 @dataclass(frozen=True)
 class CheckpointMetricContract:
     metrics_schema_version: int
-    evaluation_backend: Literal["modal", "none"]
+    evaluation_backend: Literal["modal", "training-container", "none"]
     rank: tuple[RankCriterion, ...]
     acceptance: tuple[Mapping[str, Any], ...]
     columns: tuple[Mapping[str, Any], ...]
@@ -241,6 +247,7 @@ class RunSummary:
     stop_reason: str
     final_step: int | None
     early_stop: Mapping[str, Any] | None
+    training_success: Mapping[str, Any] | None
     goal: str
     recipe: str
     recipe_sha256: str
@@ -278,6 +285,7 @@ class CheckpointSummary:
     playback_seed_source: Literal["evaluation", "training"] | None
     metrics: Mapping[str, float | None]
     evaluation: Mapping[str, Any] | None = None
+    representative_media: tuple[Mapping[str, Any], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -303,11 +311,12 @@ class _RepositoryNamespace:
 
 @dataclass(frozen=True)
 class _CheckpointEvaluationData:
-    evaluations: Mapping[int, dict[str, Any]]
+    evaluations: Mapping[int | str, dict[str, Any]]
     training_seed: int | None
     evaluation_seed: int | None
     training_metric_history: Mapping[str, tuple[tuple[int, float], ...]]
     warning: Mapping[str, Any] | None = None
+    media: tuple[Mapping[str, Any], ...] = ()
 
 
 def parse_wandb_location(value: object) -> WandbRunLocation | None:
@@ -508,7 +517,9 @@ def checkpoint_metric_contract(
     schema_version = require_current_metrics_schema(train_config.get("metrics_schema_version"))
     raw_evaluation_backend = str(train_config.get("checkpoint_eval_backend") or "").strip()
     if raw_evaluation_backend == "modal":
-        evaluation_backend: Literal["modal", "none"] = "modal"
+        evaluation_backend: Literal["modal", "training-container", "none"] = "modal"
+    elif raw_evaluation_backend == "training-container":
+        evaluation_backend = "training-container"
     elif raw_evaluation_backend == "none":
         evaluation_backend = "none"
     else:
@@ -544,6 +555,8 @@ def checkpoint_metric_contract(
         direction: Literal["min", "max"] | None,
         role: str,
         rank_index: int | None = None,
+        rank_source_metric: str | None = None,
+        source_metric: str | None = None,
         acceptance_rule: Mapping[str, Any] | None = None,
         proxy_for: str | None = None,
     ) -> dict[str, Any]:
@@ -566,6 +579,10 @@ def checkpoint_metric_contract(
             }
             by_metric[metric] = column
             columns.append(column)
+        if rank_source_metric is not None:
+            column["rank_source_metric"] = rank_source_metric
+        if source_metric is not None:
+            column["source_metric"] = source_metric
         if role not in column["roles"]:
             column["roles"].append(role)
         if rank_index is not None:
@@ -583,15 +600,27 @@ def checkpoint_metric_contract(
             column["proxy_for"] = proxy_for
         return column
 
+    breakout_monitoring = (
+        evaluation_backend == "none" and "bricks_destroyed_normalized" in progress_fields
+    )
     for rank_index, criterion in enumerate(rank):
         if criterion.metric in CHECKPOINT_STRUCTURAL_METRICS:
             continue
         role = "objective" if rank_index == 0 else "tie_breaker"
+        display_metric = criterion.metric
+        if breakout_monitoring and criterion.metric in {
+            "train/progress/bricks_destroyed/mean",
+            "train/progress/bricks_destroyed/max",
+        }:
+            # Historical Breakout ranks use raw bricks. The normalized measure is
+            # the same value divided by the fixed 216-brick provider denominator.
+            display_metric = criterion.metric.replace("bricks_destroyed/", "bricks_destroyed_normalized/")
         add_column(
-            criterion.metric,
+            display_metric,
             direction=criterion.direction,
             role=role,
             rank_index=rank_index,
+            rank_source_metric=criterion.metric if display_metric != criterion.metric else None,
         )
         proxy = _checkpoint_training_proxy(
             criterion.metric,
@@ -628,6 +657,36 @@ def checkpoint_metric_contract(
         direction="max",
         role="optimization",
     )
+    if breakout_monitoring:
+        single_start = len(train_config.get("states") or (train_config.get("state") or "default",)) == 1
+        suffixes = (
+            "success/mean",
+            "progress/bricks_destroyed_normalized/mean",
+            "progress/bricks_destroyed_normalized/max",
+            "episode_steps/mean",
+            "return/mean",
+        )
+        for suffix in suffixes:
+            training_metric = f"train/{suffix}"
+            if training_metric not in by_metric:
+                add_column(
+                    training_metric,
+                    direction=None,
+                    role="observation",
+                    source_metric=(
+                        "train/success/min" if suffix == "success/mean" and single_start else None
+                    ),
+                )
+            add_column(f"eval/{suffix}", direction=None, role="observation")
+        # Match the two groups column for column while retaining rank roles.
+        columns.sort(key=lambda column: (
+            0 if column["evidence"] == "training" else 1,
+            (
+                suffixes.index(str(column["metric"]).split("/", 1)[1])
+                if str(column["metric"]).split("/", 1)[1] in suffixes
+                else len(suffixes)
+            ),
+        ))
     return CheckpointMetricContract(
         metrics_schema_version=schema_version,
         evaluation_backend=evaluation_backend,
@@ -703,28 +762,29 @@ def filter_checkpoint_summaries(
 
 
 def _checkpoint_training_metric_history(
-    run: Any,
+    run: ScientificEvidence,
     columns: Sequence[Mapping[str, Any]],
+    on_metric: Callable[[str, tuple[tuple[int, float], ...]], None] | None = None,
 ) -> dict[str, tuple[tuple[int, float], ...]]:
     history: dict[str, tuple[tuple[int, float], ...]] = {}
     for column in columns:
         metric = str(column["metric"])
+        source_metric = str(column.get("source_metric") or metric)
         if column.get("evidence") != "training" or metric == TRAIN_GLOBAL_STEP:
             continue
         samples: dict[int, float] = {}
-        rows = run.scan_history(
-            keys=[TRAIN_GLOBAL_STEP, metric],
-            page_size=10_000,
-        )
+        rows = run.read([TRAIN_GLOBAL_STEP, source_metric])
         for raw in rows:
             if not isinstance(raw, Mapping):
                 continue
             step = _safe_int(raw.get(TRAIN_GLOBAL_STEP))
-            value = _safe_float(raw.get(metric))
+            value = _safe_float(raw.get(source_metric))
             if step is not None and value is not None:
                 samples[step] = value
         if samples:
             history[metric] = tuple(sorted(samples.items()))
+        if on_metric is not None:
+            on_metric(metric, history.get(metric, ()))
     return history
 
 
@@ -1194,7 +1254,8 @@ class PlayCatalog:
         exact_resolution_run_id: str = "",
     ) -> dict[str, Any]:
         validated = validate_goal_variant_descriptor(descriptor)
-        authored_current = validated["goal_contract_sha256"] == current["goal_contract_sha256"]
+        authored_current = (validated["goal_slug"] == current["goal_slug"]
+            and validated["goal_contract_sha256"] == current["goal_contract_sha256"])
         effective_current = (
             validated["effective_goal_contract_sha256"] == current["effective_goal_contract_sha256"]
         )
@@ -1271,7 +1332,7 @@ class PlayCatalog:
         return GoalVariantSummary(
             environment_id=repository_goal.environment_id,
             goal_id=repository_goal.goal_id,
-            goal_slug=repository_goal.goal_slug,
+            goal_slug=str(validated["goal_slug"]),
             variant_id=str(validated["variant_id"]),
             label=str(validated["label"]),
             goal_contract_sha256=str(validated["goal_contract_sha256"]),
@@ -1433,7 +1494,78 @@ class PlayCatalog:
             )
         return deepcopy(dict(resolved_goal))
 
+    def _historical_goal_slugs(self, goal_slug: str) -> tuple[str, ...]:
+        document = load_mapping_document(
+            self.goals_root / CATALOG_INDEX_FILENAME, label="repository goal catalog"
+        )
+        historical = document.get("historical_goals", {})
+        if not isinstance(historical, Mapping):
+            raise ValueError("historical_goals must map current goal scopes to historical scopes")
+        seen = set()
+        for target, sources in historical.items():
+            if not isinstance(target, str) or not isinstance(sources, list):
+                raise ValueError("historical_goals entries must contain a list of goal scopes")
+            for source in sources:
+                if (
+                    not isinstance(source, str)
+                    or not source
+                    or source in historical
+                    or source in seen
+                ):
+                    raise ValueError(
+                        "historical goal scopes must be nonempty, unique, and non-recursive"
+                    )
+                seen.add(source)
+        return tuple(historical.get(goal_slug, ()))
+
     def _control_generation_scope(
+        self,
+        *,
+        goal_slug: str,
+        include_archives: bool = False,
+        pointer_document: object = _CONTROL_DOCUMENT_UNSET,
+        generation_document: object = _CONTROL_DOCUMENT_UNSET,
+    ) -> dict[str, Any] | None:
+        current = self._single_control_generation_scope(
+            goal_slug=goal_slug,
+            include_archives=include_archives,
+            pointer_document=pointer_document,
+            generation_document=generation_document,
+        )
+        historical = self._historical_goal_slugs(goal_slug)
+        if not historical:
+            return current
+        scopes = [
+            scope
+            for scope in [
+                current,
+                *(
+                    self._single_control_generation_scope(
+                        goal_slug=source, include_archives=include_archives
+                    )
+                    for source in historical
+                ),
+            ]
+            if scope is not None
+        ]
+        if not scopes:
+            return None
+        # Each scope is independently hash-verified. Only the browse grouping changes;
+        # descriptors, run identities, and exact contract proofs retain their source scope.
+        return {
+            "goal_slug": goal_slug,
+            "goal_slugs": [goal_slug, *historical],
+            "generation_sha256": compact_json_sha256(
+                [scope["generation_sha256"] for scope in scopes]
+            ),
+            "generated_at": max(scope["generated_at"] for scope in scopes),
+            **{
+                key: [item for scope in scopes for item in scope[key]]
+                for key in ("variants", "runs", "archive_pages")
+            },
+        }
+
+    def _single_control_generation_scope(
         self,
         *,
         goal_slug: str,
@@ -1812,7 +1944,7 @@ class PlayCatalog:
                     page_document,
                     expected_digest=str(reference["page_sha256"]),
                 )
-                if page["goal_slug"] != selected_goal_slug:
+                if page["goal_slug"] not in generation_scope.get("goal_slugs", [selected_goal_slug]):
                     raise CatalogIntegrityError("catalog archive page belongs to another goal")
                 generation_scope["runs"].extend(dict(run) for run in page["runs"])
         if generation_scope is None:
@@ -1850,7 +1982,7 @@ class PlayCatalog:
                 effective_hash = str(raw.get("effective_goal_contract_sha256") or "")
                 if (
                     RUN_ID_PATTERN.fullmatch(run_id) is None
-                    or raw.get("goal_slug") != selected_goal_slug
+                    or raw.get("goal_slug") not in generation_scope.get("goal_slugs", [selected_goal_slug])
                     or raw.get("goal_variant_id") != variant_id
                     or not isinstance(metrics, Mapping)
                     or (
@@ -1872,7 +2004,12 @@ class PlayCatalog:
                             if isinstance(raw.get("early_stop"), Mapping)
                             else None
                         ),
-                        goal=selected_goal_slug,
+                        training_success=(
+                            dict(raw["training_success"])
+                            if isinstance(raw.get("training_success"), Mapping)
+                            else None
+                        ),
+                        goal=str(raw["goal_slug"]),
                         recipe=str(raw.get("recipe_slug") or ""),
                         recipe_sha256=str(raw.get("recipe_sha256") or ""),
                         recipe_overrides=tuple(
@@ -2010,15 +2147,39 @@ class PlayCatalog:
         environment_id: str,
         query: str = "",
         cursor: str | None = None,
+        include_evidence: bool = True,
+        progressive: bool = False,
     ) -> CatalogPage:
+        if progressive and include_evidence:
+            page = self.goals(
+                environment_id=environment_id, query=query, cursor=cursor,
+                include_evidence=False,
+            )
+            goals = {
+                goal.goal_id: goal
+                for goal in self._repository_goals(environment_id=environment_id)
+            }
+            selected = [goals[item["goal_id"]] for item in page.items]
+            scopes = self._control_generation_scopes(selected)
+            enriched = []
+            for item, goal, scope in zip(page.items, selected, scopes, strict=True):
+                badges, run_count = self._current_goal_evidence(goal, generation_scope=scope)
+                enriched.append({
+                    **item, "success_badges": badges, "run_count": run_count,
+                    "evidence_status": "ready",
+                })
+            return replace(page, items=tuple(enriched))
         normalized = str(query or "").strip().casefold()
         items = []
         repository_goals = self._repository_goals(environment_id=environment_id)
-        generation_scopes = self._control_generation_scopes(repository_goals)
+        generation_scopes = (
+            self._control_generation_scopes(repository_goals)
+            if include_evidence else [None] * len(repository_goals)
+        )
         for goal, scope in zip(repository_goals, generation_scopes, strict=True):
-            badges, run_count = self._current_goal_evidence(
-                goal,
-                generation_scope=scope,
+            badges, run_count = (
+                self._current_goal_evidence(goal, generation_scope=scope)
+                if include_evidence else ((), 0)
             )
             if normalized and normalized not in _search_text(
                 goal.goal_id,
@@ -2040,6 +2201,10 @@ class PlayCatalog:
                     success_badges=badges,
                 ).to_dict()
             )
+        if not include_evidence:
+            for item in items:
+                item["evidence_status"] = "pending"
+                item["run_count"] = None
         return self._page(
             items,
             cursor,
@@ -2210,9 +2375,9 @@ class PlayCatalog:
             )
             best = [dict(run) for run in recent]
             _rank_run_summaries(best, primary=metric_specs, fallback=fallback_specs)
-            variant["recent_runs"] = recent[:5]
+            variant["recent_runs"] = recent[:CATALOG_PAGE_SIZE]
             variant["best_runs"] = best[:5]
-            variant["has_more_runs"] = int(variant.get("run_count") or 0) > 5
+            variant["has_more_runs"] = int(variant.get("run_count") or 0) > len(variant["recent_runs"])
         revision = compact_json_sha256(
             {
                 "repository_goal_sha256": current["effective_goal_contract_sha256"],
@@ -2872,13 +3037,58 @@ class PlayCatalog:
         if not isinstance(projected, Mapping):
             return None
         early_stop = projected.get("early_stop")
+        training_success = projected.get("training_success")
         return {
             "run_id": run_id,
             "state": str(projected.get("state") or ""),
             "stop_reason": str(projected.get("stop_reason") or ""),
             "early_stop": dict(early_stop) if isinstance(early_stop, Mapping) else None,
+            "training_success": (
+                dict(training_success) if isinstance(training_success, Mapping) else None
+            ),
             "updated_at": str(projected.get("updated_at") or ""),
         }
+
+    def latest_run_routes(self) -> list[dict[str, str]]:
+        """Order newest first by run creation time from verified catalog projections, never activity."""
+        if self.control_bucket is None:
+            raise CatalogUnavailable(
+                self.control_error or "--latest requires control-catalog authority for run discovery",
+                code="catalog_configuration",
+            )
+        goals = self._repository_goals()
+        scopes = self._control_generation_scopes(goals)
+        candidates = []
+        for goal, scope in zip(goals, scopes, strict=True):
+            if scope is None:
+                continue
+            runs = self._control_run_catalog(
+                environment_id=goal.environment_id,
+                selected_goal_slug=goal.goal_slug,
+                selected_goal_variant_id="",
+                metric_specs=(),
+                fallback_metric_specs=(),
+                generation_scope=scope,
+            )
+            for run in runs or ():
+                try:
+                    created = datetime.fromisoformat(str(run["created_at"]))
+                    if created.tzinfo is None:
+                        raise ValueError("run creation time must include a timezone")
+                except (KeyError, ValueError) as exc:
+                    raise CatalogIntegrityError("run has an invalid creation time") from exc
+                key = (created, str(run["run_id"]))
+                candidates.append((key, {
+                    "level": "runs",
+                    "environment_id": goal.environment_id,
+                    "goal_id": goal.goal_id,
+                    "goal_variant_id": str(run["goal_variant_id"]),
+                    "run_id": str(run["run_id"]),
+                    "checkpoint_id": "",
+                }))
+        if not candidates:
+            raise CatalogUnavailable("No runs are available in the player catalog", code="no_runs")
+        return [route for _, route in sorted(candidates, key=lambda item: item[0], reverse=True)]
 
     def public_run_route(self, *, run_id: str) -> dict[str, str]:
         """Return the hierarchical checkpoint-browser route proven by a public run."""
@@ -2901,11 +3111,11 @@ class PlayCatalog:
             environment_id = goal_slug
         if not environment_id:
             raise ValueError("public run goal slug is empty")
-        for goal in self._repository_goals(environment_id=environment_id):
-            if goal.goal_slug == goal_slug:
+        for goal in self._repository_goals():
+            if goal_slug in (goal.goal_slug, *self._historical_goal_slugs(goal.goal_slug)):
                 return {
                     "level": "runs",
-                    "environment_id": environment_id,
+                    "environment_id": goal.environment_id,
                     "goal_id": goal.goal_id,
                     "goal_variant_id": str(descriptor["variant_id"]),
                     "run_id": run_id,
@@ -2945,9 +3155,153 @@ class PlayCatalog:
         validated = validate_goal_variant_descriptor(descriptor)
         goal_slug = str(validated["goal_slug"])
         for goal in self._repository_goals(environment_id=environment_id):
-            if goal.goal_slug == goal_slug:
+            if goal_slug in (goal.goal_slug, *self._historical_goal_slugs(goal.goal_slug)):
                 return goal.goal_id, str(validated["variant_id"])
         raise ValueError(f"run goal is not declared in the repository: {goal_slug}")
+
+    def _checkpoint_monitoring_states(
+        self,
+        *,
+        run_id: str,
+        checkpoints: Sequence[CheckpointManifest],
+        recipe_sha256: str,
+        settings: Mapping[str, Any],
+    ) -> dict[str, dict[str, Any]]:
+        if self.control_bucket is None or settings.get("enabled") is not True:
+            return {}
+        contract_hash = compact_json_sha256(
+            {"recipe_sha256": recipe_sha256, "settings": dict(settings)}
+        )
+        keys = {
+            checkpoint.checkpoint_id: (
+                f"runs/{run_id}/monitoring/{contract_hash}/"
+                f"{compact_json_sha256({'checkpoint': checkpoint.checkpoint_id, 'contract': contract_hash})}"
+                "/state.json"
+            )
+            for checkpoint in checkpoints
+        }
+        read_many = getattr(self.control_bucket, "get_json_many_optional", None)
+        documents = (
+            read_many(keys.values())
+            if callable(read_many)
+            else {key: self.control_bucket.get_json_optional(key) for key in keys.values()}
+        )
+        steps = {checkpoint.checkpoint_id: checkpoint.step for checkpoint in checkpoints}
+        states = {}
+        for checkpoint_id, key in keys.items():
+            state = documents.get(key)
+            if state is None:
+                continue
+            if not isinstance(state, Mapping):
+                raise ValueError("checkpoint monitoring state is malformed")
+            status = str(state.get("status") or "")
+            if status not in {
+                "pending",
+                "submitting",
+                "running",
+                "verified",
+                "complete",
+                "failed",
+                "canceled",
+            }:
+                raise ValueError("checkpoint monitoring state has an invalid status")
+            digest = str(state.get("result_sha256") or "")
+            if status in {"verified", "complete"} and SHA256_PATTERN.fullmatch(digest) is None:
+                raise ValueError("verified checkpoint monitoring state has no result hash")
+            states[checkpoint_id] = {
+                "status": status,
+                "result_sha256": digest,
+                "step": steps[checkpoint_id],
+            }
+        return states
+
+    @staticmethod
+    def _monitoring_history(
+        run: ScientificEvidence,
+        metric_contract: CheckpointMetricContract,
+        *,
+        expected_episodes: int | None = None,
+    ) -> dict[int, dict[str, Any]]:
+        monitoring_metrics = tuple(
+            str(column["metric"])
+            for column in metric_contract.columns
+            if "observation" in column.get("roles", ())
+        )
+        if not monitoring_metrics:
+            return {}
+        marker = "eval/monitor/progress/median"
+        core_metrics = (
+            "eval/success/mean",
+            "eval/progress/bricks_destroyed_normalized/mean",
+            "eval/return/mean",
+        )
+        optional_metrics = tuple(metric for metric in monitoring_metrics if metric not in core_metrics)
+        evaluations = {}
+        for raw in run.read([EVAL_CHECKPOINT_STEP, marker, "eval/episodes/count", *core_metrics]):
+            if not isinstance(raw, Mapping):
+                continue
+            step = _safe_int(raw.get(EVAL_CHECKPOINT_STEP))
+            values = {metric: _safe_float(raw.get(metric)) for metric in core_metrics}
+            episode_count = _safe_int(raw.get("eval/episodes/count"))
+            if (
+                step is None
+                or episode_count is None
+                or episode_count <= 0
+                or (expected_episodes is not None and episode_count != expected_episodes)
+                or _safe_float(raw.get(marker)) is None
+                or any(value is None for value in values.values())
+            ):
+                continue
+            evaluations[step] = {
+                "status": "verified",
+                "source": "monitoring",
+                "episodes_completed": episode_count,
+                "episodes_planned": episode_count,
+                "metrics": values,
+            }
+        # Older completed monitoring rows lack newer observational measures.
+        # Fetch those independently so their absence cannot hide verified evidence.
+        for metric in optional_metrics:
+            for raw in run.read([EVAL_CHECKPOINT_STEP, metric]):
+                if not isinstance(raw, Mapping):
+                    continue
+                step = _safe_int(raw.get(EVAL_CHECKPOINT_STEP))
+                value = _safe_float(raw.get(metric))
+                if step in evaluations and value is not None:
+                    evaluations[step]["metrics"][metric] = value
+        return evaluations
+
+    def _public_journal_history(
+        self, run_id: str, reference: Mapping[str, Any],
+    ) -> PublicJournalHistory:
+        reference = dict(reference)
+        digest = str(reference.get("sha256") or "")
+        url = str(reference.get("url") or "")
+        expected_prefix = f"{self.public_models_base_url}/runs/{run_id}/telemetry/"
+        if (
+            SHA256_PATTERN.fullmatch(digest) is None
+            or url != f"{expected_prefix}{digest}.json"
+            or reference.get("run_id") != run_id
+        ):
+            raise ValueError("public telemetry reference is invalid")
+        document = _public_json(url, max_bytes=64 * 1024 * 1024)
+        run = PublicJournalHistory(document, run_id=run_id, digest=digest)
+        media = tuple(run.media)
+        for item in media:
+            media_digest = str(item.get("sha256") or "")
+            identity = re.fullmatch(r"checkpoint-(\d+)-[0-9a-f]{16}",
+                                    str(item.get("checkpoint_id") or ""))
+            if identity is None or int(identity.group(1)) != item["step"]:
+                raise ValueError("public telemetry media checkpoint identity is invalid")
+            if (SHA256_PATTERN.fullmatch(media_digest) is None
+                    or item.get("url") != (
+                        f"{self.public_models_base_url}/runs/{run_id}/media/"
+                        f"{media_digest}.mp4"
+                    )):
+                raise ValueError("public telemetry media URL is invalid")
+        if len(run.rows) != int(reference.get("history_count") or 0):
+            raise ValueError("public telemetry history count mismatch")
+        return run
 
     def _checkpoint_evaluations(
         self,
@@ -2955,8 +3309,27 @@ class PlayCatalog:
         run_id: str,
         metric_contract: CheckpointMetricContract,
         include_wandb: bool,
+        monitoring_states: Mapping[str, Mapping[str, Any]] | None = None,
+        monitoring_episodes: int | None = None,
+        on_training_metric: Callable[[str, tuple[tuple[int, float], ...]], None] | None = None,
+        public_telemetry: Mapping[str, Any] | None = None,
+        public_recipe_config: Mapping[str, Any] | None = None,
     ) -> _CheckpointEvaluationData:
-        def validate_wandb_config(config: Mapping[str, Any]) -> None:
+        def frozen_journal_config(raw: Mapping[str, Any]) -> dict[str, Any]:
+            config = dict(raw)
+            if (metric_contract.acceptance and metric_contract.evaluation_backend != "none"
+                    and not isinstance(config.get("checkpoint_eval_contract"), Mapping)):
+                from gradlab.checkpoint_acceptance import CheckpointEvalContractCompiler
+
+                config["checkpoint_eval_contract"] = (
+                    CheckpointEvalContractCompiler.from_train_config(
+                        config, portable_asset=True, require_asset=False,
+                        materialize_seed_defaults=True,
+                    ).contract(require_acceptance=True)
+                )
+            return config
+
+        def validate_evidence_config(config: Mapping[str, Any]) -> None:
             schema_version = require_current_metrics_schema(config.get("metrics_schema_version"))
             if schema_version != metric_contract.metrics_schema_version:
                 raise ValueError("W&B metrics schema disagrees with the immutable recipe")
@@ -3044,7 +3417,7 @@ class PlayCatalog:
             raw_evaluations = (
                 projected_run.get("evaluations") if isinstance(projected_run, Mapping) else None
             )
-            evaluations: dict[int, dict[str, Any]] = {}
+            evaluations: dict[int | str, dict[str, Any]] = {}
             evaluation_seed = None
             if isinstance(raw_evaluations, Mapping):
                 for checkpoint_id, raw in raw_evaluations.items():
@@ -3085,57 +3458,112 @@ class PlayCatalog:
                         ],
                         "metrics": ranked_metrics,
                     }
+            if not metric_contract.acceptance:
+                monitoring_status = {
+                    "pending": "queued",
+                    "submitting": "queued",
+                    "running": "running",
+                    "verified": "finalizing",
+                    "complete": "verified",
+                    "failed": "failed",
+                    "canceled": "canceled",
+                }
+                for checkpoint_id, state in (monitoring_states or {}).items():
+                    status = str(state["status"])
+                    finished = status in {"verified", "complete"}
+                    evaluations[checkpoint_id] = {
+                        "status": monitoring_status[status],
+                        "source": "monitoring",
+                        "episodes_planned": monitoring_episodes,
+                        "episodes_completed": monitoring_episodes if finished else None,
+                        "metrics": {},
+                    }
             training_metric_history = {}
             warning = None
             training_seed = _safe_int(manifest.get("seed"))
+            use_journal = manifest.get("tracking") is not None
             wandb = manifest.get("wandb")
             entity = str(wandb.get("entity") or "").strip() if isinstance(wandb, Mapping) else ""
             project = str(wandb.get("project") or "").strip() if isinstance(wandb, Mapping) else ""
-            if include_wandb and entity and project:
+            if use_journal or (include_wandb and entity and project):
                 try:
-                    run = self._wandb_api().run(f"{entity}/{project}/{run_id}")
-                    config = dict(getattr(run, "config", {}) or {})
-                    validate_wandb_config(config)
-                    if training_seed is None:
-                        training_seed = _safe_int(config.get("seed"))
+                    if use_journal:
+                        recipe = self._control_recipe_document(str(manifest["recipe_sha256"]))
+                        if recipe is None:
+                            raise ValueError("frozen Run recipe is unavailable")
+                        evidence = ScientificEvidence.journal(
+                            JournalHistory(read_control_journal(self.control_bucket, run_id)),
+                            frozen_journal_config(recipe["recipe"]["train_config"]),
+                        )
+                    else:
+                        evidence = ScientificEvidence.historical_wandb(
+                            self._wandb_api().run(f"{entity}/{project}/{run_id}")
+                        )
+                    validate_evidence_config(evidence.config)
+                    if not use_journal and training_seed is None:
+                        training_seed = _safe_int(evidence.config.get("seed"))
                     training_metric_history = _checkpoint_training_metric_history(
-                        run,
-                        metric_contract.columns,
+                        evidence, metric_contract.columns, on_training_metric,
                     )
+                    if not metric_contract.acceptance and monitoring_states:
+                        history = self._monitoring_history(
+                            evidence, metric_contract, expected_episodes=monitoring_episodes,
+                        )
+                        complete_steps = [int(state["step"]) for state in monitoring_states.values()
+                                          if state["status"] == "complete"]
+                        for checkpoint_id, state in monitoring_states.items():
+                            step = int(state["step"])
+                            if state["status"] == "complete" and complete_steps.count(step) == 1 and step in history:
+                                evaluations[checkpoint_id] = history[step]
                 except Exception as exc:
                     warning = {
-                        "code": (
-                            "wandb_contract_mismatch"
-                            if isinstance(exc, ValueError)
-                            else "wandb_enrichment_unavailable"
-                        ),
-                        "message": f"Optional W&B training history is unavailable: {exc}",
+                        "code": ("journal_contract_mismatch" if isinstance(exc, ValueError) else "journal_unavailable")
+                                if use_journal else ("wandb_contract_mismatch" if isinstance(exc, ValueError) else "wandb_enrichment_unavailable"),
+                        "message": f"GradLab metric journal is unavailable: {exc}" if use_journal
+                                   else f"Optional W&B training history is unavailable: {exc}",
                         "retryable": isinstance(exc, (TimeoutError, OSError)),
-                        "source": "wandb",
+                        "source": "gradlab-journal" if use_journal else "wandb",
                     }
+            media = ()
+            if use_journal and isinstance(public_telemetry, Mapping):
+                try:
+                    media = tuple(self._public_journal_history(run_id, public_telemetry).media)
+                except Exception as exc:
+                    warning = {"code": "public_media_unavailable", "source": "public-telemetry",
+                               "message": f"Published media is unavailable: {exc}",
+                               "retryable": isinstance(exc, (TimeoutError, OSError))}
             return _CheckpointEvaluationData(
-                evaluations=evaluations,
-                training_seed=training_seed,
-                evaluation_seed=evaluation_seed,
-                training_metric_history=training_metric_history,
-                warning=warning,
+                evaluations=evaluations, training_seed=training_seed,
+                evaluation_seed=evaluation_seed, training_metric_history=training_metric_history,
+                warning=warning, media=media,
             )
         wandb_location = self._wandb_run_locations.get(run_id)
         entity = str(wandb_location.entity or "").strip() if wandb_location else ""
         project = str(wandb_location.project or "").strip() if wandb_location else ""
-        if not include_wandb or not entity or not project:
+        use_public = isinstance(public_telemetry, Mapping)
+        if not use_public and (not include_wandb or not entity or not project):
             return _CheckpointEvaluationData({}, None, None, {})
         run = None
         try:
-            run = self._wandb_api().run(f"{entity}/{project}/{run_id}")
-            config = dict(getattr(run, "config", {}) or {})
-            validate_wandb_config(config)
+            if use_public:
+                run = ScientificEvidence.journal(
+                    self._public_journal_history(run_id, public_telemetry),
+                    frozen_journal_config(public_recipe_config or {}),
+                )
+                media = run.media
+                config = run.config
+            else:
+                run = ScientificEvidence.historical_wandb(self._wandb_api().run(f"{entity}/{project}/{run_id}"))
+                media = run.media
+                config = run.config
+            validate_evidence_config(config)
             require_current_metrics_schema(metric_contract.metrics_schema_version)
             training_seed = _safe_int(config.get("seed"))
             contract = config.get("checkpoint_eval_contract")
             if metric_contract.evaluation_backend == "none" or not metric_contract.acceptance:
                 evaluations = {}
                 evaluation_seed = None
+                evaluations = self._monitoring_history(run, metric_contract)
             else:
                 assert isinstance(contract, Mapping)
                 evaluation_seed = _safe_int(contract.get("seed"))
@@ -3143,11 +3571,10 @@ class PlayCatalog:
                 result_keys = {
                     EVAL_CHECKPOINT_STEP,
                     EVAL_ACCEPTANCE_PASS,
-                    EVAL_ACCEPTANCE_EPISODE_PLANNED_COUNT,
                     EVAL_ACCEPTANCE_EPISODE_COMPLETED_COUNT,
                 }
                 evaluations = {}
-                for raw in run.scan_history(keys=sorted(result_keys), page_size=10_000):
+                for raw in run.read(sorted(result_keys)):
                     if not isinstance(raw, Mapping):
                         continue
                     step = _safe_int(raw.get(EVAL_CHECKPOINT_STEP))
@@ -3157,28 +3584,12 @@ class PlayCatalog:
                     criteria: list[dict[str, Any]] = []
                     for rule in rules:
                         metric = str(rule["metric"])
-                        operator = str(rule["operator"])
-                        threshold = float(rule["threshold"])
                         value = _safe_float(raw.get(metric))
-                        criteria.append(
-                            {
-                                "metric": metric,
-                                "operator": operator,
-                                "threshold": threshold,
-                                "value": value,
-                                "passed": (
-                                    None
-                                    if value is None
-                                    else bool(EARLY_STOP_OPERATORS[operator](value, threshold))
-                                ),
-                            }
-                        )
+                        criteria.append(metric_threshold_evidence(rule, value))
                     evaluations[step] = {
                         "status": "accepted" if accepted >= 0.5 else "rejected",
                         "pass": accepted >= 0.5,
-                        "episodes_planned": _safe_int(
-                            raw.get(EVAL_ACCEPTANCE_EPISODE_PLANNED_COUNT)
-                        ),
+                        "episodes_planned": _safe_int(contract.get("episodes")),
                         "episodes_completed": _safe_int(
                             raw.get(EVAL_ACCEPTANCE_EPISODE_COMPLETED_COUNT)
                         ),
@@ -3189,48 +3600,44 @@ class PlayCatalog:
                 # W&B returns no rows when scan_history requests a key that is absent
                 # from some history records, so fetch each optional criterion
                 # independently and merge it into the authoritative verdict rows.
-                for rule_index, rule in enumerate(rules):
-                    metric = str(rule["metric"])
-                    for raw in run.scan_history(
-                        keys=[EVAL_CHECKPOINT_STEP, metric],
-                        page_size=10_000,
-                    ):
-                        if not isinstance(raw, Mapping):
-                            continue
+                criteria_by_metric: dict[str, list[int]] = {}
+                for index, rule in enumerate(rules):
+                    criteria_by_metric.setdefault(str(rule["metric"]), []).append(index)
+                evaluation_metrics = {
+                    str(column["metric"])
+                    for column in metric_contract.columns
+                    if column.get("evidence") == "evaluation"
+                }
+                metric_names = dict.fromkeys([
+                    *criteria_by_metric,
+                    *(str(column["metric"]) for column in metric_contract.columns
+                      if column.get("evidence") == "evaluation"),
+                ])
+                for metric in metric_names:
+                    if metric == LEADER_CHECKPOINT_STEP and metric not in criteria_by_metric:
+                        continue
+                    for raw in run.read([EVAL_CHECKPOINT_STEP, metric]):
                         step = _safe_int(raw.get(EVAL_CHECKPOINT_STEP))
                         value = _safe_float(raw.get(metric))
                         evaluation = evaluations.get(step) if step is not None else None
                         if evaluation is None or value is None:
                             continue
-                        criterion = evaluation["criteria"][rule_index]
-                        criterion["value"] = value
-                        criterion["passed"] = bool(
-                            EARLY_STOP_OPERATORS[str(rule["operator"])](
-                                value,
-                                float(rule["threshold"]),
-                            )
-                        )
-                evaluation_metric_names = dict.fromkeys(
-                    str(column["metric"])
-                    for column in metric_contract.columns
-                    if column.get("evidence") == "evaluation"
-                )
-                evaluation_metric_names.pop(LEADER_CHECKPOINT_STEP, None)
-                for metric in evaluation_metric_names:
-                    for raw in run.scan_history(
-                        keys=[EVAL_CHECKPOINT_STEP, metric],
-                        page_size=10_000,
-                    ):
-                        if not isinstance(raw, Mapping):
-                            continue
-                        step = _safe_int(raw.get(EVAL_CHECKPOINT_STEP))
-                        value = _safe_float(raw.get(metric))
-                        evaluation = evaluations.get(step) if step is not None else None
-                        if evaluation is not None and value is not None:
+                        if metric in criteria_by_metric:
+                            for index in criteria_by_metric[metric]:
+                                criterion = evaluation["criteria"][index]
+                                criterion["value"] = value
+                                rule = rules[index]
+                                criterion["passed"] = bool(
+                                    EARLY_STOP_OPERATORS[str(rule["operator"])](
+                                        value, float(rule["threshold"])
+                                    )
+                                )
+                        if metric in evaluation_metrics and metric != LEADER_CHECKPOINT_STEP:
                             evaluation["metrics"][metric] = value
             training_metric_history = _checkpoint_training_metric_history(
                 run,
                 metric_contract.columns,
+                on_training_metric,
             )
         except Exception as exc:
             # Public checkpoints remain playable when W&B history is unavailable.
@@ -3238,15 +3645,17 @@ class PlayCatalog:
             training_seed = None
             evaluation_seed = None
             training_metric_history = {}
+            media = ()
+            source = "public-telemetry" if use_public else "wandb"
             warning = {
                 "code": (
                     "wandb_contract_mismatch"
                     if isinstance(exc, ValueError)
                     else "wandb_enrichment_unavailable"
                 ),
-                "message": f"W&B enrichment is unavailable: {exc}",
+                "message": f"{source} enrichment is unavailable: {exc}",
                 "retryable": isinstance(exc, (TimeoutError, OSError)),
-                "source": "wandb",
+                "source": source,
             }
         else:
             warning = None
@@ -3256,6 +3665,7 @@ class PlayCatalog:
             evaluation_seed=evaluation_seed,
             training_metric_history=training_metric_history,
             warning=warning,
+            media=media,
         )
         return data
 
@@ -3266,6 +3676,7 @@ class PlayCatalog:
         query: str = "",
         goal_variant_id: str = "",
         include_wandb: bool = True,
+        on_training_progress: Callable[[Mapping[str, Any]], None] | None = None,
     ) -> CheckpointPage:
         if RUN_ID_PATTERN.fullmatch(run_id) is None:
             raise ValueError("run id must match gradlab-<32 lowercase hex>")
@@ -3296,6 +3707,22 @@ class PlayCatalog:
             checkpoints=[manifest.to_dict() for manifest in manifests],
         )
         warnings: list[Mapping[str, Any]] = []
+        telemetry_tracking = (
+            (index.get("telemetry") or {}).get("tracking")
+            if isinstance(index.get("telemetry"), Mapping)
+            else None
+        )
+        if (
+            isinstance(telemetry_tracking, Mapping)
+            and telemetry_tracking.get("delivery") == "local_only"
+            and telemetry_tracking.get("tracker_sync_status") == "pending"
+        ):
+            warnings.append({
+                "code": "tracker_sync_pending",
+                "message": "This completed local Run has durable public telemetry; optional tracker sync is pending.",
+                "retryable": False,
+                "source": "public-telemetry",
+            })
         try:
             run_status = run_status_future.result()
         except Exception as exc:
@@ -3313,6 +3740,8 @@ class PlayCatalog:
             )
         recipe_document: Mapping[str, Any] | None = None
         metric_contract: CheckpointMetricContract | None = None
+        recipe_digest = ""
+        train_config: Mapping[str, Any] | None = None
         try:
             recipe_document, _metadata = recipe_future.result()
             if recipe_document is None:
@@ -3344,6 +3773,40 @@ class PlayCatalog:
                     "source": "recipe",
                 }
             )
+
+        monitoring_states: dict[str, dict[str, Any]] = {}
+        monitoring_episodes = None
+        settings = (
+            train_config.get("checkpoint_monitoring")
+            if isinstance(train_config, Mapping)
+            else None
+        )
+        if (
+            metric_contract is not None
+            and isinstance(settings, Mapping)
+            and settings.get("enabled") is True
+        ):
+            try:
+                monitoring_episodes = int(settings["episodes"])
+                if monitoring_episodes <= 0:
+                    raise ValueError("checkpoint monitoring episode count must be positive")
+                monitoring_states = self._checkpoint_monitoring_states(
+                    run_id=run_id,
+                    checkpoints=manifests,
+                    recipe_sha256=recipe_digest,
+                    settings=settings,
+                )
+            except Exception as exc:
+                warnings.append(
+                    {
+                        "code": "checkpoint_monitoring_status_unavailable",
+                        "message": f"Checkpoint Monitoring status is unavailable: {exc}",
+                        "retryable": isinstance(
+                            exc, (CatalogUnavailable, TimeoutError, URLError, OSError)
+                        ),
+                        "source": "control-catalog",
+                    }
+                )
 
         expected_effective_goal_hash = ""
         selected_variant = str(goal_variant_id or "").strip()
@@ -3378,11 +3841,38 @@ class PlayCatalog:
                     "checkpoint effective goal contract does not match its run variant"
                 )
 
+        def training_progress(metric: str, samples: tuple[tuple[int, float], ...]) -> None:
+            if on_training_progress is None:
+                return
+            # Publish each completed metric immediately, in checkpoint table order.
+            ordered = sorted(manifests, key=lambda item: (item.step, item.sha256), reverse=True)
+            sample_index = len(samples) - 1
+            updates = []
+            for manifest in ordered:
+                while sample_index >= 0 and samples[sample_index][0] > manifest.step:
+                    sample_index -= 1
+                updates.append({
+                    "checkpoint_id": manifest.checkpoint_id,
+                    "metrics": {metric: samples[sample_index][1] if sample_index >= 0 else None},
+                })
+                if len(updates) == 20:
+                    on_training_progress({"type": "metrics", "items": updates})
+                    updates = []
+            if updates:
+                on_training_progress({"type": "metrics", "items": updates})
+
         evaluation_data = (
             self._checkpoint_evaluations(
                 run_id=run_id,
                 metric_contract=metric_contract,
                 include_wandb=include_wandb,
+                monitoring_states=monitoring_states,
+                monitoring_episodes=monitoring_episodes,
+                on_training_metric=training_progress if on_training_progress else None,
+                public_telemetry=(
+                    index.get("telemetry") if isinstance(index.get("telemetry"), Mapping) else None
+                ),
+                public_recipe_config=train_config,
             )
             if metric_contract is not None
             else _CheckpointEvaluationData({}, None, None, {})
@@ -3392,7 +3882,9 @@ class PlayCatalog:
         columns = metric_contract.columns if metric_contract is not None else ()
         rows: list[CheckpointSummary] = []
         for manifest in manifests:
-            evaluation = evaluation_data.evaluations.get(manifest.step)
+            evaluation = evaluation_data.evaluations.get(
+                manifest.checkpoint_id
+            ) or evaluation_data.evaluations.get(manifest.step)
             playback_seed = (
                 evaluation_data.evaluation_seed
                 if evaluation is not None and evaluation_data.evaluation_seed is not None
@@ -3428,6 +3920,10 @@ class PlayCatalog:
                     columns,
                 ),
                 evaluation=evaluation,
+                representative_media=tuple(
+                    item for item in evaluation_data.media
+                    if item.get("checkpoint_id") == manifest.checkpoint_id
+                ),
             )
             rows.append(row)
         rows.sort(key=lambda row: (row.step, row.sha256), reverse=True)

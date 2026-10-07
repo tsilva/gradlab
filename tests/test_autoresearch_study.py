@@ -846,10 +846,10 @@ class AutoresearchStudyTests(unittest.TestCase):
             state="finished",
             scan_history=lambda **_kwargs: [
                 {
-                    "train/global_step": 50_176,
+                    "train/step": 50_176,
                     "train/target/success/from/A/episode/count": 2,
                     "train/target/success/from/B/episode/count": 0,
-                    "train/target/success/start_rate_min": 0.91,
+                    "train/success/min": 0.91,
                 }
             ],
         )
@@ -874,10 +874,10 @@ class AutoresearchStudyTests(unittest.TestCase):
 
     def test_return_evidence_does_not_query_absent_success_metrics(self) -> None:
         queried_keys: list[list[str]] = []
-        return_metric = "train/target/return_mean"
+        return_metric = "train/return/mean"
         return_rows = [
             {
-                "train/global_step": step * 4096,
+                "train/step": step * 4096,
                 return_metric: float(step),
             }
             for step in range(1, 101)
@@ -889,7 +889,7 @@ class AutoresearchStudyTests(unittest.TestCase):
                 return []
             if return_metric in keys:
                 return return_rows
-            return [{"train/global_step": row["train/global_step"]} for row in return_rows]
+            return [{"train/step": row["train/step"]} for row in return_rows]
 
         run = SimpleNamespace(
             id="gradlab-43",

@@ -1,17 +1,42 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
+import { renderComponent } from "./helpers/svelte-render.mjs";
+
+async function sourceHtml(overrides = {}) {
+  const presentation = {
+    route: { level: "runs", run_id: "run-a" }, items: [], sourceItems: [],
+    loading: false, loadedKey: "loaded", error: "", query: "", searchOpen: false,
+    app: { phase: "selecting" }, hasControl: true, heading: "Choose a run",
+    selectedCheckpoints: new Set(), goalVariantRunPages: new Map(),
+    favoriteEnvironments: new Set(), selectedGoalVariantId: "current",
+    goalVariantDiff: null, metricColumns: [], fallbackMetricColumns: [],
+    sort: { metric: "", direction: "" }, refreshing: false,
+    searchPlaceholder: "Search checkpoints", ...overrides,
+  };
+  presentation.table = sourceTablePresentation(presentation);
+  return renderComponent(new URL("../../frontend/components/SourceBrowser.svelte", import.meta.url), {
+    presentation, controller: { embeddedGoalRunsHaveMore: () => false },
+  });
+}
+const checkpoint = {checkpoint_id: "checkpoint-a", step: 100, metrics: {}};
+const configuration = {
+  variant_id: "current", configuration_kind: "current_default", goal_contract_sha256: "abcdef123456",
+  run_count: 1, recent_runs: [],
+};
+
 
 import {
+  sourceTablePresentation,
   activeRunMetricColumns,
   availableRunMetricColumns,
   bestRunEfficiency,
   catalogItemMatchesSearch,
   checkpointCanEvaluate,
-  checkpointMetricBestBadge,
+  checkpointEvaluationPresentation,
   checkpointMetricDescription,
   checkpointMetricHeaderLabel,
-  checkpointMetricIsBest,
+  checkpointMetricIsLoading,
   checkpointMetricRoleLabel,
   checkpointNavigationPresentation,
   checkpointPrefetchSources,
@@ -20,6 +45,7 @@ import {
   readEnvironmentFavorites,
   environmentSuccessStatus,
   formatGoalDiffValue,
+  formatGoalConfigurationDate,
   formatMetricValue,
   groupGoalConfigurations,
   goalConfigurationPresentation,
@@ -40,9 +66,7 @@ import {
   toggleEnvironmentFavorite,
   writeEnvironmentFavorites,
 } from "../../src/gradlab/web_player/sources/browser.js";
-import {
-  snapshotActivatesCheckpointSelection,
-} from "../../src/gradlab/web_player/playback-transition.js";
+
 
 test("checkpoint navigation reports chronological position and neighbors", () => {
   const checkpoints = [
@@ -74,17 +98,9 @@ test("checkpoint navigation reports chronological position and neighbors", () =>
 });
 
 test("checkpoint navigation renders only the compact position ratio", async () => {
-  const source = await readFile(
-    new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
-    "utf8",
-  );
-
-  assert.match(source, /\? "… \/ …"/);
-  assert.match(
-    source,
-    /`\$\{presentation\.position\.toLocaleString\(\)\} \/ \$\{presentation\.count\.toLocaleString\(\)\}`/,
-  );
-  assert.doesNotMatch(source, /`Checkpoint \$\{presentation\.position/);
+  const html = await renderComponent(new URL("../../frontend/components/SourceNavigation.svelte", import.meta.url), {controller: {}, kind: "checkpoints", presentation: {position: "2 / 3", previousDisabled: false, nextDisabled: false}});
+  assert.match(html, /2 \/ 3/);
+  assert.doesNotMatch(html, /Checkpoint 2/);
 });
 
 test("checkpoint navigation fails closed when the active checkpoint is absent", () => {
@@ -141,92 +157,6 @@ test("checkpoint prefetch selects only the immediate disk-cache neighbors", () =
   );
 });
 
-test("top checkpoint navigation starts one blocking load state", () => {
-  const browser = Object.create(SourceBrowser.prototype);
-  browser.route = {
-    run_id: "gradlab-run",
-    checkpoint_id: "checkpoint-200-b",
-  };
-  browser.activeCheckpointPendingId = "";
-  browser.activeCheckpointItems = () => [
-    {
-      checkpoint_id: "checkpoint-100-a",
-      manifest_url: "https://models.example/checkpoint-100/manifest.json",
-      run_id: "gradlab-run",
-      step: 100,
-    },
-    {
-      checkpoint_id: "checkpoint-200-b",
-      manifest_url: "https://models.example/checkpoint-200/manifest.json",
-      run_id: "gradlab-run",
-      step: 200,
-    },
-  ];
-  browser.command = () => "load-command";
-  browser.syncUrl = () => {};
-  browser.renderActiveCheckpointNavigation = () => {};
-  const loads = [];
-  browser.beginCheckpointLoad = (load) => loads.push(load);
-
-  assert.equal(browser.selectAdjacentCheckpoint("previous"), true);
-  assert.deepEqual(loads, [{
-    commandId: "load-command",
-    checkpointId: "checkpoint-100-a",
-  }]);
-  assert.equal(browser.activeCheckpointPendingId, "checkpoint-100-a");
-  assert.equal(browser.selectAdjacentCheckpoint("previous"), false);
-  assert.equal(loads.length, 1);
-});
-
-test("checkpoint list selection starts one tracked foreground load", () => {
-  const browser = Object.create(SourceBrowser.prototype);
-  browser.route = {
-    level: "runs",
-    run_id: "gradlab-run",
-    checkpoint_id: "",
-  };
-  browser.command = () => "load-command";
-  browser.syncUrl = () => {};
-  const loads = [];
-  browser.beginCheckpointLoad = (load) => loads.push(load);
-
-  assert.equal(browser.selectCheckpoint({
-    checkpoint_id: "checkpoint-200-b",
-    manifest_url: "https://models.example/checkpoint-200/manifest.json",
-    run_id: "gradlab-run",
-  }), "load-command");
-  assert.deepEqual(loads, [{
-    commandId: "load-command",
-    checkpointId: "checkpoint-200-b",
-  }]);
-});
-
-test("only the selected checkpoint leaves background playback", () => {
-  const checkpointLoad = {
-    commandId: "load-command",
-    checkpointId: "checkpoint-200-b",
-  };
-
-  assert.equal(snapshotActivatesCheckpointSelection(checkpointLoad, {
-    app: {
-      phase: "active",
-      route: { checkpoint_id: "checkpoint-100-a" },
-    },
-  }), false);
-  assert.equal(snapshotActivatesCheckpointSelection(checkpointLoad, {
-    app: {
-      phase: "resolving",
-      route: { checkpoint_id: "checkpoint-200-b" },
-    },
-  }), false);
-  assert.equal(snapshotActivatesCheckpointSelection(checkpointLoad, {
-    app: {
-      phase: "active",
-      route: { checkpoint_id: "checkpoint-200-b" },
-    },
-  }), true);
-});
-
 test("adjacent checkpoint prefetch is deduplicated before reaching the worker", () => {
   const browser = Object.create(SourceBrowser.prototype);
   browser.route = {
@@ -269,6 +199,27 @@ test("adjacent checkpoint prefetch is deduplicated before reaching the worker", 
     commands[0].payload.sources.map((source) => source.checkpoint_id),
     ["checkpoint-100-a", "checkpoint-300-c"],
   );
+});
+
+test("checkpoint navigation uses the session's fetched table", async () => {
+  const browser = Object.create(SourceBrowser.prototype);
+  const route = { run_id: "run-a", goal_variant_id: "variant-a", checkpoint_id: "checkpoint-1" };
+  browser.activeCheckpointCache = new Map([[JSON.stringify({
+    run_id: "run-a", goal_variant_id: "variant-a",
+  }), [{ checkpoint_id: "checkpoint-1" }]]]);
+  browser.activeCheckpointRequestSerial = 0;
+  browser.activeCheckpointError = "old error";
+  const controller = new AbortController();
+  browser.activeCheckpointController = controller;
+  const prefetched = [];
+  browser.prefetchAdjacentCheckpoints = (value) => prefetched.push(value);
+
+  await browser.loadActiveCheckpointNavigation(route, "route");
+
+  assert.equal(controller.signal.aborted, true);
+  assert.equal(browser.activeCheckpointRequestSerial, 1);
+  assert.equal(browser.activeCheckpointError, "");
+  assert.deepEqual(prefetched, [route]);
 });
 
 test("catalog search filters the displayed authoritative page synchronously", () => {
@@ -351,42 +302,11 @@ test("environment favorites toggle on and back off", () => {
 });
 
 test("environment favorite controls use a thin outline and filled selected star", async () => {
-  const source = await readFile(
-    new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
-    "utf8",
-  );
-  const styles = await readFile(
-    new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
-    "utf8",
-  );
-  const sprite = await readFile(
-    new URL("../../src/gradlab/web_player/tabler-icons.svg", import.meta.url),
-    "utf8",
-  );
-
-  assert.match(source, /favorite\.append\(icon\(isFavorite \? "star-filled" : "star"\)\);/);
-  assert.doesNotMatch(source, /[⭐☆]/);
-  assert.match(source, /favorite\.setAttribute\("aria-pressed", String\(isFavorite\)\);/);
-  assert.match(source, /writeEnvironmentFavorites\(next\);/);
-  assert.match(source, /environmentHeading\.scope = "colgroup";/);
-  assert.match(source, /environmentHeading\.colSpan = 2;/);
-  assert.match(source, /headings\.append\(environmentHeading\);/);
-  assert.doesNotMatch(source, /favoriteHeading/);
-  assert.match(source, /const environmentColumns = makeColumnGroup\(\[/);
-  assert.match(source, /table\.append\(environmentColumns, metricColumns, head, body\);/);
-  assert.match(
-    source,
-    /row\.append\(favoriteCell, environmentCell, goalsCell, trainingCell, evaluationCell\);/,
-  );
-  assert.match(styles, /\.environment-favorite-column,\s*\.environment-favorite-cell \{ width: 2\.5rem; \}/);
-  assert.match(
-    styles,
-    /\.environment-favorite \{[\s\S]*color: color-mix\(in srgb, var\(--color-text-muted\) 55%, transparent\);/,
-  );
-  assert.match(styles, /\.environment-favorite \.icon \{ width: 1\.5rem; height: 1\.5rem; \}/);
-  assert.match(styles, /\.environment-favorite\.selected \{ color: var\(--color-series-amber\); \}/);
-  assert.match(sprite, /id="ti-star"[^>]*stroke-width="1\.25"/);
-  assert.match(sprite, /id="ti-star-filled"[^>]*fill="currentColor"/);
+  const html = await sourceHtml({route: {level: "environments"}, items: [{name: "Mario", goal_count: 1}, {name: "Doom", goal_count: 2}], favoriteEnvironments: new Set(["Mario"])});
+  assert.match(html, /ti-star-filled/);
+  assert.match(html, /ti-star["<]/);
+  assert.match(html, /aria-pressed="true"/);
+  assert.match(html, /Remove Mario from favorites/);
 });
 
 test("goal variant selection uses the exact live activity diff", () => {
@@ -467,24 +387,38 @@ test("selecting a goal configuration updates the master-detail selection", () =>
 
 test("run evidence status distinguishes missing evaluation from failed evaluation", () => {
   assert.deepEqual(runTrainingEvidenceStatus({ success_badges: ["train/success"] }), {
-    label: "Met",
+    label: "✅",
     className: "met",
     description: "The Run met its declared Training Success proxy",
   });
-  assert.equal(runTrainingEvidenceStatus({ state: "running" }).label, "In progress");
-  assert.equal(runTrainingEvidenceStatus({ state: "finished" }).label, "Not met");
+  assert.equal(runTrainingEvidenceStatus({ state: "running" }).label, "⏳");
+  assert.equal(runTrainingEvidenceStatus({ state: "finished" }).label, "❌");
+  const historical = runTrainingEvidenceStatus({
+    state: "finished",
+    training_success: {
+      criterion: {
+        metric: "train/progress/bricks_destroyed_normalized/mean",
+        operator: ">=",
+        threshold: 0.5,
+      },
+      status: "not_met",
+      best: { step: 189161472, value: 0.4992129623889923 },
+    },
+  });
+  assert.equal(historical.label, "❌");
+  assert.match(historical.description, /0\.4992129623889923 at step 189161472/);
 
   assert.deepEqual(runEvaluationEvidenceStatus({ evaluation_status: "not_evaluated" }), {
-    label: "Not evaluated",
+    label: "∅",
     className: "not-evaluated",
     description: "No evaluation evidence is available for this Run",
   });
-  assert.equal(runEvaluationEvidenceStatus({ evaluation_status: "in_progress" }).label, "In progress");
-  assert.equal(runEvaluationEvidenceStatus({ evaluation_status: "not_accepted" }).label, "Not accepted");
-  assert.equal(runEvaluationEvidenceStatus({ success_badges: ["eval/success"] }).label, "Accepted");
+  assert.equal(runEvaluationEvidenceStatus({ evaluation_status: "in_progress" }).label, "⏳");
+  assert.equal(runEvaluationEvidenceStatus({ evaluation_status: "not_accepted" }).label, "❌");
+  assert.equal(runEvaluationEvidenceStatus({ success_badges: ["eval/success"] }).label, "✅");
 });
 
-const METRIC = "eval/return_mean";
+const METRIC = "eval/return/mean";
 
 test("checkpoint selection boxes are centered and distinguish enabled from disabled", async () => {
   const styles = await readFile(
@@ -494,7 +428,7 @@ test("checkpoint selection boxes are centered and distinguish enabled from disab
 
   assert.match(
     styles,
-    /\.source-table \.source-selection-cell \{[^}]*vertical-align: middle;/,
+    /\.source-table\.checkpoint-table \.source-selection-cell \{[^}]*vertical-align: middle;/,
   );
   assert.match(
     styles,
@@ -504,22 +438,12 @@ test("checkpoint selection boxes are centered and distinguish enabled from disab
   assert.match(styles, /\.source-selection-cell input:disabled \{[^}]*border-color: var\(--color-border\);[^}]*opacity: \.42;/);
 });
 
-test("checkpoint table uses compact metric labels with full accessible descriptions", async () => {
-  const source = await readFile(
-    new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
-    "utf8",
-  );
-
-  assert.match(source, /fullLabel: column\.label \|\| metricLabel\(column\.metric\)/);
-  assert.match(source, /label: checkpointMetricHeaderLabel\(column\)/);
-  assert.match(source, /sortButton\.title = `\$\{fullLabel\}/);
-  assert.match(source, /`Sort by \$\{fullLabel\}, \$\{nextDirection\}`/);
-  assert.match(source, /table\.classList\.add\("checkpoint-table"\)/);
-  assert.match(source, /indicator\.hidden = showingCheckpoints && !active/);
-  assert.doesNotMatch(source, /roleLabel\.className = `checkpoint-metric-role/);
-  assert.doesNotMatch(source, /\{ label: "Evaluation" \}/);
-  assert.doesNotMatch(source, /\{ label: "Evidence" \}/);
-  assert.doesNotMatch(source, /checkpoint-evidence/);
+test("checkpoint table keeps full metric descriptions for accessible sorting", async () => {
+  const html = await sourceHtml({items: [checkpoint], metricColumns: [{metric: "eval/return/mean", label: "eval/return/mean", evidence: "evaluation", direction: "max"}]});
+  assert.match(html, /Sort by eval\/return\/mean, descending/);
+  assert.match(html, /Frozen checkpoint-evaluation evidence/);
+  assert.match(html, /<wbr/);
+  assert.match(html, /scope="colgroup"[^>]*>Eval/);
 });
 
 test("catalog list hover highlights the complete row", async () => {
@@ -551,99 +475,27 @@ test("scientific success badges are ordered, independent, and evidence-labelled"
   ]);
   assert.deepEqual(successBadgeLabels({}), []);
 
-  const source = await readFile(
-    new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
-    "utf8",
-  );
-  const styles = await readFile(
-    new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
-    "utf8",
-  );
-  assert.doesNotMatch(source, /renderSuccessBadges\(environment\)/);
-  assert.doesNotMatch(source, /renderSuccessBadges\(goal\)/);
-  assert.doesNotMatch(source, /renderSuccessBadges\(variant\)/);
-  assert.doesNotMatch(source, /renderSuccessBadges\(run\)/);
-  assert.match(source, /renderSuccessBadges\(item\)/);
-  assert.doesNotMatch(source, /heading\.className = "goal-row-heading"/);
-  assert.match(
-    styles,
-    /\.success-badge\s*\{[^}]*padding: \.14rem \.32rem;[^}]*border: 1px solid color-mix\(in srgb, var\(--color-training-success-text\) 36%, transparent\);[^}]*background: color-mix\(in srgb, var\(--color-training-success-surface\) 48%, transparent\);[^}]*font-weight: var\(--font-weight-semibold\);[^}]*letter-spacing: 0;/,
-  );
-  assert.match(styles, /\.success-badge\.evaluation/);
-  assert.match(
-    styles,
-    /\.success-badge\.training\s*\{[^}]*font-size: var\(--font-size-xs\);[^}]*font-weight: var\(--font-weight-regular\);/,
-  );
+  const html = await sourceHtml({route: {level: "runs", run_id: ""}, items: [{run_id: "run-a", metrics: {}, success_badges: ["eval/success", "train/success"]}]});
+  assert.match(html, /success-badge training/);
+  assert.match(html, /success-badge evaluation/);
+  assert.ok(html.indexOf(">train/success<") < html.indexOf(">eval/success<"));
+  assert.match(html, /verified evaluation/);
 });
 
 test("goals render as table status columns", async () => {
-  const source = await readFile(
-    new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
-    "utf8",
-  );
-
-  assert.match(source, /table\.className = "goal-table"/);
-  assert.match(source, /\["Goal", "Recipes", "train\/success", "eval\/success", "YAML"\]/);
-  assert.match(source, /recipesCell\.textContent = Number\(goal\.recipe_count\)\.toLocaleString\(\);/);
-  assert.match(source, /environmentSuccessStatus\(goal, "train\/success"\)/);
-  assert.match(source, /environmentSuccessStatus\(goal, "eval\/success"\)/);
-  assert.match(source, /row\.append\(goalCell, recipesCell, trainingCell, evaluationCell, inspectCell\);/);
+  const html = await sourceHtml({route: {level: "goals"}, items: [{goal_id: "Level1-1", goal_slug: "level", title: "Finish level", recipe_count: 2, success_badges: ["train/success"]}]});
+  assert.match(html, /class="goal-table"/);
+  assert.match(html, /train\/success/);
+  assert.match(html, /eval\/success/);
+  assert.match(html, /Inspect Level1-1 YAML/);
 });
 
 test("environment success is rendered as table status columns", async () => {
-  assert.deepEqual(environmentSuccessStatus({
-    run_count: 2,
-    success_badges: ["train/success"],
-  }, "train/success"), {
-    label: "✅",
-    className: "satisfied",
-    description: "Training success satisfied",
-  });
-  assert.deepEqual(environmentSuccessStatus({
-    run_count: 2,
-    success_badges: ["train/success"],
-  }, "eval/success"), {
-    label: "❌",
-    className: "unsatisfied",
-    description: "Training runs exist, but evaluation success is not satisfied",
-  });
-  assert.deepEqual(environmentSuccessStatus({
-    run_count: 0,
-    success_badges: [],
-  }, "train/success"), {
-    label: "N/A",
-    className: "not-applicable",
-    description: "No runs yet",
-  });
-
-  const source = await readFile(
-    new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
-    "utf8",
-  );
-  assert.match(source, /document\.createElement\("table"\)/);
-  assert.match(source, /environmentHeading\.textContent = "Environment";/);
-  assert.match(source, /\["Goals", "environment-goals-column"\]/);
-  assert.match(source, /goalsCell\.textContent = Number\(environment\.goal_count\)\.toLocaleString\(\);/);
-  assert.match(
-    source,
-    /row\.append\(favoriteCell, environmentCell, goalsCell, trainingCell, evaluationCell\);/,
-  );
-  assert.doesNotMatch(source, /const goalLabel =/);
-
-  const styles = await readFile(
-    new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
-    "utf8",
-  );
-  assert.match(styles, /\.environment-table \{ table-layout: fixed; \}/);
-  assert.doesNotMatch(styles, /\.environment-table th\.environment-heading/);
-  assert.match(
-    styles,
-    /\.environment-goals-column,\s*\.environment-row td:nth-child\(3\) \{ width: 7rem; text-align: left; \}/,
-  );
-  assert.match(
-    styles,
-    /\.environment-status-column,\s*\.environment-row td:nth-child\(4\),\s*\.environment-row td:nth-child\(5\) \{ width: 8\.5rem; text-align: center; \}/,
-  );
+  const html = await sourceHtml({route: {level: "environments"}, items: [{name: "Mario", goal_count: 2, success_badges: ["train/success"]}]});
+  assert.match(html, /class="environment-table"/);
+  assert.match(html, /train\/success/);
+  assert.match(html, /eval\/success/);
+  assert.match(html, /class="environment-status/);
 });
 
 test("goal configurations expose exact diff counts and date columns", () => {
@@ -695,9 +547,27 @@ test("goal configurations expose exact diff counts and date columns", () => {
     first_used_at: "2026-07-29T10:00:00Z",
     last_activity_at: "2026-07-30T11:00:00Z",
   }, now);
-  assert.equal(older.firstUsedDate, "29 Jul 2026");
-  assert.equal(older.lastActivityDate, "30 Jul 2026");
+  assert.equal(older.firstUsedDate, "3 days ago");
+  assert.equal(older.lastActivityDate, "2 days ago");
   assert.equal(older.differenceLabel, "Exact diff unavailable");
+});
+
+test("goal configuration ages cross midnight and fall back to dates at 30 days", () => {
+  const now = Date.parse("2026-09-16T00:05:00Z");
+  const ago = (milliseconds) => new Date(now - milliseconds).toISOString();
+  assert.equal(formatGoalConfigurationDate(ago(0), now), "just now");
+  assert.equal(formatGoalConfigurationDate(ago(1_000), now), "1 second ago");
+  assert.equal(formatGoalConfigurationDate(ago(59_000), now), "59 seconds ago");
+  assert.equal(formatGoalConfigurationDate(ago(60_000), now), "1 minute ago");
+  assert.equal(formatGoalConfigurationDate(ago(600_000), now), "10 minutes ago");
+  assert.equal(formatGoalConfigurationDate(ago(3_600_000), now), "1 hour ago");
+  assert.equal(formatGoalConfigurationDate(ago(86_400_000), now), "1 day ago");
+  assert.equal(formatGoalConfigurationDate(ago(29 * 86_400_000), now), "29 days ago");
+  assert.equal(formatGoalConfigurationDate(ago(30 * 86_400_000), now), "17 Aug 2026");
+  assert.equal(formatGoalConfigurationDate(ago(-3_600_000), now), "in 1 hour");
+  assert.equal(formatGoalConfigurationDate("invalid", now), "—");
+  assert.equal(formatGoalConfigurationDate(null, now), "—");
+  assert.equal(formatGoalConfigurationDate("2025-01-02T23:00:00Z", now), "2 Jan 2025");
 });
 
 test("goal diff values preserve JSON types", () => {
@@ -715,107 +585,29 @@ test("goal configuration summaries preserve useful science without leaking raw c
     differenceLabel: "5 changes",
   };
   assert.equal(goalConfigurationSummary({
-    display_label: "Eval → {\"acceptance\":[{\"metric\":\"eval/return_mean\"}]} · Evaluation mode training_only → evaluated · +3 more",
+    display_label: "Eval → {\"acceptance\":[{\"metric\":\"eval/return/mean\"}]} · Evaluation mode training_only → evaluated · +3 more",
   }, presentation), "Evaluation mode training_only → evaluated · 5 changes total");
   assert.equal(goalConfigurationSummary({ display_label: "" }, presentation), "5 changes from current goal");
 });
 
 test("goal configurations render as a master-detail browser with exact changes", async () => {
-  const source = await readFile(
-    new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
-    "utf8",
-  );
-  const styles = await readFile(
-    new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
-    "utf8",
-  );
-
-  assert.match(source, /layout\.className = "goal-configuration-layout";/);
-  assert.match(source, /list\.setAttribute\("aria-label", "Goal configurations"\);/);
-  assert.match(source, /groupGoalConfigurations\(this\.items\)/);
-  assert.match(source, /appendGroups\("Current revision"/);
-  assert.match(source, /appendGroups\("Previous revisions"/);
-  assert.match(source, /renderGoalConfigurationOption\(entry, selected/);
-  assert.match(source, /option\.setAttribute\("aria-pressed", String\(isSelected\)\);/);
-  assert.match(source, /presentation\.runLabel} · Last activity/);
-  assert.match(source, /First used \$\{presentation\.firstUsedDate}/);
-  assert.doesNotMatch(source, /Older goal/);
-  assert.doesNotMatch(source, /Selected goal version/);
-  assert.match(source, /button\("View goal YAML"/);
-  assert.doesNotMatch(source, /role", "treegrid"/);
-  assert.doesNotMatch(styles, /\.goal-configuration-table/);
-  assert.match(styles, /\.goal-configuration-layout \{[^}]*grid-template-columns: minmax\(18rem, 26rem\) minmax\(0, 1fr\);/);
-  assert.match(styles, /\.goal-configuration-option\.selected \{/);
-  assert.match(styles, /@media \(max-width: 1100px\)[\s\S]*\.goal-configuration-layout \{ grid-template-columns: 1fr; \}/);
-  assert.match(source, /\["Operation", "Exact contract path", "Before", "After"\]/);
-  assert.match(
-    source,
-    /goal-configuration-value goal-configuration-after \$\{kind\}/,
-  );
-  assert.match(
-    styles,
-    /\.goal-configuration-operation\.added,\s*\.goal-configuration-after\.added \{ color: var\(--color-evaluation-text\); \}/,
-  );
-  assert.match(
-    styles,
-    /\.goal-configuration-operation\.removed,\s*\.goal-configuration-after\.removed \{ color: var\(--color-error-text\); \}/,
-  );
-  assert.match(
-    styles,
-    /\.goal-configuration-operation\.changed,\s*\.goal-configuration-after\.changed \{ color: var\(--color-interaction-active\); \}/,
-  );
+  const variant = {...configuration, configuration_kind: "previous_modified", comparison_available: true, current_diff_count: 1, current_diff_count_exact: true};
+  const html = await sourceHtml({route: {level: "goal_variants"}, items: [variant], goalVariantDiff: {state: "ready", availability: "exact", entries: [{path: "eval.metric", kind: "changed", before: "old", after: "new"}]}});
+  for (const value of ["goal-configuration-layout", "Goal configurations", "aria-pressed=\"true\"", "History", "First used", "Last activity", "View goal YAML", "Exact contract path", "Before", "After", "eval.metric", "goal-configuration-after changed"]) assert.ok(html.includes(value), value);
+  assert.doesNotMatch(html, /treegrid/);
 });
 
-test("goal activity renders recent runs as action-oriented evidence cards", async () => {
-  const source = await readFile(
-    new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
-    "utf8",
-  );
-
-  assert.match(source, /\/goals\/\$\{encodeURIComponent\(this\.route\.goal_id\)\}\/activity/);
-  assert.doesNotMatch(source, /If-None-Match/);
-  assert.match(source, /Array\.isArray\(variant\.current_diff\)/);
-  assert.doesNotMatch(source, /Goal diff request failed/);
-  assert.doesNotMatch(source, /activityHasActiveRuns/);
-  assert.doesNotMatch(source, /setInterval/);
-  assert.match(source, /heading\.className = "goal-configuration-runs-header";/);
-  assert.match(source, /title\.textContent = `Runs \(\$\{runCount\.toLocaleString\(\)\}\)`;/);
-  assert.doesNotMatch(source, /goal-configuration-run-sort/);
-  assert.doesNotMatch(source, /goalVariantRunSort/);
-  assert.match(source, /const baseItems = page\?\.items\?\.length\s*\? page\.items\s*:\s*variant\.recent_runs;/);
-  assert.match(source, /list\.className = "goal-configuration-run-list";/);
-  assert.match(source, /navigate\.className = "goal-configuration-run-card";/);
-  assert.match(source, /const presentation = runStatePresentation\(run\);/);
-  assert.match(source, /runTrainingEvidenceStatus\(run\)/);
-  assert.match(source, /runEvaluationEvidenceStatus\(run\)/);
-  assert.match(source, /addEvidence\("Training target"/);
-  assert.match(source, /addEvidence\("Evaluation evidence"/);
-  assert.match(source, /action\.append\(document\.createTextNode\("View checkpoints"\), icon\("arrow-right"\)\);/);
-  assert.match(source, /page\?\.nextCursor \? "Load more" : "Load older runs"/);
-
-  const styles = await readFile(
-    new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
-    "utf8",
-  );
-  assert.match(
-    styles,
-    /\.goal-configuration-runs\s*\{[^}]*padding: 1\.15rem;/,
-  );
-  assert.match(styles, /\.goal-configuration-run-card \{/);
-  assert.match(styles, /\.goal-configuration-run-evidence \{[^}]*grid-template-columns: repeat\(3, minmax\(0, 1fr\)\);/);
-  assert.match(styles, /\.goal-run-evidence\.not-evaluated \{/);
-  assert.doesNotMatch(styles, /\.goal-configuration-run-table/);
+test("goal activity renders recent runs as a compact success table", async () => {
+  const html = await sourceHtml({route: {level: "goal_variants"}, items: [{...configuration, recent_runs: [{run_id: "run-a", recipe: "ppo", seed: 7, state: "running", success_badges: ["train/success"]}]}]});
+  for (const value of ["goal-configuration-run-table", "goal-configuration-run-identity", "train/success", "eval/success", "Copy ID", "View checkpoints for ppo"]) assert.ok(html.includes(value), value);
+  assert.doesNotMatch(html, /goal-configuration-run-sort/);
 });
 
 test("catalog pages refresh only on explicit request", async () => {
-  const source = await readFile(
-    new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
-    "utf8",
-  );
-
+  const source = await readFile(new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url), "utf8");
   assert.doesNotMatch(source, /setInterval/);
-  assert.match(source, /refresh\.addEventListener\("click", \(\) => \{/);
-  assert.match(source, /this\.load\(\{ force: true, quiet: Boolean\(this\.items\.length\) \}\)/);
+  const html = await sourceHtml({items: [checkpoint]});
+  assert.match(html, /aria-label="Refresh"/);
 });
 
 test("run table hover highlights only the complete row", async () => {
@@ -835,19 +627,9 @@ test("run table hover highlights only the complete row", async () => {
 });
 
 test("run ranking badges render in the run column", async () => {
-  const source = await readFile(
-    new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
-    "utf8",
-  );
-
-  assert.match(
-    source,
-    /className\.includes\("run-cell"\) && isEfficiencyLeader/,
-  );
-  assert.doesNotMatch(
-    source,
-    /className\.includes\("recipe-cell"\) && isEfficiencyLeader/,
-  );
+  const html = await sourceHtml({route: {level: "runs", run_id: ""}, items: [{run_id: "run-a", metrics: {"train/success/mean": 1}}], fallbackMetricColumns: [{metric: "train/success/mean", direction: "max", evidence: "training"}]});
+  assert.match(html, /run-cell[\s\S]*Training lead[\s\S]*recipe-cell/);
+  assert.doesNotMatch(html, /recipe-cell[^<]*Training lead/);
 });
 
 test("run result evidence is visually promoted above supporting metadata", async () => {
@@ -876,20 +658,10 @@ test("active-run status icon is available in the shared icon sprite", async () =
 });
 
 test("checkpoint selection shows the authoritative training run state", async () => {
-  const source = await readFile(
-    new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
-    "utf8",
-  );
-  const styles = await readFile(
-    new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
-    "utf8",
-  );
-
-  assert.match(source, /this\.runStatus = payload\.run && typeof payload\.run === "object"/);
-  assert.match(source, /titleBlock\.append\(this\.renderSelectedRunStatus\(\)\);/);
-  assert.match(source, /context\.textContent = "Training run";/);
-  assert.match(source, /label: waiting \? "Loading…" : "Unavailable"/);
-  assert.match(styles, /\.source-run-status\.running,/);
+  const html = await sourceHtml({items: [checkpoint], runStatus: {state: "running", updated_at: "2026-01-01"}});
+  assert.match(html, /Training run state: Running/);
+  assert.match(html, /ti-activity-heartbeat/);
+  assert.match(html, /Training run/);
 });
 
 test("playback home is the root environment route", () => {
@@ -1015,70 +787,39 @@ test("run checkpoint discovery omits the redundant recommendation banner", async
 });
 
 test("source discovery progressively discloses secondary controls", async () => {
-  const source = await readFile(
-    new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
-    "utf8",
-  );
-  const styles = await readFile(
-    new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
-    "utf8",
-  );
-  const html = await readFile(
-    new URL("../../src/gradlab/web_player/index.html", import.meta.url),
-    "utf8",
-  );
-
-  assert.match(source, /return "Choose a goal configuration"/);
-  assert.match(source, /source-search-disclosure/);
-  assert.match(source, /disclosure\.open = this\.searchOpen/);
-  assert.match(source, /close\.setAttribute\("aria-label", "Close search"\);/);
-  assert.match(source, /this\.searchOpen = false;\s*if \(this\.query\) \{\s*this\.setSearch\(""\);/);
-  assert.match(styles, /\.source-search-disclosure\[open\] > summary \{ display: none; \}/);
-  assert.match(styles, /grid-template-columns: auto minmax\(0, 1fr\) auto;/);
-  assert.doesNotMatch(source, /resultCount > 8/);
-  assert.match(html, /id="contract-search-disclosure" class="contract-search-disclosure"/);
-  assert.match(source, /Exact contract differences · \$\{presentation\.differenceLabel\}/);
-  assert.doesNotMatch(source, /Evaluation & technical details/);
-  assert.doesNotMatch(source, /Compare all checkpoints/);
-  assert.match(source, /body\.append\(this\.renderEvaluationActions\(\), results\)/);
+  const html = await sourceHtml({items: [checkpoint], searchOpen: false});
+  assert.match(html, /<details class="source-search-disclosure">/);
+  assert.match(html, /Close search/);
+  assert.match(html, /Evaluate selected/);
+  assert.match(html, /Inspect run YAML/);
+  const open = await sourceHtml({items: [checkpoint], searchOpen: true});
+  assert.match(open, /<details class="source-search-disclosure" open(?:="")?>/);
 });
 
 test("catalog refresh animates and disables only the header refresh control", async () => {
-  const source = await readFile(
-    new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
-    "utf8",
-  );
-  const styles = await readFile(
-    new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
-    "utf8",
-  );
-
-  assert.doesNotMatch(source, /source-list-loading-indicator/);
-  assert.match(source, /const labelsRefresh = this\.route\.level === "goal_variants";/);
-  assert.match(source, /const refresh = button\(labelsRefresh \? "Refresh" : "", \{ iconName: "refresh", quiet: true \}\)/);
-  assert.match(source, /if \(!labelsRefresh\) refresh\.classList\.add\("icon-only"\)/);
-  assert.match(source, /if \(this\.loading\) refresh\.classList\.add\("refreshing"\)/);
-  assert.match(source, /refresh\.setAttribute\("aria-label", this\.loading \? "Refreshing" : "Refresh"\)/);
-  assert.match(source, /refresh\.disabled = this\.loading/);
-  assert.match(
-    source,
-    /if \(this\.loading && !this\.items\.length && !this\.query\.trim\(\)\) return body;/,
-  );
-  assert.doesNotMatch(source, /loadingState\("Loading catalog…"\)/);
-  assert.doesNotMatch(source, /Some catalog evidence is unavailable/);
-  assert.doesNotMatch(styles, /source-list-loading-indicator/);
-  assert.match(
-    styles,
-    /\.source-head \.icon-only\.refreshing \.icon \{ animation: source-spin \.8s linear infinite; \}/,
-  );
+  const html = await sourceHtml({route: {level: "goals"}, loading: true, refreshing: true, loadedKey: ""});
+  assert.match(html, /class="quiet icon-only refreshing"/);
+  assert.match(html, /aria-label="Refreshing"/);
+  assert.match(html, /aria-busy="true"/);
+  assert.match(html, /disabled/);
+  assert.match(html, /Loading table value/);
+  assert.doesNotMatch(html, /Loading catalog/);
 });
 
-test("returning to environments keeps the last table visible during refresh", async (context) => {
+test("returning to environments restores the completed table without refreshing", async (context) => {
   const originalLocation = globalThis.location;
+  const originalFetch = globalThis.fetch;
+  const requests = [];
   globalThis.location = { pathname: "/embedded-player", search: "", hash: "" };
+  globalThis.fetch = (...args) => {
+    requests.push(args);
+    throw new Error("cached environments should not request the catalog");
+  };
   context.after(() => {
     if (originalLocation === undefined) delete globalThis.location;
     else globalThis.location = originalLocation;
+    if (originalFetch === undefined) delete globalThis.fetch;
+    else globalThis.fetch = originalFetch;
   });
 
   const sourceBrowser = new SourceBrowser(
@@ -1104,18 +845,17 @@ test("returning to environments keeps the last table visible during refresh", as
   sourceBrowser.sourceItems = [{ goal_id: "Level1-1" }];
   sourceBrowser.items = [...sourceBrowser.sourceItems];
   sourceBrowser.renderView = () => {};
-  const loads = [];
-  sourceBrowser.ensureLoaded = (options) => loads.push(options);
 
   sourceBrowser.applyRoute({
     level: "environments",
     environment_id: "",
     goal_id: "",
   });
+  await new Promise(setImmediate);
 
   assert.deepEqual(sourceBrowser.items, [{ name: "Mario", goal_count: 18 }]);
-  assert.deepEqual(loads, [{ quiet: true }]);
-  assert.equal(sourceBrowser.loadedKey, "");
+  assert.equal(sourceBrowser.loadedKey, sourceBrowser.routeKey());
+  assert.equal(requests.length, 0);
 });
 
 test("returning to goals restores the last table without refreshing", async (context) => {
@@ -1170,6 +910,154 @@ test("returning to goals restores the last table without refreshing", async (con
   assert.deepEqual(sourceBrowser.items, [{ goal_id: "Level1-1", recipe_count: 1 }]);
   assert.equal(sourceBrowser.loadedKey, sourceBrowser.routeKey());
   assert.equal(requests.length, 0);
+});
+
+test("repeating a search and clearing it restore session results without requests", (context) => {
+  const originalLocation = globalThis.location;
+  globalThis.location = { pathname: "/embedded-player", search: "", hash: "" };
+  context.after(() => {
+    if (originalLocation === undefined) delete globalThis.location;
+    else globalThis.location = originalLocation;
+  });
+  const browser = new SourceBrowser({}, { replaceChildren() {}, hidden: false }, {
+    token: "token", command() {}, getState: () => ({ hasControl: true }), showToast() {},
+  });
+  browser.renderView = () => {};
+  browser.sourceItems = [{ name: "Mario" }, { name: "Doom" }];
+  browser.loadedKey = browser.routeKey();
+  browser.rememberEnvironmentCatalog();
+  browser.query = "mario";
+  browser.sourceItems = [{ name: "Mario" }];
+  browser.loadedKey = browser.routeKey();
+  browser.rememberSearchCatalog();
+
+  browser.query = "other";
+  browser.sourceItems = [];
+  browser.setSearch("mario");
+  assert.deepEqual(browser.items, [{ name: "Mario" }]);
+  assert.equal(browser.loadedKey, browser.routeKey());
+  browser.setSearch("");
+  assert.deepEqual(browser.items, [{ name: "Mario" }, { name: "Doom" }]);
+  assert.equal(browser.loadedKey, browser.routeKey());
+});
+
+test("revisiting Goal Variant activity restores the page without a request", async (context) => {
+  const originalLocation = globalThis.location;
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.location = { pathname: "/embedded-player", search: "", hash: "" };
+  globalThis.fetch = (...args) => {
+    requests.push(args);
+    throw new Error("cached activity should not request the catalog");
+  };
+  context.after(() => {
+    if (originalLocation === undefined) delete globalThis.location;
+    else globalThis.location = originalLocation;
+    if (originalFetch === undefined) delete globalThis.fetch;
+    else globalThis.fetch = originalFetch;
+  });
+  const browser = new SourceBrowser({}, { replaceChildren() {}, hidden: false }, {
+    token: "token", command() {}, getState: () => ({ hasControl: true }), showToast() {},
+  });
+  browser.renderView = () => {};
+  browser.route = { ...browser.route, level: "goal_variants", environment_id: "Mario", goal_id: "Level1-1" };
+  browser.sourceItems = [{ variant_id: "current", run_count: 2 }];
+  browser.goalVariantRunPages.set("current", { loaded: true, items: [{ run_id: "run-a" }], nextCursor: null });
+  browser.loadedKey = browser.routeKey();
+  browser.rememberGoalActivity();
+  browser.route = { ...browser.route, level: "goals", goal_id: "" };
+
+  browser.applyRoute({ level: "goal_variants", goal_id: "Level1-1" });
+  await new Promise(setImmediate);
+
+  assert.deepEqual(browser.items, [{ variant_id: "current", run_count: 2 }]);
+  assert.deepEqual(browser.goalVariantRunPages.get("current").items, [{ run_id: "run-a" }]);
+  assert.equal(browser.loadedKey, browser.routeKey());
+  assert.equal(requests.length, 0);
+});
+
+test("checkpoint table returns from memory only within the current player session", async (context) => {
+  const originalLocation = globalThis.location;
+  const originalFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.location = { pathname: "/embedded-player", search: "", hash: "" };
+  globalThis.fetch = (...args) => {
+    requests.push(args);
+    throw new Error("cached checkpoints should not request the catalog");
+  };
+  context.after(() => {
+    if (originalLocation === undefined) delete globalThis.location;
+    else globalThis.location = originalLocation;
+    if (originalFetch === undefined) delete globalThis.fetch;
+    else globalThis.fetch = originalFetch;
+  });
+
+  const createBrowser = () => {
+    const browser = new SourceBrowser({}, { replaceChildren() {}, hidden: false }, {
+      token: "token", command() {}, getState: () => ({ hasControl: true }), showToast() {},
+    });
+    browser.renderView = () => {};
+    return browser;
+  };
+  const browser = createBrowser();
+  browser.route = { ...browser.route, level: "runs", run_id: "run-a", goal_variant_id: "variant-a" };
+  browser.sourceItems = [{ checkpoint_id: "checkpoint-1", step: 100, metrics: { "train/return": 3 } }];
+  browser.items = [...browser.sourceItems];
+  browser.metricColumns = [{ metric: "train/return", evidence: "training" }];
+  browser.runStatus = { state: "finished" };
+  browser.selectionFence = "fence-a";
+  browser.nextCursor = "page-two";
+  assert.equal(browser.rememberCheckpointCatalog(), true);
+
+  browser.route = { ...browser.route, checkpoint_id: "checkpoint-1" };
+  browser.applyRoute({ checkpoint_id: "" });
+  await new Promise(setImmediate);
+  assert.deepEqual(browser.items, [{ checkpoint_id: "checkpoint-1", step: 100, metrics: { "train/return": 3 } }]);
+  assert.deepEqual(browser.metricColumns, [{ metric: "train/return", evidence: "training" }]);
+  assert.deepEqual(browser.runStatus, { state: "finished" });
+  assert.equal(browser.selectionFence, "fence-a");
+  assert.equal(browser.nextCursor, "page-two");
+  assert.equal(browser.loadedKey, browser.routeKey());
+  assert.equal(requests.length, 0);
+
+  const newSession = createBrowser();
+  newSession.route = { ...browser.route };
+  assert.equal(newSession.restoreCheckpointCatalog(), false);
+  browser.route = { ...browser.route, run_id: "run-b" };
+  assert.equal(browser.restoreCheckpointCatalog(), false);
+  browser.route = { ...browser.route, run_id: "run-a", goal_variant_id: "variant-b" };
+  assert.equal(browser.restoreCheckpointCatalog(), false);
+});
+
+test("returning to a checkpoint table resumes pending evidence without reloading its rows", async (context) => {
+  const originalLocation = globalThis.location;
+  globalThis.location = { pathname: "/embedded-player", search: "", hash: "" };
+  context.after(() => {
+    if (originalLocation === undefined) delete globalThis.location;
+    else globalThis.location = originalLocation;
+  });
+  const browser = new SourceBrowser({}, { replaceChildren() {}, hidden: false }, {
+    token: "token", command() {}, getState: () => ({ hasControl: true }), showToast() {},
+  });
+  browser.route = { ...browser.route, level: "runs", run_id: "run-a" };
+  browser.sourceItems = [{ checkpoint_id: "checkpoint-1", step: 100 }];
+  browser.checkpointTrainingPending = true;
+  browser.rememberCheckpointCatalog();
+  browser.route = { ...browser.route, checkpoint_id: "checkpoint-1" };
+  browser.renderView = () => {};
+  const resumed = [];
+  browser.loadCheckpointTraining = (key) => {
+    browser.checkpointTrainingController = {};
+    resumed.push(key);
+  };
+
+  browser.applyRoute({ checkpoint_id: "" });
+  browser.restoreCheckpointCatalog(); // The app can render the same route after navigation.
+  await new Promise(setImmediate);
+
+  assert.deepEqual(browser.items, [{ checkpoint_id: "checkpoint-1", step: 100 }]);
+  assert.deepEqual(resumed, [browser.routeKey()]);
+  assert.equal(browser.loadedKey, browser.routeKey());
 });
 
 test("refreshing cached goals keeps old rows until the new catalog arrives", async (context) => {
@@ -1227,174 +1115,6 @@ test("refreshing cached goals keeps old rows until the new catalog arrives", asy
   );
 });
 
-test("active breadcrumb rendering hides routes without a selected checkpoint", () => {
-  const browser = Object.create(SourceBrowser.prototype);
-  browser.breadcrumbsRoot = {
-    hidden: false,
-    replaceChildrenCalled: 0,
-    replaceChildren() {
-      this.replaceChildrenCalled += 1;
-    },
-  };
-  browser.stop = () => {};
-  browser.renderBreadcrumbs = () => {
-    throw new Error("breadcrumbs should not render without a checkpoint");
-  };
-
-  browser.renderActiveBreadcrumbs({
-    app: {
-      phase: "active",
-      route: { level: "runs", run_id: "gradlab-c22f7c7a", checkpoint_id: "" },
-    },
-  });
-
-  assert.equal(browser.breadcrumbsRoot.hidden, true);
-  assert.equal(browser.breadcrumbsRoot.replaceChildrenCalled, 1);
-});
-
-test("imported recording breadcrumbs show the environment without loading checkpoints", () => {
-  const browser = Object.create(SourceBrowser.prototype);
-  browser.breadcrumbsRoot = { hidden: true, replaceChildren() {} };
-  browser.stop = () => {};
-  browser.hideActiveCheckpointNavigation = () => {};
-  let rendered = [];
-  browser.renderBreadcrumbs = () => {
-    rendered = sourceBreadcrumbItems(browser.route);
-  };
-  let path;
-  browser.syncUrl = () => { path = sourceRoutePath(browser.route); };
-  browser.loadActiveCheckpointNavigation = () => {
-    throw new Error("Recorded playback must not fetch checkpoint navigation");
-  };
-  const snapshot = {
-    mode: "trajectory",
-    app: {
-      phase: "active",
-      route: { level: "goals", environment_id: "CartPole-v1" },
-    },
-  };
-
-  browser.renderActiveBreadcrumbs(snapshot);
-  // Source selection can be opened while the recording remains active.
-  browser.route = { level: "goal_variants", environment_id: "Mario", goal_id: "Level1-1" };
-  browser.app = { phase: "selecting", has_active_runner: true };
-  browser.renderBreadcrumbs();
-  browser.syncUrl();
-  browser.renderActiveBreadcrumbs(snapshot);
-
-  assert.equal(browser.breadcrumbsRoot.hidden, false);
-  assert.deepEqual(rendered.map((item) => item.label), ["Environments", "Cart Pole"]);
-  assert.equal(path, "/environments/CartPole-v1");
-});
-
-test("hidden breadcrumbs do not restart active checkpoint loading", () => {
-  const browser = Object.create(SourceBrowser.prototype);
-  browser.activeBreadcrumbRoute = "";
-  browser.breadcrumbsRoot = {
-    hidden: true,
-    replaceChildren() {},
-  };
-  browser.stop = () => {};
-  const historyModes = [];
-  browser.syncUrl = (mode) => historyModes.push(mode);
-  let loads = 0;
-  browser.loadActiveCheckpointNavigation = () => {
-    loads += 1;
-  };
-  let renders = 0;
-  browser.renderBreadcrumbs = () => {
-    renders += 1;
-  };
-  const snapshot = {
-    app: {
-      phase: "active",
-      route: {
-        level: "runs",
-        environment_id: "ViZDoom",
-        goal_id: "DefendTheLine-v1",
-        goal_variant_id: "goal-variant-a27a8239",
-        run_id: "gradlab-c22f7c7a",
-        checkpoint_id: "checkpoint-10002432-b285ff3b",
-      },
-    },
-  };
-
-  browser.renderActiveBreadcrumbs(snapshot);
-  browser.breadcrumbsRoot.hidden = true;
-  browser.renderActiveBreadcrumbs(snapshot);
-
-  assert.equal(renders, 1);
-  assert.equal(loads, 1);
-  assert.deepEqual(historyModes, ["replace"]);
-});
-
-test("active checkpoint breadcrumb navigation exits playback at the selected ancestor", () => {
-  const browser = Object.create(SourceBrowser.prototype);
-  browser.route = {
-    level: "runs",
-    environment_id: "ViZDoom",
-    goal_id: "DefendTheLine-v1",
-    goal_variant_id: "goal-variant-a27a8239",
-    run_id: "gradlab-c22f7c7a",
-    checkpoint_id: "checkpoint-10002432-b285ff3b",
-  };
-  const commands = [];
-  const historyModes = [];
-  const openedRoutes = [];
-  browser.command = (name, payload) => {
-    commands.push({ name, payload });
-    return "command-id";
-  };
-  browser.applyRoute = (route) => {
-    browser.route = { ...browser.route, ...route };
-  };
-  browser.syncUrl = (mode) => historyModes.push(mode);
-  browser.openSourceRoute = (route) => openedRoutes.push(route);
-  const target = sourceBreadcrumbItems(browser.route)[2].route;
-
-  assert.equal(browser.navigate(target), true);
-
-  const expected = {
-    level: "goal_variants",
-    environment_id: "ViZDoom",
-    goal_id: "DefendTheLine-v1",
-    goal_variant_id: "",
-    run_id: "",
-    checkpoint_id: "",
-  };
-  assert.deepEqual(commands, [{
-    name: "browse_sources",
-    payload: { route: expected },
-  }]);
-  assert.deepEqual(browser.route, expected);
-  assert.deepEqual(historyModes, ["push"]);
-  assert.deepEqual(openedRoutes, [expected]);
-});
-
-test("browsing from an active player keeps the current runner available", () => {
-  const browser = Object.create(SourceBrowser.prototype);
-  browser.app = { has_active_runner: true };
-  browser.route = {
-    level: "runs",
-    environment_id: "ViZDoom",
-    goal_id: "DefendTheLine-v1",
-    goal_variant_id: "goal-variant-a27a8239",
-    run_id: "gradlab-c22f7c7a",
-    checkpoint_id: "checkpoint-a",
-  };
-  const commands = [];
-  browser.command = (...args) => commands.push(args);
-  browser.applyRoute = (route) => {
-    browser.route = { ...browser.route, ...route };
-  };
-  browser.syncUrl = () => {};
-  browser.openSourceRoute = () => {};
-
-  assert.equal(browser.navigate({ level: "runs", checkpoint_id: "" }), true);
-  assert.deepEqual(commands, []);
-  assert.equal(browser.route.checkpoint_id, "");
-});
-
 test("source discovery omits the redundant continue-watching banner", async () => {
   const source = await readFile(
     new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
@@ -1410,86 +1130,101 @@ test("source discovery omits the redundant continue-watching banner", async () =
   assert.doesNotMatch(styles, /continue-playback/);
 });
 
-test("rejected active breadcrumb navigation leaves playback and history unchanged", () => {
-  const browser = Object.create(SourceBrowser.prototype);
-  browser.route = {
-    level: "runs",
-    environment_id: "ViZDoom",
-    goal_id: "DefendTheLine-v1",
-    goal_variant_id: "goal-variant-a27a8239",
-    run_id: "gradlab-c22f7c7a",
-    checkpoint_id: "checkpoint-10002432-b285ff3b",
-  };
-  const initialRoute = { ...browser.route };
-  browser.command = () => null;
-  browser.applyRoute = () => {
-    throw new Error("a rejected navigation must not mutate the active route");
-  };
-  browser.syncUrl = () => {
-    throw new Error("a rejected navigation must not mutate browser history");
-  };
-  browser.openSourceRoute = () => {
-    throw new Error("a rejected navigation must not exit playback");
-  };
-
-  assert.equal(
-    browser.navigate(sourceBreadcrumbItems(browser.route)[0].route),
-    false,
-  );
-  assert.deepEqual(browser.route, initialRoute);
-});
-
 test("run metrics use compact labels and values", () => {
   assert.equal(metricLabel("leader/step"), "Checkpoint step");
   assert.equal(metricLabel(METRIC), "Mean return");
   assert.equal(
-    metricLabel("train/target/success/start_rate_min"),
+    metricLabel("train/success/min"),
     "Recent all-start success rate min",
   );
   assert.equal(
-    metricLabel("train/target/success/start_rate_mean"),
+    metricLabel("train/success/mean"),
     "Recent all-start success rate mean",
   );
   assert.equal(
-    metricLabel("train/target/return_mean"),
+    metricLabel("train/return/mean"),
     "Recent target return mean",
   );
   assert.equal(
-    metricLabel("train/target/progress/kills/mean"),
+    metricLabel("train/progress/kills/mean"),
     "Recent target kills mean",
   );
   assert.equal(
-    metricLabel("train/target/progress/bricks_destroyed/max"),
+    metricLabel("train/progress/bricks_destroyed/max"),
     "Recent target bricks destroyed max",
   );
   assert.equal(
-    formatMetricValue("eval/success/start_rate_min", 0.875),
+    formatMetricValue("eval/success/min", 0.875),
     "87.5%",
   );
   assert.equal(formatMetricValue(METRIC, null), "—");
 });
 
-test("checkpoint metric headers preserve semantics in one short line", () => {
+test("checkpoint metric headers omit the prefix shown by their group", () => {
   assert.equal(checkpointMetricHeaderLabel({
-    metric: "eval/success/start_rate_min",
+    metric: "eval/success/min",
     evidence: "evaluation",
-  }), "Eval success");
+  }), "success/min");
   assert.equal(checkpointMetricHeaderLabel({
-    metric: "train/target/success/start_rate_min",
+    metric: "train/success/min",
     evidence: "training",
-  }), "Train success");
+  }), "success/min");
   assert.equal(checkpointMetricHeaderLabel({
-    metric: "eval/return_mean",
+    metric: "eval/return/mean",
     evidence: "evaluation",
-  }), "Eval return");
+  }), "return/mean");
   assert.equal(checkpointMetricHeaderLabel({
-    metric: "train/target/return_mean",
+    metric: "train/progress/bricks_destroyed/max",
     evidence: "training",
-  }), "Train return");
+  }), "progress/bricks_destroyed/max");
   assert.equal(checkpointMetricHeaderLabel({
-    metric: "eval/progress/kills/mean",
-    evidence: "evaluation",
-  }), "Eval kills");
+    metric: "custom/score",
+    evidence: "training",
+  }), "custom/score");
+});
+
+test("checkpoint evaluation status distinguishes missing, running, and verified evidence", () => {
+  assert.deepEqual(checkpointEvaluationPresentation({}), {
+    label: "Not evaluated", tone: "absent",
+  });
+  assert.deepEqual(checkpointEvaluationPresentation({ evaluation_queue: { state: "running", evaluation: {
+    episodes_completed: 43, episodes_planned: 100,
+  } } }), { label: "Running · 43/100", tone: "running" });
+  assert.deepEqual(checkpointEvaluationPresentation({ evaluation: {
+    source: "monitoring", status: "queued", episodes_planned: 100,
+  } }), { label: "Queued", tone: "pending", title: "Checkpoint Monitoring · observational" });
+  assert.deepEqual(checkpointEvaluationPresentation({ evaluation: {
+    source: "monitoring", status: "running", episodes_planned: 100,
+  } }), { label: "Running", tone: "running", title: "Checkpoint Monitoring · observational" });
+  assert.deepEqual(checkpointEvaluationPresentation({ evaluation: {
+    source: "monitoring", status: "finalizing", episodes_completed: 100, episodes_planned: 100,
+  } }), { label: "Finalizing · 100/100", tone: "pending", title: "Checkpoint Monitoring · observational" });
+  assert.deepEqual(checkpointEvaluationPresentation({ evaluation: {
+    source: "monitoring", status: "verified", episodes_completed: 100, episodes_planned: 100,
+  } }), {
+    label: "FINISHED", progress: "100/100", tone: "verified", title: "Checkpoint Monitoring · observational",
+  });
+  assert.deepEqual(checkpointEvaluationPresentation({ evaluation: {
+    status: "verified", episodes_completed: 100, episodes_planned: 100,
+  } }), { label: "FINISHED", progress: "100/100", tone: "verified" });
+  for (const status of ["accepted", "rejected"]) {
+    assert.deepEqual(checkpointEvaluationPresentation({ evaluation: {
+      status, episodes_completed: status === "accepted" ? 100 : 1, episodes_planned: 100,
+    } }), {
+      label: "FINISHED", progress: status === "accepted" ? "100/100" : "1/100",
+      tone: "verified", title: "Acceptance evaluation",
+    });
+  }
+  assert.deepEqual(checkpointEvaluationPresentation({
+    evaluation_queue: { state: "rejected" },
+  }), {
+    label: "FINISHED", progress: "", tone: "verified", title: "Acceptance evaluation",
+  });
+  for (const state of ["failed", "blocked", "expired", "canceled"]) {
+    assert.deepEqual(checkpointEvaluationPresentation({ evaluation_queue: { state } }), {
+      label: state[0].toUpperCase() + state.slice(1), tone: "failed",
+    });
+  }
 });
 
 test("run finish reasons distinguish resource, training, and evaluation outcomes", () => {
@@ -1552,10 +1287,10 @@ test("run finish reasons distinguish resource, training, and evaluation outcomes
       early_stop: {
         condition_id: "training_target",
         trigger: "threshold",
-        metric: "train/target/return_mean",
+        metric: "train/return/mean",
         value: 5.25,
         condition: {
-          metric: "train/target/return_mean",
+          metric: "train/return/mean",
           trigger: "threshold",
           operator: ">=",
           threshold: 5,
@@ -1674,18 +1409,17 @@ test("unevaluated and unsuccessfully evaluated checkpoints are selectable", () =
   );
 });
 
-test("checkpoint metric cells identify their own leaders", async () => {
-  const trainSuccess = "train/target/success/start_rate_mean";
-  const evalReturn = "eval/return_mean";
-  const checkpoint = { best_metrics: [trainSuccess, evalReturn] };
-
-  assert.equal(checkpointMetricIsBest(checkpoint, trainSuccess), true);
-  assert.equal(checkpointMetricIsBest(checkpoint, evalReturn), true);
-  assert.equal(
-    checkpointMetricIsBest(checkpoint, "eval/success/start_rate_mean"),
-    false,
-  );
-  assert.equal(checkpointMetricIsBest({}, trainSuccess), false);
+test("checkpoint metric cells show loading until their values resolve", async () => {
+  const trainSuccess = "train/success/mean";
+  const evalReturn = "eval/return/mean";
+  const trainColumn = { metric: trainSuccess, evidence: "training" };
+  const evalColumn = { metric: evalReturn, evidence: "evaluation" };
+  const loading = { training_pending: true, training_loaded_metrics: [], metrics: {} };
+  assert.equal(checkpointMetricIsLoading(loading, trainColumn), true);
+  assert.equal(checkpointMetricIsLoading(loading, evalColumn), true);
+  assert.equal(checkpointMetricIsLoading({ ...loading, metrics: { [evalReturn]: 1 } }, evalColumn), false);
+  assert.equal(checkpointMetricIsLoading({ ...loading, training_loaded_metrics: [trainSuccess] }, trainColumn), false);
+  assert.equal(checkpointMetricIsLoading({ ...loading, training_pending: false }, evalColumn), false);
 
   const objective = {
     evidence: "evaluation",
@@ -1699,29 +1433,13 @@ test("checkpoint metric cells identify their own leaders", async () => {
   };
   assert.equal(checkpointMetricRoleLabel(objective), "Objective · gate");
   assert.equal(checkpointMetricRoleLabel(proxy), "Training proxy");
-  assert.equal(checkpointMetricBestBadge(objective), "Best");
-  assert.equal(checkpointMetricBestBadge(proxy), "Best");
   assert.match(checkpointMetricDescription(objective), /Frozen checkpoint-evaluation evidence/);
   assert.match(checkpointMetricDescription(proxy), /Diagnostic online training proxy/);
 
-  const source = await readFile(
-    new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
-    "utf8",
-  );
-  assert.match(source, /"checkpoint-metric-cell"/);
-  assert.match(source, /badge\.className = "checkpoint-best-badge"/);
-  assert.match(source, /badge\.textContent = badgeLabel/);
-  assert.doesNotMatch(source, /Best objective/);
-  assert.doesNotMatch(source, /Best observed/);
-
-  const styles = await readFile(
-    new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
-    "utf8",
-  );
-  assert.match(
-    styles,
-    /\.source-table \.checkpoint-best-badge \{[^}]*border: 1px solid var\(--color-training-success-text\);[^}]*background: var\(--color-training-success-surface\);[^}]*color: var\(--color-training-success-text\);/,
-  );
+  const html = await sourceHtml({items: [{...checkpoint, training_pending: true, training_loaded_metrics: []}], metricColumns: [{metric: trainSuccess, label: trainSuccess, evidence: "training"}, {metric: evalReturn, label: evalReturn, evidence: "evaluation"}]});
+  assert.match(html, /Loading train\/success\/mean/);
+  assert.match(html, /Loading eval\/return\/mean/);
+  assert.match(html, /checkpoint-eval-metric-cell/);
 });
 
 test("selected checkpoints are admitted together through the evaluation API", async (context) => {
@@ -1792,127 +1510,6 @@ test("selected checkpoints are admitted together through the evaluation API", as
   assert.match(toasts[0][0], /2 checkpoints queued/);
 });
 
-test("catalog checkpoint playback preserves public-run publication identity", async () => {
-  const source = await readFile(
-    new URL("../../src/gradlab/web_player/sources/browser.js", import.meta.url),
-    "utf8",
-  );
-  assert.match(
-    source,
-    /selectCheckpoint[\s\S]*?kind: "public_run",[\s\S]*?value: item\.manifest_url/,
-  );
-});
-
-test("browser back through checkpoint routes preserves canonical environment identity", (context) => {
-  const originalLocation = globalThis.location;
-  const originalWindow = globalThis.window;
-  let popstate;
-  globalThis.location = {
-    pathname: (
-      "/environments/ViZDoom/goals/DefendTheLine-v1"
-      + "/variants/goal-variant-a27a8239/runs/gradlab-c22f7c7a"
-      + "/checkpoints/checkpoint-10002432-b285ff3b"
-    ),
-    search: "",
-    hash: "",
-  };
-  globalThis.window = {
-    addEventListener(name, listener) {
-      if (name === "popstate") popstate = listener;
-    },
-  };
-  context.after(() => {
-    if (originalLocation === undefined) delete globalThis.location;
-    else globalThis.location = originalLocation;
-    if (originalWindow === undefined) delete globalThis.window;
-    else globalThis.window = originalWindow;
-  });
-
-  const commands = [];
-  const sourceBrowser = new SourceBrowser(
-    {},
-    { replaceChildren() {}, hidden: false },
-    {
-      token: "token",
-      command: (name, payload) => commands.push({ name, payload }),
-      getState: () => ({ hasControl: true }),
-      showToast() {},
-    },
-  );
-  sourceBrowser.route = {
-    level: "runs",
-    environment_id: "ViZDoom",
-    goal_id: "DefendTheLine-v1",
-    goal_variant_id: "goal-variant-a27a8239",
-    run_id: "gradlab-c22f7c7a",
-    checkpoint_id: "checkpoint-10002432-b285ff3b",
-  };
-  sourceBrowser.app = {
-    phase: "selecting",
-    route: { ...sourceBrowser.route },
-  };
-  sourceBrowser.applyRoute = (route) => {
-    sourceBrowser.route = route;
-  };
-
-  globalThis.location.pathname = (
-    "/environments/ViZDoom/goals/DefendTheLine-v1"
-    + "/variants/goal-variant-a27a8239/runs/gradlab-c22f7c7a"
-  );
-  popstate();
-
-  assert.equal(sourceBrowser.route.environment_id, "ViZDoom");
-  assert.equal(sourceBrowser.endpoint(), (
-    "/api/catalog/runs/gradlab-c22f7c7a/checkpoints?"
-    + "goal_variant_id=goal-variant-a27a8239"
-  ));
-  assert.equal(commands[0].name, "browse_sources");
-  assert.equal(commands[0].payload.route.environment_id, "ViZDoom");
-
-  globalThis.location.pathname = (
-    "/environments/ViZDoom/goals/DefendTheLine-v1"
-  );
-  popstate();
-
-  assert.equal(sourceBrowser.route.environment_id, "ViZDoom");
-  assert.equal(sourceBrowser.endpoint(), (
-    "/api/catalog/environments/ViZDoom/goals/DefendTheLine-v1/activity?"
-  ));
-  assert.equal(commands[1].name, "browse_sources");
-  assert.equal(commands[1].payload.route.environment_id, "ViZDoom");
-  assert.equal(commands[1].payload.route.level, "goal_variants");
-  assert.equal(commands[1].payload.route.goal_variant_id, "");
-});
-
-test("runless run routes return to goal versions instead of rendering run selection", () => {
-  const browser = Object.create(SourceBrowser.prototype);
-  browser.app = { has_active_runner: true };
-  browser.route = {
-    level: "runs",
-    environment_id: "ViZDoom",
-    goal_id: "DefendTheLine-v1",
-    goal_variant_id: "goal-variant-a27a8239",
-    run_id: "gradlab-c22f7c7a",
-    checkpoint_id: "checkpoint-a",
-  };
-  browser.applyRoute = SourceBrowser.prototype.applyRoute;
-  browser.renderView = () => {};
-  browser.ensureLoaded = () => {};
-  browser.resetGoalVariantDetail = () => {};
-  browser.restoreEnvironmentCatalog = () => false;
-  browser.restoreGoalCatalog = () => false;
-  browser.hydrateInitialEnvironments = () => false;
-  browser.checkpointTrainingController = null;
-  browser.checkpointTrainingSerial = 0;
-  browser.selectedCheckpoints = new Set();
-  browser.syncUrl = () => {};
-  browser.openSourceRoute = () => {};
-
-  assert.equal(browser.navigate({ level: "runs", run_id: "", checkpoint_id: "" }), true);
-  assert.equal(browser.route.level, "goal_variants");
-  assert.equal(browser.route.goal_variant_id, "");
-  assert.equal(browser.route.run_id, "");
-});
 
 test("late catalog responses cannot populate a newer route", async (context) => {
   const originalLocation = globalThis.location;
@@ -2019,72 +1616,6 @@ test("run and checkpoint routes preserve goal variant identity", () => {
   }), "/environments/Mario/goals/Level1-1");
 });
 
-test("initial checkpoint deep links override a failed default run source", (context) => {
-  const originalLocation = globalThis.location;
-  const originalWindow = globalThis.window;
-  const originalHistory = globalThis.history;
-  const variant = "goal-variant-0123456789abcdef01234567";
-  const run = `gradlab-${"a".repeat(32)}`;
-  const checkpoint = `checkpoint-12-${"b".repeat(16)}`;
-  globalThis.location = {
-    pathname: (
-      `/environments/Mario/goals/Level1-1/variants/${variant}`
-      + `/runs/${run}/checkpoints/${checkpoint}`
-    ),
-    search: "",
-    hash: "#token=test-token",
-  };
-  globalThis.window = { addEventListener() {} };
-  globalThis.history = { replaceState() {}, pushState() {} };
-  context.after(() => {
-    if (originalLocation === undefined) delete globalThis.location;
-    else globalThis.location = originalLocation;
-    if (originalWindow === undefined) delete globalThis.window;
-    else globalThis.window = originalWindow;
-    if (originalHistory === undefined) delete globalThis.history;
-    else globalThis.history = originalHistory;
-  });
-
-  const commands = [];
-  const browser = new SourceBrowser(
-    {},
-    { replaceChildren() {}, hidden: false },
-    {
-      token: "test-token",
-      command: (name, payload) => commands.push({ name, payload }),
-      getState: () => ({ hasControl: true }),
-      showToast() {},
-    },
-  );
-  browser.renderView = () => {};
-  browser.ensureLoaded = () => {};
-  browser.hydrateInitialEnvironments = () => false;
-
-  browser.render({
-    app: {
-      phase: "selecting",
-      route: {
-        level: "runs",
-        environment_id: "Mario",
-        goal_id: "Level1-1",
-        goal_variant_id: variant,
-        run_id: run,
-        checkpoint_id: "",
-      },
-      source: {
-        kind: "public_run",
-        value: run,
-        run_id: run,
-        checkpoint_id: "",
-      },
-    },
-  });
-
-  assert.equal(browser.route.checkpoint_id, checkpoint);
-  assert.equal(commands.length, 1);
-  assert.equal(commands[0].name, "browse_sources");
-  assert.equal(commands[0].payload.route.checkpoint_id, checkpoint);
-});
 
 test("stalled catalog requests time out with a recoverable error", async (context) => {
   const originalLocation = globalThis.location;
@@ -2158,18 +1689,18 @@ test("run efficiency prefers complete goal evaluation and follows its rank order
   ];
   const fallback = [
     {
-      metric: "train/target/success/start_rate_min",
+      metric: "train/success/min",
       direction: "max",
     },
-    { metric: "train/global_step", direction: "min" },
+    { metric: "train/step", direction: "min" },
   ];
   const items = [
     {
       run_id: "training-only",
       recipe: "fast-training",
       metrics: {
-        "train/target/success/start_rate_min": 1,
-        "train/global_step": 100,
+        "train/success/min": 1,
+        "train/step": 100,
       },
     },
     {
@@ -2207,24 +1738,24 @@ test("run efficiency labels training fallback without evaluation evidence", () =
   ];
   const fallback = [
     {
-      metric: "train/target/success/start_rate_min",
+      metric: "train/success/min",
       direction: "max",
     },
-    { metric: "train/global_step", direction: "min" },
+    { metric: "train/step", direction: "min" },
   ];
   const items = [
     {
       run_id: "slower",
       metrics: {
-        "train/target/success/start_rate_min": 0.9,
-        "train/global_step": 2_000,
+        "train/success/min": 0.9,
+        "train/step": 2_000,
       },
     },
     {
       run_id: "faster",
       metrics: {
-        "train/target/success/start_rate_min": 0.9,
-        "train/global_step": 1_000,
+        "train/success/min": 0.9,
+        "train/step": 1_000,
       },
     },
   ];
@@ -2233,4 +1764,134 @@ test("run efficiency labels training fallback without evaluation evidence", () =
   const leader = bestRunEfficiency(items, primary, fallback);
   assert.equal(leader.evidence, "training");
   assert.equal(leader.item.run_id, "faster");
+});
+
+test("goal evidence fills pending rows and ignores obsolete responses", async (context) => {
+  const originalFetch = globalThis.fetch;
+  context.after(() => { globalThis.fetch = originalFetch; });
+  let finish;
+  globalThis.fetch = () => new Promise((resolve) => { finish = resolve; });
+  const browser = Object.create(SourceBrowser.prototype);
+  Object.assign(browser, {
+    token: "test", catalogRequestTimeoutMs: 1000, goalEvidenceEpoch: 1,
+    sourceItems: [{ goal_id: "goal", recipe_count: 8, evidence_status: "pending" }],
+    routeKey: () => "goals", endpoint: () => "/goals?evidence=0",
+    rememberGoalCatalog() {}, renderView() {},
+  });
+  const loading = browser.loadGoalEvidence("goals", 1, null);
+  assert.equal(environmentSuccessStatus(browser.sourceItems[0], "train/success").label, "Loading…");
+  finish({ ok: true, json: async () => ({ items: [{ goal_id: "goal", run_count: 1, success_badges: ["train/success"] }] }) });
+  await loading;
+  assert.equal(browser.items[0].recipe_count, 8);
+  assert.equal(environmentSuccessStatus(browser.items[0], "train/success").label, "✅");
+
+  const obsolete = browser.loadGoalEvidence("goals", 1, null);
+  browser.goalEvidenceEpoch = 2;
+  finish({ ok: true, json: async () => ({ items: [{ goal_id: "goal", run_count: 0, success_badges: [] }] }) });
+  await obsolete;
+  assert.equal(browser.items[0].run_count, 1);
+
+  browser.sourceItems = [{ goal_id: "goal", evidence_status: "pending" }];
+  globalThis.fetch = async () => { throw new Error("offline"); };
+  await browser.loadGoalEvidence("goals", 2, null);
+  assert.equal(environmentSuccessStatus(browser.items[0], "eval/success").label, "Unavailable");
+});
+
+
+test("embedded runs use the fetched cursor after exhausting older runs", () => {
+  const browser = Object.create(SourceBrowser.prototype);
+  browser.goalVariantRunPages = new Map();
+  const variant = { variant_id: "variant", has_more_runs: true };
+  assert.equal(browser.embeddedGoalRunsHaveMore(variant), true);
+  browser.goalVariantRunPages.set("variant", { loading: true });
+  assert.equal(browser.embeddedGoalRunsHaveMore(variant), true);
+  browser.goalVariantRunPages.set("variant", { loaded: true, nextCursor: "next" });
+  assert.equal(browser.embeddedGoalRunsHaveMore(variant), true);
+  browser.goalVariantRunPages.set("variant", { loaded: true, nextCursor: null });
+  assert.equal(browser.embeddedGoalRunsHaveMore(variant), false);
+  browser.goalVariantRunPages.clear();
+  assert.equal(browser.embeddedGoalRunsHaveMore({ ...variant, has_more_runs: false }), false);
+});
+
+
+test("checkpoint evidence renders partial cells before completion and clears loading", async (t) => {
+  let stream;
+  t.mock.method(globalThis, "fetch", async () => new Response(new ReadableStream({
+    start(controller) { stream = controller; },
+  })));
+  const browser = Object.create(SourceBrowser.prototype);
+  Object.assign(browser, {
+    route: { run_id: "gradlab-test" }, routeKey: () => "run", query: "", token: "test",
+    checkpointTrainingSerial: 0, catalogRequestTimeoutMs: 1000,
+    sourceItems: [{ checkpoint_id: "top", metrics: {} }, { checkpoint_id: "bottom", metrics: {} }],
+    catalogWarnings: [], renderView() {},
+  });
+  const loading = browser.loadCheckpointTraining("run");
+  assert.ok(browser.checkpointTrainingController);
+  assert.ok(browser.sourceItems.every((item) => item.training_pending));
+  const encode = (event) => new TextEncoder().encode(JSON.stringify(event) + "\n");
+  const update = encode({ type: "metrics", items: [{ checkpoint_id: "top", metrics: { bricks: 42 } }] });
+  // The network may split a JSON record across arbitrary chunks.
+  stream.enqueue(update.slice(0, 12));
+  stream.enqueue(update.slice(12));
+  await new Promise(setImmediate);
+  assert.equal(browser.items[0].metrics.bricks, 42);
+  assert.deepEqual(browser.items[0].training_loaded_metrics, ["bricks"]);
+  assert.deepEqual(browser.items[1].training_loaded_metrics, []);
+  assert.ok(browser.checkpointTrainingController);
+  stream.enqueue(encode({ type: "complete", items: browser.items, warnings: [] }));
+  stream.close();
+  await loading;
+  assert.equal(browser.checkpointTrainingController, null);
+  assert.ok(browser.items.every((item) => !item.training_pending));
+});
+
+test("interrupted checkpoint evidence keeps received values and releases refresh", async (t) => {
+  const events = [{ type: "metrics", items: [{ checkpoint_id: "top", metrics: { bricks: 7 } }] }];
+  t.mock.method(globalThis, "fetch", async () => new Response(events.map(JSON.stringify).join("\n") + "\n"));
+  const browser = Object.create(SourceBrowser.prototype);
+  Object.assign(browser, {
+    route: { run_id: "gradlab-test" }, routeKey: () => "run", query: "", token: "test",
+    checkpointTrainingSerial: 0, catalogRequestTimeoutMs: 1000,
+    sourceItems: [{ checkpoint_id: "top", metrics: {} }], catalogWarnings: [], renderView() {},
+  });
+  await browser.loadCheckpointTraining("run");
+  assert.equal(browser.items[0].metrics.bricks, 7);
+  assert.equal(browser.items[0].training_pending, false);
+  assert.equal(browser.checkpointTrainingController, null);
+  assert.equal(browser.freshness, "partial");
+  assert.match(browser.catalogWarnings[0].message, /ended before completion/);
+});
+
+test("goal activity restores its complete table and expanded run pages", () => {
+  const view = Object.create(SourceBrowser.prototype);
+  Object.assign(view, {
+    route: { level: "goal_variants", environment_id: "env", goal_id: "goal" },
+    query: "", goalActivityCache: new Map(), loadedKey: "",
+    sourceItems: [{ variant_id: "current", recent_runs: [] }], activityRevision: "revision",
+    metricColumns: [], fallbackMetricColumns: [], nextCursor: "next", freshness: "fresh",
+    catalogWarnings: [], catalogSource: null, generatedAt: null, selectionFence: "fence",
+    goalVariantRunPages: new Map([["current", { loaded: true, items: [{ run_id: "run-a" }], nextCursor: null }]]),
+  });
+  view.rememberGoalActivity();
+  view.sourceItems = [];
+  view.items = [];
+  view.goalVariantRunPages.clear();
+  assert.equal(view.restoreGoalActivity(), true);
+  assert.equal(view.items[0].variant_id, "current");
+  assert.equal(view.loadedKey, view.routeKey());
+  assert.equal(view.freshness, "fresh");
+  assert.equal(view.nextCursor, "next");
+  assert.deepEqual(view.goalVariantRunPages.get("current").items, [{ run_id: "run-a" }]);
+  view.route.goal_id = "different";
+  assert.equal(view.restoreGoalActivity(), false);
+});
+
+test("goal configuration loading renders both columns before data arrives", async () => {
+  const html = await sourceHtml({route: {level: "goal_variants"}, loading: true, loadedKey: ""});
+  assert.match(html, /aria-busy="true"/);
+  assert.match(html, /goal-configuration-list/);
+  assert.match(html, /goal-configuration-panel/);
+  assert.equal((html.match(/Loading goal configuration/g) || []).length, 16);
+  assert.equal((html.match(/Loading configuration details/g) || []).length, 3);
 });

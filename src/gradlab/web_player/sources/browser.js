@@ -1,30 +1,3 @@
-const ICONS = "/assets/tabler-icons.svg";
-
-function icon(name) {
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.classList.add("icon");
-  svg.setAttribute("aria-hidden", "true");
-  const use = document.createElementNS("http://www.w3.org/2000/svg", "use");
-  use.setAttribute("href", `${ICONS}#ti-${name}`);
-  svg.append(use);
-  return svg;
-}
-
-function button(label, { iconName = null, quiet = false, primary = false } = {}) {
-  const element = document.createElement("button");
-  element.type = "button";
-  element.className = [
-    iconName ? "button-with-icon" : "",
-    quiet ? "quiet" : "",
-    primary ? "primary" : "",
-  ].filter(Boolean).join(" ");
-  if (iconName) element.append(icon(iconName));
-  const text = document.createElement("span");
-  text.textContent = label;
-  element.append(text);
-  return element;
-}
-
 export function formatDate(value, nowValue = Date.now()) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "—";
@@ -58,17 +31,24 @@ export function formatCalendarDate(value) {
   return `${date.getUTCDate()} ${months[date.getUTCMonth()]} ${date.getUTCFullYear()}`;
 }
 
-function formatGoalConfigurationDate(value, nowValue = Date.now()) {
+export function formatGoalConfigurationDate(value, nowValue = Date.now()) {
+  if (!value) return "—";
   const date = new Date(value);
   const now = new Date(nowValue);
   if (Number.isNaN(date.getTime())) return "—";
-  if (
-    !Number.isNaN(now.getTime())
-    && date.getFullYear() === now.getFullYear()
-    && date.getMonth() === now.getMonth()
-    && date.getDate() === now.getDate()
-  ) {
-    return formatDate(value, nowValue);
+  const elapsed = now.getTime() - date.getTime();
+  const age = Math.abs(elapsed);
+  if (Number.isFinite(age) && age < 30 * 86_400_000) {
+    if (age < 1_000) return "just now";
+    const [duration, unit] = age < 60_000
+      ? [1_000, "second"]
+      : age < 3_600_000
+        ? [60_000, "minute"]
+        : age < 86_400_000
+          ? [3_600_000, "hour"]
+          : [86_400_000, "day"];
+    const amount = Math.floor(age / duration) * (elapsed >= 0 ? -1 : 1);
+    return new Intl.RelativeTimeFormat("en", { numeric: "always" }).format(amount, unit);
   }
   return formatCalendarDate(value);
 }
@@ -195,23 +175,6 @@ export function successBadgeLabels(item) {
   return SUCCESS_BADGES.filter((badge) => present.has(badge));
 }
 
-function renderSuccessBadges(item) {
-  const labels = successBadgeLabels(item);
-  if (!labels.length) return null;
-  const badges = document.createElement("span");
-  badges.className = "success-badges";
-  labels.forEach((label) => {
-    const badge = document.createElement("span");
-    badge.className = `success-badge ${label.startsWith("train/") ? "training" : "evaluation"}`;
-    badge.textContent = label;
-    badge.title = label === "train/success"
-      ? "A run reached this training goal's success condition"
-      : "A verified evaluation reached this goal's acceptance condition";
-    badges.append(badge);
-  });
-  return badges;
-}
-
 export function goalConfigurationPresentation(item, nowValue = Date.now()) {
   const kind = String(item?.configuration_kind || "previous_default");
   const kindPresentation = GOAL_CONFIGURATION_KINDS[kind] || {
@@ -328,14 +291,6 @@ export function formatGoalDiffValue(value, { unavailable = false } = {}) {
   if (value === undefined) return "—";
   const rendered = JSON.stringify(value);
   return rendered === undefined ? String(value) : rendered;
-}
-
-function formatBytes(value) {
-  const bytes = Number(value);
-  if (!Number.isFinite(bytes) || bytes <= 0) return "—";
-  const units = ["B", "KiB", "MiB", "GiB"];
-  const unit = Math.min(units.length - 1, Math.floor(Math.log(bytes) / Math.log(1024)));
-  return `${(bytes / (1024 ** unit)).toFixed(unit ? 1 : 0)} ${units[unit]}`;
 }
 
 export function runStatePresentation(item) {
@@ -559,14 +514,14 @@ export function metricLabel(metric) {
   const name = String(metric || "");
   const known = {
     "leader/step": "Checkpoint step",
-    "train/global_step": "Global step",
-    "train/target/return_mean": "Recent target return mean",
-    "train/target/success/start_rate_min": "Recent all-start success rate min",
-    "train/target/success/start_rate_mean": "Recent all-start success rate mean",
-    "eval/success/start_rate_min": "Full-eval start success rate min",
-    "eval/success/start_rate_mean": "Full-eval start success rate mean",
-    "eval/return_mean": "Mean return",
-    "eval/return_max": "Best return",
+    "train/step": "Global step",
+    "train/return/mean": "Recent target return mean",
+    "train/success/min": "Recent all-start success rate min",
+    "train/success/mean": "Recent all-start success rate mean",
+    "eval/success/min": "Full-eval start success rate min",
+    "eval/success/mean": "Full-eval start success rate mean",
+    "eval/return/mean": "Mean return",
+    "eval/return/max": "Best return",
   };
   if (known[name]) return known[name];
   const progress = name.match(/^eval\/progress\/([^/]+)\/(mean|max)$/);
@@ -574,7 +529,7 @@ export function metricLabel(metric) {
     return `${humanizeMetricPart(progress[1])} ${progress[2]}`;
   }
   const trainingProgress = name.match(
-    /^train\/target\/progress\/([^/]+)\/(mean|max|min)$/,
+    /^train\/progress\/([^/]+)\/(mean|max|min)$/,
   );
   if (trainingProgress) {
     return `Recent target ${humanizeMetricPart(trainingProgress[1]).toLowerCase()} ${trainingProgress[2]}`;
@@ -590,7 +545,7 @@ export function formatMetricValue(metric, value) {
   if (value === null || value === undefined || value === "") return "—";
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return "—";
-  if (String(metric).includes("/rate/") || String(metric).endsWith("/rate") || /\/success\/(?:observed_)?start_rate_/.test(String(metric))) {
+  if (String(metric).includes("/rate/") || String(metric).endsWith("/rate") || /\/success\/(?:min|mean|max)$/.test(String(metric))) {
     return `${(numeric * 100).toLocaleString(undefined, { maximumFractionDigits: 2 })}%`;
   }
   return numeric.toLocaleString(undefined, { maximumFractionDigits: 3 });
@@ -775,13 +730,6 @@ export function checkpointCanEvaluate(item) {
   );
 }
 
-export function checkpointMetricIsBest(item, metric) {
-  return (
-    Array.isArray(item?.best_metrics)
-    && item.best_metrics.includes(metric)
-  );
-}
-
 export function checkpointMetricRoleLabel(column) {
   const roles = new Set(Array.isArray(column?.roles) ? column.roles : []);
   if (roles.has("objective") && roles.has("acceptance")) return "Objective · gate";
@@ -790,27 +738,74 @@ export function checkpointMetricRoleLabel(column) {
   if (roles.has("acceptance")) return "Acceptance";
   if (roles.has("training_proxy")) return "Training proxy";
   if (roles.has("optimization")) return "Optimization";
+  if (roles.has("observation")) return "Observation";
   return "";
 }
 
 export function checkpointMetricHeaderLabel(column) {
   const metric = String(column?.metric || "");
-  const evidence = (
-    column?.evidence === "evaluation"
-    || /^(eval\/|leader\/)/.test(metric)
-  ) ? "Eval" : "Train";
-  if (/\/success\//.test(metric)) return `${evidence} success`;
-  if (/\/return_(mean|max)$/.test(metric)) return `${evidence} return`;
-  const progress = metric.match(/\/progress\/([^/]+)\//);
-  if (progress) return `${evidence} ${humanizeMetricPart(progress[1]).toLowerCase()}`;
-  if (metric === "leader/step") return "Checkpoint step";
-  return column?.label || metricLabel(metric);
+  const prefix = column?.evidence === "training" ? "train/"
+    : column?.evidence === "evaluation" ? "eval/" : "";
+  return prefix && metric.startsWith(prefix) ? metric.slice(prefix.length) : metric;
+}
+
+export function checkpointMetricIsLoading(item, column) {
+  if (!item?.training_pending || !column || item.metrics?.[column.metric] != null) {
+    return false;
+  }
+  return column.evidence === "evaluation"
+    || (column.evidence === "training"
+      && !item.training_loaded_metrics?.includes(column.metric));
+}
+
+export function checkpointEvaluationPresentation(item) {
+  const queue = item?.evaluation_queue;
+  const state = String(queue?.state || "").toLowerCase();
+  const evaluation = queue?.evaluation || item?.evaluation;
+  const completed = Number(evaluation?.episodes_completed);
+  const planned = Number(evaluation?.episodes_planned);
+  const progressCount = Number.isFinite(completed) && Number.isFinite(planned) && planned > 0
+    ? `${completed}/${planned}` : "";
+  const progress = progressCount ? ` · ${progressCount}` : "";
+  if (["queued", "retry_wait", "waiting_for_training_terminal", "waiting_for_run_lease", "submitted", "submission_uncertain", "awaiting_projection", "flusher_unavailable"].includes(state)) {
+    return { label: "Queued", tone: "pending" };
+  }
+  if (state === "running") return { label: `Running${progress}`, tone: "running" };
+  if (["failed", "blocked", "expired", "canceled"].includes(state)) {
+    return { label: humanizeMetricPart(state), tone: "failed" };
+  }
+  if (evaluation?.source === "monitoring") {
+    const title = "Checkpoint Monitoring · observational";
+    if (evaluation.status === "queued") return { label: "Queued", tone: "pending", title };
+    if (evaluation.status === "running") return { label: `Running${progress}`, tone: "running", title };
+    if (evaluation.status === "finalizing") return { label: `Finalizing${progress}`, tone: "pending", title };
+    if (evaluation.status === "failed") return { label: "Failed", tone: "failed", title };
+    if (evaluation.status === "canceled") return { label: "Canceled", tone: "failed", title };
+  }
+  if (evaluation?.source === "monitoring" && evaluation.status === "verified") {
+    return {
+      label: "FINISHED", progress: progressCount, tone: "verified",
+      title: "Checkpoint Monitoring · observational",
+    };
+  }
+  if (["accepted", "rejected"].includes(evaluation?.status) || ["accepted", "rejected"].includes(state)) {
+    return {
+      label: "FINISHED", progress: progressCount, tone: "verified",
+      title: evaluation?.manual ? "Manual Acceptance evaluation" : "Acceptance evaluation",
+    };
+  }
+  if (evaluation?.status === "verified") {
+    return { label: "FINISHED", progress: progressCount, tone: "verified" };
+  }
+  return { label: "Not evaluated", tone: "absent" };
 }
 
 export function checkpointMetricDescription(column) {
   const role = checkpointMetricRoleLabel(column);
   const evidence = column?.evidence === "evaluation"
-    ? "Frozen checkpoint-evaluation evidence"
+    ? Array.isArray(column?.roles) && column.roles.includes("observation")
+      ? "Verified observational checkpoint evaluation; no Acceptance authority"
+      : "Frozen checkpoint-evaluation evidence"
     : Array.isArray(column?.roles) && column.roles.includes("training_proxy")
       ? "Diagnostic online training proxy; checkpoint evaluation remains authoritative"
       : "Diagnostic online training evidence";
@@ -820,10 +815,6 @@ export function checkpointMetricDescription(column) {
       ? "Higher is better"
       : "No single better direction";
   return [role, evidence, direction].filter(Boolean).join(" · ");
-}
-
-export function checkpointMetricBestBadge() {
-  return "Best";
 }
 
 export function humanSourceLabel(value, kind) {
@@ -868,6 +859,14 @@ export function environmentEvidenceRank(item) {
 }
 
 export function environmentSuccessStatus(item, badge) {
+  if (["pending", "unavailable"].includes(item?.evidence_status)) {
+    const pending = item.evidence_status === "pending";
+    return {
+      label: pending ? "Loading…" : "Unavailable",
+      className: "not-applicable",
+      description: pending ? "Loading success evidence" : "Success evidence unavailable; refresh to retry",
+    };
+  }
   if (successBadgeLabels(item).includes(badge)) {
     return {
       label: "✅",
@@ -887,39 +886,56 @@ export function environmentSuccessStatus(item, badge) {
     };
   }
   return {
-    label: "N/A",
+    label: "∅",
     className: "not-applicable",
-    description: "No runs yet",
+    description: "No results recorded",
   };
 }
 
 export function runTrainingEvidenceStatus(item) {
+  const trainingSuccess = item?.training_success;
+  const criterion = trainingSuccess?.criterion;
+  const best = trainingSuccess?.best;
+  const criterionDetail = criterion
+    ? `${criterion.metric} ${criterion.operator} ${criterion.threshold}`
+    : "the declared Training Success criterion";
   if (successBadgeLabels(item).includes("train/success")) {
     return {
-      label: "Met",
+      label: "✅",
       className: "met",
-      description: "The Run met its declared Training Success proxy",
+      description: trainingSuccess?.status === "met"
+        ? `Training Success reached: ${criterionDetail}`
+        : "The Run met its declared Training Success proxy",
     };
   }
   const state = String(item?.state || "").trim().toLowerCase();
   if (["pending", "queued", "starting", "running"].includes(state)) {
     return {
-      label: "In progress",
+      label: "⏳",
       className: "in-progress",
       description: "The Run is still in progress",
     };
   }
+  if (trainingSuccess?.status === "unavailable") {
+    return {
+      label: "∅",
+      className: "not-applicable",
+      description: `No training samples are available for ${criterionDetail}`,
+    };
+  }
   return {
-    label: "Not met",
+    label: "❌",
     className: "not-met",
-    description: "The Run did not meet its declared Training Success proxy",
+    description: trainingSuccess?.status === "not_met" && best
+      ? `${criterionDetail} was not reached; best observed value ${best.value} at step ${best.step}`
+      : "The Run did not meet its declared Training Success proxy",
   };
 }
 
 export function runEvaluationEvidenceStatus(item) {
   if (successBadgeLabels(item).includes("eval/success")) {
     return {
-      label: "Accepted",
+      label: "✅",
       className: "accepted",
       description: "Verified evaluation evidence satisfied Acceptance",
     };
@@ -927,21 +943,21 @@ export function runEvaluationEvidenceStatus(item) {
   const projected = String(item?.evaluation_status || "").trim().toLowerCase();
   if (projected === "in_progress") {
     return {
-      label: "In progress",
+      label: "⏳",
       className: "in-progress",
       description: "Evaluation is in progress",
     };
   }
   if (projected === "not_accepted") {
     return {
-      label: "Not accepted",
+      label: "❌",
       className: "not-accepted",
       description: "Available evaluation evidence did not satisfy Acceptance",
     };
   }
   if (projected === "not_evaluated") {
     return {
-      label: "Not evaluated",
+      label: "∅",
       className: "not-evaluated",
       description: "No evaluation evidence is available for this Run",
     };
@@ -954,20 +970,20 @@ export function runEvaluationEvidenceStatus(item) {
   const statuses = records.map((record) => String(record.status || "").trim().toLowerCase());
   if (statuses.some((status) => ["pending", "queued", "submitted", "running", "evaluating"].includes(status))) {
     return {
-      label: "In progress",
+      label: "⏳",
       className: "in-progress",
       description: "Evaluation is in progress",
     };
   }
   if (records.length) {
     return {
-      label: "Not accepted",
+      label: "❌",
       className: "not-accepted",
       description: "Available evaluation evidence did not satisfy Acceptance",
     };
   }
   return {
-    label: "Not evaluated",
+    label: "∅",
     className: "not-evaluated",
     description: "No evaluation evidence is available for this Run",
   };
@@ -1197,6 +1213,41 @@ export function sourceBreadcrumbItems(route) {
   return items;
 }
 
+export function sourceTablePresentation(view) {
+  const { items, metricColumns, fallbackMetricColumns, sort, loading, route } = view;
+  const showingRuns = route.level === "runs" && !route.run_id;
+  const ranking = showingRuns ? activeRunMetricColumns(items, metricColumns, fallbackMetricColumns) : [];
+  const metrics = availableRunMetricColumns(items, ranking).map((c) => ({ ...c, label: metricLabel(c.metric) }));
+  const checkpointColumns = (evidence) => metricColumns.filter((c) => c.evidence === evidence).map((c) => ({
+    ...c, fullLabel: c.label || metricLabel(c.metric), label: checkpointMetricHeaderLabel(c),
+  }));
+  const training = checkpointColumns("training");
+  const evaluation = checkpointColumns("evaluation");
+  const trainingPlaceholder = loading && !items.length && !training.length;
+  const columns = showingRuns ? [
+    { label: "Run" }, { label: "Recipe / variant" }, { label: "Seed" }, { label: "Training result" },
+    ...metrics, { label: "Updated" }, { label: "Contract" },
+  ] : [
+    { label: "", selection: true }, { label: "Step" }, ...training,
+    ...(trainingPlaceholder ? [{ label: "", trainingPlaceholder: true }] : []),
+    { label: "Status", evaluationStatus: true }, ...evaluation,
+  ];
+  const widths = columns.map((c) => {
+    if (c.selection) return 3;
+    if (c.label === "Step") return 15;
+    if (c.evaluationStatus) return Math.max(8, Math.min(15, Math.max(0, ...items.map((i) => checkpointEvaluationPresentation(i).label.length)) + 1));
+    if (c.trainingPlaceholder) return 8;
+    const header = Math.max(...String(c.label || "").split("/").map((p) => p.length));
+    const value = Math.max(0, ...items.map((i) => formatMetricValue(c.metric, i.metrics?.[c.metric]).length));
+    return Math.max(8, Math.min(18, header + 1), Math.min(18, value + 1));
+  });
+  return { training, evaluation, trainingPlaceholder, columns, widths,
+    totalWidth: widths.reduce((total, width) => total + width, 0), metrics,
+    items: sort.metric ? sortRunItems(items, sort) : showingRuns ? rankRunItems(items, ranking) : items,
+    efficiency: showingRuns ? bestRunEfficiency(items, metricColumns, fallbackMetricColumns) : null,
+  };
+}
+
 export class SourceBrowser {
   constructor(
     root,
@@ -1207,7 +1258,7 @@ export class SourceBrowser {
       getState,
       showToast,
       checkpointNavigationRoot = null,
-      beginCheckpointLoad = null,
+      selection,
       openInspection,
       openSourceRoute,
       catalogRequestTimeoutMs = 30_000,
@@ -1220,16 +1271,7 @@ export class SourceBrowser {
     this.getState = getState;
     this.showToast = showToast;
     this.checkpointNavigationRoot = checkpointNavigationRoot;
-    this.checkpointPrevious = checkpointNavigationRoot?.querySelector(
-      "[data-checkpoint-previous]",
-    ) || null;
-    this.checkpointNext = checkpointNavigationRoot?.querySelector(
-      "[data-checkpoint-next]",
-    ) || null;
-    this.checkpointPosition = checkpointNavigationRoot?.querySelector(
-      "[data-checkpoint-position]",
-    ) || null;
-    this.beginCheckpointLoad = beginCheckpointLoad;
+    this.selection = selection;
     this.openInspection = openInspection;
     this.openSourceRoute = openSourceRoute;
     this.route = {
@@ -1275,18 +1317,20 @@ export class SourceBrowser {
     this.goalVariantRunPages = new Map();
     this.activityRevision = "";
     this.autoSelectedRoute = "";
-    this.playbackRoute = null;
     this.activeBreadcrumbRoute = "";
     this.activeCheckpointCache = new Map();
     this.activeCheckpointController = null;
     this.activeCheckpointRequestSerial = 0;
     this.activeCheckpointError = "";
-    this.activeCheckpointPendingId = "";
     this.adjacentPrefetchKey = "";
     this.initialEnvironmentCatalog = null;
     this.initialCatalogConsumed = false;
     this.environmentCatalogCache = null;
     this.goalCatalogCache = new Map();
+    this.goalActivityCache = new Map();
+    this.checkpointCatalogCache = new Map();
+    this.searchCatalogCache = new Map();
+    this.checkpointTrainingPending = false;
     this.favoriteEnvironments = readEnvironmentFavorites();
     writeEnvironmentFavorites(this.favoriteEnvironments);
     this.historyEnabled = (
@@ -1301,12 +1345,6 @@ export class SourceBrowser {
       if (!parsedRoute) return;
       this.navigate(parsedRoute, { historyMode: null });
     };
-    this.checkpointPrevious?.addEventListener("click", () => {
-      this.selectAdjacentCheckpoint("previous");
-    });
-    this.checkpointNext?.addEventListener("click", () => {
-      this.selectAdjacentCheckpoint("next");
-    });
     if (this.historyEnabled) window.addEventListener("popstate", this.onPopState);
   }
 
@@ -1321,7 +1359,7 @@ export class SourceBrowser {
     ) {
       this.initialEnvironmentCatalog = this.app.catalog;
     }
-    const appRoute = canonicalSourceRoute(this.app.route || {});
+    const appRoute = canonicalSourceRoute(this.selection.view.route || {});
     if (
       this.pendingLocationRoute
       && location.pathname !== "/"
@@ -1331,7 +1369,7 @@ export class SourceBrowser {
       this.pendingLocationRoute = null;
       this.lastAppRoute = routeSignature(appRoute);
       this.applyRoute(pending);
-      this.command("browse_sources", { route: { ...pending } });
+      this.selection.browse(pending, snapshot, { historyMode: null });
     } else {
       this.pendingLocationRoute = null;
     }
@@ -1360,6 +1398,7 @@ export class SourceBrowser {
       this.generatedAt = null;
       this.selectionFence = "";
       this.runStatus = null;
+      this.checkpointTrainingPending = false;
       this.checkpointTrainingController?.abort();
       this.checkpointTrainingController = null;
       this.checkpointTrainingSerial += 1;
@@ -1368,7 +1407,8 @@ export class SourceBrowser {
       this.selectedCheckpoints.clear();
       this.resetGoalVariantDetail();
       this.autoSelectedRoute = "";
-      restoredCatalog = this.restoreEnvironmentCatalog() || this.restoreGoalCatalog();
+      restoredCatalog = this.restoreEnvironmentCatalog() || this.restoreGoalCatalog()
+        || this.restoreGoalActivity() || this.restoreCheckpointCatalog();
       this.syncUrl("replace");
     }
     this.hydrateInitialEnvironments();
@@ -1383,6 +1423,7 @@ export class SourceBrowser {
     this.requestController?.abort();
     this.requestController = null;
     this.requestSerial += 1;
+    this.goalEvidenceEpoch = (this.goalEvidenceEpoch || 0) + 1;
     this.checkpointTrainingController?.abort();
     this.checkpointTrainingController = null;
     this.checkpointTrainingSerial += 1;
@@ -1399,14 +1440,13 @@ export class SourceBrowser {
     }
     if (!preserveBreadcrumbs) {
       this.activeBreadcrumbRoute = "";
-      this.breadcrumbsRoot.replaceChildren();
-      this.breadcrumbsRoot.hidden = true;
+      this.view?.breadcrumbs([]);
     }
   }
 
   renderActiveBreadcrumbs(snapshot) {
     const app = snapshot?.app || {};
-    const route = app.route || {};
+    const route = this.selection.view.route || {};
     const recording = snapshot?.mode === "trajectory" && Boolean(route.environment_id);
     const signature = routeSignature(route);
     if (
@@ -1422,8 +1462,7 @@ export class SourceBrowser {
     this.app = app;
     if (!route.checkpoint_id && !recording) {
       this.activeBreadcrumbRoute = "";
-      this.breadcrumbsRoot.replaceChildren();
-      this.breadcrumbsRoot.hidden = true;
+      this.view?.breadcrumbs([]);
       this.hideActiveCheckpointNavigation();
       return;
     }
@@ -1435,12 +1474,9 @@ export class SourceBrowser {
       run_id: route.run_id || "",
       checkpoint_id: route.checkpoint_id || "",
     };
-    this.playbackRoute = { ...this.route };
-    this.activeCheckpointPendingId = "";
     this.activeCheckpointError = "";
     this.activeBreadcrumbRoute = signature;
     this.renderBreadcrumbs(this.breadcrumbsRoot);
-    this.breadcrumbsRoot.hidden = false;
     this.syncUrl("replace");
     if (recording) {
       this.hideActiveCheckpointNavigation();
@@ -1451,7 +1487,7 @@ export class SourceBrowser {
   }
 
   hideActiveCheckpointNavigation() {
-    if (this.checkpointNavigationRoot) this.checkpointNavigationRoot.hidden = true;
+    this.view?.navigation(null);
   }
 
   activeCheckpointItems(route = this.route) {
@@ -1459,49 +1495,38 @@ export class SourceBrowser {
   }
 
   renderActiveCheckpointNavigation(route = this.route) {
-    const root = this.checkpointNavigationRoot;
-    if (!root || !route?.checkpoint_id || !route?.run_id) {
+    if (!route?.checkpoint_id || !route?.run_id) {
       this.hideActiveCheckpointNavigation();
       return;
     }
-    root.hidden = false;
     const items = this.activeCheckpointItems(route);
-    const presentation = checkpointNavigationPresentation(items, route.checkpoint_id);
-    const pending = Boolean(this.activeCheckpointPendingId);
+    const p = checkpointNavigationPresentation(items, route.checkpoint_id);
     const loading = items === null && !this.activeCheckpointError;
-    const unavailable = !loading && presentation.position === null;
-    root.classList.toggle("warning", Boolean(this.activeCheckpointError || unavailable));
-    if (this.checkpointPosition) {
-      this.checkpointPosition.textContent = loading
-        ? "… / …"
-        : presentation.position === null
-          ? `— / ${presentation.count.toLocaleString()}`
-          : `${presentation.position.toLocaleString()} / ${presentation.count.toLocaleString()}`;
-      this.checkpointPosition.title = this.activeCheckpointError
-        || String(presentation.current?.checkpoint_id || route.checkpoint_id);
-    }
-    const canChange = this.hasControl() && !pending;
-    if (this.checkpointPrevious) {
-      this.checkpointPrevious.disabled = !canChange || !presentation.previous;
-      this.checkpointPrevious.title = presentation.previous
-        ? `Previous checkpoint · step ${Number(presentation.previous.step).toLocaleString()}`
-        : loading ? "Loading checkpoints" : "This is the first checkpoint";
-    }
-    if (this.checkpointNext) {
-      this.checkpointNext.disabled = !canChange || !presentation.next;
-      this.checkpointNext.title = presentation.next
-        ? `Next checkpoint · step ${Number(presentation.next.step).toLocaleString()}`
-        : loading ? "Loading checkpoints" : "This is the latest checkpoint";
-    }
+    const canChange = this.hasControl() && !this.selection.view.navigationPending;
+    this.view?.navigation({
+      warning: Boolean(this.activeCheckpointError || (!loading && p.position === null)),
+      position: loading ? "… / …" : `${p.position === null ? "—" : p.position.toLocaleString()} / ${p.count.toLocaleString()}`,
+      title: this.activeCheckpointError || String(p.current?.checkpoint_id || route.checkpoint_id),
+      previousDisabled: !canChange || !p.previous,
+      nextDisabled: !canChange || !p.next,
+      previousTitle: p.previous ? `Previous checkpoint · step ${Number(p.previous.step).toLocaleString()}` : loading ? "Loading checkpoints" : "This is the first checkpoint",
+      nextTitle: p.next ? `Next checkpoint · step ${Number(p.next.step).toLocaleString()}` : loading ? "Loading checkpoints" : "This is the latest checkpoint",
+    });
   }
 
   async loadActiveCheckpointNavigation(route, expectedSignature) {
     const requestRoute = { ...route };
     const cacheKey = activeCheckpointCacheKey(requestRoute);
     this.activeCheckpointController?.abort();
+    this.activeCheckpointController = null;
+    const serial = ++this.activeCheckpointRequestSerial;
+    if (this.activeCheckpointCache.has(cacheKey)) {
+      this.activeCheckpointError = "";
+      this.prefetchAdjacentCheckpoints(requestRoute);
+      return;
+    }
     const controller = new AbortController();
     this.activeCheckpointController = controller;
-    const serial = ++this.activeCheckpointRequestSerial;
     const query = new URLSearchParams();
     if (requestRoute.goal_variant_id) {
       query.set("goal_variant_id", requestRoute.goal_variant_id);
@@ -1545,7 +1570,7 @@ export class SourceBrowser {
       this.route.checkpoint_id,
     );
     const item = direction === "previous" ? presentation.previous : presentation.next;
-    if (!item || this.activeCheckpointPendingId) return false;
+    if (!item || this.selection.view.navigationPending) return false;
     const commandId = this.selectCheckpoint(item);
     if (!commandId) return false;
     return true;
@@ -1683,9 +1708,8 @@ export class SourceBrowser {
     return true;
   }
 
-  rememberEnvironmentCatalog() {
-    if (this.route.level !== "environments" || this.query.trim()) return false;
-    this.environmentCatalogCache = {
+  catalogSnapshot() {
+    return {
       sourceItems: [...this.sourceItems],
       metricColumns: [...this.metricColumns],
       fallbackMetricColumns: [...this.fallbackMetricColumns],
@@ -1696,12 +1720,9 @@ export class SourceBrowser {
       generatedAt: this.generatedAt,
       selectionFence: this.selectionFence,
     };
-    return true;
   }
 
-  restoreEnvironmentCatalog() {
-    const catalog = this.environmentCatalogCache;
-    if (!catalog || this.route.level !== "environments" || this.query.trim()) return false;
+  restoreCatalogSnapshot(catalog) {
     this.sourceItems = [...catalog.sourceItems];
     this.items = [...this.sourceItems];
     this.metricColumns = [...catalog.metricColumns];
@@ -1712,6 +1733,22 @@ export class SourceBrowser {
     this.catalogSource = catalog.catalogSource ? { ...catalog.catalogSource } : null;
     this.generatedAt = catalog.generatedAt;
     this.selectionFence = catalog.selectionFence;
+  }
+
+  rememberEnvironmentCatalog() {
+    if (this.route.level !== "environments" || this.query.trim()) return false;
+    this.environmentCatalogCache = {
+      ...this.catalogSnapshot(),
+      loaded: this.loadedKey === this.routeKey(),
+    };
+    return true;
+  }
+
+  restoreEnvironmentCatalog() {
+    const catalog = this.environmentCatalogCache;
+    if (!catalog || this.route.level !== "environments" || this.query.trim()) return false;
+    this.restoreCatalogSnapshot(catalog);
+    if (catalog.loaded) this.loadedKey = this.routeKey();
     return true;
   }
 
@@ -1720,15 +1757,7 @@ export class SourceBrowser {
       return false;
     }
     this.goalCatalogCache.set(this.route.environment_id, {
-      sourceItems: [...this.sourceItems],
-      metricColumns: [...this.metricColumns],
-      fallbackMetricColumns: [...this.fallbackMetricColumns],
-      nextCursor: this.nextCursor,
-      freshness: this.freshness,
-      catalogWarnings: [...this.catalogWarnings],
-      catalogSource: this.catalogSource ? { ...this.catalogSource } : null,
-      generatedAt: this.generatedAt,
-      selectionFence: this.selectionFence,
+      ...this.catalogSnapshot(),
     });
     return true;
   }
@@ -1739,17 +1768,101 @@ export class SourceBrowser {
     }
     const catalog = this.goalCatalogCache.get(this.route.environment_id);
     if (!catalog) return false;
-    this.sourceItems = [...catalog.sourceItems];
+    this.restoreCatalogSnapshot(catalog);
+    this.sourceItems = catalog.sourceItems.map((item) => item.evidence_status === "pending"
+      ? { ...item, evidence_status: "unavailable" }
+      : item);
     this.items = [...this.sourceItems];
-    this.metricColumns = [...catalog.metricColumns];
-    this.fallbackMetricColumns = [...catalog.fallbackMetricColumns];
-    this.nextCursor = catalog.nextCursor;
-    this.freshness = catalog.freshness;
-    this.catalogWarnings = [...catalog.catalogWarnings];
-    this.catalogSource = catalog.catalogSource ? { ...catalog.catalogSource } : null;
-    this.generatedAt = catalog.generatedAt;
-    this.selectionFence = catalog.selectionFence;
     this.loadedKey = this.routeKey();
+    return true;
+  }
+
+  rememberGoalActivity() {
+    if (this.route.level !== "goal_variants") return;
+    this.goalActivityCache.set(this.routeKey(), {
+      ...this.catalogSnapshot(),
+      activityRevision: this.activityRevision,
+      runPages: new Map(this.goalVariantRunPages),
+    });
+  }
+
+  restoreGoalActivity() {
+    if (this.route.level !== "goal_variants") return false;
+    const cached = this.goalActivityCache.get(this.routeKey());
+    if (!cached) return false;
+    this.restoreCatalogSnapshot(cached);
+    this.activityRevision = cached.activityRevision;
+    this.goalVariantRunPages = new Map(cached.runPages);
+    this.loadedKey = this.routeKey();
+    return true;
+  }
+
+  rememberCheckpointCatalog() {
+    if (this.route.level !== "runs" || !this.route.run_id
+      || this.route.checkpoint_id || this.query.trim()) return false;
+    const key = activeCheckpointCacheKey(this.route);
+    this.checkpointCatalogCache.delete(key);
+    this.activeCheckpointCache.set(key, [...this.sourceItems]);
+    this.checkpointCatalogCache.set(key, {
+      ...this.catalogSnapshot(),
+      runStatus: this.runStatus ? { ...this.runStatus } : null,
+      trainingPending: this.checkpointTrainingPending,
+    });
+    return true;
+  }
+
+  restoreCheckpointCatalog() {
+    if (this.route.level !== "runs" || !this.route.run_id
+      || this.route.checkpoint_id || this.query.trim()) return false;
+    const cached = this.checkpointCatalogCache.get(activeCheckpointCacheKey(this.route));
+    if (!cached) return false;
+    this.restoreCatalogSnapshot(cached);
+    this.runStatus = cached.runStatus ? { ...cached.runStatus } : null;
+    this.checkpointTrainingPending = cached.trainingPending;
+    this.loadedKey = this.routeKey();
+    if (cached.trainingPending) {
+      const key = this.loadedKey;
+      queueMicrotask(() => {
+        if (key === this.routeKey() && this.checkpointTrainingPending
+          && !this.checkpointTrainingController) {
+          void this.loadCheckpointTraining(key);
+        }
+      });
+    }
+    return true;
+  }
+
+  rememberSearchCatalog() {
+    if (!this.query?.trim()) return false;
+    this.searchCatalogCache.set(this.routeKey(), {
+      ...this.catalogSnapshot(),
+      runStatus: this.runStatus ? { ...this.runStatus } : null,
+      activityRevision: this.activityRevision,
+      trainingPending: this.checkpointTrainingPending,
+      runPages: new Map(this.goalVariantRunPages),
+    });
+    return true;
+  }
+
+  restoreSearchCatalog() {
+    if (!this.query?.trim()) return false;
+    const cached = this.searchCatalogCache.get(this.routeKey());
+    if (!cached) return false;
+    this.restoreCatalogSnapshot(cached);
+    this.runStatus = cached.runStatus ? { ...cached.runStatus } : null;
+    this.activityRevision = cached.activityRevision;
+    this.checkpointTrainingPending = cached.trainingPending;
+    this.goalVariantRunPages = new Map(cached.runPages);
+    this.loadedKey = this.routeKey();
+    if (cached.trainingPending && this.route.level === "runs" && this.route.run_id) {
+      const key = this.loadedKey;
+      queueMicrotask(() => {
+        if (key === this.routeKey() && this.checkpointTrainingPending
+          && !this.checkpointTrainingController) {
+          void this.loadCheckpointTraining(key);
+        }
+      });
+    }
     return true;
   }
 
@@ -1759,6 +1872,7 @@ export class SourceBrowser {
     if (cursor) query.set("cursor", cursor);
     if (force) query.set("refresh", "1");
     if (this.route.level === "goals") {
+      if (!this.query.trim()) query.set("evidence", "0");
       return `/api/catalog/environments/${encodeURIComponent(this.route.environment_id)}/goals?${query}`;
     }
     if (this.route.level === "goal_variants") {
@@ -1783,10 +1897,14 @@ export class SourceBrowser {
     const key = this.routeKey();
     if (this.loading && this.loadingKey === key) return;
     this.requestController?.abort();
+    this.checkpointTrainingController?.abort();
+    this.checkpointTrainingController = null;
+    this.checkpointTrainingSerial += 1;
     const controller = new AbortController();
     this.requestController = controller;
     const cursor = append ? this.nextCursor : null;
     const serial = ++this.requestSerial;
+    if (!append) this.goalEvidenceEpoch = (this.goalEvidenceEpoch || 0) + 1;
     this.loading = true;
     this.loadingKey = key;
     let timedOut = false;
@@ -1847,7 +1965,9 @@ export class SourceBrowser {
         this.runStatus = payload.run && typeof payload.run === "object"
           ? { ...payload.run }
           : null;
+        this.checkpointTrainingPending = payload.training_enrichment === "pending";
         if (this.route.level === "goal_variants") {
+          if (force) this.goalVariantRunPages.clear();
           this.activityRevision = String(payload.revision || "");
         }
         this.metricColumns = Array.isArray(payload.metric_columns)
@@ -1869,13 +1989,20 @@ export class SourceBrowser {
       this.error = "";
       this.rememberEnvironmentCatalog();
       this.rememberGoalCatalog();
+      this.rememberGoalActivity();
+      this.rememberCheckpointCatalog();
+      this.rememberSearchCatalog();
+      this.goalVariantDiff = null;
+      if (this.route.level === "goals" && received.some((item) => item.evidence_status === "pending")) {
+        void this.loadGoalEvidence(key, this.goalEvidenceEpoch, cursor, received);
+      }
       if (
         !append
         && payload.training_enrichment === "pending"
         && this.route.level === "runs"
         && this.route.run_id
       ) {
-        queueMicrotask(() => this.loadCheckpointTraining(key));
+        void this.loadCheckpointTraining(key);
       }
       if (this.route.checkpoint_id && !append) {
         const selected = received.find(
@@ -1919,6 +2046,33 @@ export class SourceBrowser {
     }
   }
 
+  async loadGoalEvidence(expectedKey, epoch, cursor, received = this.sourceItems) {
+    const pendingIds = new Set(received.map((item) => item.goal_id));
+    const endpoint = this.endpoint(cursor).replace("evidence=0", "evidence=1");
+    try {
+      const response = await fetch(endpoint, {
+        headers: { Authorization: `Bearer ${this.token}` },
+        cache: "no-store",
+        signal: AbortSignal.timeout(this.catalogRequestTimeoutMs),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error || "Success evidence unavailable");
+      if (epoch !== this.goalEvidenceEpoch || expectedKey !== this.routeKey()) return;
+      const evidence = new Map((payload.items || []).map((item) => [item.goal_id, item]));
+      this.sourceItems = this.sourceItems.map((item) => evidence.has(item.goal_id)
+        ? { ...item, ...evidence.get(item.goal_id), evidence_status: "ready" }
+        : item);
+    } catch {
+      if (epoch !== this.goalEvidenceEpoch || expectedKey !== this.routeKey()) return;
+      this.sourceItems = this.sourceItems.map((item) => item.evidence_status === "pending" && pendingIds.has(item.goal_id)
+        ? { ...item, evidence_status: "unavailable" } : item);
+    }
+    this.items = [...this.sourceItems];
+    this.rememberGoalCatalog();
+    this.rememberSearchCatalog();
+    this.renderView();
+  }
+
   async loadCheckpointTraining(expectedKey) {
     const runId = String(this.route.run_id || "");
     if (!runId || expectedKey !== this.routeKey()) return;
@@ -1926,12 +2080,17 @@ export class SourceBrowser {
     const controller = new AbortController();
     this.checkpointTrainingController = controller;
     const serial = ++this.checkpointTrainingSerial;
-    const query = new URLSearchParams();
+    this.sourceItems = this.sourceItems.map((item) => ({ ...item, training_pending: true, training_loaded_metrics: [] }));
+    this.items = [...this.sourceItems];
+    this.renderView();
+    const query = new URLSearchParams({ stream: "1" });
     if (this.query.trim()) query.set("q", this.query.trim());
     if (this.route.goal_variant_id) {
       query.set("goal_variant_id", this.route.goal_variant_id);
     }
-    const timeout = setTimeout(() => controller.abort(), this.catalogRequestTimeoutMs);
+    let timedOut = false;
+    const abortOnTimeout = () => { timedOut = true; controller.abort(); };
+    let timeout = setTimeout(abortOnTimeout, this.catalogRequestTimeoutMs);
     try {
       const response = await fetch(
         `/api/catalog/runs/${encodeURIComponent(runId)}/checkpoint-training?${query}`,
@@ -1941,10 +2100,57 @@ export class SourceBrowser {
           signal: controller.signal,
         },
       );
-      const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
         throw new Error(payload.error || `Training evidence request failed (${response.status})`);
       }
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let payload = null;
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (serial !== this.checkpointTrainingSerial || expectedKey !== this.routeKey()) {
+            await reader.cancel();
+            return;
+          }
+          clearTimeout(timeout);
+          timeout = setTimeout(abortOnTimeout, this.catalogRequestTimeoutMs);
+          buffer += decoder.decode(value, { stream: !done });
+          const lines = buffer.split("\n");
+          buffer = lines.pop();
+          if (done && buffer.trim()) lines.push(buffer);
+          let changed = false;
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            const event = JSON.parse(line);
+            if (event.type === "error") throw new Error(event.error || "Training evidence unavailable");
+            if (event.type === "complete") payload = event;
+            if (event.type === "metrics") {
+              const updates = new Map(event.items.map((item) => [item.checkpoint_id, item.metrics]));
+              this.sourceItems = this.sourceItems.map((item) => {
+                const metrics = updates.get(item.checkpoint_id);
+                return metrics ? {
+                  ...item,
+                  metrics: { ...item.metrics, ...metrics },
+                  training_loaded_metrics: [...new Set([...item.training_loaded_metrics, ...Object.keys(metrics)])],
+                } : item;
+              });
+              changed = true;
+            }
+          }
+          if (changed) {
+            this.items = [...this.sourceItems];
+            this.renderView();
+          }
+          if (done) break;
+        }
+      } finally {
+        await reader.cancel().catch(() => {});
+        reader.releaseLock();
+      }
+      if (!payload) throw new Error("Training evidence stream ended before completion. Try Refresh.");
       if (
         serial !== this.checkpointTrainingSerial
         || expectedKey !== this.routeKey()
@@ -1965,8 +2171,7 @@ export class SourceBrowser {
       this.freshness = this.catalogWarnings.length ? "partial" : "fresh";
     } catch (error) {
       if (
-        controller.signal.aborted
-        || serial !== this.checkpointTrainingSerial
+        serial !== this.checkpointTrainingSerial
         || expectedKey !== this.routeKey()
       ) return;
       this.freshness = "partial";
@@ -1974,7 +2179,9 @@ export class SourceBrowser {
         ...this.catalogWarnings.filter((warning) => warning?.code !== "wandb_enrichment_pending"),
         {
           code: "wandb_enrichment_unavailable",
-          message: `Live W&B training evidence is unavailable: ${String(error?.message || error)}`,
+          message: timedOut
+            ? "Training evidence request timed out. Try Refresh."
+            : `Live W&B training evidence is unavailable: ${String(error?.message || error)}`,
           retryable: true,
           source: "wandb",
         },
@@ -1983,6 +2190,11 @@ export class SourceBrowser {
       clearTimeout(timeout);
       if (serial === this.checkpointTrainingSerial) {
         this.checkpointTrainingController = null;
+        this.checkpointTrainingPending = false;
+        this.sourceItems = this.sourceItems.map((item) => ({ ...item, training_pending: false }));
+        this.items = [...this.sourceItems];
+        this.rememberCheckpointCatalog();
+        this.rememberSearchCatalog();
         this.renderView();
       }
     }
@@ -2004,6 +2216,7 @@ export class SourceBrowser {
     this.generatedAt = null;
     this.selectionFence = "";
     this.runStatus = null;
+    this.checkpointTrainingPending = false;
     this.loadedKey = "";
     this.error = "";
     this.checkpointTrainingController?.abort();
@@ -2018,7 +2231,8 @@ export class SourceBrowser {
       this.items = [...this.sourceItems];
       this.freshness = "partial";
     } else {
-      restoredCatalog = this.restoreEnvironmentCatalog() || this.restoreGoalCatalog();
+      restoredCatalog = this.restoreEnvironmentCatalog() || this.restoreGoalCatalog()
+        || this.restoreGoalActivity() || this.restoreCheckpointCatalog();
     }
     this.hydrateInitialEnvironments();
     this.renderView();
@@ -2037,18 +2251,28 @@ export class SourceBrowser {
 
   navigate(route, { historyMode = "push", seedItems = null } = {}) {
     const nextRoute = canonicalSourceRoute({ ...this.route, ...route });
-    if (!this.app?.has_active_runner) {
-      const commandId = this.command("browse_sources", { route: nextRoute });
-      if (commandId === null) return false;
-    }
-    this.applyRoute(nextRoute, { seedItems });
-    if (historyMode) this.syncUrl(historyMode);
+    const current = this.getState()?.applicationSnapshot || { app: this.app };
+    const decision = this.selection.browse(nextRoute, current, { historyMode });
+    if (!decision) return false;
+    this.applyRoute(decision.route, { seedItems });
+    if (decision.historyMode) this.syncUrl(decision.historyMode);
     this.openSourceRoute?.({ ...this.route });
     return true;
   }
 
+  goBack() {
+    if (!this.selection.view.sourceMode) {
+      this.browseCurrentSource();
+      return;
+    }
+    const items = sourceBreadcrumbItems(this.selection.view.route || this.route);
+    const current = items.findIndex((item) => item.current);
+    const parent = items[current - 1];
+    if (parent?.route) this.navigate(parent.route);
+  }
+
   browseCurrentSource() {
-    const route = this.app.route || this.route;
+    const route = this.selection.view.route || this.route;
     const next = route.run_id
       ? { ...route, level: "runs", checkpoint_id: "" }
       : {
@@ -2079,26 +2303,18 @@ export class SourceBrowser {
       level: "runs",
       checkpoint_id: item.checkpoint_id,
     };
-    const commandId = this.command("select_source", {
-      source: {
-        kind: "public_run",
-        value: item.manifest_url,
-        run_id: item.run_id,
-        checkpoint_id: item.checkpoint_id,
-        seed: checkpointPlaybackSeed(item),
-      },
-      route: { ...route },
-    });
-    if (commandId === null) return false;
-    this.route = route;
-    this.syncUrl(historyMode);
-    this.activeCheckpointPendingId = String(item.checkpoint_id || "");
-    this.beginCheckpointLoad?.({
-      commandId,
-      checkpointId: this.activeCheckpointPendingId,
-    });
+    const decision = this.selection.select({
+      kind: "public_run",
+      value: item.manifest_url,
+      run_id: item.run_id,
+      checkpoint_id: item.checkpoint_id,
+      seed: checkpointPlaybackSeed(item),
+    }, route, { historyMode });
+    if (!decision) return false;
+    this.route = { ...decision.route };
+    if (decision.historyMode) this.syncUrl(decision.historyMode);
     this.renderActiveCheckpointNavigation(this.route);
-    return commandId;
+    return decision.commandId;
   }
 
   back() {
@@ -2132,12 +2348,28 @@ export class SourceBrowser {
   setSearch(value) {
     this.query = value;
     clearTimeout(this.searchTimer);
+    this.requestController?.abort();
+    this.requestController = null;
+    this.requestSerial += 1;
+    this.goalEvidenceEpoch = (this.goalEvidenceEpoch || 0) + 1;
+    this.loading = false;
+    this.loadingKey = "";
     this.checkpointTrainingController?.abort();
     this.checkpointTrainingController = null;
     this.checkpointTrainingSerial += 1;
+    this.goalVariantRunPages.clear();
     this.items = this.sourceItems.filter((item) => catalogItemMatchesSearch(item, value));
     this.nextCursor = null;
     this.loadedKey = "";
+    this.error = "";
+    const restored = this.restoreSearchCatalog() || (!this.query.trim() && (
+      this.restoreEnvironmentCatalog() || this.restoreGoalCatalog()
+      || this.restoreGoalActivity() || this.restoreCheckpointCatalog()
+    ));
+    if (restored && this.loadedKey === this.routeKey()) {
+      this.renderView();
+      return;
+    }
     this.renderView();
     this.searchTimer = window.setTimeout(() => {
       this.load();
@@ -2145,97 +2377,31 @@ export class SourceBrowser {
   }
 
   renderView() {
-    const activeElement = document.activeElement;
-    const restoreSearchFocus = (
-      activeElement instanceof HTMLInputElement
-      && activeElement.type === "search"
-      && this.root.contains(activeElement)
-    );
-    const selectionStart = restoreSearchFocus ? activeElement.selectionStart : null;
-    const selectionEnd = restoreSearchFocus ? activeElement.selectionEnd : null;
-    const shell = document.createElement("section");
-    shell.className = "source-shell";
-    const head = document.createElement("div");
-    head.className = "source-head";
-    const titleBlock = document.createElement("div");
-    titleBlock.className = "source-title";
-    const eyebrow = document.createElement("span");
-    eyebrow.className = "eyebrow";
-    eyebrow.textContent = "PLAYBACK SOURCE";
-    const heading = document.createElement("h2");
-    heading.textContent = this.heading();
-    titleBlock.append(eyebrow, heading);
-    if (this.route.level === "runs" && this.route.run_id) {
-      titleBlock.append(this.renderSelectedRunStatus());
-    }
-    head.append(titleBlock);
-
-    if (this.app.phase === "selecting") {
-      const labelsRefresh = this.route.level === "goal_variants";
-      const refresh = button(labelsRefresh ? "Refresh" : "", { iconName: "refresh", quiet: true });
-      if (!labelsRefresh) refresh.classList.add("icon-only");
-      if (this.loading) refresh.classList.add("refreshing");
-      refresh.setAttribute("aria-label", this.loading ? "Refreshing" : "Refresh");
-      refresh.title = this.loading ? "Refreshing this list" : "Refresh this list";
-      refresh.disabled = this.loading;
-      refresh.addEventListener("click", () => {
-        this.loadedKey = "";
-        this.load({ force: true, quiet: Boolean(this.items.length) });
-      });
-      head.append(refresh);
-    }
-    shell.append(head);
-
-    if (!this.hasControl()) {
-      const observer = document.createElement("p");
-      observer.className = "source-notice";
-      observer.textContent = "Observer window — choose Control here to change the shared run.";
-      shell.append(observer);
-    }
-
-    const showsCatalog = ![
-      "error",
-      "resolving",
-      "verifying",
-      "loading",
-    ].includes(this.app.phase);
-    if (showsCatalog) {
-      this.renderBreadcrumbs(this.breadcrumbsRoot);
-      this.breadcrumbsRoot.hidden = false;
-    } else {
-      this.breadcrumbsRoot.replaceChildren();
-      this.breadcrumbsRoot.hidden = true;
-    }
-
-    if (this.app.phase === "error") {
-      shell.append(this.renderFailure());
-    } else if (["resolving", "verifying", "loading"].includes(this.app.phase)) {
-      shell.append(this.renderProgress());
-    } else {
-      if (this.route.level === "goal_variants") {
-        const description = document.createElement("p");
-        description.className = "source-description";
-        description.textContent = "Select the scientific goal configuration used by the Run you want to inspect.";
-        shell.append(description);
-      }
-      if (
-        this.route.level !== "goal_variants"
-        || this.sourceItems.length > 8
-        || this.query
-        || this.searchOpen
-      ) {
-        shell.append(this.renderSearch());
-      }
-      shell.append(this.renderResults());
-    }
-    this.root.replaceChildren(shell);
-    if (restoreSearchFocus) {
-      const search = this.root.querySelector('input[type="search"]');
-      search?.focus({ preventScroll: true });
-      if (search && selectionStart !== null && selectionEnd !== null) {
-        search.setSelectionRange(selectionStart, selectionEnd);
+    if (this.route.level === "goal_variants") {
+      const selected = this.items.find((v) => v.variant_id === this.selectedGoalVariantId)
+        || this.items.find((v) => v.configuration_kind === "current_default") || this.items[0];
+      if (selected) {
+        this.selectedGoalVariantId = String(selected.variant_id || "");
+        if (this.goalVariantDiff?.variantId !== this.selectedGoalVariantId) {
+          this.goalVariantDiff = this.goalVariantDiffFromActivity(selected);
+        }
       }
     }
+    if (["error", "resolving", "verifying", "loading"].includes(this.app.phase)) {
+      this.view?.breadcrumbs([]);
+    } else this.renderBreadcrumbs();
+    const presentation = { ...this,
+      selectedCheckpoints: new Set(this.selectedCheckpoints),
+      goalVariantRunPages: new Map(this.goalVariantRunPages),
+      hasControl: this.hasControl(), heading: this.heading(),
+      refreshing: this.loading || Boolean(this.checkpointTrainingController),
+      searchPlaceholder: this.route.level === "environments" ? "Search environments"
+        : this.route.level === "goals" ? "Search goals"
+        : this.route.level === "goal_variants" ? "Search configuration, difference, status, date, or contract hash"
+        : "Search checkpoint, step, hash, purpose, or evaluation",
+    };
+    presentation.table = sourceTablePresentation(presentation);
+    this.view?.render(presentation);
   }
 
   heading() {
@@ -2245,129 +2411,14 @@ export class SourceBrowser {
       return "Runs · choose a checkpoint";
     }
     if (this.route.level === "goal_variants") {
-      return "Choose a goal configuration";
+      return "Choose a run";
     }
     if (this.route.level === "goals") return "Choose a goal";
     return "Choose an environment";
   }
 
-  renderSelectedRunStatus() {
-    const stateAvailable = Boolean(String(this.runStatus?.state || "").trim());
-    const waiting = this.loading && !this.loadedKey && !stateAvailable;
-    const presentation = stateAvailable
-      ? runStatePresentation(this.runStatus)
-      : {
-          iconName: waiting ? "refresh" : "activity-heartbeat",
-          tone: waiting ? "pending" : "unknown",
-          label: waiting ? "Loading…" : "Unavailable",
-        };
-    const status = document.createElement("div");
-    status.className = `source-run-status ${presentation.tone}`;
-    if (waiting) status.classList.add("loading");
-    const context = document.createElement("span");
-    context.textContent = "Training run";
-    const state = document.createElement("strong");
-    state.textContent = presentation.label;
-    status.append(icon(presentation.iconName), context, state);
-    const updatedAt = String(this.runStatus?.updated_at || "").trim();
-    if (updatedAt) {
-      const activity = document.createElement("small");
-      activity.textContent = `Updated ${formatDate(updatedAt)}`;
-      status.append(activity);
-    }
-    status.setAttribute(
-      "aria-label",
-      `Training run state: ${presentation.label}${updatedAt ? `. Updated ${formatDate(updatedAt)}` : ""}`,
-    );
-    return status;
-  }
-
-  renderBreadcrumbs(nav) {
-    nav.replaceChildren();
-    sourceBreadcrumbItems(this.route).forEach((item) => {
-      const crumb = button(item.label, { quiet: true });
-      if (item.title) crumb.title = item.title;
-      crumb.disabled = item.current;
-      if (item.route) {
-        crumb.addEventListener("click", () => this.navigate(item.route));
-      }
-      nav.append(crumb);
-    });
-    return nav;
-  }
-
-  renderSearch() {
-    const wrap = document.createElement("div");
-    wrap.className = "source-search";
-    wrap.append(icon("search"));
-    const input = document.createElement("input");
-    input.type = "search";
-    input.value = this.query;
-    input.autocomplete = "off";
-    input.placeholder = this.route.level === "environments"
-      ? "Search environments"
-      : this.route.level === "goals"
-        ? "Search goals"
-        : this.route.level === "goal_variants"
-          ? "Search configuration, difference, status, date, or contract hash"
-          : "Search checkpoint, step, hash, purpose, or evaluation";
-    input.setAttribute("aria-label", input.placeholder);
-    input.addEventListener("input", (event) => this.setSearch(event.target.value));
-    wrap.append(input);
-    const close = button("", { iconName: "x", quiet: true });
-    close.classList.add("source-search-close", "icon-only");
-    close.setAttribute("aria-label", "Close search");
-    close.title = "Close search";
-    close.addEventListener("click", () => {
-      this.searchOpen = false;
-      if (this.query) {
-        this.setSearch("");
-      } else {
-        this.renderView();
-      }
-    });
-    wrap.append(close);
-    const disclosure = document.createElement("details");
-    disclosure.className = "source-search-disclosure";
-    disclosure.open = this.searchOpen;
-    const summary = document.createElement("summary");
-    summary.append(icon("search"), document.createTextNode("Search"));
-    disclosure.append(summary, wrap);
-    disclosure.addEventListener("toggle", () => {
-      this.searchOpen = disclosure.open;
-      if (disclosure.open) {
-        requestAnimationFrame(() => input.focus({ preventScroll: true }));
-      }
-    });
-    return disclosure;
-  }
-
-  renderEvaluationActions() {
-    const actions = document.createElement("div");
-    actions.className = "source-evaluation-actions";
-    const selected = this.selectedCheckpoints.size;
-    const summary = document.createElement("span");
-    summary.textContent = selected
-      ? `${selected.toLocaleString()} selected`
-      : "Select checkpoints to evaluate";
-    const evaluate = button(
-      this.evaluating
-        ? "Adding to queue…"
-        : selected
-          ? `Evaluate ${selected.toLocaleString()}`
-          : "Evaluate selected",
-      { iconName: "player-play", primary: true },
-    );
-    evaluate.disabled = !selected || this.evaluating;
-    evaluate.addEventListener("click", () => this.evaluateSelected());
-    const inspect = button("Inspect run YAML", { iconName: "code", quiet: true });
-    inspect.addEventListener("click", () => {
-      void this.inspectRun().catch(
-        (error) => this.showToast(String(error?.message || error), true),
-      );
-    });
-    actions.append(summary, inspect, evaluate);
-    return actions;
+  renderBreadcrumbs() {
+    this.view?.breadcrumbs(sourceBreadcrumbItems(this.route));
   }
 
   async evaluateSelected() {
@@ -2404,7 +2455,7 @@ export class SourceBrowser {
         (Array.isArray(payload.items) ? payload.items : [])
           .map((item) => [String(item.checkpoint_id || ""), item]),
       );
-      this.items = this.items.map((item) => {
+      const withEvaluationStatus = (item) => {
         const status = statuses.get(String(item.checkpoint_id || ""));
         return status
           ? {
@@ -2413,7 +2464,11 @@ export class SourceBrowser {
               evaluation_queue: status,
             }
           : item;
-      });
+      };
+      this.items = this.items.map(withEvaluationStatus);
+      this.sourceItems = this.sourceItems.map(withEvaluationStatus);
+      this.rememberCheckpointCatalog();
+      this.rememberSearchCatalog();
       this.selectedCheckpoints.clear();
       const admitted = [...statuses.values()].filter(
         (item) => [
@@ -2446,482 +2501,15 @@ export class SourceBrowser {
     }
   }
 
-  renderResults() {
-    const body = document.createElement("div");
-    body.className = "source-results";
-    if (this.error) {
-      const error = document.createElement("div");
-      error.className = "source-inline-error";
-      const message = document.createElement("p");
-      message.textContent = this.error;
-      const retry = button("Retry", { iconName: "refresh" });
-      retry.addEventListener("click", () => {
-        this.loadedKey = "";
-        this.load();
-      });
-      error.append(message, retry);
-      body.append(error);
-      return body;
-    }
-    if (this.loading) {
-      body.classList.add("loading");
-      if (!this.items.length) body.classList.add("loading-empty");
-    }
-    if (this.loading && !this.items.length && !this.query.trim()) return body;
-    if (!this.items.length) {
-      const empty = document.createElement("div");
-      empty.className = "source-empty";
-      const heading = document.createElement("strong");
-      heading.textContent = this.route.level === "runs" && this.route.run_id
-        ? "No public checkpoints yet"
-        : "No matching results";
-      const detail = document.createElement("p");
-      detail.textContent = this.route.level === "runs" && this.route.run_id
-        ? "This run has not published a playable checkpoint to public model storage."
-        : "Try a broader search.";
-      empty.append(heading, detail);
-      body.append(empty);
-      return body;
-    }
-    const results = this.route.level === "environments"
-      ? this.renderEnvironments()
-      : this.route.level === "goals"
-        ? this.renderGoals()
-        : this.route.level === "goal_variants"
-          ? this.renderGoalVariants()
-          : this.route.level === "runs"
-            ? this.renderRunResults()
-            : this.renderTable();
-    if (this.route.level === "runs" && this.route.run_id) {
-      body.classList.add("source-checkpoint-results");
-      body.append(this.renderEvaluationActions(), results);
-    } else {
-      body.append(results);
-    }
-    if (this.nextCursor) {
-      const more = button(this.loading ? "Loading…" : "Load more");
-      more.classList.add("source-load-more");
-      more.disabled = this.loading;
-      more.addEventListener("click", () => this.load({ append: true }));
-      body.append(more);
-    }
-    return body;
-  }
-
-  renderEnvironments() {
-    const scroll = document.createElement("div");
-    scroll.className = "environment-table-scroll";
-    const table = document.createElement("table");
-    table.className = "environment-table";
-    const makeColumnGroup = (classNames) => {
-      const group = document.createElement("colgroup");
-      classNames.forEach((className) => {
-        const column = document.createElement("col");
-        column.className = className;
-        group.append(column);
-      });
-      return group;
-    };
-    const environmentColumns = makeColumnGroup([
-      "environment-favorite-column",
-      "environment-name-column",
-    ]);
-    const metricColumns = makeColumnGroup([
-      "environment-goals-column",
-      "environment-status-column",
-      "environment-status-column",
-    ]);
-    const head = document.createElement("thead");
-    const headings = document.createElement("tr");
-    const environmentHeading = document.createElement("th");
-    environmentHeading.scope = "colgroup";
-    environmentHeading.colSpan = 2;
-    environmentHeading.className = "environment-heading";
-    environmentHeading.textContent = "Environment";
-    headings.append(environmentHeading);
-    [
-      ["Goals", "environment-goals-column"],
-      ["train/success", "environment-status-column"],
-      ["eval/success", "environment-status-column"],
-    ].forEach(([label, className]) => {
-      const heading = document.createElement("th");
-      heading.scope = "col";
-      heading.className = className;
-      heading.textContent = label;
-      headings.append(heading);
-    });
-    head.append(headings);
-    const body = document.createElement("tbody");
-    sortEnvironmentItems(this.items, this.favoriteEnvironments).forEach((environment) => {
-      const row = document.createElement("tr");
-      row.className = "environment-row";
-      const environmentCell = document.createElement("td");
-      const navigate = document.createElement("button");
-      navigate.type = "button";
-      navigate.className = "environment-row-navigation";
-      navigate.disabled = !this.hasControl();
-      navigate.textContent = environment.name;
-      environmentCell.append(navigate);
-      const favoriteCell = document.createElement("td");
-      favoriteCell.className = "environment-favorite-cell";
-      const favorite = document.createElement("button");
-      favorite.type = "button";
-      favorite.className = "environment-favorite";
-      const isFavorite = this.favoriteEnvironments.has(environment.name);
-      favorite.classList.toggle("selected", isFavorite);
-      favorite.append(icon(isFavorite ? "star-filled" : "star"));
-      favorite.setAttribute("aria-pressed", String(isFavorite));
-      favorite.setAttribute(
-        "aria-label",
-        `${isFavorite ? "Remove" : "Add"} ${environment.name} ${isFavorite ? "from" : "to"} favorites`,
-      );
-      favorite.title = isFavorite
-        ? `Remove ${environment.name} from favorites`
-        : `Add ${environment.name} to favorites`;
-      favorite.addEventListener("click", () => {
-        const next = toggleEnvironmentFavorite(this.favoriteEnvironments, environment.name);
-        this.favoriteEnvironments = next;
-        writeEnvironmentFavorites(next);
-        this.renderView();
-      });
-      favoriteCell.append(favorite);
-      const trainingCell = document.createElement("td");
-      const trainingStatus = environmentSuccessStatus(environment, "train/success");
-      trainingCell.className = `environment-status ${trainingStatus.className}`;
-      trainingCell.textContent = trainingStatus.label;
-      trainingCell.title = trainingStatus.description;
-      trainingCell.setAttribute("aria-label", trainingStatus.description);
-      const evaluationCell = document.createElement("td");
-      const evaluationStatus = environmentSuccessStatus(environment, "eval/success");
-      evaluationCell.className = `environment-status ${evaluationStatus.className}`;
-      evaluationCell.textContent = evaluationStatus.label;
-      evaluationCell.title = evaluationStatus.description;
-      evaluationCell.setAttribute("aria-label", evaluationStatus.description);
-      const goalsCell = document.createElement("td");
-      goalsCell.textContent = Number(environment.goal_count).toLocaleString();
-      const openEnvironment = () => this.navigate({
-        level: "goals",
-        environment_id: environment.name,
-        goal_id: "",
-        goal_variant_id: "",
-        run_id: "",
-        checkpoint_id: "",
-      });
-      navigate.addEventListener("click", openEnvironment);
-      row.addEventListener("click", (event) => {
-        if (!event.target.closest("button") && this.hasControl()) openEnvironment();
-      });
-      row.append(favoriteCell, environmentCell, goalsCell, trainingCell, evaluationCell);
-      body.append(row);
-    });
-    table.append(environmentColumns, metricColumns, head, body);
-    scroll.append(table);
-    return scroll;
-  }
-
-  renderGoals() {
-    const scroll = document.createElement("div");
-    scroll.className = "goal-table-scroll";
-    const table = document.createElement("table");
-    table.className = "goal-table";
-    const head = document.createElement("thead");
-    const headings = document.createElement("tr");
-    ["Goal", "Recipes", "train/success", "eval/success", "YAML"].forEach((label) => {
-      const heading = document.createElement("th");
-      heading.scope = "col";
-      heading.textContent = label;
-      headings.append(heading);
-    });
-    head.append(headings);
-    const body = document.createElement("tbody");
-    this.items.forEach((goal) => {
-      const row = document.createElement("tr");
-      row.className = "goal-row";
-      const goalCell = document.createElement("td");
-      const navigate = document.createElement("button");
-      navigate.type = "button";
-      navigate.className = "goal-row-navigation";
-      navigate.disabled = !this.hasControl();
-      const identity = document.createElement("div");
-      identity.className = "goal-row-identity";
-      const name = document.createElement("strong");
-      name.textContent = goal.goal_id;
-      identity.append(name);
-      const meta = document.createElement("span");
-      meta.textContent = goal.title || goal.goal_slug;
-      identity.append(meta);
-      if (goal.goal_slug && goal.goal_slug !== goal.goal_id) {
-        navigate.title = `Goal slug: ${goal.goal_slug}`;
-      }
-      navigate.append(identity);
-      goalCell.append(navigate);
-      const recipesCell = document.createElement("td");
-      recipesCell.textContent = Number(goal.recipe_count).toLocaleString();
-      const trainingCell = document.createElement("td");
-      const trainingStatus = environmentSuccessStatus(goal, "train/success");
-      trainingCell.className = `goal-status ${trainingStatus.className}`;
-      trainingCell.textContent = trainingStatus.label;
-      trainingCell.title = trainingStatus.description;
-      trainingCell.setAttribute("aria-label", trainingStatus.description);
-      const evaluationCell = document.createElement("td");
-      const evaluationStatus = environmentSuccessStatus(goal, "eval/success");
-      evaluationCell.className = `goal-status ${evaluationStatus.className}`;
-      evaluationCell.textContent = evaluationStatus.label;
-      evaluationCell.title = evaluationStatus.description;
-      evaluationCell.setAttribute("aria-label", evaluationStatus.description);
-      const openGoal = () => this.navigate({
-        level: "goal_variants",
-        goal_id: goal.goal_id,
-        goal_variant_id: "",
-        run_id: "",
-        checkpoint_id: "",
-      });
-      navigate.addEventListener("click", openGoal);
-      row.addEventListener("click", (event) => {
-        if (!event.target.closest("button") && this.hasControl()) openGoal();
-      });
-      const inspectCell = document.createElement("td");
-      const inspect = button("", { iconName: "code", quiet: true });
-      inspect.classList.add("goal-row-inspect", "icon-only");
-      inspect.title = `Inspect ${goal.goal_id} YAML`;
-      inspect.setAttribute("aria-label", inspect.title);
-      inspect.addEventListener("click", () => {
-        void this.inspectGoal(goal).catch(
-          (error) => this.showToast(String(error?.message || error), true),
-        );
-      });
-      inspectCell.append(inspect);
-      row.append(goalCell, recipesCell, trainingCell, evaluationCell, inspectCell);
-      body.append(row);
-    });
-    table.append(head, body);
-    scroll.append(table);
-    return scroll;
-  }
-
-  renderGoalVariants() {
-    const container = document.createElement("div");
-    container.className = "goal-configuration-browser";
-    const variants = this.items.map((variant) => ({
-      variant,
-      presentation: goalConfigurationPresentation(variant),
-    }));
-    const groups = groupGoalConfigurations(this.items);
-    const selected = variants.find(
-      ({ variant }) => variant.variant_id === this.selectedGoalVariantId,
-    ) || variants.find(({ presentation }) => presentation.kind === "current_default")
-      || variants[0];
-    if (!selected) return container;
-    this.selectedGoalVariantId = String(selected.variant.variant_id || "");
-    if (this.goalVariantDiff?.variantId !== this.selectedGoalVariantId) {
-      this.goalVariantDiff = this.goalVariantDiffFromActivity(selected.variant);
-    }
-    const entriesById = new Map(
-      variants.map((entry) => [String(entry.variant.variant_id || ""), entry]),
-    );
-    const layout = document.createElement("div");
-    layout.className = "goal-configuration-layout";
-    const list = document.createElement("aside");
-    list.className = "goal-configuration-list";
-    list.setAttribute("aria-label", "Goal configurations");
-    const listHeading = document.createElement("h3");
-    listHeading.textContent = "Goal configurations";
-    list.append(listHeading);
-
-    const appendGroups = (label, targetGroups) => {
-      if (!targetGroups.length) return;
-      const section = document.createElement("section");
-      section.className = "goal-configuration-group";
-      const heading = document.createElement("h4");
-      heading.textContent = label;
-      section.append(heading);
-      targetGroups.forEach((group) => {
-        const candidates = [group.defaultVariant, ...group.overrides]
-          .filter(Boolean)
-          .map((variant) => entriesById.get(String(variant.variant_id || "")))
-          .filter(Boolean);
-        candidates.forEach((entry) => {
-          section.append(this.renderGoalConfigurationOption(entry, selected, {
-            currentRevision: group.current,
-            revisionId: group.revisionId,
-          }));
-        });
-      });
-      list.append(section);
-    };
-    appendGroups("Current revision", groups.filter((group) => group.current));
-    appendGroups("Previous revisions", groups.filter((group) => !group.current));
-    layout.append(list, this.renderGoalConfigurationPanel(selected));
-    container.append(layout);
-
-    return container;
-  }
-
-  renderGoalConfigurationOption(entry, selected, { currentRevision, revisionId }) {
-    const { variant, presentation } = entry;
-    const isSelected = variant.variant_id === selected.variant.variant_id;
-    const option = document.createElement("button");
-    option.type = "button";
-    option.className = `goal-configuration-option${isSelected ? " selected" : ""}`;
-    option.setAttribute("aria-pressed", String(isSelected));
-    option.addEventListener("click", () => this.selectGoalVariant(variant));
-    const header = document.createElement("span");
-    header.className = "goal-configuration-option-header";
-    const title = document.createElement("strong");
-    title.textContent = presentation.behaviorLabel;
-    const badge = document.createElement("span");
-    badge.className = `goal-configuration-badge${currentRevision ? " current" : ""}`;
-    badge.textContent = currentRevision ? "Current" : "Historical";
-    header.append(title, badge);
-    const summary = document.createElement("span");
-    summary.className = "goal-configuration-option-summary";
-    summary.textContent = goalConfigurationSummary(variant, presentation);
-    const activity = document.createElement("span");
-    activity.className = "goal-configuration-option-meta";
-    activity.textContent = `${presentation.runLabel} · Last activity ${presentation.lastActivityDate}`;
-    const provenance = document.createElement("span");
-    provenance.className = "goal-configuration-option-meta";
-    provenance.textContent = `First used ${presentation.firstUsedDate} · Revision ${String(revisionId || "").slice(0, 8) || "unknown"}`;
-    option.append(header, summary, activity, provenance);
-    return option;
-  }
-
-  renderGoalConfigurationPanel({ variant, presentation }) {
-    const panel = document.createElement("section");
-    panel.className = "goal-configuration-panel";
-    panel.setAttribute("aria-label", "Selected goal configuration");
-    const header = document.createElement("header");
-    header.className = "goal-configuration-panel-header";
-    const identity = document.createElement("div");
-    const title = document.createElement("h3");
-    const currentRevision = presentation.kind.startsWith("current_");
-    title.textContent = `${currentRevision ? "Current" : "Historical"} revision · ${presentation.behaviorLabel}`;
-    const summary = document.createElement("p");
-    summary.textContent = presentation.kind === "current_default"
-      ? "Matches the checked-in goal contract"
-      : goalConfigurationSummary(variant, presentation);
-    const revision = document.createElement("small");
-    revision.textContent = `Goal Revision ${String(variant.goal_contract_sha256 || "").slice(0, 8) || "unknown"}`;
-    identity.append(title, summary, revision);
-    const inspect = button("View goal YAML", { iconName: "code", quiet: true });
-    inspect.classList.add("goal-configuration-inspect");
-    inspect.addEventListener("click", () => {
-      const inspection = presentation.kind === "current_default"
-        ? this.inspectGoal({ goal_id: this.route.goal_id })
-        : this.inspectGoalVariant(variant);
-      void inspection.catch(
-        (error) => this.showToast(String(error?.message || error), true),
-      );
-    });
-    header.append(identity, inspect);
-    panel.append(header, this.renderEmbeddedGoalRuns(variant));
-    const differences = this.renderGoalConfigurationDifferences({ variant, presentation });
-    if (differences) panel.append(differences);
-    return panel;
-  }
-
-  renderGoalConfigurationDifferences({ variant, presentation }) {
-    if (presentation.kind === "current_default") {
-      const baseline = document.createElement("p");
-      baseline.className = "goal-configuration-baseline";
-      baseline.textContent = "No contract differences. This configuration matches the current checked-in goal.";
-      return baseline;
-    };
-
-    const differences = document.createElement("details");
-    differences.className = "goal-configuration-differences";
-    const differencesSummary = document.createElement("summary");
-    differencesSummary.textContent = `Exact contract differences · ${presentation.differenceLabel}`;
-    const differencesIntro = document.createElement("p");
-    differencesIntro.textContent = (
-      "Baseline: current checked-in goal · Exact contract paths and typed values."
-    );
-    differences.append(differencesSummary, differencesIntro);
-    const finishDifferences = (content) => {
-      differences.append(content);
-      return differences;
-    }
-    if (!presentation.comparisonAvailable) {
-      return finishDifferences(this.goalVariantDiffEmpty(
-        "The exact historical contract is not sufficiently proven, so no field-level comparison is shown.",
-        { warning: true },
-      ));
-    }
-
-    const state = this.goalVariantDiff?.variantId === variant.variant_id
-      ? this.goalVariantDiff
-      : null;
-    if (!state || state.state === "loading") {
-      return finishDifferences(this.loadingState("Loading exact contract differences…"));
-    }
-    if (state.state === "error") {
-      return finishDifferences(this.goalVariantDiffEmpty(state.message, { warning: true }));
-    }
-    if (state.availability !== "exact") {
-      return finishDifferences(this.goalVariantDiffEmpty(
-        state.message || "An exact field-level comparison is unavailable.",
-        { warning: true },
-      ));
-    }
-    if (!state.entries.length) {
-      return finishDifferences(this.goalVariantDiffEmpty(
-        "This configuration has no behavioral differences from the current checked-in goal.",
-      ));
-    }
-
-    const count = document.createElement("span");
-    count.className = "goal-configuration-detail-count";
-    const changeCount = state.changeCount ?? state.entries.length;
-    count.textContent = `${changeCount.toLocaleString()} ${changeCount === 1 ? "changed key" : "changed keys"}`;
-    differencesSummary.append(" · ", count);
-    const scroll = document.createElement("div");
-    scroll.className = "goal-configuration-diff-scroll";
-    const table = document.createElement("table");
-    table.className = "goal-configuration-diff-table";
-    const head = document.createElement("thead");
-    const headerRow = document.createElement("tr");
-    ["Operation", "Exact contract path", "Before", "After"].forEach((label) => {
-      const cell = document.createElement("th");
-      cell.scope = "col";
-      cell.textContent = label;
-      headerRow.append(cell);
-    });
-    head.append(headerRow);
-    const body = document.createElement("tbody");
-    state.entries.forEach((entry) => {
-      const row = document.createElement("tr");
-      const kind = ["added", "removed", "changed"].includes(String(entry?.kind))
-        ? String(entry.kind)
-        : "changed";
-      const operation = document.createElement("td");
-      operation.className = `goal-configuration-operation ${kind}`;
-      operation.textContent = kind[0].toUpperCase() + kind.slice(1);
-      const path = document.createElement("td");
-      path.className = "goal-configuration-path";
-      const pathCode = document.createElement("code");
-      pathCode.textContent = String(entry?.path || "");
-      path.append(pathCode);
-      const before = document.createElement("td");
-      before.className = "goal-configuration-value";
-      const beforeCode = document.createElement("code");
-      beforeCode.textContent = formatGoalDiffValue(entry?.before, { unavailable: kind === "added" });
-      before.append(beforeCode);
-      const after = document.createElement("td");
-      after.className = `goal-configuration-value goal-configuration-after ${kind}`;
-      const afterCode = document.createElement("code");
-      afterCode.textContent = formatGoalDiffValue(entry?.after, { unavailable: kind === "removed" });
-      after.append(afterCode);
-      row.append(operation, path, before, after);
-      body.append(row);
-    });
-    table.append(head, body);
-    scroll.append(table);
-    return finishDifferences(scroll);
+  embeddedGoalRunsHaveMore(variant) {
+    const page = this.goalVariantRunPages.get(String(variant?.variant_id || ""));
+    return page?.loaded ? Boolean(page.nextCursor) : Boolean(variant.has_more_runs);
   }
 
   async loadEmbeddedGoalRuns(variant, { append = false } = {}) {
     const variantId = String(variant?.variant_id || "");
     if (!variantId) return;
+    const expectedKey = this.routeKey();
     const current = this.goalVariantRunPages.get(variantId) || {
       items: [],
       nextCursor: null,
@@ -2945,6 +2533,7 @@ export class SourceBrowser {
         cache: "no-store",
       });
       const payload = await response.json().catch(() => ({}));
+      if (expectedKey !== this.routeKey()) return;
       if (response.status === 409) {
         this.goalVariantRunPages.delete(variantId);
         this.loadedKey = "";
@@ -2955,11 +2544,15 @@ export class SourceBrowser {
       const received = Array.isArray(payload.items) ? payload.items : [];
       this.goalVariantRunPages.set(variantId, {
         items: append ? [...current.items, ...received] : received,
+        loaded: true,
         nextCursor: payload.next_cursor || null,
         loading: false,
         error: "",
       });
+      this.rememberGoalActivity();
+      this.rememberSearchCatalog();
     } catch (error) {
+      if (expectedKey !== this.routeKey()) return;
       this.goalVariantRunPages.set(variantId, {
         ...current,
         loading: false,
@@ -2968,558 +2561,6 @@ export class SourceBrowser {
     } finally {
       this.renderView();
     }
-  }
-
-  renderEmbeddedGoalRuns(variant) {
-    const section = document.createElement("section");
-    section.className = "goal-configuration-runs";
-    const variantId = String(variant?.variant_id || "");
-    const page = this.goalVariantRunPages.get(variantId);
-    const baseItems = page?.items?.length
-      ? page.items
-      : variant.recent_runs;
-    const items = Array.isArray(baseItems) ? baseItems : [];
-    const heading = document.createElement("div");
-    heading.className = "goal-configuration-runs-header";
-    const title = document.createElement("h4");
-    const runCount = Math.max(items.length, Number(variant?.run_count) || 0);
-    title.textContent = `Runs (${runCount.toLocaleString()})`;
-    const instructions = document.createElement("p");
-    instructions.textContent = "Choose a Run to view its public Checkpoints.";
-    heading.append(title, instructions);
-    section.append(heading);
-    if (!items.length) {
-      const empty = document.createElement("p");
-      empty.className = "goal-configuration-runs-empty";
-      empty.textContent = "No runs use this configuration yet.";
-      section.append(empty);
-      return section;
-    }
-    const list = document.createElement("div");
-    list.className = "goal-configuration-run-list";
-    list.setAttribute("role", "list");
-    items.forEach((run) => {
-      const listItem = document.createElement("div");
-      listItem.setAttribute("role", "listitem");
-      const navigate = document.createElement("button");
-      navigate.type = "button";
-      navigate.className = "goal-configuration-run-card";
-      const cardHeader = document.createElement("span");
-      cardHeader.className = "goal-configuration-run-card-header";
-      const identity = document.createElement("span");
-      identity.className = "goal-configuration-run-identity";
-      const name = document.createElement("strong");
-      name.textContent = String(run?.name || run?.run_id || "Run");
-      const description = document.createElement("small");
-      description.textContent = String(run?.description || run?.run_id || "");
-      identity.append(name, description);
-      const presentation = runStatePresentation(run);
-      const statusName = humanizeMetricPart(run?.state || "unknown");
-      const state = document.createElement("span");
-      state.className = `goal-configuration-run-state ${presentation.tone}`;
-      state.textContent = statusName;
-      cardHeader.append(identity, state);
-
-      const evidence = document.createElement("dl");
-      evidence.className = "goal-configuration-run-evidence";
-      const addEvidence = (label, status, className = "") => {
-        const item = document.createElement("div");
-        const term = document.createElement("dt");
-        term.textContent = label;
-        const value = document.createElement("dd");
-        value.className = className;
-        value.textContent = status.label;
-        value.title = status.description;
-        item.append(term, value);
-        evidence.append(item);
-      };
-      const trainingStatus = runTrainingEvidenceStatus(run);
-      const evaluationStatus = runEvaluationEvidenceStatus(run);
-      addEvidence("Training target", trainingStatus, `goal-run-evidence ${trainingStatus.className}`);
-      addEvidence("Evaluation evidence", evaluationStatus, `goal-run-evidence ${evaluationStatus.className}`);
-      addEvidence("Last activity", {
-        label: run?.updated_at ? formatDate(run.updated_at) : "—",
-        description: "Most recent Run activity",
-      });
-      const action = document.createElement("span");
-      action.className = "goal-configuration-run-action";
-      action.append(document.createTextNode("View checkpoints"), icon("arrow-right"));
-      const openRun = () => this.navigate({
-        level: "runs",
-        goal_variant_id: variantId,
-        run_id: String(run.run_id || ""),
-        checkpoint_id: "",
-      });
-      navigate.addEventListener("click", openRun);
-      navigate.append(cardHeader, evidence, action);
-      listItem.append(navigate);
-      list.append(listItem);
-    });
-    section.append(list);
-    if (page?.error) {
-      const error = document.createElement("p");
-      error.className = "source-inline-error";
-      error.textContent = page.error;
-      section.append(error);
-    }
-    if (variant.has_more_runs || page?.nextCursor) {
-      const load = button(page?.nextCursor ? "Load more" : "Load older runs", {
-        iconName: "refresh",
-        quiet: true,
-      });
-      load.disabled = Boolean(page?.loading);
-      load.addEventListener("click", () => this.loadEmbeddedGoalRuns(variant, {
-        append: Boolean(page?.items?.length),
-      }));
-      section.append(load);
-    }
-    return section;
-  }
-
-  goalVariantDiffEmpty(message, { warning = false } = {}) {
-    const empty = document.createElement("div");
-    empty.className = `goal-configuration-diff-empty${warning ? " warning" : ""}`;
-    empty.textContent = message;
-    return empty;
-  }
-
-  activeRunMetricColumns() {
-    return activeRunMetricColumns(
-      this.items,
-      this.metricColumns,
-      this.fallbackMetricColumns,
-    );
-  }
-
-  runEfficiency() {
-    return bestRunEfficiency(
-      this.items,
-      this.metricColumns,
-      this.fallbackMetricColumns,
-    );
-  }
-
-  renderRunResults() {
-    if (this.route.run_id) return this.renderTable();
-    const efficiency = this.runEfficiency();
-    return this.renderTable(efficiency);
-  }
-
-  renderTable(efficiency = null) {
-    const scroll = document.createElement("div");
-    scroll.className = "source-table-scroll";
-    if (efficiency?.evidence === "training") {
-      scroll.classList.add("training-leader");
-    }
-    const table = document.createElement("table");
-    table.className = "source-table";
-    const head = document.createElement("thead");
-    const headerRow = document.createElement("tr");
-    const showingRuns = this.route.level === "runs" && !this.route.run_id;
-    const showingCheckpoints = this.route.level === "runs" && Boolean(this.route.run_id);
-    if (showingCheckpoints) table.classList.add("checkpoint-table");
-    const runRankingColumns = showingRuns ? this.activeRunMetricColumns() : [];
-    const runMetricColumns = availableRunMetricColumns(this.items, runRankingColumns);
-    const checkpointMetricColumns = showingCheckpoints ? this.metricColumns : [];
-    const columns = showingRuns
-      ? [
-          { label: "Run" },
-          { label: "Recipe / variant" },
-          { label: "Seed" },
-          { label: "Training result" },
-          ...runMetricColumns.map((column) => ({
-            ...column,
-            label: metricLabel(column.metric),
-          })),
-          { label: "Updated" },
-          { label: "Contract" },
-        ]
-      : [
-          ...(showingCheckpoints ? [{ label: "", selection: true }] : []),
-          { label: "Checkpoint" },
-          ...(showingCheckpoints ? [{ label: "Purpose" }] : []),
-          { label: "Step" },
-          ...checkpointMetricColumns.map((column) => ({
-            ...column,
-            fullLabel: column.label || metricLabel(column.metric),
-            label: checkpointMetricHeaderLabel(column),
-          })),
-          ...(showingCheckpoints ? [{ label: "Size" }, { label: "Created" }] : []),
-        ];
-    columns.forEach((column) => {
-      const cell = document.createElement("th");
-      cell.scope = "col";
-      if (column.selection) {
-        cell.className = "source-selection-cell";
-        const eligible = this.items.filter(checkpointCanEvaluate);
-        const allSelected = (
-          eligible.length > 0
-          && eligible.every((item) => this.selectedCheckpoints.has(item.checkpoint_id))
-        );
-        const selectAll = document.createElement("input");
-        selectAll.type = "checkbox";
-        selectAll.checked = allSelected;
-        selectAll.disabled = !eligible.length || this.evaluating;
-        selectAll.setAttribute("aria-label", "Select all eligible checkpoints");
-        selectAll.addEventListener("change", () => {
-          if (selectAll.checked) {
-            eligible.forEach((item) => this.selectedCheckpoints.add(item.checkpoint_id));
-          } else {
-            eligible.forEach((item) => this.selectedCheckpoints.delete(item.checkpoint_id));
-          }
-          this.renderView();
-        });
-        cell.append(selectAll);
-      } else if (column.metric) {
-        const fullLabel = column.fullLabel || column.label;
-        const active = this.sort.metric === column.metric;
-        const defaultDirection = column.direction === "min" ? "ascending" : "descending";
-        const nextDirection = active && this.sort.direction === "ascending"
-          ? "descending"
-          : active && this.sort.direction === "descending"
-            ? "ascending"
-            : defaultDirection;
-        cell.setAttribute("aria-sort", active ? this.sort.direction : "none");
-        const sortButton = document.createElement("button");
-        sortButton.type = "button";
-        sortButton.className = "source-sort";
-        sortButton.title = `${fullLabel} · ${
-          showingCheckpoints
-            ? checkpointMetricDescription(column)
-            : column.direction === "min" ? "Lower is better" : "Higher is better"
-        }`;
-        sortButton.setAttribute(
-          "aria-label",
-          `Sort by ${fullLabel}, ${nextDirection}`,
-        );
-        const labelGroup = document.createElement("span");
-        labelGroup.className = "source-sort-label";
-        const label = document.createElement("span");
-        label.textContent = column.label;
-        labelGroup.append(label);
-        const indicator = document.createElement("span");
-        indicator.className = "source-sort-indicator";
-        indicator.setAttribute("aria-hidden", "true");
-        indicator.hidden = showingCheckpoints && !active;
-        indicator.textContent = active
-          ? this.sort.direction === "ascending" ? "↑" : "↓"
-          : "↕";
-        sortButton.append(labelGroup, indicator);
-        sortButton.addEventListener("click", () => {
-          this.sort = { metric: column.metric, direction: nextDirection };
-          this.renderView();
-        });
-        cell.append(sortButton);
-      } else {
-        cell.textContent = column.label;
-      }
-      headerRow.append(cell);
-    });
-    head.append(headerRow);
-    const body = document.createElement("tbody");
-    const items = showingRuns
-      ? this.sort.metric
-        ? sortRunItems(this.items, this.sort)
-        : rankRunItems(this.items, runRankingColumns)
-      : showingCheckpoints && this.sort.metric
-        ? sortRunItems(this.items, this.sort)
-      : this.items;
-    items.forEach((item) => {
-      const row = document.createElement("tr");
-      const isEfficiencyLeader = (
-        showingRuns
-        && efficiency?.item?.run_id === item.run_id
-      );
-      if (isEfficiencyLeader) row.classList.add("efficiency-leader");
-      row.tabIndex = this.hasControl() ? 0 : -1;
-      row.setAttribute("role", "button");
-      row.setAttribute("aria-disabled", String(!this.hasControl()));
-      const finish = showingRuns ? runFinishPresentation(item) : null;
-      const values = showingRuns
-        ? [
-            [item.description || item.name || item.run_id, item.run_id, "run-cell"],
-            [
-              item.recipe || "—",
-              "",
-              "recipe-cell",
-            ],
-            [item.seed ?? "—", "", "data-cell"],
-            [
-              finish.label,
-              finish.detail,
-              `finish-reason ${finish.tone}`,
-              finish.evidence,
-            ],
-            ...runMetricColumns.map((column) => [
-              formatMetricValue(column.metric, item.metrics?.[column.metric]),
-              "",
-              "data-cell",
-            ]),
-            [formatDate(item.updated_at || item.created_at), "", "data-cell"],
-            [null, "", "inspection-cell"],
-          ]
-        : (() => {
-            const checkpointName = /final/i.test(String(item.purpose || ""))
-              ? "Final checkpoint"
-              : `Checkpoint at ${Number(item.step).toLocaleString()} steps`;
-            return [
-              ...(showingCheckpoints ? [[null, "", "source-selection-cell"]] : []),
-              [
-                checkpointName,
-                showingCheckpoints
-                  ? [item.checkpoint_id, item.sha256].filter(Boolean).join(" · ")
-                  : "",
-                "checkpoint-cell",
-              ],
-              ...(showingCheckpoints ? [[item.purpose || "—"]] : []),
-              [Number(item.step).toLocaleString(), "", "data-cell"],
-              ...checkpointMetricColumns.map((column) => [
-                formatMetricValue(column.metric, item.metrics?.[column.metric]),
-                "",
-                "checkpoint-metric-cell",
-                null,
-                {
-                  isBest: checkpointMetricIsBest(item, column.metric),
-                  label: column.label || metricLabel(column.metric),
-                  column,
-                },
-              ]),
-              ...(showingCheckpoints
-                ? [
-                    [formatBytes(item.size_bytes), "", "data-cell"],
-                    [formatDate(item.created_at), "", "data-cell"],
-                  ]
-                : []),
-            ];
-          })();
-      values.forEach(([
-        primary,
-        secondary = "",
-        className = "",
-        evidence = null,
-        metadata = null,
-      ]) => {
-        const cell = document.createElement("td");
-        if (className) cell.className = className;
-        if (className.includes("source-selection-cell")) {
-          const selectable = showingCheckpoints && checkpointCanEvaluate(item);
-          cell.addEventListener("click", (event) => event.stopPropagation());
-          const checkbox = document.createElement("input");
-          checkbox.type = "checkbox";
-          checkbox.checked = this.selectedCheckpoints.has(item.checkpoint_id);
-          checkbox.disabled = !selectable || this.evaluating;
-          checkbox.setAttribute(
-            "aria-label",
-            selectable
-              ? `Select ${item.checkpoint_id} for evaluation`
-              : `${item.checkpoint_id} cannot be evaluated again`,
-          );
-          checkbox.addEventListener("change", () => {
-            if (checkbox.checked) this.selectedCheckpoints.add(item.checkpoint_id);
-            else this.selectedCheckpoints.delete(item.checkpoint_id);
-            this.renderView();
-          });
-          cell.append(checkbox);
-          row.append(cell);
-          return;
-        }
-        if (className.includes("inspection-cell")) {
-          const inspect = button("Inspect", { iconName: "code", quiet: true });
-          inspect.addEventListener("click", (event) => {
-            event.stopPropagation();
-            void this.inspectRun(item.run_id).catch(
-              (error) => this.showToast(String(error?.message || error), true),
-            );
-          });
-          cell.append(inspect);
-          row.append(cell);
-          return;
-        }
-        if (className.includes("finish-reason") && evidence) {
-          const status = document.createElement("span");
-          status.className = "finish-status";
-          status.textContent = String(primary);
-
-          const comparison = document.createElement("div");
-          comparison.className = "finish-evidence";
-          [
-            ["Observed", evidence.observed],
-            ["Required", evidence.required],
-          ].forEach(([labelText, valueText]) => {
-            const item = document.createElement("div");
-            item.className = "finish-evidence-item";
-            const value = document.createElement("strong");
-            value.className = "finish-evidence-value";
-            value.textContent = String(valueText);
-            const label = document.createElement("span");
-            label.className = "finish-evidence-label";
-            label.textContent = labelText;
-            item.append(value, label);
-            comparison.append(item);
-          });
-
-          const metric = document.createElement("small");
-          metric.className = "finish-evidence-metric";
-          metric.textContent = String(evidence.metric);
-          cell.append(status, comparison, metric);
-          if (evidence.step) {
-            const step = document.createElement("small");
-            step.className = "finish-evidence-step";
-            step.textContent = String(evidence.step);
-            cell.append(step);
-          }
-          row.append(cell);
-          return;
-        }
-        const main = document.createElement("span");
-        main.textContent = String(primary);
-        if (className.includes("checkpoint-cell")) {
-          main.title = String(item.checkpoint_id || "");
-        }
-        if (className.includes("run-cell")) {
-          const presentation = runStatePresentation(item);
-          const identity = document.createElement("button");
-          identity.type = "button";
-          identity.className = "run-identity";
-          identity.disabled = !this.hasControl();
-          const state = document.createElement("span");
-          state.className = `run-state ${presentation.tone}`;
-          state.title = `Run state: ${presentation.label}`;
-          state.setAttribute("aria-label", `Run state: ${presentation.label}`);
-          state.append(icon(presentation.iconName));
-          const text = document.createElement("div");
-          text.className = "run-identity-text";
-          main.className = "run-name";
-          text.append(main);
-          if (secondary) {
-            const small = document.createElement("small");
-            small.textContent = String(secondary);
-            text.append(small);
-          }
-          identity.append(state, text);
-          cell.append(identity);
-          const success = renderSuccessBadges(item);
-          if (success) cell.append(success);
-        } else {
-          cell.append(main);
-        }
-        if (className.includes("checkpoint-metric-cell") && metadata?.isBest) {
-          const badge = document.createElement("span");
-          const badgeLabel = checkpointMetricBestBadge(metadata.column);
-          const description = `${badgeLabel}: ${String(metadata.label).toLowerCase()}`;
-          badge.className = "checkpoint-best-badge";
-          badge.textContent = badgeLabel;
-          badge.title = description;
-          badge.setAttribute("aria-label", description);
-          cell.append(badge);
-        }
-        if (className.includes("run-cell") && isEfficiencyLeader) {
-          const badge = document.createElement("span");
-          badge.className = "source-leader-badge";
-          badge.textContent = efficiency.evidence === "evaluation"
-            ? "Most efficient"
-            : "Training lead";
-          cell.append(badge);
-        }
-        if (className.includes("recipe-cell")) {
-          const variant = recipeVariantPresentation(item);
-          const variation = document.createElement("small");
-          variation.className = "recipe-variant";
-          variation.textContent = variant.summary;
-          variation.title = variant.detail;
-          cell.append(variation);
-          if (item.recipe_sha256) {
-            const revision = document.createElement("small");
-            revision.className = "recipe-revision";
-            revision.textContent = `rev ${String(item.recipe_sha256).slice(0, 12)}`;
-            revision.title = `Recipe SHA-256: ${item.recipe_sha256}`;
-            cell.append(revision);
-          }
-        }
-        if (secondary && !className.includes("run-cell")) {
-          const small = document.createElement("small");
-          small.textContent = String(secondary);
-          cell.append(small);
-        }
-        row.append(cell);
-      });
-      if (this.selectedCheckpoints.has(item.checkpoint_id)) {
-        row.classList.add("selected");
-      }
-      const activate = () => {
-        if (!this.hasControl()) return;
-        if (showingRuns) {
-          this.navigate({
-            level: "runs",
-            run_id: item.run_id,
-            checkpoint_id: "",
-          });
-        } else {
-          this.selectCheckpoint(item);
-        }
-      };
-      row.addEventListener("click", activate);
-      row.addEventListener("keydown", (event) => {
-        if (event.target !== row) return;
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          activate();
-        }
-      });
-      body.append(row);
-    });
-    table.append(head, body);
-    scroll.append(table);
-    return scroll;
-  }
-
-  loadingState(message) {
-    const state = document.createElement("div");
-    state.className = "source-loading";
-    const spinner = document.createElement("span");
-    spinner.className = "spinner";
-    spinner.setAttribute("aria-hidden", "true");
-    const text = document.createElement("p");
-    text.textContent = message;
-    state.append(spinner, text);
-    return state;
-  }
-
-  renderProgress() {
-    const wrap = document.createElement("div");
-    wrap.className = "source-centered";
-    wrap.append(this.loadingState(this.app.message || "Preparing playback…"));
-    if (this.app.has_active_runner) {
-      const cancel = button("Back to current run", { iconName: "arrow-left", quiet: true });
-      cancel.disabled = !this.hasControl();
-      cancel.addEventListener("click", () => this.command("cancel_source"));
-      wrap.append(cancel);
-    }
-    return wrap;
-  }
-
-  renderFailure() {
-    const wrap = document.createElement("div");
-    wrap.className = "source-centered source-failure";
-    const message = document.createElement("p");
-    message.textContent = this.app.error || "The checkpoint could not be opened.";
-    const actions = document.createElement("div");
-    actions.className = "source-actions";
-    const retry = button("Retry", { iconName: "refresh", primary: true });
-    retry.disabled = !this.hasControl();
-    retry.addEventListener("click", () => this.command("retry_source"));
-    const choose = button("Choose another", { iconName: "folder-search", quiet: true });
-    choose.disabled = !this.hasControl();
-    choose.addEventListener("click", () => this.browseCurrentSource());
-    actions.append(retry, choose);
-    if (this.app.has_active_runner) {
-      const cancel = button("Back to current run", { iconName: "arrow-left", quiet: true });
-      cancel.disabled = !this.hasControl();
-      cancel.addEventListener("click", () => this.command("cancel_source"));
-      actions.append(cancel);
-    }
-    wrap.append(message, actions);
-    return wrap;
   }
 
 }

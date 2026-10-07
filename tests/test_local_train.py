@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 import hashlib
 import json
 import os
@@ -32,6 +33,17 @@ from gradlab.training_lifecycle import TRAINING_RESULT_FILENAME
 from gradlab.rom_runtime import RomRuntimeBinding
 
 
+@pytest.fixture(autouse=True)
+def isolate_local_tracking_transport():
+    # These tests exercise CLI/materialization; transport has real-outbox tests separately.
+    with (
+        mock.patch(
+            "gradlab.local_train.local_metrics_writer", side_effect=lambda *a, **k: nullcontext(None)
+        ),
+    ):
+        yield
+
+
 def _write_training_result(
     run_dir: Path,
     *,
@@ -40,6 +52,7 @@ def _write_training_result(
     model_kind: str = "final",
     step: int = 64,
 ) -> None:
+    policy = json.loads((run_dir / "local-run.json").read_text())["training_execution"]
     (run_dir / TRAINING_RESULT_FILENAME).write_text(
         json.dumps(
             {
@@ -47,14 +60,8 @@ def _write_training_result(
                 "format_version": 2,
                 "status": status,
                 "terminal_reason": terminal_reason,
-                "execution_mode": "local-demo",
-                "execution_policy": {
-                    "mode": "local-demo",
-                    "console_mode": "auto",
-                    "persist_intermediate_checkpoints": False,
-                    "stop_on_first_completion": True,
-                    "handle_sigint": True,
-                },
+                "execution_mode": policy["mode"],
+                "execution_policy": policy,
                 "first_completion_step": None,
                 "final_step": step,
                 "requested_limit": 64,
@@ -186,9 +193,37 @@ def test_local_train_rejects_non_main_thread_before_recipe_resolution() -> None:
     resolve.assert_not_called()
 
 
-def test_local_train_materializes_credential_free_playable_run(
+def test_bundled_smoke_uses_local_only_tracking_without_service(
+    tmp_path: Path,
+) -> None:
+    def fake_learner(argv: list[str], *, runtime_rom_binding=None) -> int:
+        assert argv[argv.index("--execution-mode") + 1] == "local-training"
+        config_path = Path(argv[argv.index("--train-config-json") + 1])
+        config = json.loads(config_path.read_text())
+        assert config["tracking"]["backend"] == "mlflow"
+        assert config["tracking"]["delivery"] == "local_only"
+        run_dir = Path(config["runs_dir"]) / config["run_name"]
+        (run_dir / "final_model.zip").write_bytes(b"model")
+        _write_training_result(run_dir)
+        return 0
+
+    with (
+        mock.patch("gradlab.train.main", side_effect=fake_learner),
+        mock.patch("gradlab.local_metrics._open_delivery", side_effect=AssertionError("service called")),
+    ):
+        assert main(["gradlab__bandit/ppo", "--runs-dir", str(tmp_path), "--no-tui"]) == 0
+    receipts = list(tmp_path.rglob(LOCAL_RUN_RECEIPT))
+    assert len(receipts) == 1
+    receipt = json.loads(receipts[0].read_text())
+    assert receipt["status"] == "complete_local"
+    assert receipt["run_id"].startswith("gradlab-")
+
+
+@pytest.mark.parametrize("wandb_enabled", [True, False])
+def test_local_train_materializes_playable_run_with_explicit_logging_mode(
     tmp_path: Path,
     monkeypatch,
+    wandb_enabled: bool,
 ) -> None:
     observed_internal_values: list[str | None] = []
 
@@ -199,7 +234,7 @@ def test_local_train_materializes_credential_free_playable_run(
     ) -> int:
         assert runtime_rom_binding is None
         observed_internal_values.append(os.environ.get(INTERNAL_LEARNER_ENV))
-        assert argv[argv.index("--execution-mode") + 1] == "local-demo"
+        assert argv[argv.index("--execution-mode") + 1] == "local-training"
         config_path = Path(argv[argv.index("--train-config-json") + 1])
         config = json.loads(config_path.read_text(encoding="utf-8"))
         run_dir = Path(config["runs_dir"]) / config["run_name"]
@@ -220,6 +255,7 @@ def test_local_train_materializes_credential_free_playable_run(
                     "--set",
                     "train.timesteps=64",
                     "--no-tui",
+                    *(["--set", "tracking.delivery=online"] if wandb_enabled else ["--no-wandb"]),
                 ]
             )
             == 0
@@ -235,7 +271,10 @@ def test_local_train_materializes_credential_free_playable_run(
     assert config["checkpoint_eval_backend"] == "none"
     assert "stop_on_acceptance" not in config
     assert "wandb" not in config
-    assert config["wandb_mode"] == "disabled"
+    assert config["tracking"]["backend"] == "mlflow"
+    assert config["tracking"]["delivery"] == ("online" if wandb_enabled else "local_only")
+    assert config["wandb_run_id"].startswith("gradlab-")
+    assert config["wandb_group"] == config["wandb_run_id"]
     assert config["timesteps"] == 64
     assert config["run_description"] == (
         "PPO smoke test for the ROM-free native-vector gradlab__bandit target."
@@ -243,9 +282,9 @@ def test_local_train_materializes_credential_free_playable_run(
     assert "image_ref" not in recipe["provenance"]["runtime"]
     assert recipe["provenance"]["runtime"]["packages"]
     assert recipe["provenance"]["source_distribution"]["name"].lower() == "gradlab"
-    assert receipt["status"] == "completed"
+    assert receipt["status"] == ("completed" if wandb_enabled else "complete_local")
     assert receipt["model"] == "final_model.zip"
-    assert receipt["training_execution"]["mode"] == "local-demo"
+    assert receipt["training_execution"]["mode"] == "local-training"
     assert receipt["final_step"] == 64
     assert receipt["requested_limit"] == 64
     assert receipt["execution_limit"] == 64
@@ -353,7 +392,7 @@ def test_local_mario_train_binds_registered_rom_cache(
     ) -> int:
         assert runtime_rom_binding is None
         observed_cache.append(os.environ.get(LOCAL_ROM_CACHE_ENV))
-        assert argv[argv.index("--execution-mode") + 1] == "local-demo"
+        assert argv[argv.index("--execution-mode") + 1] == "local-training"
         config_path = Path(argv[argv.index("--train-config-json") + 1])
         config = json.loads(config_path.read_text(encoding="utf-8"))
         assert config["rom_asset_manifest"] == manifest
@@ -415,7 +454,7 @@ def test_local_mario_train_uses_direct_rom_without_registry_or_cache_mutation(
         runtime_rom_binding: RomRuntimeBinding,
     ) -> int:
         observed_bindings.append(runtime_rom_binding)
-        assert argv[argv.index("--execution-mode") + 1] == "local-demo"
+        assert argv[argv.index("--execution-mode") + 1] == "local-training"
         config_path = Path(argv[argv.index("--train-config-json") + 1])
         config = json.loads(config_path.read_text(encoding="utf-8"))
         assert config["rom_asset_manifest"] == manifest
@@ -775,7 +814,8 @@ def test_latest_local_recipe_model_uses_newest_completed_receipt(tmp_path: Path)
     ) == (tmp_path / "newer" / "final_model.zip")
 
 
-def test_play_recipe_selects_latest_local_model(tmp_path: Path) -> None:
+@pytest.mark.parametrize("hotreload", [False, True])
+def test_play_recipe_selects_latest_local_model(tmp_path: Path, hotreload: bool) -> None:
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     model_path = run_dir / "final_model.zip"
@@ -805,6 +845,7 @@ def test_play_recipe_selects_latest_local_model(tmp_path: Path) -> None:
                     "--runs-dir",
                     str(tmp_path),
                     "--no-open",
+                    *(["--hotreload"] if hotreload else []),
                 ]
             )
             == 23
@@ -812,6 +853,7 @@ def test_play_recipe_selects_latest_local_model(tmp_path: Path) -> None:
 
     host, args = run_application.call_args.args[:2]
     assert args.model == str(model_path)
+    assert args.hot_reload is hotreload
     assert host.snapshot()["app"]["source"]["kind"] == "local"
     assert host.snapshot()["app"]["source"]["value"] == str(model_path)
 

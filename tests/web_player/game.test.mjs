@@ -9,11 +9,6 @@ import {
   gameFrameTerminationTone,
 } from "../../src/gradlab/web_player/panels/game.js";
 
-const source = readFileSync(
-  new URL("../../src/gradlab/web_player/panels/game.js", import.meta.url),
-  "utf8",
-);
-
 test("game frame phase distinguishes initial, after-action, and terminal frames", () => {
   assert.equal(gameFramePhase({ transition: null }), "Initial observation");
   assert.equal(
@@ -111,19 +106,4 @@ test("terminal badge tone follows the canonical success or failure outcome", () 
       outcome: "failure",
     },
   }), "");
-});
-
-test("game frames commit only the latest exact scrub decode", () => {
-  assert.match(source, /data-frame-boundary hidden/);
-  assert.match(source, /boundaryElement\.hidden = !boundaryKind/);
-  assert.match(source, /targetSnapshot = nextSnapshot/);
-  assert.match(source, /const prepareFrame = async \(kind, blob, metadata = \{\}\)/);
-  assert.match(source, /async renderFrame\(kind, blob, metadata = \{\}\)/);
-  assert.match(source, /const incomingSequence = Number\(metadata\.sequence\)/);
-  assert.match(
-    source,
-    /const bitmap = await createImageBitmap\(blob\);\s*if \(!mounted \|\| request !== bitmapRequest\)/,
-  );
-  assert.match(source, /if \(incomingSequence === targetSequence\) commitPrepared\(frameSnapshot\)/);
-  assert.match(source, /resetFrames\(\) \{\s*bitmapRequest \+= 1;/);
 });

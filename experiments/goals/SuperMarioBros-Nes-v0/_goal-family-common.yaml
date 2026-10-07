@@ -14,7 +14,7 @@ objective:
   # Ordered ranking signals; compare each metric in sequence until a candidate wins.
   rank:
   - min(leader/step)
-  - max(eval/return_mean)
+  - max(eval/return/mean)
 # Training contract for this goal family.
 train:
   # Shared checkpoint cadence for Mario training jobs.
@@ -22,7 +22,7 @@ train:
   early_stop:
     conditions:
       clear_100:
-        metric: train/target/success/start_rate_min
+        metric: train/success/min
         trigger: threshold
         operator: '>='
         progress_baseline: 0.0
@@ -113,7 +113,7 @@ train:
 eval:
   episodes: 100
   acceptance:
-  - metric: eval/success/start_rate_min
+  - metric: eval/success/min
     operator: '>='
     threshold: 1.0
   environment:

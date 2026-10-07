@@ -42,8 +42,8 @@ def test_publication_evidence_uses_one_structured_record_per_start(
         "status": "accepted",
         "episode_results": episodes,
         "aggregates": {
-            "eval/return_mean": 0.0,
-            "eval/success/start_rate_min": 0.5,
+            "eval/return/mean": 0.0,
+            "eval/success/min": 0.5,
         },
         "duration_seconds": 1.0,
         "evidence_sha256": ["evidence"],

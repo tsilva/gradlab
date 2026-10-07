@@ -10,13 +10,14 @@ from types import SimpleNamespace
 import pytest
 
 from gradlab.eval_backend import EvalHandle
+from gradlab.evaluation_attempts import build_modal_eval_payload
 from gradlab.file_utils import file_sha256
 from gradlab.modal_eval_backend import ModalEvalBackend
 from gradlab.modal_eval_config import load_modal_eval_config, modal_app_name
 from gradlab.modal_eval_protocol import SEED_PROTOCOL, build_execution_contract
 from gradlab.modal_eval_storage import write_downloaded_file
 from gradlab.modal_eval_worker import _prepare_vizdoom_iwad, execute_attempt, run_child
-from gradlab.r2_store import PUBLIC_OBJECT_USER_AGENT
+from gradlab.r2_store import BucketConfig, PUBLIC_OBJECT_USER_AGENT, R2Bucket
 from gradlab.vizdoom_assets import (
     verify_vizdoom_iwad_file,
     vizdoom_iwad_binding,
@@ -104,6 +105,55 @@ def test_modal_download_uses_explicit_gradlab_user_agent(
 
     assert target.read_bytes() == b"checkpoint"
     assert observed == [PUBLIC_OBJECT_USER_AGENT]
+
+
+def test_checkpoint_video_upload_is_signed_for_the_workers_content_type(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    signed_puts: list[dict[str, object]] = []
+
+    class SigningClient:
+        def generate_presigned_url(self, operation, *, Params, ExpiresIn):
+            assert operation == "put_object"
+            assert ExpiresIn == 1230
+            signed_puts.append(Params)
+            return f"https://eval.example.test/upload/{len(signed_puts)}"
+
+    evaluation_store = R2Bucket(
+        BucketConfig(
+            uri="s3://eval-private",
+            endpoint_url="https://r2.example.test",
+            access_key_id="test-id",
+            secret_access_key="test-secret",
+        )
+    )
+    monkeypatch.setattr(evaluation_store, "_s3_client", lambda: SigningClient())
+    run_id = "gradlab-" + "a" * 32
+    intent_key = "c" * 64
+    payload = build_modal_eval_payload(
+        manifest=SimpleNamespace(run_id=run_id, modal={}),
+        checkpoint=SimpleNamespace(
+            public_url="https://models.example.test/model.zip",
+            model_document_url="https://models.example.test/model.json",
+            model_document_sha256="b" * 64,
+            recipe_document_url="https://models.example.test/recipe.json",
+        ),
+        intent=SimpleNamespace(
+            timeout_seconds=1200,
+            execution_contract={"record_episode": True},
+            result_key=f"runs/{run_id}/evals/{intent_key}/result.json",
+            idempotency_key=intent_key,
+        ),
+        attempt=1,
+        expires_at=1234.0,
+        evaluation_store=evaluation_store,
+        child_margin_seconds=60,
+        expiry_margin_seconds=30,
+    )
+
+    assert signed_puts[0]["ContentType"] == "application/json"
+    assert signed_puts[1]["ContentType"] == payload["video"]["content_type"] == "video/mp4"
+    assert signed_puts[1]["IfNoneMatch"] == "*"
 
 
 def test_modal_eval_installs_the_contract_bound_vizdoom_iwad(tmp_path: Path) -> None:
@@ -217,7 +267,7 @@ def test_modal_child_wire_result_omits_metrics_and_claimed_aggregates(
         "watchdog_steps": 10,
         "seed": 10_000,
         "asset": None,
-        "acceptance": [{"metric": "eval/return_mean"}],
+        "acceptance": [{"metric": "eval/return/mean"}],
     }
     input_path = tmp_path / "input.json"
     output_path = tmp_path / "output.json"
@@ -249,7 +299,7 @@ def test_modal_child_wire_result_omits_metrics_and_claimed_aggregates(
         "gradlab.eval_runner.evaluate_policy_bundle",
         lambda *_args, **_kwargs: (
             {
-                "eval/return_mean": 1.0,
+                "eval/return/mean": 1.0,
                 "episode_results": [{"episode_id": "episode-1"}],
                 "evaluation_evidence": {"manifest": "verified"},
                 "acceptance_verdict": "accepted",
@@ -266,5 +316,65 @@ def test_modal_child_wire_result_omits_metrics_and_claimed_aggregates(
         "episode_results": [{"episode_id": "episode-1"}],
         "evaluation_evidence": {"manifest": "verified"},
         "preview": None,
+        "video": None,
         "verdict": "accepted",
     }
+
+
+def test_modal_child_video_uses_one_declared_evaluation_episode(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    contract = {
+        "environment": {"env_provider": "gradlab", "game": "Bandit-v0", "task": {}},
+        "episodes": 1,
+        "n_envs": 1,
+        "watchdog_steps": 10,
+        "seed": 10_000,
+        "asset": None,
+        "acceptance": [{"metric": "eval/return/mean"}],
+        "record_episode": True,
+    }
+    request = {
+        "contract": contract,
+        "bundle_root": str(tmp_path / "bundle"),
+        "rom_path": None,
+        "rom_asset_manifest": None,
+        "execution_id": "execution-1",
+        "video": {"episode_id": "lane-00-episode-000", "fps": 30, "max_bytes": 1024},
+    }
+    input_path = tmp_path / "input.json"
+    output_path = tmp_path / "output.json"
+    input_path.write_text(json.dumps(request), encoding="utf-8")
+    monkeypatch.setattr(
+        "gradlab.modal_eval_worker.load_policy_bundle",
+        lambda _root: SimpleNamespace(recipe={}),
+    )
+    monkeypatch.setattr(
+        "gradlab.modal_eval_worker.evaluation_contract",
+        lambda _recipe: {
+            "environment": contract["environment"],
+            "seed": contract["seed"],
+            "watchdog_steps": contract["watchdog_steps"],
+        },
+    )
+
+    def evaluate(_bundle, **kwargs):
+        recorder = kwargs["episode_video_capture"]
+        recorder.output.write_bytes(b"complete-video")
+        recorder.frames = 2
+        recorder.complete = True
+        return (
+            {
+                "episode_results": [{"episode_id": "lane-00-episode-000"}],
+                "evaluation_evidence": {"manifest": "verified"},
+                "acceptance_verdict": "accepted",
+            },
+            None,
+        )
+
+    monkeypatch.setattr("gradlab.eval_runner.evaluate_policy_bundle", evaluate)
+    assert run_child(input_path, output_path) == 0
+    result = json.loads(output_path.read_text(encoding="utf-8"))
+    assert result["video"]["episode_id"] == result["episode_results"][0]["episode_id"]
+    assert result["video"]["bytes"] == len(b"complete-video")

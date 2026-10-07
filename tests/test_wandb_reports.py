@@ -10,7 +10,6 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from gradlab.metric_names import (
-    TRAIN_A2C_POLICY_ENTROPY,
     TRAIN_PPO_POLICY_ENTROPY,
     validate_metric_name,
 )
@@ -38,13 +37,7 @@ FAMILY_ROOT = ROOT / "experiments" / "goals" / "SuperMarioBros-Nes-v0"
 LEVEL1_1_GOAL = FAMILY_ROOT / "Level1-1" / "_goal.yaml"
 MIXED_GOAL = FAMILY_ROOT / "Levels_1-1_1-2" / "_goal.yaml"
 MARIO_RECIPE = (
-    ROOT
-    / "experiments"
-    / "goals"
-    / "SuperMarioBros-Nes-v0"
-    / "Level1-1"
-    / "recipes"
-    / "ppo.yaml"
+    ROOT / "experiments" / "goals" / "SuperMarioBros-Nes-v0" / "Level1-1" / "recipes" / "ppo.yaml"
 )
 
 
@@ -96,18 +89,16 @@ class WandbReportCompilationTests(unittest.TestCase):
         self.assertEqual(spec.starts, ("Level1-1", "Level1-2"))
         serialized = str(payload)
         self.assertIn("min(leader/step)", serialized)
-        self.assertIn("max(eval/return_mean)", serialized)
-        self.assertIn("eval/acceptance/pass", serialized)
-        self.assertIn("train/target/success/start_rate_min", serialized)
-        self.assertIn("train/throughput/provider/step/rate", serialized)
-        self.assertIn("eval/start/table", serialized)
+        self.assertIn("max(eval/return/mean)", serialized)
+        self.assertIn("eval/pass", serialized)
+        self.assertIn("train/success/min", serialized)
+        self.assertIn("train/provider/rate", serialized)
+        self.assertIn("eval/starts/table", serialized)
         self.assertNotIn("eval/outcome/success/from/Level1-1/rate", serialized)
         self.assertNotIn("eval/outcome/success/from/Level1-2/rate", serialized)
 
     def test_compiled_panel_metrics_are_registered(self) -> None:
-        report = build_wandb_report(
-            goal_spec("Level1-1"), entity="entity", source_sha="a" * 40
-        )
+        report = build_wandb_report(goal_spec("Level1-1"), entity="entity", source_sha="a" * 40)
         for block in report.blocks:
             for panel in getattr(block, "panels", ()):
                 for metric in getattr(panel, "y", ()):
@@ -120,9 +111,7 @@ class WandbReportCompilationTests(unittest.TestCase):
                     validate_metric_name(table_name)
 
     def test_policy_entropy_panel_uses_only_observed_entropy_metrics(self) -> None:
-        report = build_wandb_report(
-            goal_spec("Level1-1"), entity="entity", source_sha="a" * 40
-        )
+        report = build_wandb_report(goal_spec("Level1-1"), entity="entity", source_sha="a" * 40)
         panel = next(
             panel
             for block in report.blocks
@@ -134,7 +123,6 @@ class WandbReportCompilationTests(unittest.TestCase):
             panel.y,
             [
                 TRAIN_PPO_POLICY_ENTROPY,
-                TRAIN_A2C_POLICY_ENTROPY,
             ],
         )
 
@@ -198,18 +186,12 @@ class WandbReportCompilationTests(unittest.TestCase):
 class WandbReportSyncTests(unittest.TestCase):
     def test_identity_marker_round_trips(self) -> None:
         identity = "SuperMarioBros-Nes-v0/goal/Level1-1"
-        report = build_wandb_report(
-            goal_spec("Level1-1"), entity="entity", source_sha="a" * 40
-        )
+        report = build_wandb_report(goal_spec("Level1-1"), entity="entity", source_sha="a" * 40)
         self.assertEqual(extract_report_identity(report.description), identity)
 
     def test_structure_fingerprint_ignores_generated_ids_but_detects_content(self) -> None:
-        first = build_wandb_report(
-            goal_spec("Level1-1"), entity="entity", source_sha="a" * 40
-        )
-        second = build_wandb_report(
-            goal_spec("Level1-1"), entity="entity", source_sha="a" * 40
-        )
+        first = build_wandb_report(goal_spec("Level1-1"), entity="entity", source_sha="a" * 40)
+        second = build_wandb_report(goal_spec("Level1-1"), entity="entity", source_sha="a" * 40)
 
         self.assertEqual(_structure_sha256(first), _structure_sha256(second))
         second.title = "manually edited"
@@ -226,9 +208,7 @@ class WandbReportSyncTests(unittest.TestCase):
             _preflight_existing(specs, duplicate)
 
     def test_existing_report_is_replaced_from_source(self) -> None:
-        desired = build_wandb_report(
-            goal_spec("Level1-1"), entity="entity", source_sha="a" * 40
-        )
+        desired = build_wandb_report(goal_spec("Level1-1"), entity="entity", source_sha="a" * 40)
         current = SimpleNamespace(
             entity="old",
             project="old",
@@ -240,9 +220,7 @@ class WandbReportSyncTests(unittest.TestCase):
             save=lambda: None,
         )
         existing = SimpleNamespace(url="https://existing")
-        with patch(
-            "wandb_workspaces.reports.v2.Report.from_url", return_value=current
-        ) as from_url:
+        with patch("wandb_workspaces.reports.v2.Report.from_url", return_value=current) as from_url:
             saved = _replace_and_save(desired, existing)
 
         from_url.assert_called_once_with("https://existing")
@@ -285,12 +263,8 @@ class WandbReportSyncTests(unittest.TestCase):
             patch("gradlab.wandb_reports._replace_and_save", side_effect=save),
         ):
             with self.assertRaisesRegex(ConnectionError, "simulated"):
-                sync_reports(
-                    specs, api=api, entity="entity", source_sha="a" * 40
-                )
-            result = sync_reports(
-                specs, api=api, entity="entity", source_sha="a" * 40
-            )
+                sync_reports(specs, api=api, entity="entity", source_sha="a" * 40)
+            result = sync_reports(specs, api=api, entity="entity", source_sha="a" * 40)
 
         goal = next(item for item in specs if isinstance(item, GoalReportSpec))
         portfolio = next(item for item in specs if isinstance(item, PortfolioReportSpec))
@@ -307,9 +281,7 @@ class WandbReportSyncTests(unittest.TestCase):
         orphan = FakeSavedReport(
             identity="SuperMarioBros-Nes-v0/goal/removed", url="https://orphan"
         )
-        desired_goal = build_wandb_report(
-            goal, entity="entity", source_sha="a" * 40
-        )
+        desired_goal = build_wandb_report(goal, entity="entity", source_sha="a" * 40)
         desired_portfolio = build_wandb_report(
             portfolio,
             entity="entity",
@@ -339,9 +311,7 @@ class WandbReportSyncTests(unittest.TestCase):
         portfolio = next(item for item in specs if isinstance(item, PortfolioReportSpec))
         goal_row = FakeSavedReport(identity=goal.identity, url="https://goal")
         portfolio_row = FakeSavedReport(identity=portfolio.identity, url="https://portfolio")
-        drifted_goal = build_wandb_report(
-            goal, entity="entity", source_sha="a" * 40
-        )
+        drifted_goal = build_wandb_report(goal, entity="entity", source_sha="a" * 40)
         drifted_goal.title = "manual W&B edit"
         desired_portfolio = build_wandb_report(
             portfolio,

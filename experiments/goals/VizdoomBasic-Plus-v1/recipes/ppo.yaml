@@ -3,3 +3,6 @@ defaults:
 - _self_
 recipe_id: ppo
 description: Training-only pixel PPO for {{ goal_id }} with scaled rewards.
+
+train:
+  checkpoint_freq: 250000

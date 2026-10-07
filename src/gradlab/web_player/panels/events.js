@@ -1,76 +1,9 @@
-import { createPanel } from "./shared.js";
 import { eventColor, eventColorFill, eventLabels } from "../event-colors.js";
 
-export function mount({ definition, services }) {
-  const element = createPanel({
-    id: definition.id,
-    label: definition.label,
-    body: '<ol data-list class="event-list"><li class="empty-state">No events observed.</li></ol>',
-  });
-  const list = element.querySelector("[data-list]");
-
-  return {
-    element,
-    renderHistory(history, _snapshot = null, view = {}) {
-      const events = history
-        .filter((point) => point.boundary || point.events?.length);
-      const selected = view.inspection
-        ? events.find(
-          (point) => Number(point.sequence) === Number(view.selectedSequence),
-        )
-        : null;
-      const visible = events.slice(-100);
-      if (
-        selected
-        && !visible.some((point) => Number(point.sequence) === Number(selected.sequence))
-      ) {
-        visible.shift();
-        visible.unshift(selected);
-      }
-      visible.reverse();
-      if (!visible.length) {
-        const empty = document.createElement("li");
-        empty.className = "empty-state";
-        empty.textContent = "No events observed.";
-        list.replaceChildren(empty);
-        return;
-      }
-      list.replaceChildren(...visible.map((point) => {
-        const labels = eventLabels(point);
-        const item = document.createElement("li");
-        const isSelected = selected
-          && Number(point.sequence) === Number(selected.sequence);
-        item.className = [
-          "event-item",
-          point.boundary ? "boundary" : "",
-          isSelected ? "selected" : "",
-        ].filter(Boolean).join(" ");
-        item.style.setProperty("--event-colors", eventColorFill(labels));
-        const jump = document.createElement("button");
-        jump.type = "button";
-        jump.className = "event-jump";
-        const label = document.createElement("div");
-        label.className = "event-labels";
-        label.append(...labels.map((eventLabel) => {
-          const part = document.createElement("span");
-          part.className = "event-label";
-          part.style.setProperty("--event-color", eventColor(eventLabel));
-          part.textContent = eventLabel;
-          return part;
-        }));
-        const meta = document.createElement("div");
-        meta.className = "event-meta";
-        meta.textContent = `ep ${point.episode} · step ${point.step}`;
-        jump.setAttribute(
-          "aria-label",
-          `Inspect ${labels.join(" · ")} at episode ${point.episode}, step ${point.step}`,
-        );
-        if (isSelected) jump.setAttribute("aria-current", "step");
-        jump.addEventListener("click", () => services.inspectSequence(point.sequence));
-        jump.append(label, meta);
-        item.append(jump);
-        return item;
-      }));
-    },
-  };
+export function eventAtCursor(point, view) {
+  if (Number.isInteger(view.selectedStep)) {
+    return point.step === view.selectedStep
+      && (view.selectedEpisode == null || point.episode === view.selectedEpisode);
+  }
+  return view.selectedSequence != null && point.sequence === view.selectedSequence;
 }

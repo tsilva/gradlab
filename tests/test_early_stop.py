@@ -362,7 +362,7 @@ def test_decision_validation_rejects_tampering() -> None:
                 "conditions": {
                     "bad": {
                         **threshold_condition(),
-                        "metric": "eval/success/start_rate_min",
+                        "metric": "eval/success/min",
                     }
                 }
             },

@@ -4,6 +4,8 @@ import copy
 import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
+from functools import cached_property
+from gradlab.resolved_training import ResolvedTrainConfig
 from pathlib import Path
 from typing import Any
 
@@ -61,9 +63,10 @@ SOURCE_RECIPE_FIELDS = frozenset(
         "seeds",
         TEMPLATE_VARS_KEY,
         "train",
+        "tracking",
     }
 )
-SOURCE_PRESET_FIELDS = frozenset({"defaults", "logging", TEMPLATE_VARS_KEY, "train"})
+SOURCE_PRESET_FIELDS = frozenset({"defaults", "logging", TEMPLATE_VARS_KEY, "train", "tracking"})
 RECIPE_DEFERRED_TEMPLATE_FIELDS: dict[tuple[str, ...], frozenset[str]] = {
     ("description",): RECIPE_TEMPLATE_FIELDS,
     ("goal", "description"): RECIPE_TEMPLATE_FIELDS,
@@ -95,7 +98,11 @@ _PHASE_EXECUTION_ENV_PATHS = frozenset(
 def goal_contract_sha256(document: Mapping[str, Any]) -> str:
     """Hash the fully composed semantic goal contract, excluding source formatting."""
 
-    return canonical_json_sha256(document, default=str, ensure_ascii=True)
+    return canonical_json_sha256(
+        {key: value for key, value in document.items() if key != "tracking"},
+        default=str,
+        ensure_ascii=True,
+    )
 
 
 def _override_parts(value: str, *, label: str) -> tuple[str, str, Any]:
@@ -144,7 +151,9 @@ def _partition_policy_environment_overrides(
     catalog = goal_document.get("reward_shapes")
     for item in overrides:
         path, raw_value, parsed_value = _override_parts(item, label=label)
-        if isinstance(catalog, Mapping) and path.startswith(("train.task.reward", "eval.task.reward")):
+        if isinstance(catalog, Mapping) and path.startswith(
+            ("train.task.reward", "eval.task.reward")
+        ):
             raise ValueError(
                 "catalog goals reject raw reward overrides; select or override a named "
                 f"reward_shape instead: {path}"
@@ -598,6 +607,13 @@ def validate_source_recipe_shape(
         raise ValueError(
             f"{label} uses goal-owned or unsupported {kind} field(s): {', '.join(unknown)}"
         )
+    for section_name in ("logging", "train"):
+        section = document.get(section_name)
+        if isinstance(section, Mapping) and "wandb_mode" in section:
+            raise ValueError(
+                f"{label}.{section_name}.wandb_mode is obsolete; use "
+                "tracking.backend and tracking.delivery"
+            )
     train = document.get("train")
     if train is not None:
         if not isinstance(train, Mapping):
@@ -680,6 +696,10 @@ def compose_train_document(
         goal_path,
         env_provider=env_provider,
     )
+    from gradlab.tracking_config import resolve_tracking
+
+    # Tracking is operational configuration and must not enter Goal identity.
+    goal_composition.document.pop("tracking", None)
     authored_goal_document = goal_composition.document
     if goal_composition.sources:
         validate_goal_contract_document(
@@ -719,9 +739,7 @@ def compose_train_document(
             Path(".").resolve(),
         )
     source_policy_overrides = [
-        item
-        for item in effective_environment_overrides
-        if item.startswith("train.environment.")
+        item for item in effective_environment_overrides if item.startswith("train.environment.")
     ]
     source_document = apply_dotlist_overrides(
         recipe_composition.document,
@@ -733,6 +751,21 @@ def compose_train_document(
         label=f"composed recipe file {recipe_path} after overrides",
         allow_goal_train_fields=True,
     )
+    launch_tracking_keys = tuple(
+        item.split("=", 1)[0].removeprefix("tracking.")
+        for item in recipe_override_list
+        if item.split("=", 1)[0].startswith("tracking.")
+    )
+    tracking = resolve_tracking(
+        experiments_root=next(
+            parent for parent in goal_path.resolve().parents if parent.name == "experiments"
+        ),
+        goal_sources=goal_composition.sources,
+        recipe_sources=recipe_composition.sources,
+        launch_tracking=source_document.get("tracking"),
+        overridden_keys=launch_tracking_keys,
+    )
+    source_document.pop("tracking", None)
     action_selector_value = source_document.pop("action_profile", None)
     action_selector = None
     if action_selector_value is not None:
@@ -851,9 +884,7 @@ def compose_train_document(
             source_environment.get("task") if isinstance(source_environment, Mapping) else None
         )
         if isinstance(source_task, Mapping) and "action" in source_task:
-            raise ValueError(
-                "action_profile cannot be combined with recipe-authored task.action"
-            )
+            raise ValueError("action_profile cannot be combined with recipe-authored task.action")
         source_env_config = (
             source_environment.get("env_config")
             if isinstance(source_environment, Mapping)
@@ -863,9 +894,7 @@ def compose_train_document(
             source_env_config.get("env_args") if isinstance(source_env_config, Mapping) else None
         )
         source_vizdoom_config = (
-            source_env_args.get("vizdoom_config")
-            if isinstance(source_env_args, Mapping)
-            else None
+            source_env_args.get("vizdoom_config") if isinstance(source_env_args, Mapping) else None
         )
         if isinstance(source_env_args, Mapping) and "use_restricted_actions" in source_env_args:
             raise ValueError(
@@ -916,9 +945,34 @@ def compose_train_document(
         path=goal_path,
         goal_composition=goal_composition,
     )
+    document["train_config"]["tracking"] = tracking
+    effective_goal = copy.deepcopy(goal_composition.document)
+    from gradlab.occupancy import resolve_cell_spaces
+    from gradlab.state_archive import normalize_state_archive_config
+
+    resolved_training = copy.deepcopy(document["train_config"])
+    resolve_cell_spaces(resolved_training)
+    archive = resolved_training.get("state_archive")
+    if isinstance(archive, Mapping):
+        archive = normalize_state_archive_config(
+            archive, label="train.state_archive", n_envs=resolved_training.get("n_envs")
+        )
+        curriculum = archive.get("curriculum") or {}
+        if curriculum.get("restore_entries"):
+            # Enabled restoration changes the effective start distribution.
+            # Passive observation and capture-only recipes retain the authored goal.
+            semantics = {key: value for key, value in archive.items() if key != "persistence"}
+            if curriculum.get("strategy") == "coverage":
+                semantics["occupancy"] = {
+                    key: value
+                    for key, value in resolved_training["occupancy"].items()
+                    if key != "labels"
+                }
+            effective_goal.setdefault("train", {})["state_archive"] = semantics
+    document["goal"] = effective_goal
     document["train_config"]["goal_contract_sha256"] = goal_contract_sha256(authored_goal_document)
     document["train_config"]["effective_goal_contract_sha256"] = goal_contract_sha256(
-        goal_composition.document
+        effective_goal
     )
     from gradlab.goal_variants import build_goal_variant_descriptor
 
@@ -936,7 +990,7 @@ def compose_train_document(
         goal_slug=goal_path.resolve().parent.relative_to(goals_root).as_posix(),
         source_sha="",
         authored_goal=authored_goal_document,
-        effective_goal=goal_composition.document,
+        effective_goal=effective_goal,
     )
     if selected_reward is not None:
         document["train_config"].update(
@@ -986,6 +1040,14 @@ class ResolvedTrainDocuments:
     canonical_goal: dict[str, Any]
     base: dict[str, Any]
     effective: dict[str, Any]
+
+    @cached_property
+    def base_training(self) -> ResolvedTrainConfig:
+        return ResolvedTrainConfig.from_validated(self.base["train_config"])
+
+    @cached_property
+    def effective_training(self) -> ResolvedTrainConfig:
+        return ResolvedTrainConfig.from_validated(self.effective["train_config"])
 
 
 def compose_resolved_train_documents(
@@ -1062,17 +1124,17 @@ def prepare_checkpoint_eval_mode(
         if checkpoint_eval_backend is not None
         else config.get("checkpoint_eval_backend") or "modal"
     ).strip()
-    if mode not in {"modal", "none"}:
+    if mode not in {"modal", "training-container", "none"}:
         raise ValueError(f"unsupported checkpoint eval backend: {mode}")
     goal = document.get("goal")
     if not isinstance(goal, Mapping):
         raise ValueError("materialized recipe goal must be an object")
     evaluation_mode = goal_evaluation_mode(goal, label="recipe.goal")
-    if mode == "modal" and evaluation_mode != "evaluated":
-        raise ValueError("checkpoint_eval_backend=modal requires an evaluated goal")
+    if mode != "none" and evaluation_mode != "evaluated":
+        raise ValueError(f"checkpoint_eval_backend={mode} requires an evaluated goal")
     from gradlab.training_backend import accepts_first_training_success
 
-    if mode == "modal" and accepts_first_training_success(config):
+    if mode != "none" and accepts_first_training_success(config):
         raise ValueError("first-training-success backend requires checkpoint_eval_backend=none")
     config["checkpoint_eval_backend"] = mode
     document["train_config"] = config
@@ -1117,7 +1179,15 @@ def recipe_tags(document: Mapping[str, Any]) -> list[str]:
 
 
 def load_goal_contract_document(path: Path, *, label: str | None = None) -> dict[str, Any]:
-    return _load_rendered_goal_composition(path, label=label).document
+    composition = _load_rendered_goal_composition(path, label=label)
+    from gradlab.tracking_config import validate_tracking
+
+    for source in composition.sources:
+        document = load_mapping_document(source, label=f"goal source {source}")
+        if "tracking" in document:
+            validate_tracking(document["tracking"], label=f"{source}.tracking")
+    composition.document.pop("tracking", None)
+    return composition.document
 
 
 def load_goal_contract(

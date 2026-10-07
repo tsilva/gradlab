@@ -45,6 +45,10 @@ _ALLOWED_CONTROL_KEYS = (
         r"[0-9a-f]{64}\.json"
     ),
     re.compile(r"runs/gradlab-[0-9a-f]{32}/manifest\.json"),
+    re.compile(
+        r"runs/gradlab-[0-9a-f]{32}/monitoring/[0-9a-f]{64}/"
+        r"[0-9a-f]{64}/state\.json"
+    ),
     re.compile(r"recipes/v2/sha256/[0-9a-f]{2}/[0-9a-f]{64}\.json"),
 )
 

@@ -7,12 +7,10 @@ import pytest
 
 from gradlab.batch_runtime import EpisodeRecord
 from gradlab.metric_names import (
+    TRAIN_EPISODE_COMPLETED_COUNT,
     TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MAX,
     TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN,
-    TRAIN_OUTCOME_SUCCESS_STARTS_OBSERVED_CUMULATIVE_RATE_MEAN,
-    TRAIN_EPISODE_COMPLETED_COUNT,
     train_outcome_reason_rolling_rate_metric,
-    train_early_stop_metric,
     train_success_count_metric,
 )
 from gradlab.task_kernels import Outcome
@@ -28,9 +26,10 @@ from gradlab.training_lifecycle import (
     TrainingExecutionMode,
     TrainingExecutionPolicy,
     TrainingSession,
+    local_target_progress_field,
     progress_sink_for_mode,
 )
-from gradlab.training_metrics import EpisodeMetricsReducer
+from gradlab.training_metrics import LOCAL_COMPLETION_FRACTION, EpisodeMetricsReducer
 
 
 class FakeMetricStore:
@@ -154,7 +153,7 @@ def test_threshold_target_progress_is_published_and_shown_as_an_outcome(
     )
 
     session.configure_budget(requested_limit=10, step_quantum=1)
-    metric = train_early_stop_metric("target_reached", "target/progress")
+    metric = local_target_progress_field("target_reached")
     assert progress.fields == (
         ProgressField(
             metric,
@@ -171,7 +170,7 @@ def test_threshold_target_progress_is_published_and_shown_as_an_outcome(
         },
     )
 
-    assert store.frames[-1][0][metric] == 0.5
+    assert metric not in store.frames[-1][0]
     assert progress.metrics[-1][metric] == 0.5
 
 
@@ -229,6 +228,10 @@ def test_execution_modes_resolve_to_fixed_lifecycle_policies() -> None:
         "stop_on_first_completion": True,
         "handle_sigint": True,
     }
+    online_local = TrainingExecutionPolicy.for_mode(TrainingExecutionMode.LOCAL_TRAINING)
+    assert online_local.persist_intermediate_checkpoints is True
+    assert online_local.stop_on_first_completion is False
+    assert online_local.handle_sigint is True
     assert supervised.to_document() == {
         "mode": "supervised",
         "console_mode": "plain",
@@ -327,19 +330,24 @@ def test_archive_success_and_missing_success_signals_do_not_stop_local_training(
     assert no_signal_session.terminal_reason() == TerminalReason.RESOURCE_EXHAUSTION
 
 
+@pytest.mark.parametrize("mode", [TrainingExecutionMode.SUPERVISED, TrainingExecutionMode.LOCAL_TRAINING])
 def test_supervised_completion_continues_and_signal_reason_is_not_acceptance(
-    tmp_path: Path,
+    tmp_path: Path, mode: TrainingExecutionMode,
 ) -> None:
-    session, stop_flag = _session(tmp_path, mode=TrainingExecutionMode.SUPERVISED)
+    session, stop_flag = _session(tmp_path, mode=mode)
     success = _episode(start="StartA", episode_return=10.0, outcome=Outcome.SUCCESS)
 
     assert session.observe_episode_completions(step=2, records=(success,)) is False
     assert session.first_completion_step == 2
     assert stop_flag.requested is False
     stop_flag.request("SIGUSR1")
-    assert session.terminal_reason() == TerminalReason.EXTERNAL_SIGNAL
-    assert session.terminal_model_kind(TerminalReason.EXTERNAL_SIGNAL) == "final"
-    assert session.should_persist_interrupted_checkpoint(TerminalReason.EXTERNAL_SIGNAL) is True
+    if mode == TrainingExecutionMode.SUPERVISED:
+        assert session.terminal_reason() == TerminalReason.EXTERNAL_SIGNAL
+        assert session.terminal_model_kind(TerminalReason.EXTERNAL_SIGNAL) == "final"
+        assert session.should_persist_interrupted_checkpoint(TerminalReason.EXTERNAL_SIGNAL) is True
+    else:
+        assert session.terminal_reason() == TerminalReason.LOCAL_INTERRUPTION
+        assert session.terminal_model_kind(TerminalReason.LOCAL_INTERRUPTION) == "interrupted"
 
 
 def test_completion_has_priority_over_early_stop_at_the_same_boundary(tmp_path: Path) -> None:
@@ -388,8 +396,8 @@ def test_plain_progress_is_bounded_and_uses_only_canonical_outcomes(
 
     metrics = {
         TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN: 5.0,
-        TRAIN_OUTCOME_SUCCESS_STARTS_OBSERVED_CUMULATIVE_RATE_MEAN: 0.25,
-        "train/go-explore/best/progress": 999.0,
+        LOCAL_COMPLETION_FRACTION: 0.25,
+        "train/go-explore/progress": 999.0,
     }
     sink.update(step=10, metrics=metrics)
     assert capsys.readouterr().out == ""
@@ -444,7 +452,7 @@ def test_session_keeps_algorithm_progress_stats_between_durable_reports(
     assert isinstance(session.progress, MemoryProgressSink)
 
     session.advance(2, progress_metrics={"algorithm/cells": 7})
-    session.report(step=2, metrics={"train/throughput/loop/rate": 100.0})
+    session.report(step=2, metrics={"train/throughput/rate": 100.0})
 
     assert session.progress.metrics[-1]["algorithm/cells"] == 7
 
@@ -479,7 +487,8 @@ def test_episode_metrics_are_identical_across_target_and_archive_consumers() -> 
     assert payload[train_outcome_reason_rolling_rate_metric("life_loss")] == pytest.approx(1 / 3)
     assert payload[train_success_count_metric("StartA")] == 1
     assert payload[train_success_count_metric("StartB")] == 0
-    assert payload[TRAIN_OUTCOME_SUCCESS_STARTS_OBSERVED_CUMULATIVE_RATE_MEAN] == 0.5
+    assert LOCAL_COMPLETION_FRACTION not in payload
+    assert reducer.local_progress()[LOCAL_COMPLETION_FRACTION] == 0.5
 
 
 def test_episode_return_max_uses_the_same_rolling_window_as_the_mean() -> None:
@@ -538,8 +547,8 @@ def test_shared_session_enforces_backend_conformance(
 
     record = _episode(start="StartA", episode_return=5.0, outcome=Outcome.SUCCESS)
     session.advance(4, (record,))
-    session.report(step=4, metrics={"train/throughput/loop/rate": 100.0})
-    session.report(step=4, metrics={"train/throughput/loop/rate": 101.0})
+    session.report(step=4, metrics={"train/throughput/rate": 100.0})
+    session.report(step=4, metrics={"train/throughput/rate": 101.0})
 
     assert len(store.frames) == 1
     assert store.frames[0][1]["source"] == "train"

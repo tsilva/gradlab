@@ -5,6 +5,16 @@ recipe_id: gradoom-ppo
 description: GPU-resident GraDOOM Deathmatch PPO trained on one RTX 4090 and evaluated zero-shot in reference ViZDoom.
 reward_shape: native-v1
 train:
+  checkpoint_freq: 5000000
+  checkpoint_steps: [1000000, 2000000]
+  checkpoint_candidates:
+    metric: train/progress/kills/mean
+    direction: maximize
+    min_delta: 0.05
+    delta_mode: relative
+    start_after_steps: 1000000
+    min_interval_steps: 5000000
+    max_checkpoints: 3
   timesteps: 50000000
   checkpoint_eval_backend: none
   environment:

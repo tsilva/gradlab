@@ -27,7 +27,7 @@ from gradlab.policy_bundle import (
 from gradlab.policy_models import load_internal_policy_model
 from gradlab.policy_registry import resolve_policy_algorithm
 from gradlab.policy_runtime import PolicyRuntime
-from gradlab.video import PolicyObservationPreview, write_preview_video
+from gradlab.video import PolicyObservationPreview, SingleEpisodeVideoRecorder, write_preview_video
 from gradlab.rom_assets import cache_path, validate_rom_asset_manifest, verify_rom_file
 from gradlab.rom_runtime import bind_rom_path
 from gradlab.vizdoom_assets import (
@@ -176,6 +176,17 @@ def run_child(input_path: Path, output_path: Path) -> int:
 
     acceptance_contract = contract if "acceptance" in contract else None
     preview_request = request.get("preview")
+    video_request = request.get("video")
+    episode_video_capture = (
+        SingleEpisodeVideoRecorder(
+            output_path.with_suffix(".episode.mp4"),
+            episode_id=str(video_request["episode_id"]),
+            fps=int(video_request["fps"]),
+            max_bytes=int(video_request["max_bytes"]),
+        )
+        if isinstance(video_request, Mapping)
+        else None
+    )
     preview_capture = (
         PolicyObservationPreview(
             max_frames=int(preview_request["max_frames"]),
@@ -203,6 +214,7 @@ def run_child(input_path: Path, output_path: Path) -> int:
             n_envs=int(contract["n_envs"]),
             progress=True,
             preview_capture=preview_capture,
+            episode_video_capture=episode_video_capture,
             acceptance_contract=acceptance_contract,
             rom_binding=rom_binding,
             internal_execution_id=f"modal-eval:{request.get('execution_id', 'unknown')}",
@@ -238,6 +250,7 @@ def run_child(input_path: Path, output_path: Path) -> int:
             progress=True,
             progress_description="modal checkpoint eval",
             preview_capture=preview_capture,
+            episode_video_capture=episode_video_capture,
             acceptance_contract=acceptance_contract,
             rom_binding=rom_binding,
             policy_runtime=PolicyRuntime(model, algorithm_id=algorithm_id),
@@ -248,6 +261,12 @@ def run_child(input_path: Path, output_path: Path) -> int:
     verdict = metrics.pop("acceptance_verdict", None)
     metrics.pop("acceptance_aggregates", None)
     preview: dict[str, Any] | None = None
+    video: dict[str, Any] | None = None
+    if episode_video_capture is not None:
+        video = {
+            **episode_video_capture.require_complete(),
+            "path": str(episode_video_capture.output),
+        }
     if preview_capture is not None:
         preview = {
             "status": "skipped",
@@ -281,6 +300,7 @@ def run_child(input_path: Path, output_path: Path) -> int:
             "evaluation_evidence": evaluation_evidence,
             "verdict": verdict,
             "preview": preview,
+            "video": video,
         },
     )
     return 0
@@ -382,6 +402,7 @@ def execute_attempt(
                     "rom_path": str(rom_path) if rom_path is not None else None,
                     "rom_asset_manifest": dict(asset) if isinstance(asset, Mapping) else None,
                     "preview": payload.get("preview"),
+                    "video": payload.get("video"),
                 },
             )
             child_environment = os.environ.copy()
@@ -435,6 +456,30 @@ def execute_attempt(
                                 "object_uri": str(preview_request["object_uri"]),
                                 "sha256": file_sha256(preview_path),
                             }
+            video: dict[str, Any] | None = None
+            video_request = payload.get("video")
+            if isinstance(video_request, Mapping):
+                child_video = child_result.get("video")
+                if not isinstance(child_video, Mapping):
+                    raise ValueError("evaluation result is missing its declared episode video")
+                video_path = Path(str(child_video.get("path") or "")).resolve()
+                if not video_path.is_relative_to(root.resolve()) or not video_path.is_file():
+                    raise ValueError("evaluation episode video path is invalid")
+                if child_video.get("episode_id") != video_request["episode_id"]:
+                    raise ValueError("evaluation episode video identity mismatch")
+                size = video_path.stat().st_size
+                if size < 1 or size > int(video_request["max_bytes"]):
+                    raise ValueError("evaluation episode video exceeds its size budget")
+                _upload_preview(str(video_request["put_url"]), video_path, video_request)
+                video = {
+                    "episode_id": str(child_video["episode_id"]),
+                    "frames": int(child_video["frames"]),
+                    "bytes": size,
+                    "content_type": "video/mp4",
+                    "source": str(child_video["source"]),
+                    "object_uri": str(video_request["object_uri"]),
+                    "sha256": file_sha256(video_path),
+                }
             result.update(
                 status="succeeded",
                 duration_seconds=time.monotonic() - started,
@@ -442,6 +487,7 @@ def execute_attempt(
                 evaluation_evidence=child_result.get("evaluation_evidence"),
                 verdict=child_result.get("verdict"),
                 preview=preview,
+                video=video,
             )
     except subprocess.TimeoutExpired:
         result.update(status="failed", error="eval child timeout")

@@ -19,7 +19,7 @@ from gradlab.model_sources import (
     NoDefaultPublicRunCheckpointError,
     is_public_checkpoint_manifest_ref,
 )
-from gradlab.play_web import idle_playback_snapshot
+from gradlab.play_engine import idle_playback_snapshot
 from gradlab.play_processing import (
     PLAYER_PROCESSING_FEATURES,
     normalize_player_processing,
@@ -366,6 +366,19 @@ class PlaybackHost:
                 frames,
             )
 
+    def read_diagnostics(self, epoch, request):
+        with self._lock:
+            if epoch != self._session_epoch or self._active is None or self._phase != "active":
+                raise ValueError("the Playback Session has been replaced")
+            diagnostics = getattr(self._active.runner, "diagnostics", None)
+            if diagnostics is None:
+                raise ValueError(f"episode {request.kind} history is unavailable")
+        result = diagnostics.read(request)
+        with self._lock:
+            if epoch != self._session_epoch or self._phase != "active":
+                raise ValueError("the Playback Session has been replaced")
+        return result
+
     def inspect_recorded_step(self, epoch: int, episode_id: str, step: int) -> dict[str, Any]:
         with self._lock:
             if epoch != self._session_epoch or self._active is None or self._phase != "active":
@@ -373,7 +386,10 @@ class PlaybackHost:
             inspect = getattr(self._active.runner, "inspect_recorded_step", None)
             if inspect is None:
                 raise ValueError("this Playback source does not support recorded inspection")
-            result = inspect(episode_id, step)
+        result = inspect(episode_id, step)
+        with self._lock:
+            if epoch != self._session_epoch or self._active is None or self._phase != "active":
+                raise ValueError("the Playback Session has been replaced")
             result["snapshot"].update(session_epoch=epoch, app=self._app_payload())
             return result
 
@@ -392,7 +408,7 @@ class PlaybackHost:
             return None
 
     def _response(self, command, *, ok: bool, **extra: Any) -> None:
-        from gradlab.play_web import PlaybackResponse
+        from gradlab.play_engine import PlaybackResponse
 
         self._responses.put(
             PlaybackResponse(
@@ -534,7 +550,7 @@ class PlaybackHost:
             active = self._active
         if active is not None:
             try:
-                from gradlab.play_web import PlaybackCommand
+                from gradlab.play_engine import PlaybackCommand
 
                 active.runner.submit(
                     PlaybackCommand(uuid.uuid4().hex, "application", "pause", {}, None)

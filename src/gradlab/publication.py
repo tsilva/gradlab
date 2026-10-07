@@ -30,6 +30,7 @@ from gradlab.metric_names import (
     EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MIN,
     EVAL_FULL_PROGRESS_X_MAX,
 )
+from gradlab.model_sources import DEFAULT_PUBLIC_MODELS_BASE_URL
 from gradlab.env_registry import environment_spec
 from gradlab.policy_bundle import (
     PolicyBundle,
@@ -446,6 +447,10 @@ def policy_lineage_contract(
         },
         "reward": deepcopy(task.get("reward")),
         "discount": deepcopy(value_contract.get("discount")),
+        **(
+            {"discount_schedule": deepcopy(value_contract["discount_schedule"])}
+            if "discount_schedule" in value_contract else {}
+        ),
         "signals": deepcopy(task.get("signals")),
         "events": deepcopy(task.get("events")),
         "starts": {
@@ -699,6 +704,9 @@ def publication_source_from_policy_bundle(
     checkpoint_step = _required_int(checkpoint.get("step"), label="model.json checkpoint.step")
     if checkpoint_step != evaluation.checkpoint_step:
         raise ValueError("model.json checkpoint_step disagrees with evaluation")
+    tracking = ((bundle.recipe.get("recipe") or {}).get("train_config") or {}).get(
+        "tracking", {}
+    )
     return {
         "repository": "https://github.com/tsilva/gradlab",
         "commit": commit,
@@ -709,9 +717,14 @@ def publication_source_from_policy_bundle(
         "run_name": _required_text(
             provenance.get("run_name"), label="model.json provenance.run_name"
         ),
-        "wandb_project": _required_text(
-            provenance.get("wandb_project"),
-            label="model.json provenance.wandb_project",
+        "wandb_project": (
+            _required_text(
+                provenance.get("wandb_project"),
+                label="model.json provenance.wandb_project",
+            )
+            if tracking.get("backend", "wandb") == "wandb"
+            and tracking.get("delivery", "online") == "online"
+            else str(provenance.get("wandb_project") or "")
         ),
         "recipe": _required_text(
             provenance.get("recipe_slug"), label="model.json provenance.recipe_slug"
@@ -933,7 +946,11 @@ def render_model_card(
         ]
     quick_start = "\n".join(quick_start_lines)
     run_name = _required_text(source.get("run_name"), label="manifest source.run_name")
-    run_value = f"[{_markdown_value(run_name)}]({wandb_url})" if wandb_url else run_name
+    run_url = wandb_url or (
+        f"{DEFAULT_PUBLIC_MODELS_BASE_URL.rstrip('/')}/runs/{run_id}/index.json"
+        if run_id else ""
+    )
+    run_value = f"[{_markdown_value(run_name)}]({run_url})" if run_url else run_name
     replay_value = manifest.get("replay")
     replay = replay_value if isinstance(replay_value, Mapping) else None
     replay_execution = (
@@ -1148,7 +1165,7 @@ def render_historical_model_card(manifest: Mapping[str, Any]) -> str:
         "the current publication identity; and `replay.mp4` is representative media.\n\n"
         "## Limitations\n\n"
         "This historical import failed its recorded acceptance contract and cannot establish "
-        "acceptance, promotion, or featured status. Results apply only to the recorded source "
+        "acceptance or promotion. Results apply only to the recorded source "
         "runtime, environment, checkpoint, seeds, and evaluation contract.\n\n"
         "## Licensing\n\n"
         "The policy weights and publication material are licensed under the repository `LICENSE`. "
@@ -1339,7 +1356,6 @@ def build_release_manifest(
         "publication": dict(publication),
         "containers": {
             "environment": environment_container,
-            "featured": "GradLab — Featured Research",
         },
         "comparison": dict(comparison or {"comparable": False, "reason": "no prior release selected"}),
         "history": history_value,
@@ -1437,7 +1453,6 @@ def build_historical_release_manifest(
         "publication": deepcopy(dict(publication)),
         "containers": {
             "environment": f"GradLab — {identity.canonical_environment_id}",
-            "featured": "GradLab — Featured Research",
         },
         "comparison": {
             "comparable": False,
