@@ -23,7 +23,15 @@ The Dockerfile preserves three independently cacheable layers:
 
 `uv.lock` is the dependency source of truth. The checked-in Linux lock
 projections must remain disjoint and reconstruct the complete training
-environment:
+environment. After changing `uv.lock`, regenerate the projections and commit
+them with the dependency update:
+
+```bash
+uv run --frozen --only-group train-image-build \
+  python containers/train/lock_projection.py
+```
+
+CI checks the generated files against the locked graph:
 
 ```bash
 uv run --frozen --only-group train-image-build \

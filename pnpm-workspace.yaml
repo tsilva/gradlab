@@ -3,3 +3,7 @@ packages:
 
 minimumReleaseAge: 10080
 blockExoticSubdeps: true
+
+overrides:
+  devalue: 5.9.4
+  source-map-js: 1.2.2
