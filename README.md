@@ -1,8 +1,10 @@
-<div align="center">
+<p align="center">
   <img src="./logo.png" alt="gradlab" width="256" />
-
-  **🤖 RL workbench for training game agents 🎮**
-</div>
+  <br />
+  <!-- repo-tagline:start -->
+  <strong>🤖 RL workbench for training game agents 🎮</strong>
+  <!-- repo-tagline:end -->
+</p>
 
 GradLab is a Python CLI and reproducible reinforcement-learning workbench for
 researchers who train, evaluate, compare, inspect, and publish game agents. It
