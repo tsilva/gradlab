@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal, TypeAlias
+from urllib.error import HTTPError
 from urllib.parse import unquote, urlparse
 
 from gradlab.file_utils import file_sha256
@@ -286,12 +287,20 @@ def public_run_checkpoint_manifest_url(
     run_id: str,
     *,
     public_base_url: str = DEFAULT_PUBLIC_MODELS_BASE_URL,
+    latest: bool = False,
 ) -> str:
     value = str(run_id).strip()
     if RUN_ID_PATTERN.fullmatch(value) is None:
         raise ValueError("run id must match gradlab-<32 lowercase hex>")
     base = str(public_base_url).strip().rstrip("/")
-    index = _public_json(f"{base}/runs/{value}/index.json")
+    try:
+        index = _public_json(f"{base}/runs/{value}/index.json")
+    except HTTPError as exc:
+        if latest and exc.code == 404:
+            raise NoDefaultPublicRunCheckpointError(
+                f"newest run {value} has no published checkpoint yet"
+            ) from exc
+        raise
     if str(index.get("run_id") or "") != value:
         raise ValueError("public run index identity mismatch")
     checkpoints: list[CheckpointManifest] = []
@@ -303,7 +312,13 @@ def public_run_checkpoint_manifest_url(
             raise ValueError("checkpoint does not belong to the public run index")
         checkpoints.append(manifest)
     promotion = index.get("promotion")
-    if promotion is not None:
+    if latest:
+        if not checkpoints:
+            raise NoDefaultPublicRunCheckpointError(
+                f"newest run {value} has no published checkpoint yet"
+            )
+        checkpoint = max(checkpoints, key=lambda row: (row.step, row.sha256))
+    elif promotion is not None:
         if not isinstance(promotion, Mapping):
             raise ValueError("public run promotion is malformed")
         checkpoint_id = str(promotion.get("checkpoint_id") or "")

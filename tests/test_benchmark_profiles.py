@@ -11,6 +11,7 @@ from unittest.mock import patch
 
 from gradlab.benchmark import main as benchmark_main, validate_benchmark_results
 from gradlab.benchmark_profiles import (
+    _assert_ppo_backend_equivalence,
     build_benchmark_commands,
     find_benchmark_profile,
     load_benchmark_profile,
@@ -22,6 +23,22 @@ from experiments.scripts.benchmarks.benchmark_env_sps import benchmark_config
 
 
 class BenchmarkProfileTests(unittest.TestCase):
+    @staticmethod
+    def _train_loop_comparison_profile():
+        # Exercise the generic comparison machinery without a retired launch recipe.
+        base = find_benchmark_profile("train-loop-throughput-mario-l11")
+        payload = {
+            **base.payload,
+            "kind": "train_loop_comparison",
+            "baseline_recipe_file": base.payload["recipe_file"],
+            "candidate_recipe_file": base.payload["recipe_file"],
+            "repeats": 2,
+            "max_candidate_slowdown": 0.10,
+        }
+        payload.pop("recipe_file")
+        payload.pop("run_name", None)
+        return replace(base, payload=payload)
+
     def test_mario_env_throughput_benchmark_always_requests_all_info(self) -> None:
         config = benchmark_config(
             argparse.Namespace(
@@ -37,14 +54,13 @@ class BenchmarkProfileTests(unittest.TestCase):
     def test_checked_in_benchmark_profiles_validate(self) -> None:
         profiles = load_benchmark_profiles()
 
-        self.assertEqual(len(profiles), 5)
+        self.assertEqual(len(profiles), 4)
         self.assertEqual(
             sorted(profile.name for profile in profiles),
             [
                 "local-smoke-mario-l11",
                 "mario-env-throughput-l11",
                 "ppo-backend-throughput-gate",
-                "train-loop-comparison-breakout-archive-curriculum",
                 "train-loop-throughput-mario-l11",
             ],
         )
@@ -193,7 +209,7 @@ goal_file: experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml
 recipe_file: experiments/goals/SuperMarioBros-Nes-v0/Level1-1/recipes/ppo.yaml
 recipe_overrides:
 - train.backend.config.timstepz=512
-required_metrics: [train/throughput/loop/rate]
+required_metrics: [train/throughput/rate]
 """,
                 encoding="utf-8",
             )
@@ -240,8 +256,8 @@ required_metrics: [train/throughput/not_real]
         self.assertEqual(train_config["wandb_mode"], "disabled")
         self.assertEqual(train_config["seed"], 123)
 
-    def test_breakout_comparison_uses_ab_ba_order_and_algorithm_neutral_config(self) -> None:
-        profile = find_benchmark_profile("train-loop-comparison-breakout-archive-curriculum")
+    def test_train_loop_comparison_uses_ab_ba_order_and_algorithm_neutral_config(self) -> None:
+        profile = self._train_loop_comparison_profile()
         commands = build_benchmark_commands(profile)
 
         self.assertEqual(
@@ -250,14 +266,18 @@ required_metrics: [train/throughput/not_real]
         )
         candidate = json.loads(commands[1].stdin or "{}")
         baseline = json.loads(commands[0].stdin or "{}")
-        self.assertNotIn("state_archive", baseline)
-        self.assertEqual(
-            candidate["state_archive"]["recorder"]["cell"]["dimensions"],
-            [{"signal": "score", "bucket_size": 50.0}],
-        )
-        self.assertEqual(candidate["state_archive"]["curriculum"]["priority_metric"], "value_error")
-        self.assertTrue(candidate["state_archive"]["curriculum"]["restore_entries"])
-        self.assertEqual(candidate["state_archive"]["curriculum"]["resolved_archive_lanes"], 3)
+        self.assertEqual(candidate["training_backend"], baseline["training_backend"])
+        self.assertEqual(candidate["task"], baseline["task"])
+
+    def test_ppo_backend_equivalence_preserves_nonempty_checkpoint_schedule_difference(self) -> None:
+        baseline = {"training_backend": {"id": "sb3.ppo", "config": {}}}
+        candidate = {
+            "training_backend": {
+                "id": "gradlab.ppo", "config": {"checkpoint_update_steps": [8192]},
+            },
+        }
+        with self.assertRaisesRegex(ValueError, "differ beyond backend identity"):
+            _assert_ppo_backend_equivalence(baseline, candidate, label="checkpoint schedule")
 
     def test_ppo_backend_gate_uses_five_pairs_and_equivalent_production_shapes(self) -> None:
         profile = find_benchmark_profile("ppo-backend-throughput-gate")
@@ -277,7 +297,7 @@ required_metrics: [train/throughput/not_real]
         )
         expected_shapes = {
             "mario": (16, 512, 512, 10),
-            "breakout": (128, 64, 256, 4),
+            "breakout": (64, 128, 512, 4),
             "vizdoom": (32, 128, 256, 4),
         }
         for case_name, shape in expected_shapes.items():
@@ -305,6 +325,7 @@ required_metrics: [train/throughput/not_real]
             candidate_config = dict(candidate_backend["config"])
             candidate_config.pop("precision")
             candidate_config.pop("execution_profile")
+            self.assertEqual(candidate_config.pop("checkpoint_update_steps"), [])
             self.assertEqual(candidate_config, baseline_backend["config"])
             self.assertEqual(
                 (
@@ -386,7 +407,7 @@ required_metrics: [train/throughput/not_real]
         )
 
     def test_train_loop_comparison_gates_candidate_slowdown(self) -> None:
-        profile = find_benchmark_profile("train-loop-comparison-breakout-archive-curriculum")
+        profile = self._train_loop_comparison_profile()
         commands = build_benchmark_commands(profile)
         prepared = []
         results = []
@@ -400,13 +421,13 @@ required_metrics: [train/throughput/not_real]
                 store.init()
                 is_candidate = command.label.startswith("candidate-")
                 payload = {
-                    "train/throughput/loop/rate": 95.0 if is_candidate else 100.0,
+                    "train/throughput/rate": 95.0 if is_candidate else 100.0,
                 }
                 if is_candidate:
                     payload.update(
                         {
-                            "train/curriculum/archive/transition/share": 0.2,
-                            "train/curriculum/archive/capture/call/count": 1.0,
+                            "train/curriculum/transitions/fraction": 0.2,
+                            "train/curriculum/capture/count": 1.0,
                         }
                     )
                 store.append_metrics(payload, step=1, source="test", publish=False)

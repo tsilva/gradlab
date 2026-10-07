@@ -309,7 +309,7 @@ def test_admission_v3_is_idempotent_and_playlist_is_not_operator_input(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     service = _service(tmp_path, monkeypatch)
-    settings = {"privacy": "public", "feature": True, "tags": []}
+    settings = {"privacy": "public", "tags": []}
     first = service.admit(settings, credential_result=_credentials())
     repeated = service.admit(settings, credential_result=_credentials())
     assert first["created"] is True
@@ -319,13 +319,23 @@ def test_admission_v3_is_idempotent_and_playlist_is_not_operator_input(
     assert "playlist" not in subject["payload"]
 
 
-def test_admission_rejects_changed_editorial_request_for_same_capture(
+def test_admission_rejects_changed_request_for_same_capture(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     service = _service(tmp_path, monkeypatch)
-    service.admit({"privacy": "public", "feature": False}, credential_result=_credentials())
+    service.admit({"privacy": "public"}, credential_result=_credentials())
     with pytest.raises(PublicationConflict, match="immutable publication request"):
-        service.admit({"privacy": "public", "feature": True}, credential_result=_credentials())
+        service.admit({"privacy": "unlisted"}, credential_result=_credentials())
+
+
+def test_featured_collection_is_retired(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    service = _service(tmp_path, monkeypatch)
+    with pytest.raises(ValueError, match="Featured Research has been retired"):
+        service.preview({"feature": True})
+    with pytest.raises(ValueError, match="Featured Research has been retired"):
+        service.admit({"feature": True}, credential_result=_credentials())
 
 
 def test_full_digest_prefix_collision_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:

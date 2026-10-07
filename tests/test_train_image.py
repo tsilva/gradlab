@@ -39,6 +39,7 @@ class TrainImageTests(unittest.TestCase):
         self.assertIn("containers/train/vizdoom_smoke.py", RUNTIME_INPUT_PATHS)
         self.assertIn("experiments/goals", RUNTIME_INPUT_PATHS)
         self.assertIn("experiments/recipes", RUNTIME_INPUT_PATHS)
+        self.assertIn("experiments/tracking.yaml", RUNTIME_INPUT_PATHS)
         self.assertIn("src", RUNTIME_INPUT_PATHS)
         self.assertIn("pyproject.toml", RUNTIME_INPUT_PATHS)
         self.assertNotIn("uv.lock", RUNTIME_INPUT_PATHS)
@@ -58,9 +59,15 @@ class TrainImageTests(unittest.TestCase):
             with self.subTest(source=source):
                 source_path = Path(source)
                 self.assertTrue(source_path.exists())
-                self.assertIn(source, RUNTIME_INPUT_PATHS)
-                destination = "./" if source_path.is_file() else f"./{source}"
-                self.assertIn(f"COPY {source} {destination}", app_package)
+                inputs = [path for path in RUNTIME_INPUT_PATHS if source_path.is_relative_to(path)]
+                self.assertTrue(inputs, f"{source} is not covered by the runtime identity")
+                self.assertTrue(
+                    any(
+                        f"COPY {path} {'./' if Path(path).is_file() else f'./{path}'}" in app_package
+                        for path in inputs
+                    ),
+                    f"{source} is not copied into the package build",
+                )
 
     def test_modal_deploy_group_covers_config_runtime(self) -> None:
         project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
@@ -80,6 +87,9 @@ class TrainImageTests(unittest.TestCase):
             source = root / "src" / "module.py"
             source.parent.mkdir(parents=True)
             source.write_text("VALUE = 1\n", encoding="utf-8")
+            frontend = root / "frontend" / "Shell.svelte"
+            frontend.parent.mkdir()
+            frontend.write_text("<main>Player</main>\n", encoding="utf-8")
             dockerfile = root / "containers" / "train" / "Dockerfile"
             dockerfile.parent.mkdir(parents=True)
             dockerfile.write_text(
@@ -99,6 +109,12 @@ class TrainImageTests(unittest.TestCase):
             ignored.write_text("version = 1\n", encoding="utf-8")
             subprocess.run(["git", "add", "."], cwd=root, check=True)
             baseline = overlay_key(repo_root=root)
+
+            frontend.write_text("<main>Updated player</main>\n", encoding="utf-8")
+            subprocess.run(["git", "add", "frontend"], cwd=root, check=True)
+            updated_frontend = overlay_key(repo_root=root)
+            self.assertNotEqual(updated_frontend, baseline)
+            baseline = updated_frontend
 
             ignored.write_text("version = 2\n", encoding="utf-8")
             subprocess.run(["git", "add", "uv.lock"], cwd=root, check=True)
@@ -328,8 +344,9 @@ class TrainImageTests(unittest.TestCase):
 
         self.assertIn("env-vizdoom-turbo==1.3.0.post30", dependencies)
         self.assertIn("env-gradoom-turbo-torch==0.2.1", dependencies)
-        self.assertIn("env-breakoutatari2600-turbo-native==0.5.12", dependencies)
+        self.assertIn("env-breakoutatari2600-turbo-native==0.5.15", dependencies)
         self.assertIn("box2d-py==2.3.5", dependencies)
+        self.assertIn("mlflow-skinny==3.16.1", dependencies)
         self.assertNotIn("wandb-workspaces==", gpu + dependencies)
         self.assertIn("torch==2.13.0", gpu)
         gpu_lines = set(gpu.splitlines())
@@ -337,7 +354,7 @@ class TrainImageTests(unittest.TestCase):
         self.assertFalse(gpu_lines & dependency_lines)
         self.assertEqual(
             train_plan_sha256(root),
-            "3c867758d1cf7764c59cab6ed31a4705eb7f70a627dde1092b4fcb2177c51a2d",
+            "643e851bd9cc5bc1dece74191e03c8ec89cc721c8e320f3f50d8b1d7e9a6c40b",
         )
         for line in gpu.splitlines():
             name = line.split("==", maxsplit=1)[0]

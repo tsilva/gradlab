@@ -14,9 +14,10 @@ from multiprocessing.connection import Connection
 from multiprocessing.process import BaseProcess
 from typing import Any
 
+from gradlab.play_diagnostics import DiagnosticRead
 from gradlab.operator_credentials import PROTECTED_ENV_NAMES
 from gradlab.play_runtime import PlaySourceSpec
-from gradlab.play_web import idle_playback_snapshot
+from gradlab.play_engine import idle_playback_snapshot
 
 
 PLAYBACK_RPC_TIMEOUT_SECONDS = 30.0
@@ -34,6 +35,8 @@ def _worker_main(
     host = None
     transfers = ThreadPoolExecutor(max_workers=2, thread_name_prefix="gradlab-trajectory-transfer")
     jobs = {}
+    reads = ThreadPoolExecutor(max_workers=4, thread_name_prefix="gradlab-diagnostic-read")
+    read_jobs = {}
     try:
         signal.signal(signal.SIGINT, signal.SIG_IGN)
         leaked = sorted(name for name in PROTECTED_ENV_NAMES if os.environ.get(name))
@@ -61,6 +64,36 @@ def _worker_main(
                 host.stop()
                 connection.send({"ok": True, "value": None})
                 return
+            if operation in {"begin_read", "poll_read"}:
+                try:
+                    if operation == "begin_read":
+                        if len(read_jobs) >= 8:
+                            raise ValueError("too many pending diagnostic reads")
+                        kind = request["kind"]
+                        if kind not in {"diagnostics", "inspect_recorded_step"}:
+                            raise ValueError("unsupported diagnostic read")
+                        value = uuid.uuid4().hex
+                        if kind == "inspect_recorded_step":
+                            future = reads.submit(
+                                host.inspect_recorded_step, request["epoch"],
+                                request["episode_id"], request["step"],
+                            )
+                        else:
+                            query = DiagnosticRead(**request["query"])
+                            future = reads.submit(host.read_diagnostics, request["epoch"], query)
+                        read_jobs[value] = future
+                    else:
+                        future = read_jobs[request["job_id"]]
+                        value = {"done": future.done()}
+                        if future.done():
+                            del read_jobs[request["job_id"]]
+                            value["result"] = future.result()
+                    connection.send({"ok": True, "value": value})
+                except Exception as exc:
+                    connection.send(
+                        {"ok": False, "error_type": type(exc).__name__, "error": str(exc)}
+                    )
+                continue
             if operation in {"begin_trajectory", "poll_trajectory"}:
                 try:
                     if operation == "begin_trajectory":
@@ -90,22 +123,15 @@ def _worker_main(
                 continue
             if operation == "start":
                 value = host.start()
+            elif operation == "playback_updates":
+                from gradlab.play_engine import playback_updates
+                value = playback_updates(host)
             elif operation == "snapshot":
                 value = host.snapshot()
             elif operation == "drain_snapshot_updates":
                 value = host.drain_snapshot_updates()
             elif operation == "history_payload":
                 value = host.history_payload()
-            elif operation == "inspect_recorded_step":
-                try:
-                    value = host.inspect_recorded_step(
-                        request["epoch"], request["episode_id"], request["step"]
-                    )
-                except (ValueError, OSError) as exc:
-                    connection.send(
-                        {"ok": False, "error_type": type(exc).__name__, "error": str(exc)}
-                    )
-                    continue
             elif operation == "episode_start_payload":
                 value = host.episode_start_payload()
             elif operation == "poll_response":
@@ -169,6 +195,7 @@ def _worker_main(
                 host.stop()
             except Exception:
                 pass
+        reads.shutdown(wait=True, cancel_futures=True)
         transfers.shutdown(wait=True, cancel_futures=True)
         for kind, future in jobs.values():
             if kind == "freeze" and not future.cancelled() and future.exception() is None:
@@ -356,9 +383,26 @@ class IsolatedPlaybackHost:
     def history_payload(self) -> dict[str, Any]:
         return dict(self._rpc("history_payload"))
 
+    def playback_updates(self):
+        return self._rpc("playback_updates")
+
+    def _read(self, kind, *, poll_interval=0.01, **payload):
+        job = self._rpc("begin_read", kind=kind, **payload)
+        while True:
+            result = self._rpc("poll_read", job_id=job)
+            if result["done"]:
+                return result["result"]
+            time.sleep(poll_interval)
+
+    def read_diagnostics(self, epoch, request: DiagnosticRead):
+        from dataclasses import asdict
+
+        return dict(self._read("diagnostics", epoch=epoch, query=asdict(request)))
+
     def inspect_recorded_step(self, epoch: int, episode_id: str, step: int) -> dict[str, Any]:
         return dict(
-            self._rpc("inspect_recorded_step", epoch=epoch, episode_id=episode_id, step=step)
+            self._read("inspect_recorded_step", epoch=epoch, episode_id=episode_id,
+                       step=step, poll_interval=0.001)
         )
 
     def episode_start_payload(

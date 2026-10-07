@@ -8,6 +8,7 @@ from typing import Any
 
 from gradlab.config_loader import load_mapping_document
 from gradlab.metric_names import (
+    MONITORING_SCALAR_METRICS,
     METRIC_DEFINITIONS,
     TRAIN_GLOBAL_STEP,
     metric_definition,
@@ -23,7 +24,9 @@ WORKSPACE_SCHEMA_VERSION = 4
 DEFAULT_WORKSPACE_MANIFEST = Path("experiments/goals/_workspaces.yaml")
 _SAFE_ID = re.compile(r"^[a-z][a-z0-9_-]*$")
 _RUN_SCOPES = frozenset({"all", "current_metrics_schema"})
-_PANEL_KINDS = frozenset({"line"})
+_PANEL_KINDS = frozenset(
+    {"line", "train_eval", "media", "occupancy", "occupancy_recent", "occupancy_cumulative", "curriculum"}
+)
 _WORKSPACE_GRID_WIDTH = 24
 
 
@@ -193,8 +196,8 @@ def _panel_spec(panel_id: str, value: Any, *, label: str) -> WorkspacePanelSpec:
         _text(document.get("x"), label=f"{label}.x"),
         label=f"{label}.x",
     )
-    if x != TRAIN_GLOBAL_STEP:
-        raise ValueError(f"{label}.x must equal {TRAIN_GLOBAL_STEP}")
+    if x not in {TRAIN_GLOBAL_STEP, "eval/step"}:
+        raise ValueError(f"{label}.x must equal train/step or eval/step")
     raw_y = document.get("y", ())
     if not isinstance(raw_y, Sequence) or isinstance(raw_y, str | bytes):
         raise ValueError(f"{label}.y must be a list")
@@ -204,6 +207,11 @@ def _panel_spec(panel_id: str, value: Any, *, label: str) -> WorkspacePanelSpec:
         )
         for index, item in enumerate(raw_y)
     )
+    if kind == "train_eval" and (x != TRAIN_GLOBAL_STEP or y != (
+        "train/progress/bricks_destroyed_normalized/mean",
+        "eval/progress/bricks_destroyed_normalized/mean",
+    )):
+        raise ValueError(f"{label} train_eval requires the train/eval normalized brick means")
     raw_templates = document.get("metric_templates", ())
     if not isinstance(raw_templates, Sequence) or isinstance(raw_templates, str | bytes):
         raise ValueError(f"{label}.metric_templates must be a list")
@@ -216,8 +224,18 @@ def _panel_spec(panel_id: str, value: Any, *, label: str) -> WorkspacePanelSpec:
     )
     if not y and not metric_templates:
         raise ValueError(f"{label} must declare y or metric_templates")
+    if kind == "media" and (metric_templates or any(metric_definition(name).unit != "video" for name in y)):
+        raise ValueError(f"{label} media panels require explicit video metrics")
+    if x == "eval/step" and any(metric_definition(name).axis != x for name in (*y, *metric_templates)):
+        raise ValueError(f"{label} evaluation panels require checkpoint-axis metrics")
     if len(set((*y, *metric_templates))) != len((*y, *metric_templates)):
         raise ValueError(f"{label} metric declarations must be unique")
+    if kind == "curriculum" and (y != ("train/curriculum/distribution",) or metric_templates):
+        raise ValueError("curriculum panels require exactly train/curriculum/distribution")
+    if kind in {"occupancy", "occupancy_recent", "occupancy_cumulative"} and (
+        y != ("train/occupancy/table",) or metric_templates
+    ):
+        raise ValueError("occupancy panels require exactly train/occupancy/table")
     y_title = document.get("y_title")
     if y_title is not None:
         y_title = _text(y_title, label=f"{label}.y_title")
@@ -269,9 +287,7 @@ def _section_spec(section_id: str, value: Any, *, label: str) -> WorkspaceSectio
                 label=f"{label}.panels[{index}]",
             )
         )
-    columns = _bounded_int(
-        document.get("columns"), minimum=1, maximum=4, label=f"{label}.columns"
-    )
+    columns = _bounded_int(document.get("columns"), minimum=1, maximum=4, label=f"{label}.columns")
     slot_width = _WORKSPACE_GRID_WIDTH // columns
     too_wide = [panel.panel_id for panel in panels if panel.width > slot_width]
     if too_wide:
@@ -331,20 +347,14 @@ def _profile_sections_without_panels(
     label: str,
 ) -> tuple[WorkspaceSectionSpec, ...]:
     excluded = set(excluded_panel_ids)
-    available = {
-        panel.panel_id
-        for section in profile.sections
-        for panel in section.panels
-    }
+    available = {panel.panel_id for section in profile.sections for panel in section.panels}
     unknown = sorted(excluded - available)
     if unknown:
         raise ValueError(f"{label} references unknown panel(s): {', '.join(unknown)}")
     sections = tuple(
         replace(
             section,
-            panels=tuple(
-                panel for panel in section.panels if panel.panel_id not in excluded
-            ),
+            panels=tuple(panel for panel in section.panels if panel.panel_id not in excluded),
         )
         for section in profile.sections
     )
@@ -467,12 +477,8 @@ def load_workspace_declaration(
             + ", ".join(unknown_projects)
         )
     assignments = {project: default_profile for project in discovered_projects}
-    panel_exclusions: dict[str, tuple[str, ...]] = {
-        project: () for project in discovered_projects
-    }
-    metric_exclusions: dict[str, tuple[str, ...]] = {
-        project: () for project in discovered_projects
-    }
+    panel_exclusions: dict[str, tuple[str, ...]] = {project: () for project in discovered_projects}
+    metric_exclusions: dict[str, tuple[str, ...]] = {project: () for project in discovered_projects}
     for project, raw_override in project_overrides.items():
         override = _mapping(raw_override, label=f"{path}.projects.{project}")
         _reject_unknown(
@@ -489,9 +495,7 @@ def load_workspace_declaration(
             )
         assignments[project] = profile_id
         raw_exclusions = override.get("exclude_panels", ())
-        if not isinstance(raw_exclusions, Sequence) or isinstance(
-            raw_exclusions, str | bytes
-        ):
+        if not isinstance(raw_exclusions, Sequence) or isinstance(raw_exclusions, str | bytes):
             raise ValueError(f"{path}.projects.{project}.exclude_panels must be a list")
         panel_exclusions[project] = tuple(
             _identifier(
@@ -572,30 +576,64 @@ def _resolve_project_metrics(
         for recipe in sorted((path.parent / "recipes").glob("*.yaml")):
             config = compose_train_document(path, recipe)["train_config"]
             available.update(resolve_metric_inventory(config).names)
+            # Monitoring can be enabled at launch even when recipes default it off.
+            if (
+                config.get("game") == "Breakout-Atari2600-v0"
+                and config.get("env_provider") == "env-breakoutatari2600-turbo-native"
+                and config["training_backend"]["id"] in {"gradlab.ppo", "sb3.ppo", "sb3.a2c"}
+            ):
+                available.update(MONITORING_SCALAR_METRICS | {"eval/monitor/video"})
+            # Keep the entry points available for runs enabled through launch-time overrides.
+            from gradlab.occupancy import TRACKING_COMBINATIONS
+
+            if (config["training_backend"]["id"], config["env_provider"]) in TRACKING_COMBINATIONS:
+                available.add("train/occupancy/table")
+                if config["training_backend"]["id"] != "gradlab.go-explore":
+                    available.add("train/curriculum/distribution")
     inventory = MetricInventory(frozenset(available), ())
     sections: list[WorkspaceSectionSpec] = []
     primary: set[str] = set()
     if spec.primary_metrics == "goal_rank":
         orders = {tuple(goal["objective"]["rank"]) for goal in goals}
         if len(orders) != 1:
-            raise ValueError(f"{spec.project} has different goal rankings; select an explicit project profile with primary_metrics: none")
+            raise ValueError(
+                f"{spec.project} has different goal rankings; select an explicit project profile with primary_metrics: none"
+            )
         panels: list[WorkspacePanelSpec] = []
         for criterion in require_objective_rank(next(iter(orders))):
             name = criterion.metric
             definition = metric_definition(name)
-            if definition is None or definition.placement != "history" or definition.axis == name or name in primary:
+            if (
+                definition is None
+                or definition.placement != "history"
+                or definition.axis == name
+                or name in primary
+            ):
                 continue
             primary.add(name)
-            panels.append(WorkspacePanelSpec(
-                panel_id=f"primary_{len(panels)}", kind="line", x=definition.axis,
-                y=(name,), metric_templates=(), width=12, height=8,
-                y_title=definition.unit,
-            ))
+            panels.append(
+                WorkspacePanelSpec(
+                    panel_id=f"primary_{len(panels)}",
+                    kind="line",
+                    x=definition.axis,
+                    y=(name,),
+                    metric_templates=(),
+                    width=12,
+                    height=8,
+                    y_title=definition.unit,
+                )
+            )
         if panels:
-            sections.append(WorkspaceSectionSpec(
-                section_id="goal_primary", title="Primary metrics", pinned=True,
-                is_open=True, columns=2, panels=tuple(panels),
-            ))
+            sections.append(
+                WorkspaceSectionSpec(
+                    section_id="goal_primary",
+                    title="Primary metrics",
+                    pinned=True,
+                    is_open=True,
+                    columns=2,
+                    panels=tuple(panels),
+                )
+            )
     for section in spec.sections:
         panels = []
         for panel in section.panels:
@@ -618,13 +656,19 @@ def compile_workspace_specs(
     for path in sorted((repo_root / "experiments/goals").rglob("_goal.yaml")):
         goal = load_goal_contract(path, repo_root)
         environment = goal["train"]["environment"]
-        project_name = resolve_wandb_project(None, environment["env_config"]["game"], env_provider=environment["env_provider"])
+        project_name = resolve_wandb_project(
+            None, environment["env_config"]["game"], env_provider=environment["env_provider"]
+        )
         sources.setdefault(project_name, []).append((path, goal))
     specs = load_workspace_declaration(
         repo_root / DEFAULT_WORKSPACE_MANIFEST,
         projects=tuple(sorted(sources)),
     )
-    specs = tuple(_resolve_project_metrics(spec, sources[spec.project]) for spec in specs if project is None or spec.project == project)
+    specs = tuple(
+        _resolve_project_metrics(spec, sources[spec.project])
+        for spec in specs
+        if project is None or spec.project == project
+    )
     if project is None:
         return specs
     selected = tuple(spec for spec in specs if spec.project == project)

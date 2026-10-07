@@ -1,6 +1,12 @@
 defaults:
 - ../_gymnasium-classic-control-common@_global_
 - _self_
+objective:
+  # Gymnasium registry threshold for reaching the hill efficiently.
+  training_success:
+    metric: train/return/mean
+    operator: '>='
+    threshold: -110
 title: Gymnasium MountainCar summit benchmark
 train:
   checkpoint_freq: 100000

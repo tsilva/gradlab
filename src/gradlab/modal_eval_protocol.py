@@ -8,6 +8,7 @@ from gradlab.checkpoint_acceptance import (
     SEED_PROTOCOL,
     acceptance_aggregates,
     evaluate_acceptance,
+    manifest_index,
     validate_episode_rows,
 )
 from gradlab.json_utils import canonical_json_sha256
@@ -35,6 +36,7 @@ _RESULT_FIELDS = frozenset(
         "evaluation_evidence",
         "verdict",
         "preview",
+        "video",
         "error",
     }
 )
@@ -223,6 +225,29 @@ def validate_attempt_result(
         episodes,
         contract=contract,
     )
+    video = result.get("video")
+    if contract.get("record_episode") is True:
+        if not isinstance(video, Mapping):
+            raise ValueError("evaluation result is missing its required episode video")
+        if str(video.get("episode_id") or "") != "lane-00-episode-000":
+            raise ValueError("evaluation video is not the selected manifest episode")
+        if str(manifest_index(contract).get((0, 0), {}).get("episode_id") or "") != video[
+            "episode_id"
+        ]:
+            raise ValueError("evaluation video is not declared in the manifest")
+        if video.get("content_type") != "video/mp4" or video.get("source") != "native_rgb":
+            raise ValueError("evaluation video format or source is invalid")
+        if not isinstance(video.get("bytes"), int) or not 0 < video["bytes"] <= 256 * 1024**2:
+            raise ValueError("evaluation video size is invalid")
+        if not isinstance(video.get("frames"), int) or video["frames"] < 2:
+            raise ValueError("evaluation video frame count is invalid")
+        _sha256(video.get("sha256"), label="evaluation video sha256")
+        if not str(video.get("object_uri") or "").startswith("s3://") and not str(
+            video.get("object_uri") or ""
+        ).startswith("file://"):
+            raise ValueError("evaluation video object URI is invalid")
+    elif video is not None:
+        raise ValueError("evaluation result has an undeclared episode video")
     computed = acceptance_aggregates(validated_rows, contract=contract)
     _validate_finite(validated_rows, label="eval episodes")
     complete = len(validated_rows) == int(contract["episodes"])
@@ -281,6 +306,7 @@ def normalize_attempt_result(
         episodes,
         result.get("evaluation_evidence") or {},
         result.get("preview") or {},
+        result.get("video") or {},
     ]
     return {
         "status": status,
@@ -293,4 +319,5 @@ def normalize_attempt_result(
             if value not in (None, {}, [])
         ],
         "error": error,
+        "video": dict(result["video"]) if isinstance(result.get("video"), Mapping) else None,
     }

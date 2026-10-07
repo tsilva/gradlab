@@ -12,6 +12,7 @@ from collections.abc import Mapping
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import asdict, is_dataclass
+from functools import lru_cache
 import json
 import math
 import re
@@ -25,6 +26,7 @@ import threading
 from typing import Any
 import uuid
 import zipfile
+import zlib
 
 import numpy as np
 
@@ -53,27 +55,42 @@ TREE_COLUMNS = (
 )
 
 
+@lru_cache(maxsize=4096)
+def _portable_metadata_key(key: str) -> bool:
+    # Cache field-name classification only, never values or mutable snapshots.
+    return not is_secret_like_key(key) and key not in {
+        "hostname",
+        "host",
+        "ssh",
+        "operator",
+        "endpoint",
+        "object_uri",
+    }
+
+
 def portable_metadata(value: Any) -> Any:
     """Remove private configuration fields without changing scientific numeric data."""
-    if is_dataclass(value) and not isinstance(value, type):
-        value = asdict(value)
+    kind = type(value)
+    if value is None or kind in (bool, int, float):
+        return value
+    if isinstance(value, str):
+        if value.startswith(("/", "~", "s3://", "r2://", "file://")) or (
+            "://" in value and any(part in value for part in ("?", "@"))
+        ):
+            return "[private location omitted]"
+        return value
     if isinstance(value, Mapping):
         return {
             str(key): portable_metadata(item)
             for key, item in value.items()
-            if not is_secret_like_key(str(key))
-            and str(key) not in {"hostname", "host", "ssh", "operator", "endpoint", "object_uri"}
+            if _portable_metadata_key(str(key))
         }
     if isinstance(value, tuple | list):
         return [portable_metadata(item) for item in value]
     if isinstance(value, Path):
         return "[local path omitted]"
-    if isinstance(value, str) and (
-        value.startswith(("/", "~", "s3://", "r2://", "file://"))
-        or "://" in value
-        and any(part in value for part in ("?", "@"))
-    ):
-        return "[private location omitted]"
+    if is_dataclass(value) and not isinstance(value, type):
+        return portable_metadata(asdict(value))
     return value
 
 
@@ -84,6 +101,13 @@ def encode_tree(value: Any) -> dict[str, Any]:
     def node(item: Any, depth: int = 0) -> Any:
         if depth > 32:
             raise ValueError("trajectory structure exceeds 32 levels")
+        # Most snapshot leaves are native JSON scalars. Avoid the NumPy and ABC
+        # dispatch for each leaf, but keep NumPy scalars on the exact-array path.
+        kind = type(item)
+        if item is None or kind in (str, bool, int):
+            return ["scalar", item]
+        if kind is float and math.isfinite(item):
+            return ["scalar", item]
         if isinstance(item, np.ndarray | np.generic):
             array = np.asarray(item)
             if array.dtype.kind not in "buifc" or array.ndim > 16:
@@ -157,11 +181,17 @@ def decode_tree(tree: Mapping[str, Any]) -> Any:
     return node(json.loads(tree["structure"]))
 
 
-def pack_record(value: Any) -> bytes:
+def pack_record(value: Any, *, compress: bool = False) -> bytes:
     tree = encode_tree(value)
     buffers = []
     for leaf in tree["arrays"]:
         data = leaf.pop("data")
+        if compress and len(data) >= 1024:
+            encoded = zlib.compress(data, level=1)
+            if len(encoded) < len(data):
+                leaf["compression"] = "zlib"
+                leaf["decoded_size"] = len(data)
+                data = encoded
         leaf["size"] = len(data)
         buffers.append(data)
     header = json.dumps(tree, separators=(",", ":")).encode()
@@ -178,8 +208,22 @@ def unpack_record(data: bytes) -> Any:
     offset = HEADER.size + size
     for leaf in tree["arrays"]:
         length = leaf.pop("size")
-        leaf["data"] = data[offset : offset + length]
+        encoded = data[offset : offset + length]
         offset += length
+        compression = leaf.pop("compression", None)
+        if compression is None:
+            leaf["data"] = encoded
+        elif compression == "zlib":
+            decoded_size = leaf.pop("decoded_size", None)
+            if type(decoded_size) is not int or not 0 <= decoded_size <= MAX_RECORD_BYTES:
+                raise ValueError("invalid compressed trajectory array size")
+            decoder = zlib.decompressobj()
+            decoded = decoder.decompress(encoded, decoded_size + 1)
+            if not decoder.eof or decoder.unused_data or decoder.unconsumed_tail or len(decoded) != decoded_size:
+                raise ValueError("invalid compressed trajectory array")
+            leaf["data"] = decoded
+        else:
+            raise ValueError("unsupported trajectory array compression")
     if offset != len(data):
         raise ValueError("invalid trajectory record length")
     return decode_tree(tree)
@@ -196,6 +240,7 @@ class EpisodeRecording:
         buffer_bytes: int = BUFFER_BYTES,
         max_bytes: int = MAX_RECORDING_BYTES,
         write_record=None,
+        compress: bool = False,
     ):
         self.root = Path(tempfile.mkdtemp(prefix="gradlab-episode-", dir=root))
         self.metadata = deepcopy(dict(metadata))
@@ -210,6 +255,7 @@ class EpisodeRecording:
         self.max_bytes = max_bytes
         self._accepted_bytes = 0
         self._write_record = write_record or self._append
+        self._compress = compress
         self._condition = threading.Condition()
         self._pending: deque[bytes] = deque()
         self._pending_bytes = 0
@@ -269,7 +315,7 @@ class EpisodeRecording:
     def append(self, row: Mapping[str, Any]) -> None:
         # This owns all arrays before another step can reuse a provider buffer.
         try:
-            data = pack_record(row)
+            data = pack_record(row, compress=self._compress)
         except ValueError as exc:
             # Never advance over an unencodable decision. Keep its owned inputs until
             # the user explicitly replaces the episode; the accepted prefix is exportable.
@@ -358,6 +404,24 @@ class EpisodeRecording:
                 stream.truncate(end)
             self._error = None
             self._condition.notify_all()
+
+    def reserve_read(self):
+        """Pin immutable written records and own references to the bounded pending tail."""
+        with self._condition:
+            if self._retired:
+                raise ValueError("the recorded episode has been replaced")
+            metadata = deepcopy(self.metadata)
+            metadata["transition_count"] = self._accepted
+            descriptor = dict(root=str(self.root), metadata=metadata, written=self._written,
+                              pending=tuple(self._pending))
+            self._pins += 1
+            return descriptor
+
+    def release_read(self):
+        with self._condition:
+            self._pins -= 1
+            if self._retired and not self._pins:
+                shutil.rmtree(self.root, ignore_errors=True)
 
     def reserve_prefix(self):
         with self._condition:
@@ -529,6 +593,9 @@ class ImportedTrajectory:
     def __init__(self, archive_path: Path):
         import pyarrow.parquet as pq
 
+        self._read_lock = threading.Lock()
+        self._read_pins = 0
+        self._retired = False
         self.root = Path(tempfile.mkdtemp(prefix="gradlab-imported-episode-"))
         try:
             self._extract(archive_path)
@@ -568,6 +635,16 @@ class ImportedTrajectory:
                     raise ValueError("excessive or incompatible trajectory row group")
             if expanded_size > MAX_ARCHIVE_BYTES:
                 raise ValueError("excessive expanded trajectory data")
+            from gradlab.play_action_summary import EpisodeActionSummary
+            from gradlab.play_reward_summary import EpisodeRewardSummary
+
+            rewards = EpisodeRewardSummary()
+            actions = EpisodeActionSummary(
+                self.metadata["initial_snapshot"]["session"].get("action_contract")
+            )
+            reward_contract = self.metadata["initial_snapshot"]["session"].get(
+                "reward_accounting", {}
+            )
             previous = None
             classifications = set()
             for batch in parquet.iter_batches(batch_size=1):
@@ -576,6 +653,12 @@ class ImportedTrajectory:
                     row[name] = decode_tree(row[name])
                 row["presentation"] = json.loads(row["presentation"])
                 self._validate_row(row, previous)
+                # Rebuild derived totals from validated transition evidence during
+                # the existing streaming import, including archives without totals.
+                rewards.append(row["presentation"], reward_contract)
+                row["presentation"]["episode_rewards"] = rewards.payload(row["presentation"])
+                actions.append(row["presentation"])
+                row["presentation"]["episode_actions"] = actions.payload(row["presentation"])
                 classifications.add(row["classification"])
                 EpisodeRecording._append(self.root, pack_record(row))
                 previous = row
@@ -728,5 +811,23 @@ class ImportedTrajectory:
             raise ValueError("transition is outside the recorded range")
         return read_record(self.root, index)
 
+    def reserve_read(self):
+        with self._read_lock:
+            if self._retired:
+                raise ValueError("the recorded episode has been replaced")
+            descriptor = dict(root=str(self.root), metadata=deepcopy(self.metadata),
+                              written=self.metadata["transition_count"], pending=())
+            self._read_pins += 1
+            return descriptor
+
+    def release_read(self):
+        with self._read_lock:
+            self._read_pins -= 1
+            if self._retired and not self._read_pins:
+                shutil.rmtree(self.root, ignore_errors=True)
+
     def close(self) -> None:
-        shutil.rmtree(self.root, ignore_errors=True)
+        with self._read_lock:
+            self._retired = True
+            if not self._read_pins:
+                shutil.rmtree(self.root, ignore_errors=True)

@@ -33,3 +33,9 @@ test("ordinary telemetry blocks retain their metric editor", () => {
   assert.equal(editorFieldsForBlock(block).metric, true);
   assert.equal(editorFieldsForBlock(block).scope, false);
 });
+
+test("reward table editor preserves the fixed diagnostic columns", () => {
+  const block = defaultBlockForKind("reward-table");
+  assert.deepEqual(block, { kind: "reward-table" });
+  assert.deepEqual(editorFieldsForBlock(block), { metric: false, namespace: false, scope: false });
+});

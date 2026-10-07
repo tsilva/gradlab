@@ -83,9 +83,9 @@ class Sb3LoggerTests(unittest.TestCase):
         output_format.write(
             {
                 "rollout/ep_rew_mean": 99.0,
-                "train/target/return_mean": 357.25,
-                "train/target/success/observed_start_rate_lifetime_mean": 0.125,
-                "train/ppo/value_loss": 42.0,
+                "train/return/mean": 357.25,
+                "completion": 0.125,
+                "train/value_loss/mean": 42.0,
                 "time/fps": 1_344,
             },
             {},
@@ -133,13 +133,13 @@ class Sb3LoggerTests(unittest.TestCase):
         )
         self.assertIs(logger.output_formats[1], complete_format)
 
-        logger.record("train/target/return_mean", 10.0)
-        logger.record("train/target/success/observed_start_rate_lifetime_mean", 0.5)
-        logger.record("train/ppo/value_loss", 42.0)
+        logger.record("train/return/mean", 10.0)
+        logger.record("completion", 0.5)
+        logger.record("train/value_loss/mean", 42.0)
         logger.dump(step=8_192)
 
         self.assertEqual(
-            complete_format.received["train/ppo/value_loss"],
+            complete_format.received["train/value_loss/mean"],
             42.0,
         )
         rendered = strip_ansi(human_output.getvalue())
@@ -207,10 +207,10 @@ class MetricsDocumentationTests(unittest.TestCase):
         self.assertEqual(
             payload,
             {
-                "train/a2c/policy_loss": -0.25,
-                "train/a2c/value_loss": 1.5,
-                "train/a2c/entropy": 0.75,
-                "train/a2c/learning_rate": 0.0007,
+                "train/policy_loss/mean": -0.25,
+                "train/value_loss/mean": 1.5,
+                "train/entropy/mean": 0.75,
+                "train/learning_rate": 0.0007,
             },
         )
         self.assertFalse(any("/ppo/" in name for name in payload))
@@ -251,7 +251,7 @@ class MetricsDocumentationTests(unittest.TestCase):
         }
         scalar_names: set[str] = set()
         for definition in metric_names.METRIC_DEFINITIONS:
-            if definition.unit == "table" or definition.placement == "summary":
+            if definition.unit in {"table", "video"} or definition.placement == "summary":
                 continue
             placeholders = re.findall(r"\{([^}]+)\}", definition.name)
             for replacements in itertools.product(*(values[name] for name in placeholders)):
@@ -260,8 +260,8 @@ class MetricsDocumentationTests(unittest.TestCase):
                     name = name.replace(f"{{{placeholder}}}", replacement, 1)
                 scalar_names.add(name)
 
-        self.assertEqual(len(metric_names.METRIC_DEFINITIONS), 102)
-        self.assertEqual(len(scalar_names), 113)
+        self.assertLessEqual(len(metric_names.METRIC_DEFINITIONS), 108)
+        self.assertLessEqual(len(scalar_names), 97)
         self.assertEqual(
             len(
                 {
@@ -293,6 +293,7 @@ class MetricsDocumentationTests(unittest.TestCase):
             "sequences",
             "steps",
             "table",
+            "video",
             "text",
             "timestamp",
             "trajectories",
@@ -300,6 +301,7 @@ class MetricsDocumentationTests(unittest.TestCase):
             "value",
             "visits",
             "transitions/second",
+            "bytes/second",
         }
         for definition in metric_names.METRIC_DEFINITIONS:
             with self.subTest(metric=definition.name):

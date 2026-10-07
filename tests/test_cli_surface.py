@@ -68,9 +68,29 @@ for name in sorted(sys.modules):
         ]
         self.assertEqual(imported, [])
 
+    def test_play_help_does_not_import_policy_runtime(self) -> None:
+        script = """
+import sys
+from gradlab.main import main
+try:
+    main(["play", "--help"])
+except SystemExit as exc:
+    assert exc.code == 0
+assert "torch" not in sys.modules
+assert "gradlab.play_session" not in sys.modules
+"""
+        subprocess.run(
+            [sys.executable, "-c", script],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=True,
+        )
+
     def test_delegated_help_uses_complete_public_command(self) -> None:
         cases = (
             (("train", "--help"), "usage: gradlab train"),
+            (("sync", "--help"), "usage: gradlab sync"),
             (("experiment", "launch", "--help"), "usage: gradlab experiment launch"),
             (("experiment", "follow", "--help"), "usage: gradlab experiment follow"),
             (("eval", "--help"), "usage: gradlab eval"),

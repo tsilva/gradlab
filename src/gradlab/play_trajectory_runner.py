@@ -8,14 +8,7 @@ from typing import Any
 
 from gradlab.play_session import render_obs_stack
 from gradlab.play_trajectory import ImportedTrajectory
-from gradlab.play_web import (
-    DatasetPlaybackRunner,
-    FRAME_GAME,
-    FRAME_OBSERVATION,
-    PROTOCOL_VERSION,
-    _frame_packet,
-    history_point_payload,
-)
+from gradlab.play_engine import DatasetPlaybackRunner, FRAME_GAME, FRAME_OBSERVATION, PROTOCOL_VERSION, _frame_packet, history_point_payload
 
 
 class TrajectoryPlaybackRunner(DatasetPlaybackRunner):
@@ -24,6 +17,11 @@ class TrajectoryPlaybackRunner(DatasetPlaybackRunner):
         self.metadata = self.recording.metadata
         self.checkpoint_path = self.recording.bundle.checkpoint_path
         self._init_protocol(thread_name="gradlab-trajectory-playback")
+        from gradlab.play_diagnostics import DiagnosticReads, ImportedRecordingSource
+
+        self.diagnostics = DiagnosticReads(ImportedRecordingSource(
+            self._snapshot_lock, self.recording, lambda: self.history
+        ))
         self.args = args
         self.rows = range(self.metadata["transition_count"] + 1)
         self.transition_index = 0
@@ -42,6 +40,7 @@ class TrajectoryPlaybackRunner(DatasetPlaybackRunner):
 
     def stop(self) -> None:
         super().stop()
+        self.diagnostics.close()
         self.recording.close()
 
     def recorded_transition(self, step: int) -> dict[str, Any]:
@@ -60,6 +59,8 @@ class TrajectoryPlaybackRunner(DatasetPlaybackRunner):
             interactive=False,
             status_message=self._status_message,
             transition=current,
+            episode_rewards=getattr(self, "_episode_rewards", None) if current else None,
+            episode_actions=current.get("episode_actions") if current else None,
             history_point=dict(self.history[-1]) if self.history else None,
             trajectory={
                 "imported": True,
@@ -85,6 +86,7 @@ class TrajectoryPlaybackRunner(DatasetPlaybackRunner):
             step=self.first_step + self.transition_index - 1,
             episode=self.metadata["episode"],
             target_fps=self.target_fps,
+            rgb_enabled=getattr(self, "rgb_enabled", True),
             total_reward=current["reward"]["return"] if current else session.get("total_reward", 0),
             awaiting_next_episode=self.transition_index >= len(self.rows) - 1,
             can_start_next_episode=False,
@@ -110,7 +112,7 @@ class TrajectoryPlaybackRunner(DatasetPlaybackRunner):
 
     def _publish(self) -> None:
         frames = {
-            FRAME_GAME: self.current_frame,
+            FRAME_GAME: self.current_frame if getattr(self, "rgb_enabled", True) else None,
             FRAME_OBSERVATION: render_obs_stack(self.observation_frames, 1)
             if self.observation_frames
             else None,
@@ -138,6 +140,7 @@ class TrajectoryPlaybackRunner(DatasetPlaybackRunner):
         self.current_frame = row["after_image"]
         self.observation_frames = row["observation_frames"]
         self._transition = row["presentation"]
+        self._episode_rewards = row["presentation"].get("episode_rewards")
 
     def _apply(self, command) -> None:
         if command.name == "replay":
@@ -165,7 +168,10 @@ class TrajectoryPlaybackRunner(DatasetPlaybackRunner):
                 self._load_step(step)
                 assert self._transition is not None
                 self.history.clear()
-                self.history.append(history_point_payload(self._transition))
+                for index in range(max(self.first_step, step - 63), step + 1):
+                    self.history.append(
+                        history_point_payload(self.recorded_transition(index)["presentation"])
+                    )
                 self.remaining_steps = 0
                 self.continue_target = None
                 self._set_state("paused", message=f"Recorded transition {step}")

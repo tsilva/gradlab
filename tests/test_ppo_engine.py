@@ -22,6 +22,7 @@ from gradlab.training.ppo_engine import (
     _normalize_grouped_advantages,
     _ppo_update,
     _Precision,
+    _UpdateCheckpoints,
 )
 
 
@@ -43,6 +44,36 @@ def _add_rollout_step(
         log_probs,
         **kwargs,
     )
+
+
+def test_update_checkpoint_saves_consumed_optimizer_state_once(monkeypatch, tmp_path):
+    parameter = torch.nn.Parameter(torch.tensor(1.0))
+    optimizer = torch.optim.Adam([parameter], lr=0.01)
+    model = SimpleNamespace(num_timesteps=108, policy=SimpleNamespace(optimizer=optimizer))
+    context = SimpleNamespace(checkpoint_dir=tmp_path)
+    saved = []
+
+    def save(**kwargs):
+        saved.append((kwargs["step"], parameter.item(), optimizer.state[parameter]["step"].item()))
+
+    monkeypatch.setattr(ppo_engine, "save_model_bundle", save)
+    checkpoints = _UpdateCheckpoints([100, 116, 124], initial_step=100, quantum=8, limit=124)
+    checkpoints.after_update(model, context, "Breakout-Atari2600-v0")
+    assert not saved
+    parameter.square().backward()
+    optimizer.step()
+    model.num_timesteps = 116
+    checkpoints.after_update(model, context, "Breakout-Atari2600-v0")
+    checkpoints.after_update(model, context, "Breakout-Atari2600-v0")
+    model.num_timesteps = 124
+    checkpoints.after_update(model, context, "Breakout-Atari2600-v0")
+    assert saved == [(116, parameter.item(), 1.0)]
+    assert saved[0][1] < 1.0
+
+
+def test_update_checkpoint_rejects_partial_rollout_branch():
+    with pytest.raises(ValueError, match="align with completed PPO updates"):
+        _UpdateCheckpoints([115], initial_step=100, quantum=8, limit=124)
 
 
 def test_device_rollout_bootstraps_only_truncated_transitions() -> None:
@@ -380,15 +411,11 @@ def test_rollout_diagnostics_remain_on_device_until_one_materialization() -> Non
     assert pending
     assert all(isinstance(value, torch.Tensor) for value in pending.values())
     metrics = ppo_engine._materialize_metrics(pending, omit_if_nonfinite=optional)
-    assert metrics["train/ppo/rollout_value/mean"] == pytest.approx(3.0)
-    assert metrics["train/ppo/rollout_value/std"] == pytest.approx(
-        np.std([1.0, 3.0, 5.0])
-    )
-    assert metrics["train/ppo/rollout_advantage/mean"] == pytest.approx(2.5)
-    assert metrics["train/ppo/rollout_advantage/std"] == pytest.approx(
-        np.std([1.0, 2.0, 3.0, 4.0])
-    )
-    assert metrics["train/ppo/dominant_action_rate"] == pytest.approx(0.75)
+    assert metrics["train/value/mean"] == pytest.approx(3.0)
+    assert metrics["train/value/std"] == pytest.approx(np.std([1.0, 3.0, 5.0]))
+    assert metrics["train/advantage/mean"] == pytest.approx(2.5)
+    assert metrics["train/advantage/std"] == pytest.approx(np.std([1.0, 2.0, 3.0, 4.0]))
+    assert metrics["train/action/fraction/max"] == pytest.approx(0.75)
 
 
 def test_rollout_diagnostics_count_legal_tuple_actions_on_device() -> None:
@@ -417,7 +444,7 @@ def test_rollout_diagnostics_count_legal_tuple_actions_on_device() -> None:
     pending, optional = ppo_engine._rollout_diagnostics(buffer, action_space)
     metrics = ppo_engine._materialize_metrics(pending, omit_if_nonfinite=optional)
 
-    assert metrics["train/ppo/dominant_action_rate"] == pytest.approx(0.5)
+    assert metrics["train/action/fraction/max"] == pytest.approx(0.5)
 
 
 def test_target_kl_stops_before_optimization_after_one_control_read(monkeypatch) -> None:
@@ -501,8 +528,8 @@ def test_target_kl_stops_before_optimization_after_one_control_read(monkeypatch)
     assert model._n_updates == 1
     assert not policy.optimizer.state
     torch.testing.assert_close(policy.weight, initial_weight)
-    assert metrics["train/ppo/approx_kl"] == pytest.approx(np.exp(0.5) - 1.0 - 0.5)
-    assert metrics["train/ppo/clip_fraction"] == pytest.approx(1.0)
+    assert metrics["train/kl/mean"] == pytest.approx(np.exp(0.5) - 1.0 - 0.5)
+    assert metrics["train/clip/fraction"] == pytest.approx(1.0)
 
 
 @pytest.mark.parametrize("method", ["collect_rollouts", "train", "learn"])
@@ -680,6 +707,30 @@ def test_tensor_native_update_matches_one_sb3_ppo_update(monkeypatch) -> None:
                 atol=2e-6,
             )
         assert materializations == 1
-        assert metrics["train/ppo/learning_rate"] == pytest.approx(1e-3)
+        assert metrics["train/learning_rate"] == pytest.approx(1e-3)
     finally:
         env.close()
+
+
+def test_throughput_tracker_emits_windows_at_completed_step_and_final_tail(monkeypatch):
+    ticks = iter([0, 1, 2, 3, 5, 6, 7])
+    monkeypatch.setattr(ppo_engine.time, "perf_counter", lambda: next(ticks))
+    frames = []
+    sink = SimpleNamespace(publish=lambda payload, *, step: frames.append((step, payload)))
+    context = SimpleNamespace(session=SimpleNamespace(metric_sink=sink))
+    runtime = SimpleNamespace(native_step_stats=lambda: None)
+    tracker = ppo_engine._ThroughputTracker(context, runtime, torch.device("cpu"))
+    tracker.begin(0)
+    tracker.end(100)
+    tracker.begin(100)
+    assert frames == []
+    tracker.end(200)
+    tracker.begin(200)
+    assert frames == [(200, {"train/throughput/rate": 40,
+                             "train/between_rollouts/seconds": 3})]
+    tracker.end(300)
+    tracker.flush()
+    tracker.flush()
+    assert frames[-1] == (300, {"train/throughput/rate": 50,
+                                "train/between_rollouts/seconds": 1})
+    assert len(frames) == 2

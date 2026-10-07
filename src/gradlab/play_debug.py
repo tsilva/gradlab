@@ -41,6 +41,7 @@ class PolicyDecision:
     route: Mapping[str, Any] | None = None
     sampled: bool | None = None
     categorical_index: int | None = None
+    sampling_temperature: float = 1.0
 
     @property
     def selected_discrete_action(self) -> int | None:
@@ -150,13 +151,39 @@ def _decisions_from_distribution(
                 stddev=None if stddev is None else stddev[lane].copy(),
                 sampled=sampled,
                 categorical_index=(
-                    None
-                    if categorical_indices is None
-                    else int(categorical_indices[lane])
+                    None if categorical_indices is None else int(categorical_indices[lane])
                 ),
             )
         )
     return tuple(decisions)
+
+
+def temper_distribution(distribution: Any, temperature: float) -> None:
+    """Apply p(a) ** (1 / temperature) without consuming policy randomness."""
+    if not np.isfinite(temperature) or temperature <= 0:
+        raise ValueError("sampling temperature must be finite and greater than zero")
+    if temperature == 1.0:
+        return
+    if isinstance(distribution, (CategoricalDistribution, LegalTupleCategoricalDistribution)):
+        distribution.distribution = torch.distributions.Categorical(
+            logits=distribution.distribution.logits / temperature
+        )
+    elif isinstance(distribution, MultiCategoricalDistribution):
+        distribution.distribution = [
+            torch.distributions.Categorical(logits=part.logits / temperature)
+            for part in distribution.distribution
+        ]
+    elif isinstance(distribution, BernoulliDistribution):
+        distribution.distribution = torch.distributions.Bernoulli(
+            logits=distribution.distribution.logits / temperature
+        )
+    elif isinstance(distribution, DiagGaussianDistribution):
+        normal = distribution.distribution
+        distribution.distribution = torch.distributions.Normal(
+            normal.loc, normal.scale * temperature**0.5
+        )
+    else:
+        raise ValueError("this policy distribution does not support sampling temperature")
 
 
 def _actor_critic_policy_decisions(
@@ -164,6 +191,7 @@ def _actor_critic_policy_decisions(
     model_obs: Any,
     *,
     deterministic: bool,
+    sampling_temperature: float = 1.0,
 ) -> tuple[PolicyDecision, ...]:
     """Run an SB3 actor-critic policy once and describe every lane."""
 
@@ -184,6 +212,7 @@ def _actor_critic_policy_decisions(
                 latent_vf = policy.mlp_extractor.forward_critic(vf_features)
             values = policy.value_net(latent_vf)
             distribution = policy._get_action_dist_from_latent(latent_pi)
+        temper_distribution(distribution, 1.0 if deterministic else sampling_temperature)
         raw_tensor = distribution.get_actions(deterministic=deterministic)
         log_probability_tensor = distribution.log_prob(raw_tensor)
     return _decisions_from_distribution(
@@ -202,11 +231,13 @@ def actor_critic_policy_decisions(
     model_obs: Any,
     *,
     deterministic: bool,
+    sampling_temperature: float = 1.0,
 ) -> tuple[PolicyDecision, ...]:
     return _actor_critic_policy_decisions(
         model,
         model_obs,
         deterministic=deterministic,
+        sampling_temperature=sampling_temperature,
     )
 
 
@@ -215,6 +246,7 @@ def actor_critic_policy_actions(
     model_obs: Any,
     *,
     deterministic: bool,
+    sampling_temperature: float = 1.0,
 ) -> tuple[PolicyDecision, ...]:
     """Choose actor actions without running critic or distribution diagnostics."""
 
@@ -223,6 +255,7 @@ def actor_critic_policy_actions(
     obs_tensor, _vectorized = policy.obs_to_tensor(model_obs)
     with torch.no_grad():
         distribution = policy.get_distribution(obs_tensor)
+        temper_distribution(distribution, 1.0 if deterministic else sampling_temperature)
         raw_tensor = distribution.get_actions(deterministic=deterministic)
     raw_actions = _as_numpy(raw_tensor).reshape((-1, *policy.action_space.shape))
     executed_actions = _postprocess_action(policy, raw_actions)
@@ -247,9 +280,7 @@ def actor_critic_state_values(model: Any, model_obs: Any) -> np.ndarray:
     with torch.no_grad():
         state_value = getattr(policy, "state_value", None)
         values = (
-            state_value(obs_tensor)
-            if callable(state_value)
-            else policy.predict_values(obs_tensor)
+            state_value(obs_tensor) if callable(state_value) else policy.predict_values(obs_tensor)
         )
     return _as_numpy(values).reshape(-1)
 

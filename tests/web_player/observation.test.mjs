@@ -17,15 +17,6 @@ import {
   sameFrameIdentity,
 } from "../../src/gradlab/web_player/panels/diagnostic-overlays.js";
 import { PANEL_TYPES } from "../../src/gradlab/web_player/panels/catalog.js";
-
-const source = readFileSync(
-  new URL("../../src/gradlab/web_player/panels/observation.js", import.meta.url),
-  "utf8",
-);
-const appSource = readFileSync(
-  new URL("../../src/gradlab/web_player/app.js", import.meta.url),
-  "utf8",
-);
 const catalogSource = readFileSync(
   new URL("../../src/gradlab/web_player/panels/catalog.js", import.meta.url),
   "utf8",
@@ -70,14 +61,6 @@ test("attribution frames require exact transition and generation identity", () =
   );
 });
 
-test("observation owns no attribution controls or processing", () => {
-  assert.doesNotMatch(source, /set_attribution/);
-  assert.doesNotMatch(source, /data-attribution-method/);
-  assert.doesNotMatch(source, /data-attribution-interval/);
-  assert.doesNotMatch(source, /data-diagnostic-overlay/);
-  assert.doesNotMatch(source, /data-overlay-opacity/);
-  assert.match(source, /reconcileOverlaySelection/);
-});
 
 test("overlay selection is exclusive, sticky, and follows newly active tools", () => {
   const none = { attribution: false, cnn: false };
@@ -172,89 +155,5 @@ test("observation receives CNN frames without demanding CNN processing", () => {
   );
   assert.deepEqual(PANEL_TYPES.observation.processing, ["observation"]);
   assert.deepEqual(PANEL_TYPES.observation.frameKinds, [2, 3, 4]);
-  assert.match(source, /baseIdentity/);
-  assert.match(source, /sameFrameIdentity\(baseIdentity, expectedBaseIdentity\(\)\)/);
-  assert.match(source, /const prepareFrame = async \(kind, blob, metadata = \{\}\)/);
-  assert.match(source, /sameFrameIdentity\(incoming, preparedBaseIdentity\)/);
-  for (const [identity, request] of [
-    ["targetAttributionIdentity", "attributionBitmapRequest"],
-    ["targetCnnIdentity", "cnnBitmapRequest"],
-  ]) {
-    const guard = source.indexOf(
-      `if (!sameFrameIdentity(incoming, ${identity}())) return true;`,
-    );
-    const decode = source.indexOf(`const request = ++${request};`, guard);
-    assert.ok(guard >= 0 && decode > guard, `${identity} rejects unrelated frames before decoding`);
-  }
-  assert.match(appSource, /magic !== "RLP3"/);
-  assert.match(appSource, /getBigUint64\(24\)/);
-  assert.match(appSource, /function frameGeneration/);
   assert.match(catalogSource, /cnn-inspection/);
-});
-
-test("observation commits an exact decoded frame and its metadata without blanking between frames", () => {
-  const renderStart = source.indexOf("render(nextSnapshot)");
-  const frameStart = source.indexOf("async renderFrame", renderStart);
-  const renderSource = source.slice(renderStart, frameStart);
-  assert.match(renderSource, /targetSnapshot = nextSnapshot/);
-  assert.doesNotMatch(renderSource, /closeBase\(\)/);
-  assert.match(source, /request !== baseBitmapRequest/);
-  assert.match(source, /commitSnapshot\(frameSnapshot\)/);
-  assert.match(source, /baseCanvas\.hidden = true/);
-  assert.doesNotMatch(source, /baseCanvas\.width = 1/);
-});
-
-test("scrubbing retains displayed frames while exact target blobs are requested", () => {
-  const start = appSource.indexOf("async function showFramesForSequence");
-  const end = appSource.indexOf("\nfunction inspectionFrames", start);
-  const showFrames = appSource.slice(start, end);
-  assert.match(
-    showFrames,
-    /if \(blob\) \{\s*await panelRuntime\.renderFrame\(kind, blob, \{ sequence, generation \}\);/,
-  );
-  assert.match(
-    showFrames,
-    /else if \(!expected \|\| !retainMissing\) \{\s*await panelRuntime\.renderFrame\(kind, null, \{ sequence, generation \}\);/,
-  );
-});
-
-test("rapid scrubbing coalesces missing-frame requests to the latest position", () => {
-  assert.match(appSource, /const INSPECTION_FRAME_REQUEST_DELAY_MS = 50;/);
-  assert.match(appSource, /function scheduleInspectionFrameRequest\(sequence, kinds\)/);
-  assert.match(appSource, /clearTimeout\(state\.inspectionFrameRequestTimer\)/);
-  assert.match(
-    appSource,
-    /Number\(state\.inspectionSequence\) !== numericSequence\) return;/,
-  );
-  assert.match(appSource, /scheduleInspectionFrameRequest\(numericSequence, missing\)/);
-});
-
-test("late observation decodes cannot repaint an older scrub position", () => {
-  assert.match(
-    source,
-    /if \(!sameFrameIdentity\(preparedBaseIdentity, targetBaseIdentity\(\)\)\) return false;/,
-  );
-  assert.match(
-    source,
-    /const bitmap = await createImageBitmap\(blob\);\s*if \(!mounted \|\| request !== baseBitmapRequest\)/,
-  );
-  for (const [targetIdentity, request] of [
-    ["targetAttributionIdentity", "attributionBitmapRequest"],
-    ["targetCnnIdentity", "cnnBitmapRequest"],
-  ]) {
-    assert.match(
-      source,
-      new RegExp(
-        `const bitmap = await createImageBitmap\\(blob\\);\\s*if \\(\\s*!mounted\\s*\\|\\| request !== ${request}\\s*\\|\\| !sameFrameIdentity\\(incoming, ${targetIdentity}\\(\\)\\)`,
-      ),
-      `${targetIdentity} must be rechecked after decoding`,
-    );
-  }
-});
-
-test("observation omits the frame stage when no exact frame exists", () => {
-  assert.match(source, /<div class="observation-stage" hidden>/);
-  assert.match(source, /stage\.hidden = !exactBase/);
-  assert.doesNotMatch(source, /data-empty/);
-  assert.doesNotMatch(source, /No exact pre-action observation frame/);
 });

@@ -6,12 +6,12 @@ export function recordingDescription(trajectory = {}) {
     return `${completeness} · transitions ${range}${prefix} · ${trajectory.classification.replaceAll("_", " ")} Playback · inspection only`;
   }
   if (trajectory.error) return `Recording storage failed: ${trajectory.error}`;
-  if (!trajectory.transitions) return trajectory.enabled ? "Recording current episode" : "Recording off";
-  const prefix = trajectory.first_step > 1 ? ` · starts at transition ${trajectory.first_step}` : "";
-  return `${trajectory.enabled ? "Recording" : "Recorded"} ${trajectory.transitions} transitions${prefix}`;
+  if (!trajectory.recorded_transitions) return trajectory.enabled ? "Recording from the next step" : "Recording off · episode seeking available";
+  const prefix = trajectory.recording_first_step > 1 ? ` · starts at transition ${trajectory.recording_first_step}` : "";
+  return `${trajectory.enabled ? "Recording" : "Recorded"} ${trajectory.recorded_transitions} transitions${prefix}`;
 }
 
-export function mountTrajectoryControls({ command, getState, request, toast }) {
+export function mountTrajectoryControls({ command, inspectStep, getState, request, toast }) {
   const retry = document.querySelector("#trajectory-retry");
   const download = document.querySelector("#trajectory-download");
   const importButton = document.querySelector("#trajectory-import");
@@ -27,12 +27,12 @@ export function mountTrajectoryControls({ command, getState, request, toast }) {
   let preparing = false;
   let importing = false;
 
-  retry.addEventListener("click", () => command("set_recording", { enabled: true }));
-  seek.addEventListener("change", () => command("seek", { step: Number(seek.value) }));
+  retry.addEventListener("click", () => command("retry_storage"));
+  seek.addEventListener("change", () => inspectStep(Number(seek.value)));
   seek.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
       event.preventDefault();
-      command("seek", { step: Number(seek.value) });
+      inspectStep(Number(seek.value));
     }
   });
   previous.addEventListener("click", () => command("step_backward"));
@@ -104,17 +104,17 @@ export function mountTrajectoryControls({ command, getState, request, toast }) {
     const trajectory = snapshot?.trajectory || {};
     const imported = Boolean(trajectory.imported);
     const available = trajectory.available || imported;
-    document.querySelector("#trajectory-controls").hidden = !available || (!imported && !trajectory.error);
+    document.querySelector("#trajectory-controls").hidden = !imported && !trajectory.error;
     document.querySelector("#trajectory-navigation").hidden = !imported;
     retry.hidden = !trajectory.error;
     retry.disabled = !state.hasControl;
     download.hidden = !available || imported;
-    download.disabled = preparing || !trajectory.transitions;
+    download.disabled = preparing || !trajectory.recorded_transitions;
     importButton.disabled = importing || !state.hasControl;
     const status = document.querySelector("#trajectory-status");
-    status.hidden = !imported && !trajectory.error;
+    status.hidden = !available;
     status.textContent = status.hidden ? "" : recordingDescription(trajectory);
-    if (!preparing) confirm.disabled = imported || !trajectory.transitions;
+    if (!preparing) confirm.disabled = imported || !trajectory.recorded_transitions;
     if (imported) {
       seek.min = String(trajectory.first_step);
       seek.max = String(trajectory.last_step);

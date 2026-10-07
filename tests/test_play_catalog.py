@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from gradlab.metric_journal import ScientificEvidence
+
 from collections.abc import Iterable
 from copy import deepcopy
 from pathlib import Path
@@ -15,6 +17,7 @@ from gradlab.goal_catalog import (
     goal_catalog_pointer_key,
     validate_goal_catalog_generation,
 )
+from gradlab.json_utils import canonical_json_sha256 as compact_json_sha256
 from gradlab.play_catalog import (
     PlayCatalog,
     WandbRunLocation,
@@ -163,9 +166,13 @@ def current_goal_document(*, goal_id: str, title: str) -> str:
             "evaluation_mode: evaluated",
             f"title: {title}",
             "objective:",
+            "  training_success:",
+            "    metric: train/return/mean",
+            "    operator: '>='",
+            "    threshold: 0.9",
             "  rank:",
             "  - min(leader/step)",
-            "  - max(eval/return_mean)",
+            "  - max(eval/return/mean)",
             "train:",
             "  checkpoint_freq: 128",
             "  environment:",
@@ -328,13 +335,13 @@ def mario_checkpoint_train_config() -> dict[str, object]:
         "metrics_schema_version": METRICS_SCHEMA_VERSION,
         "checkpoint_eval_backend": "modal",
         "selection_rank": [
-            "max(eval/success/start_rate_mean)",
-            "max(eval/return_mean)",
+            "max(eval/success/mean)",
+            "max(eval/return/mean)",
             "min(leader/step)",
         ],
         "checkpoint_eval_acceptance": [
             {
-                "metric": "eval/success/start_rate_min",
+                "metric": "eval/success/min",
                 "operator": ">=",
                 "threshold": 1.0,
             }
@@ -485,6 +492,53 @@ def test_goal_variants_use_one_private_index_read_without_wandb(
     assert items[0]["run_count"] == 0
     assert activity["generation_sha256"] == pointer["generation_sha256"]
     assert bucket.calls == [pointer_key, pointer["generation_key"]]
+
+
+@pytest.mark.parametrize("run_count", [6, 50, 51])
+def test_goal_activity_prefetches_a_full_page(
+    run_count: int,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    write_goal_catalog(tmp_path)
+    goal_path = tmp_path / "experiments" / "goals" / "Mario" / "Level1-1" / "_goal.yaml"
+    authored = load_goal_contract(goal_path, tmp_path)
+    descriptor = build_goal_variant_descriptor(
+        goal_slug="Mario/Level1-1",
+        source_sha="a" * 40,
+        authored_goal=authored,
+        effective_goal=goal_for_contract_validation(authored, label="stale fallback test"),
+    )
+    generation, pointer = goal_catalog_documents(
+        descriptor,
+        [{"run_id": f"gradlab-{index:032x}", "state": "running"}
+         for index in range(run_count)],
+    )
+    pointer_key = goal_catalog_pointer_key("Mario/Level1-1")
+
+    class FailingAfterWarmBucket:
+        available = True
+
+        def get_json_optional(self, key: str):
+            if not self.available:
+                raise TimeoutError("simulated control-plane outage")
+            if key == pointer_key:
+                return pointer
+            if key == pointer["generation_key"]:
+                return generation
+            raise AssertionError(key)
+
+    bucket = FailingAfterWarmBucket()
+    monkeypatch.setattr(
+        "gradlab.catalog_jobs.enqueue_catalog_projection",
+        lambda **_kwargs: {},
+    )
+    catalog = PlayCatalog(repo_root=tmp_path, control_bucket=bucket)
+
+    activity = catalog.goal_activity(environment_id="Mario", goal_id="Level1-1")
+    variant = next(item for item in activity["items"] if item["run_count"])
+    assert len(variant["recent_runs"]) == min(run_count, 50)
+    assert variant["has_more_runs"] is (run_count > 50)
 
 
 def test_goal_activity_never_falls_back_to_a_stale_generation(
@@ -747,7 +801,7 @@ def test_run_catalog_uses_lifecycle_owned_variant_index_without_wandb(
         "url": f"https://wandb.ai/research/Mario/runs/{RUN_ID}",
         "metrics": {
             "leader/step": 1_500_000,
-            "eval/return_mean": 321.25,
+            "eval/return/mean": 321.25,
         },
     }
     generation, pointer = goal_catalog_documents(descriptor, [run_record])
@@ -1272,6 +1326,7 @@ def test_projected_run_status_uses_the_authoritative_goal_catalog(
         "state": "running",
         "stop_reason": "",
         "early_stop": None,
+        "training_success": None,
         "updated_at": "2026-09-03T10:00:00Z",
     }
 
@@ -1318,6 +1373,59 @@ def test_checkpoint_base_inventory_never_waits_for_wandb(
     assert page.warnings == ()
 
 
+def test_public_checkpoint_history_uses_verified_telemetry_without_private_service(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint = checkpoint_row(step=250_000, digest="2" * 64, purpose="final")
+    same_step_checkpoint = checkpoint_row(step=250_000, digest="1" * 64, purpose="periodic")
+    config = mario_checkpoint_train_config()
+    config.update({
+        "checkpoint_eval_environment": {"game": "Bandit-v0", "env_provider": "gradlab"},
+        "post_train_eval_episodes": 100, "checkpoint_eval_n_envs": 1,
+        "checkpoint_eval_watchdog_steps": 1, "training_backend": {"id": "sb3.ppo"},
+    })
+    telemetry = {
+        "schema_version": 1, "run_id": RUN_ID, "event_high_water": 2,
+        "media": [{"kind": "evaluation_video", "step": 250_000,
+                   "checkpoint_id": checkpoint["checkpoint_id"],
+                   "bytes": 100, "sha256": "a" * 64,
+                   "url": f"https://models.example/runs/{RUN_ID}/media/{'a' * 64}.mp4"}],
+        "histories": [
+            {"train/step": 250_000.0, "train/return/mean": 0.75},
+            {"eval/step": 250_000.0, "eval/pass": 1.0, "eval/success/min": 1.0},
+        ],
+    }
+    digest = compact_json_sha256(telemetry)
+    url = f"https://models.example/runs/{RUN_ID}/telemetry/{digest}.json"
+    index = {
+        "schema_version": 1, "run_id": RUN_ID,
+        "checkpoints": [checkpoint, same_step_checkpoint],
+        "promotion": None,
+        "telemetry": {
+            "run_id": RUN_ID, "url": url, "sha256": digest,
+            "history_count": 2, "event_high_water": 2,
+        },
+    }
+
+    def public_json(request_url: str, **_kwargs):
+        return telemetry if request_url == url else index
+
+    monkeypatch.setattr("gradlab.play_catalog._public_json", public_json)
+    catalog = PlayCatalog(public_models_base_url="https://models.example")
+    bind_checkpoint_recipe(catalog, monkeypatch, (checkpoint, same_step_checkpoint), config)
+    page = catalog.checkpoints(run_id=RUN_ID, include_wandb=False)
+    assert page.items[0]["metrics"]["train/return/mean"] == 0.75
+    assert page.items[0]["evaluation"]["status"] == "accepted"
+    assert list(page.items[0]["representative_media"]) == telemetry["media"]
+    assert not page.items[1]["representative_media"]
+    assert not page.warnings
+    telemetry["histories"][0]["train/return/mean"] = 0.99
+    tampered = catalog.checkpoints(run_id=RUN_ID, include_wandb=False)
+    assert tampered.items[0]["metrics"]["train/return/mean"] is None
+    assert not tampered.items[0]["representative_media"]
+    assert tampered.warnings[-1]["source"] == "public-telemetry"
+
+
 def test_deathmatch_checkpoint_metric_contract_prioritizes_frag_evidence() -> None:
     repo_root = Path.cwd()
     goal_root = repo_root / "experiments/goals/VizdoomDeathmatch-v1"
@@ -1346,7 +1454,7 @@ def test_deathmatch_checkpoint_metric_contract_prioritizes_frag_evidence() -> No
             ],
         },
         {
-            "metric": "train/target/progress/kills/mean",
+            "metric": "train/progress/kills/mean",
             "direction": "max",
             "label": "Recent target kills mean",
             "evidence": "training",
@@ -1362,7 +1470,7 @@ def test_deathmatch_checkpoint_metric_contract_prioritizes_frag_evidence() -> No
             "rank_index": 1,
         },
         {
-            "metric": "train/target/return_mean",
+            "metric": "train/return/mean",
             "direction": "max",
             "label": "Recent target return mean",
             "evidence": "training",
@@ -1372,10 +1480,10 @@ def test_deathmatch_checkpoint_metric_contract_prioritizes_frag_evidence() -> No
 
 
 def test_checkpoint_metric_leaders_marks_each_best_value_and_ties() -> None:
-    train_success = "train/target/success/start_rate_mean"
-    train_return = "train/target/return_mean"
-    eval_success = "eval/success/start_rate_mean"
-    eval_return = "eval/return_mean"
+    train_success = "train/success/mean"
+    train_return = "train/return/mean"
+    eval_success = "eval/success/mean"
+    eval_return = "eval/return/mean"
 
     columns = tuple(
         {"metric": metric, "direction": "max"}
@@ -1467,31 +1575,31 @@ def test_catalog_attaches_latest_training_metrics_at_each_checkpoint(
         def scan_history(*, keys, page_size):
             assert page_size == 10_000
             if keys == [
-                "train/global_step",
-                "train/target/progress/kills/mean",
+                "train/step",
+                "train/progress/kills/mean",
             ]:
                 return [
                     {
-                        "train/global_step": 200_000,
-                        "train/target/progress/kills/mean": 2.5,
+                        "train/step": 200_000,
+                        "train/progress/kills/mean": 2.5,
                     },
                     {
-                        "train/global_step": 490_000,
-                        "train/target/progress/kills/mean": 9.0,
+                        "train/step": 490_000,
+                        "train/progress/kills/mean": 9.0,
                     },
                 ]
             if keys == [
-                "train/global_step",
-                "train/target/return_mean",
+                "train/step",
+                "train/return/mean",
             ]:
                 return [
                     {
-                        "train/global_step": 220_000,
-                        "train/target/return_mean": 11.5,
+                        "train/step": 220_000,
+                        "train/return/mean": 11.5,
                     },
                     {
-                        "train/global_step": 480_000,
-                        "train/target/return_mean": 22.0,
+                        "train/step": 480_000,
+                        "train/return/mean": 22.0,
                     },
                 ]
             assert "across_origins" not in " ".join(keys)
@@ -1515,19 +1623,19 @@ def test_catalog_attaches_latest_training_metrics_at_each_checkpoint(
 
     assert periodic_row["metrics"] == {
         "eval/progress/kills/mean": None,
-        "train/target/progress/kills/mean": 2.5,
+        "train/progress/kills/mean": 2.5,
         "eval/progress/kills/max": None,
-        "train/target/return_mean": 11.5,
+        "train/return/mean": 11.5,
     }
     assert final_row["metrics"] == {
         "eval/progress/kills/mean": None,
-        "train/target/progress/kills/mean": 9.0,
+        "train/progress/kills/mean": 9.0,
         "eval/progress/kills/max": None,
-        "train/target/return_mean": 22.0,
+        "train/return/mean": 22.0,
     }
     assert final_row["best_metrics"] == [
-        "train/target/progress/kills/mean",
-        "train/target/return_mean",
+        "train/progress/kills/mean",
+        "train/return/mean",
     ]
     assert periodic_row["best_metrics"] == []
     filtered = catalog.checkpoints(
@@ -1589,23 +1697,23 @@ def test_catalog_attaches_training_metrics_when_checkpoint_evaluation_is_disable
         def scan_history(*, keys, page_size):
             assert page_size == 10_000
             if keys == [
-                "train/global_step",
-                "train/target/success/start_rate_min",
+                "train/step",
+                "train/success/min",
             ]:
                 return [
                     {
-                        "train/global_step": 490_000,
-                        "train/target/success/start_rate_min": 1.0,
+                        "train/step": 490_000,
+                        "train/success/min": 1.0,
                     }
                 ]
             if keys == [
-                "train/global_step",
-                "train/target/return_mean",
+                "train/step",
+                "train/return/mean",
             ]:
                 return [
                     {
-                        "train/global_step": 480_000,
-                        "train/target/return_mean": 22.0,
+                        "train/step": 480_000,
+                        "train/return/mean": 22.0,
                     }
                 ]
             return []
@@ -1629,13 +1737,257 @@ def test_catalog_attaches_training_metrics_when_checkpoint_evaluation_is_disable
     assert page.warnings == ()
     assert row["evaluation"] is None
     assert row["metrics"] == {
-        "eval/success/start_rate_mean": None,
-        "train/target/success/start_rate_mean": None,
-        "eval/return_mean": None,
-        "train/target/return_mean": 22.0,
-        "eval/success/start_rate_min": None,
-        "train/target/success/start_rate_min": 1.0,
+        "eval/success/mean": None,
+        "train/success/mean": None,
+        "eval/return/mean": None,
+        "train/return/mean": 22.0,
+        "eval/success/min": None,
+        "train/success/min": 1.0,
     }
+
+
+def test_breakout_checkpoint_table_uses_verified_monitoring_event_for_eval_columns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    checkpoint = checkpoint_row(step=500_000, digest="3" * 64, purpose="final")
+    monkeypatch.setattr(
+        "gradlab.play_catalog._public_json",
+        lambda _url: {
+            "schema_version": 1,
+            "run_id": RUN_ID,
+            "checkpoints": [checkpoint],
+            "promotion": None,
+        },
+    )
+    train_config = {
+        "metrics_schema_version": METRICS_SCHEMA_VERSION,
+        "checkpoint_eval_backend": "none",
+        "selection_rank": [
+            "max(train/progress/bricks_destroyed/mean)",
+            "max(train/progress/bricks_destroyed/max)",
+            "min(train/episode_steps/mean)",
+        ],
+        "episode_progress_fields": ["bricks_destroyed", "bricks_destroyed_normalized"],
+    }
+
+    class Run:
+        config = {
+            "metrics_schema_version": METRICS_SCHEMA_VERSION,
+            "checkpoint_eval_backend": "none",
+            "selection_rank": train_config["selection_rank"],
+            "seed": 7,
+        }
+
+        @staticmethod
+        def scan_history(*, keys, page_size):
+            assert page_size == 10_000
+            if keys == ["train/step", "train/success/min"]:
+                return [{"train/step": 500_000, "train/success/min": 0.75}]
+            if "eval/monitor/progress/median" in keys:
+                return [{
+                    "eval/step": 500_000,
+                    "eval/monitor/progress/median": 0.48,
+                    "eval/episodes/count": 100,
+                    "eval/success/mean": 0.84,
+                    "eval/progress/bricks_destroyed_normalized/mean": 0.47,
+                    "eval/return/mean": 138.2,
+                }]
+            return []
+
+    class Api:
+        @staticmethod
+        def run(_path):
+            return Run()
+
+    catalog = PlayCatalog(
+        public_models_base_url="https://models.example",
+        wandb_run_location=WandbRunLocation(entity="research", project="Breakout", run_id=RUN_ID),
+    )
+    bind_checkpoint_recipe(catalog, monkeypatch, (checkpoint,), train_config)
+    catalog._api = Api()
+
+    page = catalog.checkpoints(run_id=RUN_ID)
+    row = page.items[0]
+    suffixes = [
+        "success/mean",
+        "progress/bricks_destroyed_normalized/mean",
+        "progress/bricks_destroyed_normalized/max",
+        "episode_steps/mean",
+        "return/mean",
+    ]
+    assert [column["metric"] for column in page.metric_columns if column["evidence"] == "training"] == [
+        f"train/{suffix}" for suffix in suffixes
+    ]
+    assert [column["metric"] for column in page.metric_columns if column["evidence"] == "evaluation"] == [
+        f"eval/{suffix}" for suffix in suffixes
+    ]
+    assert page.metric_columns[0]["source_metric"] == "train/success/min"
+    assert page.metric_columns[1]["rank_source_metric"] == "train/progress/bricks_destroyed/mean"
+    assert row["evaluation"] == {
+        "status": "verified",
+        "source": "monitoring",
+        "episodes_completed": 100,
+        "episodes_planned": 100,
+        "metrics": {
+            "eval/success/mean": 0.84,
+            "eval/progress/bricks_destroyed_normalized/mean": 0.47,
+            "eval/return/mean": 138.2,
+        },
+    }
+    assert row["metrics"]["eval/success/mean"] == 0.84
+    assert row["metrics"]["train/success/mean"] == 0.75
+    assert row["metrics"]["eval/progress/bricks_destroyed_normalized/max"] is None
+    assert all(metric not in row["best_metrics"] for metric in row["evaluation"]["metrics"])
+
+
+def test_current_breakout_goal_ranks_normalized_bricks() -> None:
+    root = Path.cwd() / "experiments/goals/Breakout-Atari2600-v0"
+    for goal_id in ("FirstWall", "TwoWalls"):
+        goal = load_goal_contract(root / goal_id / "_goal.yaml", Path.cwd())
+        family = "train" if goal_id == "FirstWall" else "eval"
+        assert goal["objective"]["rank"] == [
+            f"max({family}/progress/bricks_destroyed_normalized/mean)",
+            f"max({family}/progress/bricks_destroyed_normalized/max)",
+            f"min({family}/episode_steps/mean)",
+        ]
+
+
+def test_breakout_checkpoint_table_reads_paired_monitoring_metrics() -> None:
+    config = {
+        "metrics_schema_version": METRICS_SCHEMA_VERSION,
+        "checkpoint_eval_backend": "none",
+        "selection_rank": [
+            "max(train/progress/bricks_destroyed_normalized/mean)",
+            "max(train/progress/bricks_destroyed_normalized/max)",
+            "min(train/episode_steps/mean)",
+        ],
+        "episode_progress_fields": ["bricks_destroyed_normalized"],
+        "state": "Start",
+    }
+    contract = checkpoint_metric_contract(config)
+
+    class Run:
+        @staticmethod
+        def scan_history(*, keys, page_size):
+            assert page_size == 10_000
+            if keys == ["eval/step", "eval/progress/bricks_destroyed_normalized/max"]:
+                return [{"eval/step": 500_000, keys[1]: 0.5}]
+            if keys == ["eval/step", "eval/episode_steps/mean"]:
+                return [{"eval/step": 500_000, keys[1]: 1200.0}]
+            if "eval/monitor/progress/median" in keys:
+                return [{
+                    "eval/step": 500_000,
+                    "eval/monitor/progress/median": 0.42,
+                    "eval/episodes/count": 100,
+                    "eval/success/mean": 0.8,
+                    "eval/progress/bricks_destroyed_normalized/mean": 0.4,
+                    "eval/return/mean": 100.0,
+                }]
+            return []
+
+    evaluation = PlayCatalog._monitoring_history(ScientificEvidence.historical_wandb(Run()), contract)[500_000]
+    assert evaluation["metrics"]["eval/progress/bricks_destroyed_normalized/max"] == 0.5
+    assert evaluation["metrics"]["eval/episode_steps/mean"] == 1200.0
+
+
+def test_checkpoint_monitoring_state_and_values_for_control_backed_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    running = checkpoint_row(step=250_000, digest="2" * 64, purpose="periodic")
+    complete = checkpoint_row(step=500_000, digest="3" * 64, purpose="final")
+    monkeypatch.setattr(
+        "gradlab.play_catalog._public_json",
+        lambda _url: {
+            "schema_version": 1,
+            "run_id": RUN_ID,
+            "checkpoints": [running, complete],
+            "promotion": None,
+        },
+    )
+    settings = {"enabled": True, "episodes": 100, "record_episodes": 50}
+    train_config = {
+        "metrics_schema_version": METRICS_SCHEMA_VERSION,
+        "checkpoint_eval_backend": "none",
+        "selection_rank": ["max(train/progress/bricks_destroyed/mean)"],
+        "episode_progress_fields": ["bricks_destroyed", "bricks_destroyed_normalized"],
+        "checkpoint_monitoring": settings,
+    }
+    state_keys: dict[str, str] = {}
+
+    class Control:
+        @staticmethod
+        def get_json_optional(key: str) -> dict[str, object] | None:
+            if key == f"runs/{RUN_ID}/manifest.json":
+                return {
+                    "goal_slug": "Breakout/FirstWall",
+                    "seed": 123,
+                    "wandb": {"entity": "research", "project": "Breakout"},
+                }
+            if key == state_keys["running"]:
+                return {"status": "running", "attempts": 1}
+            if key == state_keys["complete"]:
+                return {"status": "complete", "attempts": 1, "result_sha256": "a" * 64}
+            return None
+
+    class Run:
+        config = {
+            "metrics_schema_version": METRICS_SCHEMA_VERSION,
+            "checkpoint_eval_backend": "none",
+            "selection_rank": train_config["selection_rank"],
+            "seed": 123,
+        }
+
+        @staticmethod
+        def scan_history(*, keys, page_size):
+            assert page_size == 10_000
+            if "eval/monitor/progress/median" in keys:
+                return [{
+                    "eval/step": 500_000,
+                    "eval/monitor/progress/median": 0.48,
+                    "eval/episodes/count": 100,
+                    "eval/success/mean": 0.84,
+                    "eval/progress/bricks_destroyed_normalized/mean": 0.47,
+                    "eval/return/mean": 138.2,
+                }]
+            return []
+
+    class Api:
+        @staticmethod
+        def run(path):
+            assert path == f"research/Breakout/{RUN_ID}"
+            return Run()
+
+    catalog = PlayCatalog(
+        public_models_base_url="https://models.example",
+        control_bucket=Control(),
+    )
+    bind_checkpoint_recipe(catalog, monkeypatch, (running, complete), train_config)
+    contract_hash = compact_json_sha256({
+        "recipe_sha256": running["recipe_sha256"],
+        "settings": settings,
+    })
+    for label, checkpoint in (("running", running), ("complete", complete)):
+        evaluation_id = compact_json_sha256({
+            "checkpoint": checkpoint["checkpoint_id"],
+            "contract": contract_hash,
+        })
+        state_keys[label] = (
+            f"runs/{RUN_ID}/monitoring/{contract_hash}/{evaluation_id}/state.json"
+        )
+    monkeypatch.setattr(catalog, "_control_generation_scope", lambda **_kwargs: None)
+    catalog._api = Api()
+
+    first_page = catalog.checkpoints(run_id=RUN_ID, include_wandb=False)
+    assert first_page.items[0]["evaluation"]["status"] == "verified"
+    assert first_page.items[0]["metrics"]["eval/success/mean"] is None
+    assert first_page.items[1]["evaluation"]["status"] == "running"
+    assert first_page.items[1]["metrics"]["eval/success/mean"] is None
+
+    enriched = catalog.checkpoints(run_id=RUN_ID)
+    assert enriched.items[0]["evaluation"]["source"] == "monitoring"
+    assert enriched.items[0]["metrics"]["eval/success/mean"] == 0.84
+    assert enriched.items[1]["evaluation"]["status"] == "running"
+    assert enriched.items[1]["metrics"]["eval/success/mean"] is None
 
 
 def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
@@ -1652,7 +2004,7 @@ def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
             "promotion": {"checkpoint_id": periodic["checkpoint_id"]},
         },
     )
-    required_metric = "eval/success/start_rate_min"
+    required_metric = "eval/success/min"
 
     repo_root = Path.cwd()
     goal_path = repo_root / "experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml"
@@ -1692,8 +2044,8 @@ def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
             ],
             "metrics": {
                 required_metric: 1.0,
-                "eval/success/start_rate_mean": 1.0,
-                "eval/return_mean": 1.0,
+                "eval/success/mean": 1.0,
+                "eval/return/mean": 1.0,
             },
         },
         final["checkpoint_id"]: {
@@ -1778,15 +2130,15 @@ def test_catalog_attaches_goal_required_eval_results_by_checkpoint(
     assert accepted_row["playback_seed_source"] == "evaluation"
     assert accepted["metrics"] == {
         required_metric: 1.0,
-        "eval/success/start_rate_mean": 1.0,
-        "eval/return_mean": 1.0,
+        "eval/success/mean": 1.0,
+        "eval/return/mean": 1.0,
         "leader/step": 250_000.0,
     }
-    assert accepted_row["metrics"]["eval/success/start_rate_mean"] == 1.0
-    assert accepted_row["metrics"]["eval/return_mean"] == 1.0
+    assert accepted_row["metrics"]["eval/success/mean"] == 1.0
+    assert accepted_row["metrics"]["eval/return/mean"] == 1.0
     assert accepted_row["best_metrics"] == [
-        "eval/success/start_rate_mean",
-        "eval/return_mean",
+        "eval/success/mean",
+        "eval/return/mean",
         required_metric,
     ]
     rejected = rejected_row["evaluation"]
@@ -1849,3 +2201,85 @@ def test_catalog_uses_training_seed_when_checkpoint_has_no_eval_result(
     assert row["evaluation"] is None
     assert row["playback_seed"] == 7
     assert row["playback_seed_source"] == "training"
+
+
+def test_progressive_goals_do_not_read_remote_evidence_until_enrichment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    write_indexed_goal_catalog(tmp_path)
+    catalog = PlayCatalog(repo_root=tmp_path)
+
+    def unexpected(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("metadata must not wait for remote evidence")
+
+    monkeypatch.setattr(catalog, "_control_generation_scopes", unexpected)
+    page = catalog.goals(environment_id="Mario", include_evidence=False)
+    assert page.items[0]["goal_id"] == "Level1-1"
+    assert page.items[0]["evidence_status"] == "pending"
+    assert page.items[0]["run_count"] is None
+
+    monkeypatch.setattr(catalog, "_control_generation_scopes", lambda goals: [None] * len(goals))
+    monkeypatch.setattr(catalog, "_current_goal_evidence", lambda *args, **kwargs: (("train/success",), 2))
+    enriched = catalog.goals(environment_id="Mario", progressive=True)
+    assert enriched.source == page.source
+    assert enriched.items[0]["evidence_status"] == "ready"
+    assert enriched.items[0]["success_badges"] == ("train/success",)
+
+
+def test_checkpoint_training_history_publishes_each_metric_before_fetching_next():
+    from gradlab.metric_journal import ScientificEvidence
+    from gradlab.play_catalog import _checkpoint_training_metric_history
+
+    published = []
+    first = "train/return/mean"
+    second = "train/episode_steps/mean"
+
+    class Run:
+        def scan_history(self, *, keys, page_size):
+            if keys[1] == second:
+                assert published == [(first, ((10, 2.0), (20, 3.0)))]
+                return []
+            return [
+                {"train/step": 20, first: 3},
+                {"train/step": 10, first: 2},
+            ]
+
+    _checkpoint_training_metric_history(
+        ScientificEvidence.historical_wandb(Run()),
+        [{"metric": first, "evidence": "training"}, {"metric": second, "evidence": "training"}],
+        lambda metric, samples: published.append((metric, samples)),
+    )
+    assert published[-1] == (second, ())
+
+
+def test_relocated_goal_discovers_historical_scope_without_rewriting_identity(tmp_path):
+    write_goal_catalog(tmp_path)
+    index = tmp_path / 'experiments/goals/_catalog.yaml'
+    index.write_text(index.read_text() + '\nhistorical_goals:\n  Mario/Level1-1:\n    - OldMario\n')
+    authored = load_goal_contract(tmp_path / 'experiments/goals/Mario/Level1-1/_goal.yaml', tmp_path)
+    resolved = goal_for_contract_validation(authored, label='original goal')
+    descriptor = build_goal_variant_descriptor(goal_slug='OldMario', source_sha='b' * 40, authored_goal=authored, effective_goal=resolved)
+    generation, pointer = goal_catalog_documents(descriptor, [{'run_id': RUN_ID}], resolved_goal=resolved)
+
+    class HistoricalBucket:
+        def get_json_optional(self, key):
+            if key == goal_catalog_pointer_key('Mario/Level1-1'):
+                return None
+            if key == goal_catalog_pointer_key('OldMario'):
+                return pointer
+            if key == pointer['generation_key']:
+                return generation
+            raise AssertionError(key)
+
+    catalog = PlayCatalog(repo_root=tmp_path, control_bucket=HistoricalBucket())
+    activity = catalog.goal_activity(environment_id='Mario', goal_id='Level1-1')
+    previous = next(item for item in activity['items'] if item['variant_id'] == descriptor['variant_id'])
+    assert previous['configuration_kind'] == 'previous_default'
+    assert previous['goal_slug'] == 'OldMario'
+    assert previous['run_count'] == 1
+    assert previous['recent_runs'][0]['run_id'] == RUN_ID
+    assert previous['recent_runs'][0]['goal_slug'] == 'OldMario'
+    runs = catalog.runs(environment_id='Mario', goal_id='Level1-1', goal_variant_id=descriptor['variant_id'])
+    assert runs.items[0]['run_id'] == RUN_ID
+    assert runs.items[0]['goal'] == 'OldMario'
+    assert catalog.latest_run_routes()[0]['goal_id'] == 'Level1-1'

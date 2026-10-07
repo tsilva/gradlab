@@ -64,7 +64,7 @@ def _line_panel(wr, panel: WorkspacePanelSpec, *, x: int, y: int):
     )
 
 
-def _section_panels(wr, section):
+def _section_panels(wr, section, *, entity=None):
     panels = []
     slot_width = _WORKSPACE_GRID_WIDTH // section.columns
     row_y = 0
@@ -78,6 +78,51 @@ def _section_panels(wr, section):
                         panel,
                         x=column * slot_width,
                         y=row_y,
+                    )
+                )
+            elif panel.kind == "train_eval":
+                from gradlab.comparison_charts import workspace_panel
+
+                panels.append(workspace_panel(wr, panel, entity=entity, layout=wr.Layout(
+                    x=column * slot_width, y=row_y, w=panel.width, h=panel.height,
+                )))
+            elif panel.kind == "media":
+                panels.append(
+                    wr.MediaBrowser(
+                        title=panel.title,
+                        media_keys=list(panel.y),
+                        layout=wr.Layout(x=column * slot_width, y=row_y, w=panel.width, h=panel.height),
+                    )
+                )
+            elif panel.kind in {
+                "occupancy",
+                "occupancy_recent",
+                "occupancy_cumulative",
+                "curriculum",
+            }:
+                from gradlab.occupancy_charts import (
+                    workspace_panel,
+                    curriculum_workspace_panel,
+                    cumulative_workspace_panel,
+                )
+
+                factory = {
+                    "curriculum": curriculum_workspace_panel,
+                    "occupancy_cumulative": cumulative_workspace_panel,
+                }.get(panel.kind, workspace_panel)
+
+                panels.append(
+                    factory(
+                        wr,
+                        entity=entity,
+                        **(
+                            {"recent": panel.kind == "occupancy_recent"}
+                            if panel.kind in {"occupancy", "occupancy_recent"}
+                            else {}
+                        ),
+                        layout=wr.Layout(
+                            x=column * slot_width, y=row_y, w=panel.width, h=panel.height
+                        ),
                     )
                 )
             else:
@@ -100,7 +145,7 @@ def build_wandb_workspace(spec: WandbWorkspaceSpec, *, entity: str):
 
     sections = []
     for section in spec.sections:
-        panels = _section_panels(wr, section)
+        panels = _section_panels(wr, section, entity=entity)
         sections.append(
             ws.Section(
                 name=section.title,
@@ -124,7 +169,7 @@ def build_wandb_workspace(spec: WandbWorkspaceSpec, *, entity: str):
         name=spec.display_name,
         sections=sections,
         settings=ws.WorkspaceSettings(
-            x_axis="train/global_step",
+            x_axis="train/step",
             smoothing_type="none",
             smoothing_weight=0,
             sort_panels_alphabetically=False,
@@ -231,7 +276,17 @@ def _load_managed_workspace(loader: WorkspaceLoader, url: str) -> tuple[str, Any
 def _default_workspace_loader(url: str):
     from wandb_workspaces.workspaces import Workspace
 
-    return Workspace.from_url(url)
+    from wandb_workspaces.reports.v2 import interface, internal
+    from gradlab.comparison_charts import query_preserving_chart_class
+
+    # Preserve the original query AST while loading: SDK dict conversion loses
+    # repeated history queries, breaking overlays and hiding actual view drift.
+    previous = interface.panel_mapping[internal.Vega2]
+    interface.panel_mapping[internal.Vega2] = query_preserving_chart_class()
+    try:
+        return Workspace.from_url(url)
+    finally:
+        interface.panel_mapping[internal.Vega2] = previous
 
 
 def _default_workspace_saver(workspace: Any):
@@ -268,6 +323,40 @@ def sync_workspaces(
     saver = workspace_saver or _default_workspace_saver
     app_url = _app_url(api)
     prepared = _prepared_workspaces(specs, entity=entity)
+    if any(
+        panel.kind in {"occupancy", "occupancy_recent"}
+        for spec in specs
+        for section in spec.sections
+        for panel in section.panels
+    ):
+        from gradlab.occupancy_charts import ensure_chart
+
+        ensure_chart(api, entity=entity)
+
+    if any(
+        panel.kind == "occupancy_cumulative"
+        for spec in specs
+        for section in spec.sections
+        for panel in section.panels
+    ):
+        from gradlab.occupancy_charts import ensure_cumulative_chart
+
+        ensure_cumulative_chart(api, entity=entity)
+
+    if any(
+        panel.kind == "curriculum"
+        for spec in specs
+        for section in spec.sections
+        for panel in section.panels
+    ):
+        from gradlab.occupancy_charts import ensure_curriculum_chart
+
+        ensure_curriculum_chart(api, entity=entity)
+
+    if any(panel.kind == "train_eval" for spec in specs for section in spec.sections for panel in section.panels):
+        from gradlab.comparison_charts import ensure_chart
+
+        ensure_chart(api, entity=entity)
 
     remote: dict[str, tuple[str, Any | None, str]] = {}
     for spec in specs:

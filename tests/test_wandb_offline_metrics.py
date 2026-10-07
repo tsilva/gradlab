@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from unittest.mock import patch
+import hashlib
 from pathlib import Path
 
 import wandb
@@ -21,6 +23,7 @@ from gradlab.metric_names import (
     TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MEAN,
 )
 from gradlab.metric_store import MetricStore
+from gradlab.r2_store import BucketConfig, R2Bucket
 from gradlab.run_contracts import (
     EarlyStopReceipt,
     TerminalReceipt,
@@ -95,7 +98,7 @@ class WandbOfflineMetricIntegrationTests(unittest.TestCase):
         run_id = new_run_id()
         attempt_id = new_attempt_id()
         condition = {
-            "metric": "train/target/return_mean",
+            "metric": "train/return/mean",
             "trigger": "no_improvement",
             "direction": "maximize",
             "min_delta": 0.01,
@@ -319,8 +322,8 @@ class WandbOfflineMetricIntegrationTests(unittest.TestCase):
             store.init()
             store.append_metrics(
                 {
-                    "train/target/return_mean": 5.0,
-                    "train/early_stop/return_plateau/patience/progress": 0.25,
+                    "train/return/mean": 5.0,
+                    "train/patience/return_plateau/fraction": 0.25,
                 },
                 step=400_000,
                 source="train:rollout",
@@ -344,16 +347,16 @@ class WandbOfflineMetricIntegrationTests(unittest.TestCase):
             {row["id"]},
         )
         self.assertEqual(
-            {payload["train/global_step"] for payload, _step in run.calls},
+            {payload["train/step"] for payload, _step in run.calls},
             {400_000},
         )
         for metric_name in (
-            "train/target/return_mean",
-            "train/early_stop/return_plateau/patience/progress",
+            "train/return/mean",
+            "train/patience/return_plateau/fraction",
         ):
             definition = (
                 (metric_name,),
-                {"summary": "last", "step_metric": "train/global_step"},
+                {"summary": "last", "step_metric": "train/step"},
             )
             self.assertIn(definition, run.metric_calls)
             self.assertEqual(
@@ -383,10 +386,10 @@ class WandbOfflineMetricIntegrationTests(unittest.TestCase):
             store.init()
             store.append_metrics(
                 {
-                    "eval/return_mean": 5.0,
-                    "eval/return_max": 5.0,
-                    "eval/success/start_rate_min": 1.0,
-                    "eval/success/start_rate_mean": 1.0,
+                    "eval/return/mean": 5.0,
+                    "eval/return/max": 5.0,
+                    "eval/success/min": 1.0,
+                    "eval/success/mean": 1.0,
                 },
                 step=100,
                 source="eval:modal",
@@ -428,15 +431,15 @@ class WandbOfflineMetricIntegrationTests(unittest.TestCase):
                 checkpoint_step=100,
                 checkpoint_url="https://models.example/model.zip",
                 metrics={
-                    "eval/return_mean": 5.0,
-                    "eval/return_max": 5.0,
-                    "eval/success/start_rate_min": 1.0,
-                    "eval/success/start_rate_mean": 1.0,
+                    "eval/return/mean": 5.0,
+                    "eval/return/max": 5.0,
+                    "eval/success/min": 1.0,
+                    "eval/success/mean": 1.0,
                 },
                 updated_at="2026-07-24T00:00:00Z",
                 selection_rank=[
-                    "max(eval/success/start_rate_min)",
-                    "max(eval/return_mean)",
+                    "max(eval/success/min)",
+                    "max(eval/return/mean)",
                     "min(leader/step)",
                 ],
                 evaluation_source="modal:test",
@@ -449,6 +452,59 @@ class WandbOfflineMetricIntegrationTests(unittest.TestCase):
             )
             self.assertEqual(store.metric_outbox_stats()["frames"], 0)
             run.finish()
+
+
+def test_checkpoint_evaluation_video_delivery_reads_verified_private_bytes() -> None:
+    class FakeRun:
+        def __init__(self, directory: Path) -> None:
+            self.dir = str(directory)
+            self.events: list[tuple[dict, int]] = []
+
+        def define_metric(self, *_args, **_kwargs) -> None:
+            return
+
+        def log(self, payload, *, step: int) -> None:
+            self.events.append((dict(payload), step))
+
+    with tempfile.TemporaryDirectory() as temporary:
+        root = Path(temporary)
+        bucket = R2Bucket(BucketConfig(uri=(root / "eval-r2").as_uri()))
+        video = b"verified-video-bytes"
+        key = "runs/test/evals/checkpoint/video/episode.mp4"
+        bucket.put_bytes(key, video, content_type="video/mp4")
+        store = MetricStore(root / "outbox.sqlite")
+        store.init()
+        store.enqueue_event(
+            kind="evaluation_video",
+            payload={
+                "bucket_uri": bucket.config.uri,
+                "key": key,
+                "bytes": len(video),
+                "sha256": hashlib.sha256(video).hexdigest(),
+                "scratch_headroom_bytes": 0,
+            },
+            step=10,
+            source="eval:test:video",
+        )
+        row = store.pending_metric_frames(limit=1)[0]
+        run = FakeRun(root)
+        token = object()
+
+        def video_factory(path: str, *, format: str):
+            assert format == "mp4"
+            assert Path(path).read_bytes() == video
+            return token
+
+        with patch("wandb.Video", side_effect=video_factory):
+            _publish_frame(run, row)
+        assert run.events == [(
+            {
+                EVAL_CHECKPOINT_STEP: 10,
+                ORCHESTRATION_EVENT_SEQUENCE: row["id"],
+                "eval/video": token,
+            },
+            row["id"],
+        )]
 
 
 if __name__ == "__main__":

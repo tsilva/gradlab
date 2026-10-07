@@ -4,17 +4,16 @@
 from __future__ import annotations
 
 import argparse
-from itertools import count
+import os
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-RELEASE_HELPER = (
-    REPO_ROOT / ".codex" / "skills" / "build-release" / "scripts" / "release_build.py"
-)
-PYTHON = REPO_ROOT / ".venv" / "bin" / "python"
+RELEASE_HELPER = REPO_ROOT / "scripts" / "release_build.py"
+PYTHON = Path(sys.executable)
 RELEASE_FILES = (
     REPO_ROOT / "pyproject.toml",
     REPO_ROOT / "src" / "gradlab" / "__init__.py",
@@ -26,7 +25,10 @@ EXPECTED_REPOSITORY = "tsilva/gradlab"
 
 def run(args: list[str]) -> None:
     print("+", " ".join(args), flush=True)
-    subprocess.run(args, cwd=REPO_ROOT, check=True)
+    env = None
+    if Path(args[0]).name == "uv":
+        env = {**os.environ, "UV_CONFIG_FILE": str(REPO_ROOT / "uv-tool.toml")}
+    subprocess.run(args, cwd=REPO_ROOT, check=True, env=env)
 
 
 def capture(args: list[str]) -> str:
@@ -63,6 +65,8 @@ def ensure_synced() -> tuple[str, str]:
         raise SystemExit(f"unexpected upstream ref: {upstream}")
     remote, branch = upstream.split("/", 1)
     require_gradlab_remote(remote)
+    if branch != "main" or capture(["git", "branch", "--show-current"]) != "main":
+        raise SystemExit("publication requires main tracking the remote main branch")
     run(["git", "fetch", "--prune", "--tags", remote])
     ahead_text, behind_text = capture(
         ["git", "rev-list", "--left-right", "--count", f"HEAD...{upstream}"]
@@ -122,26 +126,29 @@ def tag_exists(tag: str) -> bool:
     )
 
 
-def candidate_directory(version: str) -> Path:
-    base = REPO_ROOT / "dist" / f"release-v{version}"
-    if not base.exists() or not any(base.iterdir()):
-        return base
-    for attempt in count(2):
-        candidate = REPO_ROOT / "dist" / f"release-v{version}-candidate-{attempt}"
-        if not candidate.exists():
-            return candidate
-    raise AssertionError("unreachable")
+def run_release_gates(version: str) -> None:
+    """Validate metadata locally; Actions owns source tests and all builds."""
+    helper("check-version", "--version", version)
+    run(["uv", "lock", "--check"])
+    run(["git", "diff", "--check"])
 
 
-def run_release_gates(version: str) -> Path:
-    run(["uv", "sync", "--frozen", "--group", "dev", "--group", "release"])
-    run(["uv", "run", "ruff", "check", "."])
-    run(["uv", "run", "pytest", "-q"])
-    run(["uv", "run", "gradlab", "validate"])
-    run(["uv", "run", "gradlab", "experiment", "certify", "--tier", "simulated", "--json"])
-    out_dir = candidate_directory(version)
-    helper("build", "--version", version, "--out-dir", str(out_dir))
-    return out_dir
+def validate_remote() -> None:
+    """Build committed remote main without changing local release state."""
+    upstream = upstream_ref()
+    remote, branch = upstream.split("/", 1)
+    require_gradlab_remote(remote)
+    if branch != "main":
+        raise SystemExit("validation requires an upstream main branch")
+    run(["gh", "auth", "status"])
+    run(["git", "fetch", remote, "main"])
+    source_sha = capture(["git", "rev-parse", f"{remote}/main"])
+    run([
+        "gh", "workflow", "run", "release.yml", "--repo", EXPECTED_REPOSITORY,
+        "--ref", "main", "-f", f"ref={source_sha}",
+    ])
+    print(f"Validation source SHA: {source_sha}")
+    print("Monitor the workflow_dispatch run on main and verify its checked-out source SHA.")
 
 
 def create_commit_and_tag(version: str) -> str:
@@ -171,15 +178,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     version.add_argument("--to", help="exact release version, for example 0.1.2")
     version.add_argument("--part", choices=("patch", "minor", "major"))
     parser.add_argument("--dry-run-push", action="store_true")
-    return parser.parse_args(argv)
+    parser.add_argument("--validate", action="store_true", help="build remote main in Actions only")
+    args = parser.parse_args(argv)
+    if args.validate and (args.to or args.part or args.dry_run_push):
+        parser.error("--validate cannot be combined with version preparation or --dry-run-push")
+    return args
 
 
 def main() -> None:
     args = parse_args()
-    if not PYTHON.exists():
-        raise SystemExit(
-            "release environment is missing; run `uv sync --frozen --group dev --group release`"
-        )
+    if args.validate:
+        validate_remote()
+        return
     ensure_clean()
     remote, branch = ensure_synced()
     snapshots = {path: path.read_bytes() for path in RELEASE_FILES}
@@ -188,7 +198,7 @@ def main() -> None:
         tag = f"v{version}"
         if tag_exists(tag):
             raise SystemExit(f"release tag already exists: {tag}")
-        out_dir = run_release_gates(version)
+        run_release_gates(version)
         tag = create_commit_and_tag(version)
     except BaseException:
         for path, contents in snapshots.items():
@@ -197,8 +207,11 @@ def main() -> None:
         raise
     push_release(remote, branch, tag, dry_run=args.dry_run_push)
     print()
-    print(f"Released {tag}: pushed {branch} and tag to {remote}.")
-    print(f"Validated local candidate: {out_dir}")
+    source_sha = capture(["git", "rev-parse", "HEAD"])
+    if args.dry_run_push:
+        print(f"Prepared {tag} at {source_sha}; dry-run push only, no Actions build or publication.")
+        return
+    print(f"Pushed {branch} and {tag} at {source_sha} to {remote}.")
     print("GitHub Actions will build, audit, publish to PyPI, and create the GitHub release.")
 
 

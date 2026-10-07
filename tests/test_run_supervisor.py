@@ -42,18 +42,35 @@ from gradlab.run_contracts import (
     new_run_id,
     utc_now,
 )
-from gradlab.run_supervisor import (
-    IncompleteEvaluationEvidence,
+from gradlab.supervisor_lifecycle import (
     LearnerExitContractMismatch,
     LearnerFailure,
     LearnerStartupTimeout,
     LearnerStateContractError,
     LearnerStopAcknowledgementTimeout,
     LearnerTeardownTimeout,
+)
+from gradlab.run_supervisor import (
+    IncompleteEvaluationEvidence,
     RunSupervisor,
     _bind_evaluation_contract,
     _terminal_outcome,
 )
+
+
+def test_forced_terminal_delivery_seals_metric_tail_before_publishing(tmp_path: Path) -> None:
+    from gradlab.lifecycle_certification import CertificationFixture
+
+    prepared = CertificationFixture(tmp_path).prepare(run_number=91)
+    supervisor = prepared.supervisor
+    supervisor.store.append_metrics({"train/return/mean": 1.0}, step=1, source="train")
+    supervisor.last_segment = supervisor.clock.monotonic()
+
+    supervisor._service_delivery(force=True)
+
+    assert supervisor.store.next_metric_events(limit=1) == []
+    assert supervisor.store.metric_segment_high_water() == 1
+    assert supervisor._wandb_high_water() == 1
 
 
 SOURCE_SHA = "a" * 40
@@ -357,8 +374,8 @@ class RunSupervisorTests(unittest.TestCase):
     def prepare_live_learner_contract(self, supervisor: RunSupervisor) -> None:
         supervisor.run_dir.mkdir(parents=True, exist_ok=True)
         supervisor.train_config = {"training_backend": {"id": "sb3.ppo"}}
-        supervisor.expected_learner_pid = 1234
-        supervisor.learner_started_at = 0.0
+        supervisor.learner_state.pid = 1234
+        supervisor.learner_state.started_at = 0.0
 
     def test_runtime_verification_uses_build_identity_and_runtime_input(self) -> None:
         supervisor = self.supervisor()
@@ -375,9 +392,9 @@ class RunSupervisorTests(unittest.TestCase):
         ):
             supervisor.validate_runtime()
 
-    def test_manifest_v5_requires_bounded_liveness_policy(self) -> None:
+    def test_manifest_v6_requires_bounded_liveness_policy(self) -> None:
         self.manifest.validate()
-        self.assertEqual(self.manifest.schema_version, 5)
+        self.assertEqual(self.manifest.schema_version, 6)
         self.assertEqual(self.manifest.liveness["poll_interval_seconds"], 0.25)
 
         missing = RunManifest(**{**self.manifest.to_dict(), "liveness": None})
@@ -416,8 +433,8 @@ class RunSupervisorTests(unittest.TestCase):
         learner = MagicMock()
         learner.poll.return_value = None
         supervisor.learner = learner
-        supervisor.learner_stop_requested_at = 0.0
-        supervisor.last_learner_stop_signal_at = 0.0
+        supervisor.learner_state.stop_requested_at = 0.0
+        supervisor.learner_state.last_stop_signal_at = 0.0
         supervisor.stop_reason = "canceled"
 
         with patch.object(supervisor.runtime, "request_learner_stop") as request_stop:
@@ -433,8 +450,8 @@ class RunSupervisorTests(unittest.TestCase):
             supervisor._maintain_learner_stop(2.1)
 
         request_stop.assert_called_once_with(learner)
-        self.assertEqual(supervisor.learner_stop_signal_attempts, 1)
-        self.assertTrue(supervisor.learner_stop_acknowledged)
+        self.assertEqual(supervisor.learner_state.stop_signal_attempts, 1)
+        self.assertTrue(supervisor.learner_state.stop_acknowledged)
 
     def test_supervisor_bounds_missing_stop_acknowledgement(self) -> None:
         supervisor = self.supervisor()
@@ -442,8 +459,8 @@ class RunSupervisorTests(unittest.TestCase):
         learner = MagicMock()
         learner.poll.return_value = None
         supervisor.learner = learner
-        supervisor.learner_stop_requested_at = 0.0
-        supervisor.last_learner_stop_signal_at = 9.0
+        supervisor.learner_state.stop_requested_at = 0.0
+        supervisor.learner_state.last_stop_signal_at = 9.0
         supervisor.stop_reason = "canceled"
 
         with self.assertRaises(LearnerStopAcknowledgementTimeout):
@@ -633,7 +650,7 @@ class RunSupervisorTests(unittest.TestCase):
             "evidence_policy": {"fail_fast": "disabled"},
             "acceptance": [
                 {
-                    "metric": "eval/return_mean",
+                    "metric": "eval/return/mean",
                     "operator": ">=",
                     "threshold": 5.0,
                 }
@@ -648,7 +665,7 @@ class RunSupervisorTests(unittest.TestCase):
                 **valid,
                 "acceptance": [
                     {
-                        "metric": "eval/success/start_rate_min",
+                        "metric": "eval/success/min",
                         "operator": ">=",
                         "threshold": 1.0,
                     }
@@ -678,7 +695,7 @@ class RunSupervisorTests(unittest.TestCase):
             "evidence_policy": {"fail_fast": "disabled"},
             "acceptance": [
                 {
-                    "metric": "eval/success/start_rate_min",
+                    "metric": "eval/success/min",
                     "operator": ">=",
                     "threshold": 1.0,
                 }
@@ -690,7 +707,7 @@ class RunSupervisorTests(unittest.TestCase):
             **valid,
             "acceptance": [
                 {
-                    "metric": "eval/return_mean",
+                    "metric": "eval/return/mean",
                     "operator": ">=",
                     "threshold": 0.95,
                 }
@@ -807,6 +824,94 @@ class RunSupervisorTests(unittest.TestCase):
         ):
             supervisor.validate_runtime()
 
+    def test_measuring_active_iteration_persists_throttled_host_load(self) -> None:
+        supervisor = self.supervisor()
+        supervisor.store.init()
+        supervisor.train_config["checkpoint_monitoring"] = {
+            "calibration": {"status": "measuring"},
+        }
+        # Stop immediately after sampling, before unrelated service boundaries.
+        with (
+            patch.object(supervisor, "_renew_lease"),
+            patch.object(supervisor, "_observe_cancel_request", side_effect=InterruptedError),
+            patch("gradlab.run_supervisor.os.getloadavg", side_effect=[(2.0, 0, 0), (4.0, 0, 0)]) as load,
+        ):
+            for instant in (0.0, 30.0, 60.0):
+                with self.assertRaises(InterruptedError):
+                    supervisor.active_iteration(now=instant)
+        self.assertEqual(load.call_count, 2)
+        self.assertEqual(supervisor.store.state("calibration_host_load"), {
+            "count": 2, "sum": 6.0, "max": 4.0, "at": 60.0,
+        })
+
+    def test_post_startup_failure_creates_terminal_with_optional_calibration_state(self) -> None:
+        supervisor = self.supervisor()
+        with (
+            patch.object(supervisor, "validate_runtime"),
+            patch.object(supervisor, "materialize"),
+            patch.object(supervisor, "_recover_durable_state"),
+            patch.object(supervisor, "_start_wandb"),
+            patch.object(supervisor, "_start_learner"),
+            patch.object(supervisor, "_publish_state_archive", side_effect=RuntimeError("archive failed")),
+            patch.object(supervisor, "_failure_drain"),
+            patch.object(supervisor, "_finish_wandb", return_value=0),
+            patch.object(supervisor.runtime, "publish_terminal"),
+        ):
+            self.assertEqual(supervisor.run(), 1)
+
+        receipt = self.authority.control.get_json(
+            f"runs/{self.run_id}/attempts/{self.manifest.attempt_id}/terminal.json"
+        )
+        self.assertEqual(receipt["state"], "resumable_failure")
+        self.assertEqual(receipt["stop_reason"], "supervisor_failure")
+        self.assertFalse(receipt["drain"]["complete"])
+        self.assertEqual(receipt["drain"]["failure"]["message"], "archive failed")
+        self.assertIsNone(receipt["drain"]["calibration_host_load"])
+        self.assertIsNone(receipt["drain"]["wandb_final_drain_seconds"])
+
+    def test_wandb_finish_allows_upload_headroom_within_task_deadline(self) -> None:
+        supervisor = self.supervisor()
+        supervisor.store.init()
+        projector = MagicMock()
+        supervisor.projector = projector
+        task_duration = int(supervisor.manifest.compute["selected"]["max_duration_seconds"])
+        with (
+            patch("gradlab.run_supervisor.parse_utc_datetime") as parse_created_at,
+            patch.object(supervisor.clock, "time", return_value=1_000),
+            patch.object(supervisor.runtime, "close_wandb") as close_wandb,
+        ):
+            parse_created_at.return_value.timestamp.return_value = 1_000
+            supervisor._finish_wandb()
+        close_wandb.assert_called_once_with(projector, timeout_seconds=1_200)
+        self.assertIsNone(supervisor.projector)
+
+        supervisor.projector = projector
+        with (
+            patch("gradlab.run_supervisor.parse_utc_datetime") as parse_created_at,
+            patch.object(supervisor.clock, "time", return_value=1_000 + task_duration - 420),
+            patch.object(supervisor.runtime, "close_wandb") as close_wandb,
+        ):
+            parse_created_at.return_value.timestamp.return_value = 1_000
+            supervisor._finish_wandb()
+        close_wandb.assert_called_once_with(projector, timeout_seconds=420)
+        self.assertIsNone(supervisor.projector)
+
+    def test_wandb_finish_timeout_does_not_open_second_session(self) -> None:
+        supervisor = self.supervisor()
+        with (
+            patch.object(supervisor, "validate_runtime"),
+            patch.object(supervisor, "materialize"),
+            patch.object(supervisor, "_recover_durable_state"),
+            patch.object(supervisor, "_start_wandb"),
+            patch.object(supervisor, "_start_learner"),
+            patch.object(supervisor, "_publish_state_archive", side_effect=RuntimeError("archive failed")),
+            patch.object(supervisor, "_failure_drain"),
+            patch.object(supervisor, "_finish_wandb", side_effect=TimeoutError("W&B finish timed out")),
+            patch.object(supervisor.runtime, "publish_terminal") as publish_terminal,
+        ):
+            self.assertEqual(supervisor.run(), 1)
+        publish_terminal.assert_not_called()
+
     def test_recovery_failure_after_lease_creates_terminal_receipt(self) -> None:
         supervisor = self.supervisor()
         with (
@@ -882,15 +987,25 @@ class RunSupervisorTests(unittest.TestCase):
 
     def test_supervisor_starts_learner_with_explicit_execution_mode(self) -> None:
         supervisor = self.supervisor()
-        with patch.object(
-            supervisor.runtime,
-            "start_learner",
-            return_value=MagicMock(pid=1234),
-        ) as start:
+        with (
+            patch.object(
+                supervisor.runtime,
+                "start_learner",
+                return_value=MagicMock(pid=1234),
+            ) as start,
+            patch.object(supervisor.clock, "monotonic", return_value=123.0),
+        ):
             supervisor._start_learner()
 
         command = start.call_args.args[0]
         self.assertEqual(command[-2:], ["--execution-mode", "supervised"])
+        self.assertEqual(supervisor.learner_state.pid, 1234)
+        self.assertEqual(supervisor.learner_state.started_at, 123.0)
+        self.assertIsNone(supervisor._observe_live_learner_state(123.0))
+        timeout = supervisor._liveness_seconds("startup_timeout_seconds")
+        self.assertIsNone(supervisor._observe_live_learner_state(123.0 + timeout - 0.25))
+        with self.assertRaises(LearnerStartupTimeout):
+            supervisor._observe_live_learner_state(123.0 + timeout)
 
     def test_fault_fixture_uses_dedicated_non_training_learner(self) -> None:
         supervisor = self.supervisor()
@@ -980,12 +1095,12 @@ class RunSupervisorTests(unittest.TestCase):
         self.assertEqual(
             set(supervisor.store.latest_metrics()),
             {
-                "ops/outbox/pending",
-                "ops/outbox/oldest_age_seconds",
-                "ops/outbox/visibility_lag_seconds",
-                "ops/checkpoints_pending",
-                "ops/evals_pending",
-                "ops/scratch/used_fraction",
+                "ops/outbox/count",
+                "ops/outbox/age/seconds",
+                "ops/visibility/seconds",
+                "ops/checkpoints/count",
+                "ops/evals/count",
+                "ops/scratch/fraction",
             },
         )
         internal = supervisor.store.state("backpressure")
@@ -1041,8 +1156,8 @@ class RunSupervisorTests(unittest.TestCase):
         with self.assertRaisesRegex(LearnerFailure, "learner exploded"):
             supervisor._observe_live_learner_state(0.25)
 
-        self.assertEqual(supervisor.learner_final_step, 17)
-        self.assertEqual(supervisor.learner_result_observed_at, 0.25)
+        self.assertEqual(supervisor.learner_state.final_step, 17)
+        self.assertEqual(supervisor.learner_state.result_observed_at, 0.25)
 
     def test_live_learner_state_rejects_noncurrent_and_identity_mismatch(self) -> None:
         supervisor = self.supervisor()
@@ -1164,14 +1279,14 @@ class RunSupervisorTests(unittest.TestCase):
             matched_condition_ids=("return_plateau",),
             outcome=outcome,  # type: ignore[arg-type]
             trigger="no_improvement",
-            metric="train/target/return_mean",
+            metric="train/return/mean",
             metric_step=2_000_000,
             value=650.0,
             best_value=650.0,
             elapsed_steps=1_000_000,
             patience_progress=1.0,
             condition={
-                "metric": "train/target/return_mean",
+                "metric": "train/return/mean",
                 "trigger": "no_improvement",
             },
             early_stop_config_sha256="d" * 64,
@@ -1340,7 +1455,7 @@ class RunSupervisorTests(unittest.TestCase):
         config = {
             "conditions": {
                 "clear": {
-                    "metric": "train/target/success/start_rate_min",
+                    "metric": "train/success/min",
                     "trigger": "threshold",
                     "operator": ">=",
                     "threshold": 1.0,
@@ -1353,7 +1468,7 @@ class RunSupervisorTests(unittest.TestCase):
         machine = MetricEarlyStopStateMachine(config)
         update = machine.update(
             {
-                "train/target/success/start_rate_min": MetricSample(
+                "train/success/min": MetricSample(
                     value=1.0,
                     step=10,
                 )
@@ -1457,7 +1572,7 @@ class RunSupervisorTests(unittest.TestCase):
                 return self.value.items()
 
         class RemoteRun:
-            summary = {"ops/event_sequence": SummarySubDict({"max": 10})}
+            summary = {"ops/sequence": SummarySubDict({"max": 10})}
 
         class Api:
             def flush(self) -> None:
@@ -1480,14 +1595,14 @@ class RunSupervisorTests(unittest.TestCase):
             )
 
         self.assertEqual(api.path, supervisor.wandb_run_path)
-        self.assertEqual(supervisor.wandb_remote_high_water, 10)
+        self.assertEqual(supervisor.delivery_schedule.remote_high_water, 10)
 
     def test_wandb_remote_probe_reads_flattened_max_summary(self) -> None:
         supervisor = self.supervisor()
         supervisor.store.init()
         supervisor.wandb_run_path = f"entity/project/{self.run_id}"
         supervisor.runtime.remote_summary = MagicMock(
-            return_value={"ops/event_sequence.max": 777}
+            return_value={"ops/sequence.max": 777}
         )
 
         supervisor._probe_wandb_remote(
@@ -1496,7 +1611,7 @@ class RunSupervisorTests(unittest.TestCase):
             force=True,
         )
 
-        self.assertEqual(supervisor.wandb_remote_high_water, 777)
+        self.assertEqual(supervisor.delivery_schedule.remote_high_water, 777)
 
     def test_wandb_delivery_drain_accepts_stale_reducer_with_current_step(self) -> None:
         supervisor = self.supervisor()
@@ -1504,7 +1619,7 @@ class RunSupervisorTests(unittest.TestCase):
         supervisor.wandb_run_path = f"entity/project/{self.run_id}"
         supervisor.runtime.remote_summary = MagicMock(
             return_value={
-                "ops/event_sequence.max": 777,
+                "ops/sequence.max": 777,
                 "_step": 778,
             }
         )
@@ -1517,14 +1632,15 @@ class RunSupervisorTests(unittest.TestCase):
             supervisor._wait_for_remote_delivery(778)
 
         sleep.assert_not_called()
-        self.assertEqual(supervisor.wandb_remote_high_water, 778)
+        self.assertEqual(supervisor.delivery_schedule.remote_high_water, 778)
 
     def test_materializes_exact_mario_acceptance_contract(self) -> None:
         supervisor = self.supervisor()
         with patch("gradlab.run_supervisor.verify_rom_file"):
             supervisor.materialize()
         self.assertEqual(supervisor.train_config["timesteps"], 50_000_000)
-        self.assertEqual(supervisor.train_config["checkpoint_freq"], 500_000)
+        self.assertEqual(supervisor.train_config["checkpoint_freq"], 0)
+        self.assertEqual(len(supervisor.train_config["checkpoint_steps"]), 9)
         self.assertEqual(supervisor.train_config["n_envs"], 16)
         self.assertEqual(supervisor.train_config["run_name"], self.run_id)
         self.assertEqual(
@@ -1543,7 +1659,7 @@ class RunSupervisorTests(unittest.TestCase):
             supervisor.eval_contract["acceptance"],
             [
                 {
-                    "metric": "eval/success/start_rate_min",
+                    "metric": "eval/success/min",
                     "operator": ">=",
                     "threshold": 1.0,
                 }
@@ -1623,7 +1739,7 @@ class RunSupervisorTests(unittest.TestCase):
             ]
             * 100,
             aggregates={
-                "eval/return_mean": 1.0,
+                "eval/return/mean": 1.0,
                 "failure_count": 0,
             },
             timings={},
@@ -1634,13 +1750,13 @@ class RunSupervisorTests(unittest.TestCase):
             {
                 "checkpoint_step": 4_500_000,
                 "idempotency_key": result.idempotency_key,
-                "intent": {"execution_contract": {"episodes": 100}},
+                "intent": {"execution_contract": {"episodes": 100, "acceptance": []}},
             },
             result,
         )
 
         self.assertEqual(
-            supervisor.store.latest_metric("eval/return_mean"),
+            supervisor.store.latest_metric("eval/return/mean"),
             1.0,
         )
         self.assertIsNone(supervisor.store.latest_metric("failure_count"))
@@ -1665,7 +1781,7 @@ class RunSupervisorTests(unittest.TestCase):
                     }
                 ]
                 * episode_count,
-                aggregates={"eval/return_mean": 0.0},
+                aggregates={"eval/return/mean": 0.0},
                 timings={},
                 evidence_sha256=[],
                 completed_at=utc_now(),
@@ -1678,7 +1794,7 @@ class RunSupervisorTests(unittest.TestCase):
             {
                 "checkpoint_step": 100,
                 "idempotency_key": complete_result.idempotency_key,
-                "intent": {"execution_contract": {"episodes": 2}},
+                "intent": {"execution_contract": {"episodes": 2, "acceptance": []}},
             },
             complete_result,
         )
@@ -1691,7 +1807,7 @@ class RunSupervisorTests(unittest.TestCase):
             {
                 "checkpoint_step": 100,
                 "idempotency_key": partial_result.idempotency_key,
-                "intent": {"execution_contract": {"episodes": 2}},
+                "intent": {"execution_contract": {"episodes": 2, "acceptance": []}},
             },
             partial_result,
         )
@@ -1768,7 +1884,7 @@ class RunSupervisorTests(unittest.TestCase):
             self.assertTrue(supervisor._observe_result(row))
 
         self.assertEqual(events, ["stop", "metrics"])
-        self.assertTrue(supervisor.eval_admission_closed)
+        self.assertTrue(supervisor.automatic_evaluation.closed)
         self.assertEqual(
             supervisor.store.state("automatic_eval_admission")["checkpoint_id"],
             result.checkpoint_id,
@@ -1847,7 +1963,7 @@ class RunSupervisorTests(unittest.TestCase):
             sha256="d" * 64,
         )
         supervisor._ensure_eval(2, later)
-        supervisor.eval_admission_closed = True
+        supervisor.automatic_evaluation.closed = True
 
         self.assertEqual(supervisor._submit_pending_evals(), 0)
         self.assertEqual(
@@ -1901,7 +2017,7 @@ class RunSupervisorTests(unittest.TestCase):
                 status="accepted",
                 result={"status": "accepted"},
             )
-            supervisor.eval_admission_closed = True
+            supervisor.automatic_evaluation.closed = True
             return True
 
         with patch.object(supervisor, "_observe_result", side_effect=observe):
@@ -1933,7 +2049,7 @@ class RunSupervisorTests(unittest.TestCase):
 
         supervisor._close_eval_admission_for_failure(failure)
 
-        self.assertTrue(supervisor.eval_admission_closed)
+        self.assertTrue(supervisor.automatic_evaluation.closed)
         self.assertEqual(supervisor._submit_pending_evals(), 0)
         self.assertEqual(
             supervisor.store.state("automatic_eval_admission")["reason"],

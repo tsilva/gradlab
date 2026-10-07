@@ -130,3 +130,41 @@ def test_progress_minimum_uses_only_finite_target_values_and_expires():
     assert reducer.snapshot()[key] == -2
     assert reducer.consume(_episode(0, kills=8) for _ in range(99))[key] == -2
     assert reducer.consume([_episode(0, kills=8)])[key] == 8
+
+
+def test_throughput_window_weights_rates_and_flushes_partial_tail():
+    from gradlab.training_metrics import ThroughputWindow
+
+    window = ThroughputWindow()
+    window.add(steps=100, loop_seconds=1, rollout_seconds=0.75,
+               between_rollouts_seconds=0.25, provider_step_seconds=0.5)
+    assert window.flush() == {}
+    window.add(steps=100, loop_seconds=4, rollout_seconds=1.25,
+               between_rollouts_seconds=2.75, provider_step_seconds=1)
+    metrics = window.flush()
+    assert metrics == {
+        "train/throughput/rate": 40,
+        "train/provider/rate": pytest.approx(200 / 1.5),
+        "train/rollout_overhead/seconds": 0.5,
+        "train/between_rollouts/seconds": 3,
+    }
+    window.add(steps=20, loop_seconds=0.2, rollout_seconds=0.1,
+               between_rollouts_seconds=0.1, provider_step_seconds=None)
+    assert window.flush() == {}
+    assert window.flush(final=True) == {
+        "train/throughput/rate": 100, "train/between_rollouts/seconds": 0.1,
+    }
+    assert window.flush(final=True) == {}
+
+
+def test_throughput_window_never_fabricates_partial_provider_rate():
+    from gradlab.training_metrics import ThroughputWindow
+
+    window = ThroughputWindow()
+    for provider in (0.5, None):
+        window.add(steps=100, loop_seconds=3, rollout_seconds=2,
+                   between_rollouts_seconds=1, provider_step_seconds=provider)
+    assert window.flush() == {
+        "train/throughput/rate": pytest.approx(200 / 6),
+        "train/between_rollouts/seconds": 2,
+    }

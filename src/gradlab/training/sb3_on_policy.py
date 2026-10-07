@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from gradlab.metric_inventory import active_reward_components
-
+import math
 import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -12,11 +11,11 @@ from gymnasium import spaces
 
 from gradlab.action_contract import runtime_action_contract
 from gradlab.artifacts import install_model_bundle
+from gradlab.metric_inventory import active_reward_components, required_metric_names
 from gradlab.policy_execution import compile_policy_execution_contract
 from gradlab.state_archive import state_archive_artifact_summary
 from gradlab.training_backend import BackendContext
 from gradlab.training_lifecycle import ProgressField, TrainingExecutionMode, TrainingResult
-
 
 ModelFactory = Callable[[BackendContext, Any, Any, str], Any]
 ConfigNormalizer = Callable[..., dict[str, Any]]
@@ -90,15 +89,18 @@ _INTEGER_FIELDS = (
     "learning_rate_schedule_timesteps",
     "n_steps",
     "ent_coef_schedule_timesteps",
+    "gamma_schedule_timesteps",
 )
 _NON_NEGATIVE_INTEGER_FIELDS = (
     "learning_rate_schedule_timesteps",
     "ent_coef_schedule_timesteps",
+    "gamma_schedule_timesteps",
 )
 _NUMBER_FIELDS = (
     "learning_rate",
     "learning_rate_final",
     "gamma",
+    "gamma_final",
     "gae_lambda",
     "ent_coef",
     "ent_coef_final",
@@ -131,6 +133,50 @@ def normalize_on_policy_config(
             continue
         if not isinstance(value, int | float) or isinstance(value, bool):
             raise ValueError(f"{label}.{key} must be a number or null")
+    for key in ("gamma", "gamma_final"):
+        value = normalized[key]
+        if key == "gamma_final" and value is None:
+            continue
+        if value is None or not math.isfinite(value) or not 0 <= value <= 1:
+            raise ValueError(f"{label}.{key} must be finite and between zero and one")
+    if normalized["gamma_final"] is None and normalized["gamma_schedule_timesteps"]:
+        raise ValueError(f"{label}.gamma_schedule_timesteps requires gamma_final")
+    milestones = normalized.get("learning_rate_milestones")
+    if milestones is not None:
+        if (
+            normalized["learning_rate_final"] is not None
+            or normalized["learning_rate_schedule_timesteps"]
+        ):
+            raise ValueError(
+                f"{label}.learning_rate_milestones cannot combine with a linear schedule"
+            )
+        if not isinstance(milestones, list) or not milestones:
+            raise ValueError(f"{label}.learning_rate_milestones must be a nonempty list")
+        initial = normalized["learning_rate"]
+        if initial is None or not math.isfinite(initial) or initial < 0:
+            raise ValueError(f"{label}.learning_rate must be finite and non-negative")
+        previous_step = 0
+        points = []
+        for point in milestones:
+            if not isinstance(point, Mapping) or set(point) != {"step", "value"}:
+                raise ValueError(f"{label}.learning_rate_milestones entries require step and value")
+            step, value = point["step"], point["value"]
+            if not isinstance(step, int) or isinstance(step, bool) or step <= previous_step:
+                raise ValueError(
+                    f"{label}.learning_rate_milestones steps must strictly increase from zero"
+                )
+            if (
+                not isinstance(value, int | float)
+                or isinstance(value, bool)
+                or not math.isfinite(value)
+                or value < 0
+            ):
+                raise ValueError(
+                    f"{label}.learning_rate_milestones values must be finite and non-negative"
+                )
+            points.append({"step": step, "value": float(value)})
+            previous_step = step
+        normalized["learning_rate_milestones"] = points
     if normalized["device"] not in {"auto", "cpu", "cuda", "mps"}:
         raise ValueError(f"{label}.device must be one of auto, cpu, cuda, mps")
     if not isinstance(normalized["normalize_advantage"], bool):
@@ -151,7 +197,6 @@ def normalize_on_policy_config(
     ):
         raise ValueError(f"{label}.resume requires a pinned approval hash and byte manifest")
     return normalized
-
 
 
 def validate_action_space(action_space, *, algorithm_id: str) -> None:
@@ -247,6 +292,49 @@ def save_model_bundle(
     )
 
 
+class LearnedPolicyCheckpoints:
+    """One scheduled/candidate publication opportunity per completed update."""
+
+    def __init__(self, model: Any, context: BackendContext, *, algorithm_id: str):
+        from gradlab.checkpoint_schedule import CheckpointSchedule
+        from gradlab.metric_store import MetricStore, metric_store_path
+
+        self.model = model
+        self.context = context
+        self.algorithm_id = algorithm_id
+        self.schedule = CheckpointSchedule(context.train_config,
+                                           initial_step=int(model.num_timesteps))
+        self.store = MetricStore(metric_store_path(context.run_dir))
+
+    def after_update(self) -> None:
+        context = self.context
+        if not context.session.checkpoints.persist_intermediate or context.stop_flag.requested:
+            return
+        step = int(self.model.num_timesteps)
+        due = self.schedule.due(step)
+        rule = self.schedule.candidate
+        sample = (
+            self.store.latest_metric_sample(rule["metric"])
+            if rule and self.schedule.candidate_count < rule["max_checkpoints"] else None
+        )
+        candidate = self.schedule.candidate_due(step, sample)
+        if not (due or candidate):
+            return
+        save_model_bundle(
+            model=self.model, context=context,
+            model_path=context.checkpoint_dir
+            / f"{checkpoint_prefix(context.environment.game, algorithm_id=self.algorithm_id)}"
+              f"_{step}_steps.zip",
+            kind="checkpoint", step=step,
+        )
+        if candidate:
+            context.session.event(
+                f"training-proxy candidate ready: step={step} metric={rule['metric']} "
+                f"value={sample[0]} metric_step={sample[1]} "
+                f"budget={self.schedule.candidate_count}/{rule['max_checkpoints']}"
+            )
+
+
 def run_sb3_on_policy(
     context: BackendContext,
     *,
@@ -257,12 +345,11 @@ def run_sb3_on_policy(
     from stable_baselines3.common.utils import set_random_seed
 
     from gradlab.callbacks import (
-        LedgerCheckpointHelper,
-        MetricStoreLoggerHelper,
+        ArchiveCurriculumFeedbackHelper,
         GradLabCallback,
+        MetricStoreLoggerHelper,
         RolloutDiagnosticsHelper,
         RuntimeMetricsHelper,
-        ArchiveCurriculumFeedbackHelper,
         ThroughputHelper,
     )
     from gradlab.device import resolve_sb3_device
@@ -274,7 +361,7 @@ def run_sb3_on_policy(
     from gradlab.file_utils import file_sha256
     from gradlab.metric_store import metric_store_path
     from gradlab.policy_bundle import write_canonical_json
-    from gradlab.schedules import EntropyCoefficientScheduleHelper
+    from gradlab.schedules import EntropyCoefficientScheduleHelper, GammaScheduleHelper
     from gradlab.training.sb3_helpers import (
         GracefulStopHelper,
         Sb3HumanOutputFormatHelper,
@@ -309,7 +396,9 @@ def run_sb3_on_policy(
         rom_binding=getattr(context, "rom_binding", None),
         state_archive=common_config.get("state_archive"),
         state_archive_root=context.run_dir / "state-archive",
+        occupancy=common_config.get("occupancy"),
     )
+    occupancy_reporter = None
     try:
         store_path = metric_store_path(context.run_dir)
         set_random_seed(int(common_config["seed"]))
@@ -340,7 +429,19 @@ def run_sb3_on_policy(
         install_on_policy_safe_boundary_stop(
             model,
             graceful_stop=graceful_stop,
+            after_update=LearnedPolicyCheckpoints(model, context,
+                                                  algorithm_id=algorithm_id).after_update,
         )
+        if (
+            common_config.get("occupancy") is not None
+            or (common_config.get("state_archive") or {}).get("curriculum") is not None
+        ):
+            from gradlab.occupancy import OccupancyReporter
+            from gradlab.callbacks import OccupancyHelper
+
+            occupancy_reporter = OccupancyReporter(
+                env.runtime, context, initial_step=model.num_timesteps
+            )
         components: list[Any] = [
             graceful_stop,
             Sb3HumanOutputFormatHelper(
@@ -348,6 +449,8 @@ def run_sb3_on_policy(
             ),
             ThroughputHelper(),
         ]
+        if occupancy_reporter is not None:
+            components.append(OccupancyHelper(occupancy_reporter))
         if common_config.get("state_archive") is not None:
             archive_config = common_config.get("state_archive")
             if isinstance(archive_config, Mapping) and archive_config.get("curriculum") is not None:
@@ -360,6 +463,8 @@ def run_sb3_on_policy(
                 RuntimeMetricsHelper(
                     event_names=tuple(task_termination(config).get("failure", ())),
                     active_reward_components=active_reward_components(config.task),
+                    task=config.task,
+                    required_metrics=required_metric_names(common_config),
                     progress_fields=tuple(common_config.get("episode_progress_fields", ())),
                     configured_starts=tuple(
                         config.states or ((config.state,) if config.state else ())
@@ -377,23 +482,7 @@ def run_sb3_on_policy(
                 ),
             ]
         )
-        checkpoint_save_freq = checkpoint_save_frequency(
-            int(common_config["checkpoint_freq"]),
-            n_envs,
-        )
-        if checkpoint_save_freq is not None:
-            components.append(
-                LedgerCheckpointHelper(
-                    train_config=common_config,
-                    config=config,
-                    save_freq=checkpoint_save_freq,
-                    save_path=str(context.checkpoint_dir),
-                    name_prefix=checkpoint_prefix(config.game, algorithm_id=algorithm_id),
-                    metric_store_path=store_path,
-                    eval_required=common_config["checkpoint_eval_backend"] != "none",
-                    checkpoint_coordinator=context.session.checkpoints,
-                )
-            )
+        components.append(GammaScheduleHelper(backend_config, int(common_config["timesteps"])))
         if backend_config["ent_coef_final"] is not None:
             components.append(
                 EntropyCoefficientScheduleHelper(
@@ -446,7 +535,9 @@ def run_sb3_on_policy(
         reason = context.session.terminal_reason()
         if (
             context.session.should_persist_interrupted_checkpoint(reason)
-            and int(common_config["checkpoint_freq"]) > 0
+            and (int(common_config["checkpoint_freq"]) > 0
+                 or common_config.get("checkpoint_steps")
+                 or common_config.get("checkpoint_candidates"))
         ):
             step = int(model.num_timesteps)
             save_model_bundle(
@@ -478,4 +569,8 @@ def run_sb3_on_policy(
             model_kind=terminal_kind,
         )
     finally:
-        env.close()
+        try:
+            if occupancy_reporter is not None:
+                occupancy_reporter.flush(final=True)
+        finally:
+            env.close()
