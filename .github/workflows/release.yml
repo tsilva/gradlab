@@ -103,12 +103,29 @@ jobs:
           uv run python scripts/release_build.py
           check-version --version "${{ steps.version.outputs.version }}"
 
-      - name: Run source checks
+      - name: Install recording test prerequisites
         run: |
-          uv run ruff check .
-          uv run pytest -q
-          uv run gradlab validate
-          uv run gradlab experiment certify --tier simulated --json
+          sudo apt-get update
+          sudo apt-get install --yes ffmpeg
+          ffmpeg -version
+          ffprobe -version
+
+      - name: Lint source
+        run: uv run ruff check .
+
+      - name: Run Python tests
+        run: uv run pytest -q --maxfail=1
+
+      - name: Validate configuration
+        run: uv run gradlab validate
+
+      - name: Certify lifecycle determinism
+        run: |
+          evidence="$(mktemp -d)"
+          uv run gradlab experiment certify --tier simulated --json > "$evidence/first.json"
+          uv run gradlab experiment certify --tier simulated --json > "$evidence/second.json"
+          cmp "$evidence/first.json" "$evidence/second.json"
+          cat "$evidence/first.json"
 
       - name: Build and audit release distributions
         run: >-
