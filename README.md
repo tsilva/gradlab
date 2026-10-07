@@ -143,6 +143,9 @@ bundles. `uv build` checks that the compiled assets match their source inputs an
 includes them in both distribution formats. Building a wheel from the published
 source distribution uses those included assets without invoking Node.
 
+Frontend security fixes are pinned through `pnpm-workspace.yaml` overrides for
+`devalue` and `source-map-js`; the seven-day release-age gate remains enabled.
+
 Run `pnpm test:web` for controller and calculation tests. Browser fixture commands
 and performance workloads are documented in
 [the player fixture guide](tests/web_player/fixtures/README.md).
@@ -262,3 +265,11 @@ explicitly authorized. See [COMPUTE.md](COMPUTE.md) and the
 
 GradLab is licensed under the [MIT License](LICENSE). Third-party attributions
 are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+## Secret scanning
+
+GitHub Actions scans changed commits with the pinned Infisical CLI. New branches
+and rewritten pushes scan the complete history reachable from the new head, even
+when the previous commit is no longer available. Missing pull-request revisions
+and scanner errors still fail the check. Reports publish only finding locations;
+credentials and matched source content remain private.
