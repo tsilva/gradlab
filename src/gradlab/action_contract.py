@@ -24,11 +24,16 @@ from gradlab.action_codecs import (
     vizdoom_shared_multidiscrete_codec_document,
     vizdoom_shared_multidiscrete_semantics,
 )
+from gradlab.action_overrides import (
+    CONDITIONAL_ACTION_OVERRIDE_KEY,
+    normalize_conditional_action_overrides,
+)
 
 
-MARIO_PROVIDERS = frozenset({"stable-retro-turbo", "supermariobrosnes-turbo"})
+MARIO_PROVIDERS = frozenset({"env-stableretro-turbo", "env-supermariobrosnes-turbo-emu"})
 BUILTIN_ACTION_MODES = frozenset({"all", "filtered", "discrete", "multi_discrete"})
-ACTION_CONTRACT_SCHEMA_VERSION = 1
+ACTION_CONTRACT_SCHEMA_VERSION = 2
+SUPPORTED_ACTION_CONTRACT_SCHEMA_VERSIONS = frozenset({1, 2})
 MARIO_ACTION_TABLES = {
     "basic": (
         (),
@@ -74,6 +79,28 @@ BREAKOUT_ACTION_TABLES = {
         ("LEFT",),
     ),
 }
+GRADOOM_DEATHMATCH_BUTTONS = (
+    "ATTACK",
+    "SPEED",
+    "STRAFE",
+    "MOVE_RIGHT",
+    "MOVE_LEFT",
+    "MOVE_BACKWARD",
+    "MOVE_FORWARD",
+    "TURN_RIGHT",
+    "TURN_LEFT",
+    "SELECT_WEAPON1",
+    "SELECT_WEAPON2",
+    "SELECT_WEAPON3",
+    "SELECT_WEAPON4",
+    "SELECT_WEAPON5",
+    "SELECT_WEAPON6",
+    "SELECT_NEXT_WEAPON",
+    "SELECT_PREV_WEAPON",
+    "LOOK_UP_DOWN_DELTA",
+    "TURN_LEFT_RIGHT_DELTA",
+    "MOVE_LEFT_RIGHT_DELTA",
+)
 
 
 def _mode_name(value: Any) -> str:
@@ -84,18 +111,18 @@ def _mode_name(value: Any) -> str:
 def _packaged_action_sets(provider_id: str, game: str) -> Mapping[str, Any]:
     # Stable Retro does not package the dedicated Mario runtime's named action
     # sets, so GradLab supplies the same current semantic tables for that provider.
-    if game == "SuperMarioBros-Nes-v0" and provider_id == "stable-retro-turbo":
+    if game == "SuperMarioBros-Nes-v0" and provider_id == "env-stableretro-turbo":
         return MARIO_ACTION_TABLES
     # Original Stable Retro does not declare Breakout's provider-neutral
     # four-action table. GradLab owns this cross-provider contract and passes
     # the exact same table directly to both implementations.
-    if game == "Breakout-Atari2600-v0" and provider_id == "stable-retro-turbo":
+    if game == "Breakout-Atari2600-v0" and provider_id == "env-stableretro-turbo":
         return BREAKOUT_ACTION_TABLES
-    if provider_id == "stable-retro-turbo":
-        import stable_retro
+    if provider_id == "env-stableretro-turbo":
+        import env_stableretro_turbo
 
         path = (
-            Path(stable_retro.__file__).resolve().parent
+            Path(env_stableretro_turbo.__file__).resolve().parent
             / "data"
             / "stable"
             / game
@@ -104,8 +131,8 @@ def _packaged_action_sets(provider_id: str, game: str) -> Mapping[str, Any]:
         metadata = json.loads(path.read_text(encoding="utf-8"))
     else:
         package = {
-            "supermariobrosnes-turbo": "supermariobrosnes_turbo",
-            "breakout-turbo-env": "breakout_turbo_env",
+            "env-supermariobrosnes-turbo-emu": "env_supermariobrosnes_turbo_emu",
+            "env-breakoutatari2600-turbo-native": "env_breakoutatari2600_turbo_native",
         }.get(provider_id)
         if package is None:
             return {}
@@ -115,18 +142,37 @@ def _packaged_action_sets(provider_id: str, game: str) -> Mapping[str, Any]:
     return action_sets if isinstance(action_sets, Mapping) else {}
 
 
+def _gradoom_scenario_buttons(
+    game: str | Path | None,
+    *,
+    scenario: str | Path | None,
+) -> tuple[str, ...]:
+    """Resolve the pinned GraDOOM profile without importing its CUDA runtime."""
+
+    requested = scenario if scenario not in (None, "scenario") else game
+    if requested is None:
+        return GRADOOM_DEATHMATCH_BUTTONS
+    candidate = Path(str(requested)).expanduser()
+    if candidate.is_file():
+        if candidate.suffix.casefold() not in {".cfg", ".wad"}:
+            raise ValueError("GraDOOM scenarios must be a ViZDoom .cfg or Doom .wad file")
+        return GRADOOM_DEATHMATCH_BUTTONS
+    alias = str(requested).strip().casefold().removesuffix(".cfg")
+    if alias not in {"deathmatch", "vizdoomdeathmatch-v1"}:
+        raise ValueError(
+            f"unsupported GraDOOM game/scenario {requested!r}; "
+            "only VizdoomDeathmatch-v1 is supported"
+        )
+    return GRADOOM_DEATHMATCH_BUTTONS
+
+
 def provider_buttons(
     provider_id: str,
     game: str,
     *,
     env_args: Mapping[str, Any] | None = None,
 ) -> tuple[str | None, ...]:
-    if provider_id in {"gradoom", "vizdoom-turbo"}:
-        if provider_id == "gradoom":
-            from gradoom import scenario_buttons
-        else:
-            from vizdoom_turbo import scenario_buttons
-
+    if provider_id in {"env-gradoom-turbo-torch", "env-vizdoom-turbo"}:
         args = env_args if isinstance(env_args, Mapping) else {}
         vizdoom_config = args.get("vizdoom_config")
         if isinstance(vizdoom_config, Mapping) and "available_buttons" in vizdoom_config:
@@ -144,31 +190,35 @@ def provider_buttons(
             if len(set(buttons)) != len(buttons):
                 raise ValueError("env_args.vizdoom_config.available_buttons cannot repeat a button")
             return buttons
+        if provider_id == "env-gradoom-turbo-torch":
+            return _gradoom_scenario_buttons(game, scenario=args.get("scenario"))
+        from env_vizdoom_turbo import scenario_buttons
+
         return scenario_buttons(game, scenario=args.get("scenario"))
-    if provider_id == "supermariobrosnes-turbo":
-        from supermariobrosnes_turbo import NES_BUTTONS
+    if provider_id == "env-supermariobrosnes-turbo-emu":
+        from env_supermariobrosnes_turbo_emu import NES_BUTTONS
 
         return tuple(NES_BUTTONS)
-    if provider_id == "breakout-turbo-env":
-        from breakout_turbo_env import BUTTONS
+    if provider_id == "env-breakoutatari2600-turbo-native":
+        from env_breakoutatari2600_turbo_native import BUTTONS
 
         return tuple(BUTTONS)
-    if provider_id == "stable-retro-turbo":
-        import stable_retro
+    if provider_id == "env-stableretro-turbo":
+        import env_stableretro_turbo
 
         parts = game.rsplit("-", 2)
         if len(parts) != 3:
             raise ValueError(f"cannot infer Stable Retro system from game id {game!r}")
-        return tuple(stable_retro.get_system_info(parts[-2])["buttons"])
+        return tuple(env_stableretro_turbo.get_system_info(parts[-2])["buttons"])
     return ()
 
 
 def declared_action_contract(config: Any) -> dict[str, Any] | None:
     """Resolve a config's provider-owned exact action table for provenance checks."""
     provider_id = str(
-        config.get("env_provider", "stable-retro-turbo")
+        config.get("env_provider", "env-stableretro-turbo")
         if isinstance(config, Mapping)
-        else getattr(config, "env_provider", "stable-retro-turbo")
+        else getattr(config, "env_provider", "env-stableretro-turbo")
     )
     game = str(
         config.get("game", "") if isinstance(config, Mapping) else getattr(config, "game", "")
@@ -184,12 +234,12 @@ def declared_action_contract(config: Any) -> dict[str, Any] | None:
     if request is None:
         return None
     request_name = _mode_name(request)
-    if provider_id == "vizdoom-turbo" and request_name not in {
+    if provider_id == "env-vizdoom-turbo" and request_name not in {
         "all",
         "filtered",
         "multi_discrete",
     }:
-        from vizdoom_turbo.action_tables import resolve_custom_action
+        from env_vizdoom_turbo.action_tables import resolve_custom_action
 
         resolved = resolve_custom_action(
             request,
@@ -328,9 +378,9 @@ def configured_action_values(config: Any) -> tuple[tuple[int, ...], ...] | None:
     if contract is None or contract.get("table") is None:
         return None
     provider_id = str(
-        config.get("env_provider", "stable-retro-turbo")
+        config.get("env_provider", "env-stableretro-turbo")
         if isinstance(config, Mapping)
-        else getattr(config, "env_provider", "stable-retro-turbo")
+        else getattr(config, "env_provider", "env-stableretro-turbo")
     )
     game = str(
         config.get("game", "") if isinstance(config, Mapping) else getattr(config, "game", "")
@@ -485,7 +535,7 @@ def _input_atom(provider_id: str, atom: str) -> str:
             "stick": "left",
             "hit": "right",
         }.get(semantic, semantic)
-    if provider_id in {"gradoom", "vizdoom-turbo"}:
+    if provider_id in {"env-gradoom-turbo-torch", "env-vizdoom-turbo"}:
         return {
             "move_left": "left",
             "move_right": "right",
@@ -774,15 +824,16 @@ def action_contract_entry(contract: Mapping[str, Any], value: Any) -> dict[str, 
     semantics = policy.get("semantics")
     if not isinstance(semantics, Mapping) or semantics.get("status") != "available":
         return None
-    if space.get("type") == "multi_discrete" and isinstance(
-        semantics.get("legal_entries"), list
-    ):
+    if space.get("type") == "multi_discrete" and isinstance(semantics.get("legal_entries"), list):
         try:
             selected = tuple(int(item) for item in np.asarray(value).reshape(-1))
         except TypeError, ValueError:
             return None
         for entry in semantics["legal_entries"]:
-            if isinstance(entry, Mapping) and tuple(int(item) for item in entry["value"]) == selected:
+            if (
+                isinstance(entry, Mapping)
+                and tuple(int(item) for item in entry["value"]) == selected
+            ):
                 return dict(entry)
         return None
     try:
@@ -889,9 +940,7 @@ def action_value_for_controls(
         if not isinstance(controls, list) or len(controls) != 1:
             continue
         inputs = {
-            _semantic_id(label)
-            for label in controls[0].get("inputs", ())
-            if _semantic_id(label)
+            _semantic_id(label) for label in controls[0].get("inputs", ()) if _semantic_id(label)
         }
         if inputs == requested:
             matches.append(tuple(int(value) for value in entry["value"]))
@@ -1016,7 +1065,7 @@ def _vizdoom_shared_policy_semantics(
                 "value": _json_action_value(tuple_value),
                 "semantic_id": semantic_id,
                 "label": _display_label(semantic_id),
-                "controls": _entry_controls("vizdoom-turbo", native_labels),
+                "controls": _entry_controls("env-vizdoom-turbo", native_labels),
                 "native_buttons": _json_action_value(native_labels),
             }
         )
@@ -1118,6 +1167,27 @@ def compile_runtime_action_contract(
     else:
         raise ValueError(f"unsupported policy action codec {configured_codec_type!r}")
 
+    task = config.get("task", {}) if isinstance(config, Mapping) else getattr(config, "task", {})
+    action = task.get("action", {}) if isinstance(task, Mapping) else {}
+    signals = task.get("signals", {}) if isinstance(task, Mapping) else {}
+    overrides = normalize_conditional_action_overrides(action, signals)
+    compiled_overrides = []
+    for rule in overrides:
+        semantic_id = str(rule["replace_with"]["semantic_id"])
+        target_value = action_value_for_semantic(
+            {"policy": {"space": policy_space, "semantics": policy_semantics}},
+            semantic_id,
+        )
+        compiled_overrides.append(
+            {
+                **deepcopy(rule),
+                "replace_with": {
+                    "semantic_id": semantic_id,
+                    "value": _json_action_value(target_value),
+                },
+            }
+        )
+
     requested = declared_action_contract(config)
     base = {
         "schema_version": ACTION_CONTRACT_SCHEMA_VERSION,
@@ -1127,6 +1197,7 @@ def compile_runtime_action_contract(
             "space": policy_space,
             "codec": codec,
             "semantics": policy_semantics,
+            CONDITIONAL_ACTION_OVERRIDE_KEY: compiled_overrides,
         },
     }
     execution_payload = {
@@ -1140,6 +1211,8 @@ def compile_runtime_action_contract(
             "codec": codec,
         },
     }
+    if compiled_overrides:
+        execution_payload["policy"][CONDITIONAL_ACTION_OVERRIDE_KEY] = compiled_overrides
     semantic_payload = {
         "provider": provider_semantics,
         "policy": policy_semantics,
@@ -1157,7 +1230,8 @@ def compile_runtime_action_contract(
 def validate_runtime_action_contract(contract: Mapping[str, Any]) -> None:
     """Fail closed on malformed or internally inconsistent runtime contracts."""
 
-    if int(contract.get("schema_version", -1)) != ACTION_CONTRACT_SCHEMA_VERSION:
+    schema_version = int(contract.get("schema_version", -1))
+    if schema_version not in SUPPORTED_ACTION_CONTRACT_SCHEMA_VERSIONS:
         raise ValueError("unsupported runtime action contract schema_version")
     provider = contract.get("provider")
     policy = contract.get("policy")
@@ -1186,6 +1260,17 @@ def validate_runtime_action_contract(contract: Mapping[str, Any]) -> None:
             "codec": policy.get("codec"),
         },
     }
+    conditional_overrides = policy.get(CONDITIONAL_ACTION_OVERRIDE_KEY, ())
+    if schema_version == 1:
+        if conditional_overrides:
+            raise ValueError(
+                "runtime action contract schema v1 cannot contain conditional overrides"
+            )
+    else:
+        if not isinstance(conditional_overrides, list):
+            raise ValueError("runtime action contract conditional overrides must be a list")
+        if conditional_overrides:
+            execution_payload["policy"][CONDITIONAL_ACTION_OVERRIDE_KEY] = conditional_overrides
     if _payload_hash(execution_payload) != contract["execution_hash"]:
         raise ValueError("runtime action execution hash does not match its content")
     semantic_payload = {
@@ -1199,6 +1284,33 @@ def validate_runtime_action_contract(contract: Mapping[str, Any]) -> None:
     space = policy.get("space")
     if not isinstance(semantics, Mapping):
         raise ValueError("runtime action contract policy semantics must be an object")
+    if schema_version == 2:
+        seen_override_ids: set[str] = set()
+        for index, rule in enumerate(conditional_overrides):
+            if not isinstance(rule, Mapping):
+                raise ValueError(f"runtime conditional override {index} must be an object")
+            rule_id = rule.get("id")
+            if not isinstance(rule_id, str) or not rule_id or rule_id in seen_override_ids:
+                raise ValueError(
+                    "runtime conditional override IDs must be unique non-empty strings"
+                )
+            seen_override_ids.add(rule_id)
+            condition = rule.get("when")
+            replacement = rule.get("replace_with")
+            if not isinstance(condition, Mapping) or not isinstance(replacement, Mapping):
+                raise ValueError("runtime conditional overrides require when and replace_with")
+            if condition.get("operation") != "equals":
+                raise ValueError("runtime conditional override operation is unsupported")
+            if not isinstance(condition.get("signal"), str):
+                raise ValueError("runtime conditional override signal must be a string")
+            semantic_id = replacement.get("semantic_id")
+            if not isinstance(semantic_id, str) or not semantic_id:
+                raise ValueError("runtime conditional override semantic_id must be a string")
+            expected_value = _json_action_value(action_value_for_semantic(contract, semantic_id))
+            if replacement.get("value") != expected_value:
+                raise ValueError(
+                    "runtime conditional override target does not match policy semantics"
+                )
     if (
         semantics.get("status") == "available"
         and space.get("type") == "discrete"
@@ -1259,8 +1371,12 @@ def validate_runtime_action_contract(contract: Mapping[str, Any]) -> None:
                 raise ValueError("constrained MultiDiscrete distribution contract is unsupported")
             legal_entries = semantics.get("legal_entries")
             if not isinstance(legal_entries, list) or len(legal_entries) != len(normalized):
-                raise ValueError("constrained MultiDiscrete semantics require one legal entry per tuple")
-            entry_values = [tuple(int(value) for value in entry["value"]) for entry in legal_entries]
+                raise ValueError(
+                    "constrained MultiDiscrete semantics require one legal entry per tuple"
+                )
+            entry_values = [
+                tuple(int(value) for value in entry["value"]) for entry in legal_entries
+            ]
             if entry_values != normalized:
                 raise ValueError("constrained MultiDiscrete legal entries are out of order")
             ids = [str(entry.get("semantic_id", "")) for entry in legal_entries]

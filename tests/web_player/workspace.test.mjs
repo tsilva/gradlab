@@ -3,7 +3,6 @@ import test from "node:test";
 
 import {
   WORKSPACE_VERSION,
-  applyWorkspacePreset,
   bumpWorkspaceRevision,
   compareWorkspaceRevisions,
   createDefaultWorkspace,
@@ -17,11 +16,11 @@ import {
 
 const CUSTOM_ID = "panel-00000000-0000-4000-8000-000000000000";
 
-test("default workspace is a v7 Watch view without a standalone action panel", () => {
+test("default workspace is a v8 editable all-panels view without redundant controls", () => {
   const workspace = createDefaultWorkspace({ writer: "main" });
-  assert.equal(workspace.version, 7);
+  assert.equal(workspace.version, 8);
   assert.equal(workspace.version, WORKSPACE_VERSION);
-  assert.equal(workspace.preset, "watch");
+  assert.equal(workspace.preset, "all");
   assert.equal(Object.hasOwn(workspace.panels, "reward"), false);
   assert.equal(Object.hasOwn(workspace.panels, "actions"), false);
   assert.deepEqual(
@@ -36,11 +35,32 @@ test("default workspace is a v7 Watch view without a standalone action panel", (
     ),
     ["line", "line", "line"],
   );
+  assert.deepEqual(workspace.panels.value.config.blocks[0].metrics, [
+    "policy/value",
+    "policy/realized-return",
+    "policy/value-error",
+  ]);
   assert.deepEqual(workspace.panels.game.placement, {
     x: 0,
     y: 0,
-    w: 12,
+    w: 8,
     h: 15,
+    visible: true,
+    window: "main",
+  });
+  assert.deepEqual(workspace.panels.policy.placement, {
+    x: 8,
+    y: 0,
+    w: 4,
+    h: 15,
+    visible: true,
+    window: "main",
+  });
+  assert.deepEqual(workspace.panels.observation.placement, {
+    x: 0,
+    y: 15,
+    w: 4,
+    h: 7,
     visible: true,
     window: "main",
   });
@@ -48,20 +68,35 @@ test("default workspace is a v7 Watch view without a standalone action panel", (
   assert.deepEqual(workspace.panels["step-reward"].placement, {
     x: 4,
     y: 15,
-    w: 4,
+    w: 3,
     h: 7,
-    visible: false,
+    visible: true,
     window: "main",
   });
+  assert.deepEqual(
+    ["observation", "step-reward", "episode-return", "events", "value", "signals"]
+      .map((id) => {
+        const { x, y, w, h } = workspace.panels[id].placement;
+        return [id, x, y, w, h];
+      }),
+    [
+      ["observation", 0, 15, 4, 7],
+      ["step-reward", 4, 15, 3, 7],
+      ["episode-return", 7, 15, 3, 7],
+      ["events", 10, 15, 2, 7],
+      ["value", 0, 29, 6, 8],
+      ["signals", 6, 29, 6, 19],
+    ],
+  );
   assert.deepEqual(workspace.panels["reward-analysis"].config.blocks, [
-    { kind: "reward-breakdown", scope: "step" },
+    { kind: "reward-breakdown", scope: "episode" },
   ]);
   assert.deepEqual(workspace.panels["reward-analysis"].placement, {
     x: 0,
     y: 37,
-    w: 12,
+    w: 6,
     h: 15,
-    visible: false,
+    visible: true,
     window: "main",
   });
   assert.equal(workspace.panels.cnn.type, "cnn");
@@ -70,27 +105,48 @@ test("default workspace is a v7 Watch view without a standalone action panel", (
   assert.equal(workspace.panels.attribution.type, "attribution");
   assert.equal(workspace.panels.attribution.placement.visible, false);
   assert.equal(workspace.panels.attribution.enabled, false);
+  assert.equal(workspace.panels.raw.placement.visible, false);
   assert.ok(
     Object.entries(workspace.panels)
       .filter(([id]) => !["attribution", "cnn"].includes(id))
       .every(([, panel]) => panel.enabled === true),
   );
+  assert.ok(
+    Object.entries(workspace.panels)
+      .filter(([id]) => !["attribution", "cnn", "controls", "raw"].includes(id))
+      .every(([, panel]) => panel.placement.visible === true),
+  );
 });
 
-test("task presets switch panel emphasis without deleting custom panels", () => {
+test("workspace normalization migrates legacy built-in panel titles", () => {
+  const workspace = createDefaultWorkspace();
+  workspace.panels.observation.title = "Observation";
+  workspace.panels.policy.title = "Policy decision";
+  workspace.panels.value.title = "Critic history";
+
+  const normalized = normalizeWorkspace(workspace);
+
+  assert.equal(normalized.panels.observation.title, "Input");
+  assert.equal(normalized.panels.policy.title, "Action decision");
+  assert.equal(normalized.panels.value.title, "Critic history");
+});
+
+test("legacy fixed views migrate to all panels without deleting custom panels", () => {
   const workspace = createDefaultWorkspace();
   workspace.panels[CUSTOM_ID] = createTelemetryInstance({ id: CUSTOM_ID, title: "Mine" });
+  workspace.preset = "debug";
+  workspace.name = "Debug";
+  workspace.panels.value.placement.visible = false;
+  workspace.panels.attribution.placement.visible = false;
+  workspace.panels[CUSTOM_ID].placement.visible = false;
 
-  applyWorkspacePreset(workspace, "explain");
-  assert.equal(workspace.preset, "explain");
-  assert.equal(workspace.panels.policy.placement.visible, true);
-  assert.equal(workspace.panels.observation.placement.visible, false);
-  assert.equal(workspace.panels[CUSTOM_ID].placement.visible, false);
+  const normalized = normalizeWorkspace(workspace);
 
-  applyWorkspacePreset(workspace, "debug");
-  assert.equal(workspace.preset, "debug");
-  assert.equal(workspace.panels.observation.placement.visible, true);
-  assert.equal(workspace.panels.raw.placement.visible, true);
+  assert.equal(normalized.preset, "all");
+  assert.equal(normalized.name, "All panels");
+  assert.equal(normalized.panels.value.placement.visible, true);
+  assert.equal(normalized.panels.attribution.placement.visible, false);
+  assert.equal(normalized.panels[CUSTOM_ID].placement.visible, false);
 });
 
 test("panel processing demand excludes disabled panels and follows telemetry metrics", () => {
@@ -115,6 +171,12 @@ test("panel processing demand excludes disabled panels and follows telemetry met
     })),
     new Set(["signals", "actions", "reward-accounting", "history"]),
   );
+  assert.deepEqual(
+    new Set(telemetryPanelProcessing({
+      blocks: [{ kind: "reward-breakdown" }],
+    })),
+    new Set(["reward-accounting", "history"]),
+  );
 });
 
 test("workspace normalization preserves explicit disabled processing state", () => {
@@ -128,7 +190,37 @@ test("workspace normalization preserves explicit disabled processing state", () 
   assert.equal(normalizeWorkspace(workspace).panels.value.enabled, true);
 });
 
-test("existing v7 workspaces receive reward analysis hidden on the shelf", () => {
+test("workspace normalization preserves a saved custom panel arrangement", () => {
+  const workspace = createDefaultWorkspace();
+  workspace.panels.raw.placement.visible = true;
+  workspace.panels.policy.placement = {
+    x: 0,
+    y: 37,
+    w: 6,
+    h: 10,
+    visible: true,
+    window: "main",
+  };
+  workspace.panels.observation.placement = {
+    x: 6,
+    y: 37,
+    w: 6,
+    h: 10,
+    visible: true,
+    window: "main",
+  };
+
+  const normalized = normalizeWorkspace(workspace);
+
+  assert.equal(normalized.panels.raw.placement.visible, true);
+  assert.deepEqual(normalized.panels.policy.placement, workspace.panels.policy.placement);
+  assert.deepEqual(
+    normalized.panels.observation.placement,
+    workspace.panels.observation.placement,
+  );
+});
+
+test("existing v8 workspaces receive reward analysis hidden on the shelf", () => {
   const workspace = createDefaultWorkspace();
   delete workspace.panels["reward-analysis"];
 
@@ -138,9 +230,33 @@ test("existing v7 workspaces receive reward analysis hidden on the shelf", () =>
   assert.equal(normalized.panels["reward-analysis"].builtin, true);
 });
 
-test("existing workspaces receive the CNN explorer hidden while new paired workspaces show it", () => {
+test("v7 workspaces add value error only to the old built-in value configuration", () => {
+  const workspace = createDefaultWorkspace();
+  workspace.version = 7;
+  workspace.panels.value.config.blocks[0].metrics = [
+    "policy/value",
+    "policy/realized-return",
+  ];
+
+  const normalized = normalizeWorkspace(workspace);
+
+  assert.equal(normalized.version, 8);
+  assert.deepEqual(normalized.panels.value.config.blocks[0].metrics, [
+    "policy/value",
+    "policy/realized-return",
+    "policy/value-error",
+  ]);
+
+  workspace.panels.value.config.blocks[0].metrics = ["policy/value"];
+  assert.deepEqual(
+    normalizeWorkspace(workspace).panels.value.config.blocks[0].metrics,
+    ["policy/value"],
+  );
+});
+
+test("paired workspaces keep the disabled CNN explorer on the shelf", () => {
   const workspace = createDefaultWorkspace({ paired: true });
-  assert.equal(workspace.panels.cnn.placement.visible, true);
+  assert.equal(workspace.panels.cnn.placement.visible, false);
   assert.equal(workspace.panels.cnn.enabled, false);
   delete workspace.panels.cnn;
 
@@ -150,9 +266,9 @@ test("existing workspaces receive the CNN explorer hidden while new paired works
   assert.equal(normalized.panels.cnn.builtin, true);
 });
 
-test("existing workspaces receive attribution hidden while new paired workspaces show it", () => {
+test("paired workspaces keep disabled attribution on the shelf", () => {
   const workspace = createDefaultWorkspace({ paired: true });
-  assert.equal(workspace.panels.attribution.placement.visible, true);
+  assert.equal(workspace.panels.attribution.placement.visible, false);
   assert.equal(workspace.panels.attribution.enabled, false);
   delete workspace.panels.attribution;
 
@@ -164,7 +280,19 @@ test("existing workspaces receive attribution hidden while new paired workspaces
 
 test("reward breakdown scope persists through workspace normalization", () => {
   const workspace = createDefaultWorkspace();
-  workspace.panels["reward-analysis"].config.blocks[0].scope = "episode";
+  workspace.panels["reward-analysis"].config.blocks[0].scope = "step";
+
+  const normalized = normalizeWorkspace(workspace);
+
+  assert.equal(
+    normalized.panels["reward-analysis"].config.blocks[0].scope,
+    "step",
+  );
+});
+
+test("reward breakdown defaults missing scope to episode-to-cursor", () => {
+  const workspace = createDefaultWorkspace();
+  delete workspace.panels["reward-analysis"].config.blocks[0].scope;
 
   const normalized = normalizeWorkspace(workspace);
 
@@ -174,36 +302,22 @@ test("reward breakdown scope persists through workspace normalization", () => {
   );
 });
 
-test("paired workspace gives every panel in a logical row the same height", () => {
+test("paired workspace keeps game, Input and Action decision in the main window", () => {
   const workspace = createDefaultWorkspace({ paired: true });
-  const rows = [
-    ["policy", "value"],
-    ["step-reward", "episode-return"],
-    ["observation", "signals", "events"],
-  ];
-  rows.forEach((ids) => {
-    const placements = ids.map((id) => workspace.panels[id].placement);
-    assert.equal(new Set(placements.map(({ y }) => y)).size, 1, `${ids} y`);
-    assert.equal(new Set(placements.map(({ h }) => h)).size, 1, `${ids} h`);
-    assert.equal(new Set(placements.map(({ window }) => window)).size, 1, `${ids} window`);
-  });
-  assert.deepEqual(
-    ["policy", "value"].map((id) => workspace.panels[id].placement.w),
-    [6, 6],
-  );
-  assert.deepEqual(
-    ["step-reward", "episode-return"].map((id) => workspace.panels[id].placement.w),
-    [6, 6],
-  );
   assert.deepEqual(workspace.panels.game.placement, {
-    x: 0,
-    y: 0,
-    w: 12,
-    h: 15,
-    visible: true,
-    window: "main",
+    x: 0, y: 0, w: 8, h: 15, visible: true, window: "main",
   });
-  assert.equal(workspace.panels.controls.placement.visible, false);
+  assert.deepEqual(workspace.panels.observation.placement, {
+    x: 8, y: 0, w: 4, h: 4, visible: true, window: "main",
+  });
+  assert.deepEqual(workspace.panels.policy.placement, {
+    x: 8, y: 4, w: 4, h: 11, visible: true, window: "main",
+  });
+  for (const [id, panel] of Object.entries(workspace.panels)) {
+    if (["game", "observation", "policy"].includes(id)) continue;
+    assert.equal(panel.placement.window, "stats", id);
+    assert.equal(panel.placement.visible, !["controls", "raw", "attribution", "cnn"].includes(id), id);
+  }
 });
 
 test("non-current workspace data is replaced instead of interpreted", () => {
@@ -273,4 +387,20 @@ test("workspace revisions have a deterministic writer tie-break", () => {
     bumpWorkspaceRevision(workspace, "window-b"),
     { counter: 1, writer: "window-b" },
   );
+});
+
+
+test("reward table migrates next to a moved chart and remains independently configurable", () => {
+  const workspace = createDefaultWorkspace();
+  delete workspace.panels["reward-table"];
+  Object.assign(workspace.panels["step-reward"].placement, { window: "detached", y: 8, h: 9 });
+  const migrated = normalizeWorkspace(workspace);
+  assert.deepEqual(migrated.panels["reward-table"].placement, {
+    x: 0, y: 17, w: 12, h: 7, visible: true, window: "detached",
+  });
+  migrated.panels["step-reward"].placement.visible = false;
+  assert.equal(normalizeWorkspace(migrated).panels["reward-table"].placement.visible, true);
+  assert.deepEqual(normalizeWorkspace(migrated).panels["reward-table"].config.blocks, [{ kind: "reward-table" }]);
+  assert.deepEqual(new Set(panelProcessing(migrated, ["reward-table"])),
+    new Set(["history", "rewards", "policy", "critic-calibration"]));
 });

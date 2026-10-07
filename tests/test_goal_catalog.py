@@ -77,7 +77,7 @@ def _run(
         "created_at": _timestamp(run_index * 10),
         "updated_at": _timestamp(updated_index if updated_index is not None else run_index * 10),
         "url": "",
-        "metrics": {"train/global_step": float(run_index)},
+        "metrics": {"train/step": float(run_index)},
         "stop_reason": "completed" if state != "running" else "",
         "final_step": run_index if state != "running" else None,
         "early_stop": None,

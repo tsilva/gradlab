@@ -7,11 +7,22 @@ on:
         description: Exact pushed Git revision to build; defaults to the selected ref HEAD
         required: false
         type: string
+      protected_modal_apps_json:
+        description: Nonterminal Run evaluator apps that lifecycle cleanup must preserve
+        required: false
+        default: "[]"
+        type: string
+      cleanup_authorized:
+        description: Allow lifecycle-safe retirement of idle GradLab evaluator apps
+        required: false
+        default: false
+        type: boolean
   push:
     branches: [main]
   pull_request:
     paths:
       - .dockerignore
+      - .npmrc
       - .github/workflows/gradlab-train-dependencies.yml
       - .github/workflows/gradlab-train-foundations.yml
       - .github/workflows/gradlab-train-image.yml
@@ -20,6 +31,15 @@ on:
       - ops/dstack/**
       - experiments/modal_eval.yaml
       - experiments/recipes/**
+      - frontend/**
+      - hatch_build.py
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - svelte.config.js
+      - tsconfig.json
+      - vite.config.ts
+      - TRAJECTORIES.md
       - scripts/**
       - src/**
       - pyproject.toml
@@ -94,6 +114,14 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: type=raw,value=runtime-${{ steps.runtime_meta.outputs.runtime_input_sha256 }}
+
+      - name: Build locked player assets
+        if: github.event_name == 'pull_request' || steps.existing_image.outputs.digest == ''
+        run: |
+          npm install --global pnpm@10.33.0 --ignore-scripts --min-release-age=10080
+          pnpm install --frozen-lockfile
+          pnpm check:web
+          pnpm build:web
 
       - name: Build image
         id: build
@@ -172,10 +200,10 @@ jobs:
               for line in Path(
                   "containers/train/train-dependencies-linux-amd64.lock"
               ).read_text(encoding="utf-8").splitlines()
-              if line.startswith("vizdoom-turbo==")
+              if line.startswith("env-vizdoom-turbo==")
           ]
           if len(provider_lines) != 1:
-              raise SystemExit("Expected one locked vizdoom-turbo provider")
+              raise SystemExit("Expected one locked env-vizdoom-turbo provider")
           expected_provider_version = (
               provider_lines[0].split(" --hash=", maxsplit=1)[0].split("==", maxsplit=1)[1]
           )
@@ -187,7 +215,7 @@ jobs:
           if payload != {
               **payload,
               "smoke_contract_version": 3,
-              "provider_distribution": "vizdoom-turbo",
+              "provider_distribution": "env-vizdoom-turbo",
               "provider_version": expected_provider_version,
               "torch_compile": {
                   "backend": "inductor",
@@ -267,7 +295,7 @@ jobs:
               "vizdoom_smoke": {
                   "contract_version": int(os.environ["VIZDOOM_SMOKE_CONTRACT_VERSION"]),
                   "image_digest": os.environ["DIGEST"],
-                  "provider_distribution": "vizdoom-turbo",
+                  "provider_distribution": "env-vizdoom-turbo",
                   "provider_version": os.environ["VIZDOOM_PROVIDER_VERSION"],
                   "evidence_sha256": os.environ["VIZDOOM_SMOKE_EVIDENCE_SHA256"],
               },
@@ -288,7 +316,7 @@ jobs:
           path: gradlab-train-image.json
 
   deploy-modal-evaluator:
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'workflow_dispatch'
     needs: build
     uses: ./.github/workflows/gradlab-modal-eval.yml
     with:
@@ -297,4 +325,6 @@ jobs:
       runtime_input_sha256: ${{ needs.build.outputs.runtime_input_sha256 }}
       runtime_build_source_sha: ${{ needs.build.outputs.runtime_build_source_sha }}
       deploy_required: ${{ needs.build.outputs.deploy_required == 'true' }}
+      protected_modal_apps_json: ${{ inputs.protected_modal_apps_json || '[]' }}
+      cleanup_authorized: ${{ inputs.cleanup_authorized == true }}
     secrets: inherit

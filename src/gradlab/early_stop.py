@@ -152,6 +152,21 @@ def normalize_metric_threshold_rules(
     ]
 
 
+def metric_threshold_evidence(
+    rule: Mapping[str, Any], value: float | None,
+) -> dict[str, Any]:
+    """Describe a validated criterion without assigning Acceptance authority."""
+    operator = str(rule["operator"])
+    threshold = float(rule["threshold"])
+    return {
+        "metric": str(rule["metric"]),
+        "operator": operator,
+        "threshold": threshold,
+        "value": value,
+        "passed": None if value is None else bool(EARLY_STOP_OPERATORS[operator](value, threshold)),
+    }
+
+
 def evaluate_metric_threshold_rules(
     config: Sequence[Mapping[str, Any]],
     value_lookup: Callable[[str], float | None],

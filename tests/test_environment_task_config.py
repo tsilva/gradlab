@@ -26,8 +26,8 @@ class EnvironmentTaskConfigTests(unittest.TestCase):
             "obs_crop_fill": 0,
             "obs_resize_algorithm": "area",
         }
-        vizdoom = {**base, "env_provider": "vizdoom-turbo"}
-        gradoom = {**base, "env_provider": "gradoom"}
+        vizdoom = {**base, "env_provider": "env-vizdoom-turbo"}
+        gradoom = {**base, "env_provider": "env-gradoom-turbo-torch"}
 
         vizdoom_identity = environment_identity_from_train_config(vizdoom)
         gradoom_identity = environment_identity_from_train_config(gradoom)
@@ -51,7 +51,7 @@ class EnvironmentTaskConfigTests(unittest.TestCase):
     def test_environment_identity_uses_v5_canonical_task(self) -> None:
         identity = environment_identity_from_train_config(
             {
-                "env_provider": "supermariobrosnes-turbo",
+                "env_provider": "env-supermariobrosnes-turbo-emu",
                 "game": "SuperMarioBros-Nes-v0",
                 "task": {
                     "id": "mario",
@@ -94,7 +94,7 @@ class EnvironmentTaskConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unexpected keys"):
             sanitize_env_config_metadata(
                 {
-                    "env_provider": "supermariobrosnes-turbo",
+                    "env_provider": "env-supermariobrosnes-turbo-emu",
                     "game": "SuperMarioBros-Nes-v0",
                     "unknown_runtime_key": True,
                 }
@@ -140,7 +140,7 @@ class EnvironmentTaskConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "use 'env_provider'"):
             environment_identity_from_train_config(
                 {
-                    "provider": "supermariobrosnes-turbo",
+                    "provider": "env-supermariobrosnes-turbo-emu",
                     "game": "SuperMarioBros-Nes-v0",
                 }
             )
@@ -215,7 +215,7 @@ class EnvironmentTaskConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unexpected keys"):
             validate_task_config(invalid)
 
-    def test_identity_task_accepts_equals_for_decrease_and_increase_events(self) -> None:
+    def test_identity_task_accepts_temporal_events(self) -> None:
         task = {
             "id": "identity",
             "action": {"set": "native"},
@@ -230,6 +230,11 @@ class EnvironmentTaskConfigTests(unittest.TestCase):
                 "life_loss": {
                     "signal": "lives",
                     "operation": "decrease",
+                },
+                "serve_wait": {
+                    "signal": "ball_y",
+                    "operation": "previous_equals",
+                    "value": 0,
                 },
                 "monster_killed": {
                     "signal": "kills",
@@ -256,6 +261,35 @@ class EnvironmentTaskConfigTests(unittest.TestCase):
             },
         }
         with self.assertRaisesRegex(ValueError, "support only operations.*equals_for"):
+            validate_task_config(invalid)
+
+    def test_task_accepts_semantic_conditional_action_overrides(self) -> None:
+        task = {
+            "id": "identity",
+            "action": {
+                "set": "native",
+                "conditional_overrides": [
+                    {
+                        "id": "auto_serve",
+                        "when": {
+                            "signal": "ball_y",
+                            "operation": "equals",
+                            "value": 0,
+                        },
+                        "replace_with": {"semantic_id": "button"},
+                    }
+                ],
+            },
+            "signals": {"ball_y": "ball_y"},
+            "events": {},
+            "termination": {},
+            "reward": {"reward_mode": "native"},
+        }
+
+        validate_task_config(task)
+        invalid = deepcopy(task)
+        invalid["action"]["conditional_overrides"][0]["when"]["signal"] = "awaiting_fire"
+        with self.assertRaisesRegex(ValueError, "references unknown signal"):
             validate_task_config(invalid)
 
     def test_identity_task_validates_terminal_outcome_precedence(self) -> None:

@@ -1,6 +1,17 @@
 defaults:
 - _self_
 train:
+  # Preserve early learning and the 4M decay boundary, then space out phase snapshots.
+  checkpoint_freq: 0
+  checkpoint_steps: [500000, 1000000, 2000000, 4000000, 8000000, 12000000, 20000000, 30000000, 40000000]
+  checkpoint_candidates:
+    metric: train/return/mean
+    direction: maximize
+    min_delta: 0.05
+    delta_mode: relative
+    start_after_steps: 500000
+    min_interval_steps: 2000000
+    max_checkpoints: 3
   # SMB recipes stop from training clearance; evaluation remains an explicit
   # post-training operation rather than an automatic checkpoint workflow.
   checkpoint_eval_backend: none
@@ -35,5 +46,3 @@ train:
       advantage_normalization:
         mode: grouped
         context: task_id
-logging:
-  wandb_mode: online

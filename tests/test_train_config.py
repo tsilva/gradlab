@@ -148,26 +148,30 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
         self.assertEqual(field.dest, "task")
         self.assertTrue(field.environment)
 
-    def test_checkpoint_eval_backend_supports_only_modal_and_none(self) -> None:
+    def test_checkpoint_eval_backend_supports_modal_container_and_none(self) -> None:
         normalized = validate_and_normalize_train_config({"checkpoint_eval_backend": "none"})
         self.assertEqual(
             normalized["checkpoint_eval_backend"],
             "none",
         )
-        with self.assertRaisesRegex(ValueError, "must be one of modal, none"):
+        container = validate_and_normalize_train_config(
+            {"checkpoint_eval_backend": "training-container"}
+        )
+        self.assertEqual(container["checkpoint_eval_backend"], "training-container")
+        with self.assertRaisesRegex(ValueError, "must be one of modal, training-container, none"):
             validate_and_normalize_train_config({"checkpoint_eval_backend": "local"})
 
-    def test_metrics_schema_version_accepts_only_active_v19(self) -> None:
+    def test_metrics_schema_version_accepts_only_active_v24(self) -> None:
         self.assertEqual(
-            validate_and_normalize_train_config({"metrics_schema_version": 19})[
+            validate_and_normalize_train_config({"metrics_schema_version": 24})[
                 "metrics_schema_version"
             ],
-            19,
+            24,
         )
-        with self.assertRaisesRegex(ValueError, "must be >= 19"):
-            validate_and_normalize_train_config({"metrics_schema_version": 18})
-        with self.assertRaisesRegex(ValueError, "must be <= 19"):
-            validate_and_normalize_train_config({"metrics_schema_version": 20})
+        with self.assertRaisesRegex(ValueError, "must be >= 24"):
+            validate_and_normalize_train_config({"metrics_schema_version": 19})
+        with self.assertRaisesRegex(ValueError, "must be <= 24"):
+            validate_and_normalize_train_config({"metrics_schema_version": 25})
 
     def test_episode_progress_fields_must_reference_task_signals(self) -> None:
         normalized = validate_and_normalize_train_config(
@@ -194,7 +198,7 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
                     "early_stop": {
                         "conditions": {
                             "invalid": {
-                                "metric": "eval/full/outcome/success/starts/rate/min",
+                                "metric": "eval/success/min",
                                 "trigger": "threshold",
                                 "operator": ">=",
                                 "threshold": 1.0,
@@ -214,7 +218,7 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
                 "early_stop": {
                     "conditions": {
                         "clear": {
-                            "metric": "train/outcome/success/starts/all/rolling/rate/min",
+                            "metric": "train/success/min",
                             "trigger": "threshold",
                             "operator": ">=",
                             "threshold": 1.0,
@@ -232,7 +236,7 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
             {
                 "conditions": {
                     "clear": {
-                        "metric": "train/outcome/success/starts/all/rolling/rate/min",
+                        "metric": "train/success/min",
                         "trigger": "threshold",
                         "outcome": "success",
                         "action": "stop",
@@ -247,7 +251,7 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
 
     def test_eval_acceptance_allows_training_success_as_a_learner_stop(self) -> None:
         failure_condition = {
-            "metric": "train/episode/return/shaped/origin/target/rolling/mean",
+            "metric": "train/return/mean",
             "trigger": "no_improvement",
             "direction": "maximize",
             "min_delta": 0.01,
@@ -259,7 +263,7 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
         }
         acceptance = [
             {
-                "metric": "eval/full/outcome/success/starts/rate/min",
+                "metric": "eval/success/min",
                 "operator": ">=",
                 "threshold": 1.0,
             }
@@ -276,7 +280,7 @@ class TrainConfigFieldSchemaTests(unittest.TestCase):
         )
 
         success_condition = {
-            "metric": "train/outcome/success/starts/all/rolling/rate/min",
+            "metric": "train/success/min",
             "trigger": "threshold",
             "operator": ">=",
             "threshold": 1.0,

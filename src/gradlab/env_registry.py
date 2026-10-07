@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import Any
 
 from gradlab.reward_transform import PROVIDER_REWARD_TRANSFORM_KEYS
-from gradlab.gymnasium_vec_env import GYMNASIUM_ENV_IDS
+from gradlab.gymnasium_vec_env import GYMNASIUM_ENV_IDS, validate_gymnasium_env_options
 
 
 EXTERNAL_ROM_ASSET_NONE = "none"
@@ -101,6 +101,7 @@ class EvalProgressField:
     info_key: str
     result_key: str
     rank: bool = False
+    required: bool = False
 
 
 @dataclass(frozen=True)
@@ -129,6 +130,7 @@ class EnvironmentSpec:
 class EnvRegistration:
     spec_id: str
     policy_compatibility_id: str | None = None
+    supports_episode_video: bool = True
 
 
 MARIO_EVAL_SEMANTICS = EvalSemantics(
@@ -147,6 +149,18 @@ MARIO_EVAL_SEMANTICS = EvalSemantics(
 VIZDOOM_DEATHMATCH_EVAL_SEMANTICS = EvalSemantics(
     progress_fields=(EvalProgressField("killcount", "kills", rank=True),),
     best_episode_rank=("progress", "reward"),
+)
+
+BREAKOUT_EVAL_SEMANTICS = EvalSemantics(
+    progress_fields=(
+        EvalProgressField(
+            "bricks_destroyed_normalized",
+            "bricks_destroyed_normalized",
+            rank=True,
+            required=True,
+        ),
+    ),
+    best_episode_rank=("completion", "progress", "reward"),
 )
 
 ENVIRONMENT_SPECS: Mapping[str, EnvironmentSpec] = MappingProxyType(
@@ -173,11 +187,6 @@ ENVIRONMENT_SPECS: Mapping[str, EnvironmentSpec] = MappingProxyType(
         "CliffWalking-v1": EnvironmentSpec(
             "CliffWalking-v1", "Gymnasium-CliffWalking", "CliffWalking-v1"
         ),
-        "CliffWalkingSlippery-v1": EnvironmentSpec(
-            "CliffWalkingSlippery-v1",
-            "Gymnasium-CliffWalkingSlippery",
-            "CliffWalkingSlippery-v1",
-        ),
         "Taxi-v3": EnvironmentSpec("Taxi-v3", "Gymnasium-Taxi", "Taxi-v3"),
         "Blackjack-v1": EnvironmentSpec(
             "Blackjack-v1", "Gymnasium-Blackjack", "Blackjack-v1"
@@ -201,6 +210,7 @@ ENVIRONMENT_SPECS: Mapping[str, EnvironmentSpec] = MappingProxyType(
             "Breakout-Atari2600-v0",
             "Atari2600-Breakout",
             "Breakout-Atari2600-v0",
+            eval_semantics=BREAKOUT_EVAL_SEMANTICS,
         ),
         "MsPacman-Atari2600-v0": EnvironmentSpec(
             "MsPacman-Atari2600-v0",
@@ -369,9 +379,9 @@ _TURBO_EXPLICIT_ENV_ARGS = frozenset(
 
 
 STABLE_RETRO_TURBO_PROVIDER = EnvProvider(
-    provider_id="stable-retro-turbo",
+    provider_id="env-stableretro-turbo",
     import_name="stable_retro",
-    distribution_name="stable-retro-turbo",
+    distribution_name="env-stableretro-turbo",
     environments={
         spec_id: EnvRegistration(spec_id)
         for spec_id in (
@@ -391,9 +401,9 @@ STABLE_RETRO_TURBO_PROVIDER = EnvProvider(
 )
 
 SUPERMARIOBROS_NES_TURBO_PROVIDER = EnvProvider(
-    provider_id="supermariobrosnes-turbo",
+    provider_id="env-supermariobrosnes-turbo-emu",
     import_name="supermariobrosnes_turbo",
-    distribution_name="supermariobrosnes-turbo",
+    distribution_name="env-supermariobrosnes-turbo-emu",
     environments={
         "SuperMarioBros-Nes-v0": EnvRegistration("SuperMarioBros-Nes-v0"),
     },
@@ -407,9 +417,9 @@ SUPERMARIOBROS_NES_TURBO_PROVIDER = EnvProvider(
 )
 
 VIZDOOM_TURBO_PROVIDER = EnvProvider(
-    provider_id="vizdoom-turbo",
+    provider_id="env-vizdoom-turbo",
     import_name="vizdoom_turbo",
-    distribution_name="vizdoom-turbo",
+    distribution_name="env-vizdoom-turbo",
     environments={
         spec_id: EnvRegistration(
             spec_id,
@@ -456,9 +466,9 @@ VIZDOOM_TURBO_PROVIDER = EnvProvider(
 )
 
 GRADOOM_PROVIDER = EnvProvider(
-    provider_id="gradoom",
+    provider_id="env-gradoom-turbo-torch",
     import_name="gradoom",
-    distribution_name="gradoom",
+    distribution_name="env-gradoom-turbo-torch",
     environments={
         "VizdoomDeathmatch-v1": EnvRegistration(
             "VizdoomDeathmatch-v1",
@@ -499,9 +509,9 @@ GRADOOM_PROVIDER = EnvProvider(
 )
 
 BREAKOUT_TURBO_ENV_PROVIDER = EnvProvider(
-    provider_id="breakout-turbo-env",
-    import_name="breakout_turbo_env",
-    distribution_name="breakout-turbo-env",
+    provider_id="env-breakoutatari2600-turbo-native",
+    import_name="env_breakoutatari2600_turbo_native",
+    distribution_name="env-breakoutatari2600-turbo-native",
     environments={
         "Breakout-Atari2600-v0": EnvRegistration("Breakout-Atari2600-v0"),
     },
@@ -566,6 +576,7 @@ GYMNASIUM_PROVIDER = EnvProvider(
     turbo_api_version=2,
     constructor_contract=ProviderConstructorContract(
         canonical_args=frozenset({"game", "num_envs"}),
+        optional_env_args=frozenset({"is_slippery", "desc"}),
         explicit_env_args=frozenset(
             {
                 "autoreset_mode",
@@ -595,7 +606,7 @@ GRADLAB_PROVIDER = EnvProvider(
     provider_id="gradlab",
     import_name="gradlab",
     distribution_name="gradlab",
-    environments={"Bandit-v0": EnvRegistration("Bandit-v0")},
+    environments={"Bandit-v0": EnvRegistration("Bandit-v0", supports_episode_video=False)},
     supports_states=False,
     constructor_contract=ProviderConstructorContract(
         canonical_args=frozenset({"game", "num_envs"}),
@@ -656,6 +667,17 @@ def environment_spec(provider_id: object, env_id: object) -> EnvironmentSpec:
         game_family=_fallback_game_family(environment, fallback="environment"),
         wandb_project=environment or "environment",
     )
+
+
+def supports_evaluation_video(provider_id: object, env_id: object) -> bool:
+    """Whether this exact registered environment supports native episode frames."""
+
+    provider, environment = _environment_identity(provider_id, env_id)
+    resolved = resolve_env_provider(provider)
+    registration = resolved.environments.get(environment)
+    if registration is None and not resolved.allows_unregistered_env_ids:
+        raise ValueError(f"environment {environment!r} is not registered for provider {provider!r}")
+    return registration.supports_episode_video if registration is not None else False
 
 
 def policy_environment_compatibility_id(provider_id: object, env_id: object) -> str | None:
@@ -884,6 +906,14 @@ def validate_provider_resolved_config(
     label: str,
 ) -> None:
     provider = resolve_env_provider(provider_id)
+    if provider.provider_id == "gymnasium":
+        game = config.get("game") if isinstance(config, Mapping) else getattr(config, "game", None)
+        options = (
+            config.get("env_args", {})
+            if isinstance(config, Mapping)
+            else getattr(config, "env_args", {})
+        )
+        validate_gymnasium_env_options(str(game), options)
     contract = provider.constructor_contract
     if contract is None:
         return

@@ -142,7 +142,7 @@ class WrongStartProvider(FakeNativeProvider):
 
 def _descriptor(native: FakeNativeProvider) -> ProviderDescriptor:
     return ProviderDescriptor(
-        provider_id="supermariobrosnes-turbo",
+        provider_id="env-supermariobrosnes-turbo-emu",
         native_observation_space=native.single_observation_space,
         native_action_space=native.single_action_space,
         start_catalog=("Level1-1",),
@@ -233,12 +233,12 @@ import json, sys
 from gradlab.env_cli import main
 assert 'stable_retro' not in sys.modules
 assert 'supermariobrosnes_turbo' not in sys.modules
-assert 'breakout_turbo_env' not in sys.modules
+assert 'env_breakoutatari2600_turbo_native' not in sys.modules
 assert 'vizdoom_turbo' not in sys.modules
 assert main(['list', '--json']) == 0
 assert 'stable_retro' not in sys.modules
 assert 'supermariobrosnes_turbo' not in sys.modules
-assert 'breakout_turbo_env' not in sys.modules
+assert 'env_breakoutatari2600_turbo_native' not in sys.modules
 assert 'vizdoom_turbo' not in sys.modules
 """
     result = subprocess.run(
@@ -252,13 +252,13 @@ assert 'vizdoom_turbo' not in sys.modules
     payload = json.loads(result.stdout)
     assert {item["provider_id"] for item in payload["providers"]} == {
         "ale-py",
-        "breakout-turbo-env",
+        "env-breakoutatari2600-turbo-native",
         "gymnasium",
         "gradlab",
-        "gradoom",
-        "stable-retro-turbo",
-        "supermariobrosnes-turbo",
-        "vizdoom-turbo",
+        "env-gradoom-turbo-torch",
+        "env-stableretro-turbo",
+        "env-supermariobrosnes-turbo-emu",
+        "env-vizdoom-turbo",
     }
 
 

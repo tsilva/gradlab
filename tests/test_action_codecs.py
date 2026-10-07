@@ -28,7 +28,7 @@ from gradlab.batch_runtime import ProviderDescriptor
 
 def _descriptor(
     *,
-    provider_id: str = "vizdoom-turbo",
+    provider_id: str = "env-vizdoom-turbo",
     buttons: tuple[str, ...] = VIZDOOM_DEATHMATCH_MULTIDISCRETE_BUTTONS,
 ) -> ProviderDescriptor:
     low = np.zeros(len(buttons), dtype=np.float32)
@@ -89,7 +89,7 @@ def test_deathmatch_multidiscrete_codec_rejects_invalid_actions_and_native_contr
         codec.map_actions(np.asarray([[0, 0, 8, 0, 0, 10]], dtype=np.int64))
     with pytest.raises(ValueError, match="requires provider"):
         VizdoomDeathmatchMultiDiscreteActionCodec(
-            _descriptor(provider_id="stable-retro-turbo"),
+            _descriptor(provider_id="env-stableretro-turbo"),
             1,
         )
     with pytest.raises(ValueError, match="native buttons differ"):
@@ -103,7 +103,7 @@ def test_deathmatch_multidiscrete_runtime_contract_is_exact_and_componentized() 
     descriptor = _descriptor()
     codec = VizdoomDeathmatchMultiDiscreteActionCodec(descriptor, 1)
     config = SimpleNamespace(
-        env_provider="vizdoom-turbo",
+        env_provider="env-vizdoom-turbo",
         game="VizdoomDeathmatch-v1",
         env_args={"use_restricted_actions": "filtered"},
         task={
@@ -188,7 +188,7 @@ def test_shared_vizdoom_runtime_contract_binds_joint_distribution_and_semantics(
     descriptor = _descriptor(buttons=VIZDOOM_SHARED_MULTIDISCRETE_BUTTONS)
     codec = VizdoomSharedMultiDiscreteActionCodec(descriptor, 1, configured)
     config = SimpleNamespace(
-        env_provider="vizdoom-turbo",
+        env_provider="env-vizdoom-turbo",
         game="VizdoomBasic-v1",
         env_args={"use_restricted_actions": "filtered"},
         task={"action": {"set": "vizdoom-shared-multidiscrete-v1", "codec": configured}},

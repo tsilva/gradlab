@@ -1,0 +1,51 @@
+defaults:
+- ../../_gymnasium-discrete-common@_global_
+- _self_
+objective:
+  # A bounded stochastic safe-navigation proxy allowing slips and detours.
+  training_success:
+    metric: train/return/mean
+    operator: '>='
+    threshold: -100
+title: Gymnasium slippery CliffWalking benchmark
+train:
+  checkpoint_freq: 100000
+  environment:
+    env_provider: &provider gymnasium
+    env_config:
+      <<: &env_config
+        game: CliffWalking-v1
+        n_envs: 32
+        env_args: &env_args
+          autoreset_mode: disabled
+          vectorization_mode: async
+          multiprocessing_context: spawn
+          shared_memory: true
+          copy: true
+          daemon: true
+          observation_mode: same
+          render_mode: rgb_array
+          is_slippery: true
+    preprocessing: &preprocessing
+      frame_skip: 1
+      max_pool_frames: false
+      sticky_action_prob: 0.0
+      obs_resize: [0, 0]
+      obs_crop: [0, 0, 0, 0]
+      obs_crop_mode: remove
+      obs_crop_fill: 0
+      obs_resize_algorithm: area
+    task: &task
+      id: identity
+      action: {set: native}
+      signals: {}
+      events: {}
+      termination:
+        success: []
+        failure: []
+        timeout: []
+        max_episode_steps: 200
+      reward:
+        reward_mode: native
+        reward_scale: 1.0
+        reward_clip: false

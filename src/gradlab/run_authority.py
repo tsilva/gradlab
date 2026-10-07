@@ -5,6 +5,7 @@ import hashlib
 import json
 import re
 import threading
+import tempfile
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass
@@ -19,7 +20,7 @@ from gradlab.clock import (
     parse_utc_datetime,
 )
 from gradlab.file_utils import atomic_write_bytes, atomic_write_json, file_sha256
-from gradlab.early_stop import EARLY_STOP_OPERATORS
+from gradlab.early_stop import EARLY_STOP_OPERATORS, metric_threshold_evidence
 from gradlab.json_utils import canonical_json_sha256
 from gradlab.r2_store import (
     BucketConfig,
@@ -186,7 +187,9 @@ class RunAuthority:
         return binding
 
     def create_manifest(self, manifest: RunManifest) -> str:
-        self.create_coordinator_binding(self.coordinator_binding_for_manifest(manifest))
+        manifest.validate()
+        if manifest.compute.get("execution_backend") != "local-process":
+            self.create_coordinator_binding(self.coordinator_binding_for_manifest(manifest))
         event = self._goal_catalog_event_for_manifest(manifest)
         self._put_goal_catalog_event(event)
         etag = self.control.put_json(
@@ -206,7 +209,21 @@ class RunAuthority:
         return etag
 
     def create_attempt_manifest(self, manifest: RunManifest) -> str:
-        self.create_coordinator_binding(self.coordinator_binding_for_manifest(manifest))
+        manifest.validate()
+        root_document = self.control.get_json_optional(
+            f"{self.run_prefix(manifest.run_id)}/manifest.json"
+        )
+        if root_document is None:
+            raise ValueError("Attempt requires an existing root Run manifest")
+        root_manifest = RunManifest.from_dict(root_document)
+        if (root_manifest.tracking or {"backend": "wandb", "delivery": "online"}) != (
+            manifest.tracking or {"backend": "wandb", "delivery": "online"}
+        ):
+            raise ValueError("Attempt tracking selection must equal the frozen Run")
+        if dict(root_manifest.wandb) != dict(manifest.wandb):
+            raise ValueError("Attempt service identity must equal the frozen Run")
+        if manifest.compute.get("execution_backend") != "local-process":
+            self.create_coordinator_binding(self.coordinator_binding_for_manifest(manifest))
         event = self._goal_catalog_event_for_manifest(manifest)
         self._put_goal_catalog_event(event)
         etag = self.control.put_json(
@@ -385,6 +402,7 @@ class RunAuthority:
                 stop_reason=receipt.stop_reason,
                 final_step=receipt.final_step,
                 early_stop=receipt.early_stop,
+                training_success=receipt.training_success,
             ),
         )
 
@@ -513,6 +531,7 @@ class RunAuthority:
         stop_reason: str | None = None,
         final_step: int | None = None,
         early_stop: Mapping[str, Any] | None = None,
+        training_success: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         normalized_metrics = {
             str(name): float(value)
@@ -601,6 +620,13 @@ class RunAuthority:
                     and existing.get("attempt_id") == manifest.attempt_id
                     and isinstance(existing.get("early_stop"), Mapping)
                 )
+                else None
+            ),
+            "training_success": (
+                dict(training_success)
+                if training_success is not None
+                else dict(existing["training_success"])
+                if existing and isinstance(existing.get("training_success"), Mapping)
                 else None
             ),
         }
@@ -929,6 +955,33 @@ class RunAuthority:
             "keys": archived_keys,
         }
 
+    def retain_metric_journals(
+        self,
+        *,
+        run_id: str,
+        heartbeat: Callable[[], None] | None = None,
+    ) -> dict[str, Any]:
+        """Index immutable journal segments without moving them to an expiring prefix."""
+        prefix = f"{self.run_prefix(run_id)}/attempts/"
+        keys = []
+        for key in self.control.iter_keys(prefix):
+            if heartbeat is not None:
+                heartbeat()
+            if "/metric-segments/" in key and key.endswith(".jsonl"):
+                keys.append(key)
+        keys.sort()
+        inventory_sha256 = hashlib.sha256(
+            "\n".join(keys).encode("utf-8")
+        ).hexdigest()
+        return {
+            "prefix": prefix,
+            "segment_count": len(keys),
+            "first_key": keys[0] if keys else None,
+            "last_key": keys[-1] if keys else None,
+            "inventory_sha256": inventory_sha256,
+            "retention": "durable",
+        }
+
     @staticmethod
     def _archive_document_sha256(value: Mapping[str, Any]) -> str:
         return canonical_json_sha256(value)
@@ -944,102 +997,167 @@ class RunAuthority:
         run_id: str,
         attempt_id: str,
         archive_root: Path,
+        heartbeat: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
-        closure_path = archive_root / "closure.json"
-        if not closure_path.is_file():
-            raise FileNotFoundError(f"state archive has no closure: {closure_path}")
-        closure = json.loads(closure_path.read_text(encoding="utf-8"))
-        if (
-            not isinstance(closure, Mapping)
-            or closure.get("semantic_id") != "state-archive-v1"
-            or int(closure.get("schema_version", 0)) != 1
-        ):
-            raise ValueError("state archive closure schema is unsupported")
-        raw_files = closure.get("files")
-        if isinstance(raw_files, str | bytes) or not isinstance(raw_files, Sequence):
-            raise ValueError("state archive closure files must be a sequence")
-        prior_objects: dict[str, str] = {}
-        prior = self.state_archive_closure(run_id=run_id)
-        if prior is not None:
-            prior_generation = self.control.get_json(str(prior["generation_key"]))
-            for raw_object in prior_generation.get("objects") or []:
-                if isinstance(raw_object, Mapping):
-                    prior_objects[str(raw_object["sha256"])] = str(raw_object["object_key"])
-        objects: list[dict[str, Any]] = []
-        seen_paths: set[str] = set()
-        for raw_file in raw_files:
-            if not isinstance(raw_file, Mapping):
-                raise ValueError("state archive closure file entry must be an object")
-            relative = Path(str(raw_file["path"]))
+        from gradlab.state_archive import archive_lock
+
+        def beat() -> None:
+            if heartbeat is not None:
+                heartbeat()
+
+        beat()
+        with archive_lock(archive_root, exclusive=False):
+            beat()
+            closure_path = archive_root / "closure.json"
+            if not closure_path.is_file():
+                raise FileNotFoundError(f"state archive has no closure: {closure_path}")
+            closure = json.loads(closure_path.read_text(encoding="utf-8"))
             if (
-                relative.is_absolute()
-                or ".." in relative.parts
-                or relative.as_posix() in seen_paths
+                not isinstance(closure, Mapping)
+                or closure.get("semantic_id") != "state-archive-v1"
+                or int(closure.get("schema_version", 0)) != 1
             ):
-                raise ValueError("state archive closure contains an unsafe or duplicate path")
-            seen_paths.add(relative.as_posix())
-            source = archive_root / relative
-            payload = source.read_bytes()
-            digest = hashlib.sha256(payload).hexdigest()
-            if digest != str(raw_file["sha256"]) or len(payload) != int(raw_file["size_bytes"]):
-                raise ValueError(f"state archive file failed closure verification: {relative}")
-            object_key = prior_objects.get(digest) or (
-                f"{self.run_prefix(run_id)}/state-archive/objects/{digest[:2]}/{digest[2:]}"
-            )
-            if digest not in prior_objects:
-                self.control.put_bytes(
-                    object_key,
-                    payload,
-                    create_only=True,
-                    metadata={"sha256": digest},
+                raise ValueError("state archive closure schema is unsupported")
+            raw_files = closure.get("files")
+            if isinstance(raw_files, str | bytes) or not isinstance(raw_files, Sequence):
+                raise ValueError("state archive closure files must be a sequence")
+            prior_objects: dict[str, str] = {}
+            beat()
+            prior = self.state_archive_closure(run_id=run_id)
+            if prior is not None:
+                beat()
+                prior_generation = self.control.get_json(str(prior["generation_key"]))
+                for raw_object in prior_generation.get("objects") or []:
+                    if isinstance(raw_object, Mapping):
+                        prior_objects[str(raw_object["sha256"])] = str(raw_object["object_key"])
+            objects: list[dict[str, Any]] = []
+            seen_paths: set[str] = set()
+            for raw_file in raw_files:
+                beat()
+                if not isinstance(raw_file, Mapping):
+                    raise ValueError("state archive closure file entry must be an object")
+                relative = Path(str(raw_file["path"]))
+                if (
+                    relative.is_absolute()
+                    or ".." in relative.parts
+                    or relative.as_posix() in seen_paths
+                ):
+                    raise ValueError("state archive closure contains an unsafe or duplicate path")
+                seen_paths.add(relative.as_posix())
+                source = archive_root / relative
+                payload = source.read_bytes()
+                digest = hashlib.sha256(payload).hexdigest()
+                if digest != str(raw_file["sha256"]) or len(payload) != int(raw_file["size_bytes"]):
+                    raise ValueError(f"state archive file failed closure verification: {relative}")
+                object_key = prior_objects.get(digest) or (
+                    f"{self.run_prefix(run_id)}/state-archive/objects/{digest[:2]}/{digest[2:]}"
                 )
-            objects.append(
-                {
-                    "path": relative.as_posix(),
-                    "sha256": digest,
-                    "size_bytes": len(payload),
-                    "object_key": object_key,
-                }
+                if digest not in prior_objects:
+                    beat()
+                    self.control.put_bytes(
+                        object_key,
+                        payload,
+                        create_only=True,
+                        metadata={"sha256": digest},
+                    )
+                objects.append(
+                    {
+                        "path": relative.as_posix(),
+                        "sha256": digest,
+                        "size_bytes": len(payload),
+                        "object_key": object_key,
+                    }
+                )
+            objects.sort(key=lambda row: str(row["path"]))
+            generation = {
+                "semantic_id": "state-archive-generation-v1",
+                "schema_version": 1,
+                "run_id": run_id,
+                "attempt_id": attempt_id,
+                "step": int(closure["step"]),
+                "status": str(closure["status"]),
+                "inventory_sha256": str(closure["inventory_sha256"]),
+                "archive": dict(closure["archive"]),
+                "closure": dict(closure),
+                "objects": objects,
+            }
+            generation_sha256 = self._archive_document_sha256(generation)
+            generation_key = (
+                f"{self.run_prefix(run_id)}/state-archive/generations/"
+                f"{int(closure['step']):020d}-{generation_sha256}.json"
             )
-        objects.sort(key=lambda row: str(row["path"]))
-        generation = {
-            "semantic_id": "state-archive-generation-v1",
-            "schema_version": 1,
-            "run_id": run_id,
-            "attempt_id": attempt_id,
-            "step": int(closure["step"]),
-            "status": str(closure["status"]),
-            "inventory_sha256": str(closure["inventory_sha256"]),
-            "archive": dict(closure["archive"]),
-            "closure": dict(closure),
-            "objects": objects,
-        }
-        generation_sha256 = self._archive_document_sha256(generation)
-        generation_key = (
-            f"{self.run_prefix(run_id)}/state-archive/generations/"
-            f"{int(closure['step']):020d}-{generation_sha256}.json"
-        )
-        self.control.put_json(generation_key, generation, create_only=True)
-        latest = {
-            "semantic_id": "state-archive-publication-v1",
-            "schema_version": 1,
-            "run_id": run_id,
-            "attempt_id": attempt_id,
-            "step": int(closure["step"]),
-            "status": str(closure["status"]),
-            "generation_key": generation_key,
-            "generation_sha256": generation_sha256,
-            "inventory_sha256": str(closure["inventory_sha256"]),
-            "file_count": len(objects),
-            "size_bytes": sum(int(row["size_bytes"]) for row in objects),
-            "archive": dict(closure["archive"]),
-        }
-        self.control.put_json(
-            f"{self.run_prefix(run_id)}/state-archive/latest.json",
-            latest,
-            create_only=False,
-        )
-        return latest
+            beat()
+            self.control.put_json(generation_key, generation, create_only=True)
+            latest = {
+                "semantic_id": "state-archive-publication-v1",
+                "schema_version": 1,
+                "run_id": run_id,
+                "attempt_id": attempt_id,
+                "step": int(closure["step"]),
+                "status": str(closure["status"]),
+                "generation_key": generation_key,
+                "generation_sha256": generation_sha256,
+                "inventory_sha256": str(closure["inventory_sha256"]),
+                "file_count": len(objects),
+                "size_bytes": sum(int(row["size_bytes"]) for row in objects),
+                "archive": dict(closure["archive"]),
+            }
+            beat()
+            self.control.put_json(
+                f"{self.run_prefix(run_id)}/state-archive/latest.json",
+                latest,
+                create_only=False,
+            )
+            beat()
+            return latest
+
+    def prune_state_archive(
+        self, lease: Lease, *, heartbeat: Callable[[], None] | None = None
+    ) -> Lease:
+        """Reclaim obsolete recovery bytes under the exclusive Run writer lease.
+
+        Recovery acquires this same lease before reading a generation, so its
+        current inventory cannot be retired concurrently. Checkpoint-owned exports
+        use other prefixes and are never candidates for this reclamation.
+        """
+        if heartbeat is None:
+            lease = self.renew_lease(lease)
+        else:
+            heartbeat()
+        last_renewal = self.clock.monotonic()
+
+        def beat() -> None:
+            nonlocal lease, last_renewal
+            if heartbeat is not None:
+                heartbeat()
+                return
+            now = self.clock.monotonic()
+            if now - last_renewal >= LEASE_RENEW_SECONDS:
+                lease = self.renew_lease(lease)
+                last_renewal = now
+
+        publication = self.state_archive_closure(run_id=lease.run_id)
+        beat()
+        if publication is None:
+            return lease
+        generation_key = str(publication["generation_key"])
+        generation = self.control.get_json(generation_key)
+        beat()
+        retained = {generation_key, *(str(row["object_key"]) for row in generation["objects"])}
+        prefix = f"{self.run_prefix(lease.run_id)}/state-archive"
+        obsolete = []
+        for directory in ("objects", "generations"):
+            beat()
+            for key in self.control.iter_keys(f"{prefix}/{directory}"):
+                beat()
+                if key not in retained:
+                    obsolete.append(key)
+        beat()
+        for key in obsolete:
+            beat()
+            self.control.delete(key)
+            beat()
+        return lease
 
     def restore_state_archive(
         self,
@@ -1086,7 +1204,13 @@ class RunAuthority:
         contract_hashes: Mapping[str, str],
         recovery_sidecar: Mapping[str, Any],
         created_at: str | None = None,
+        heartbeat: Callable[[], None] | None = None,
     ) -> CheckpointManifest:
+        def beat() -> None:
+            if heartbeat is not None:
+                heartbeat()
+
+        beat()
         digest = file_sha256(model_path)
         model_sidecar = model_document_path(model_path)
         recipe_sidecar = recipe_document_path(model_path)
@@ -1101,7 +1225,9 @@ class RunAuthority:
         recipe_document_key = f"{public_prefix}/recipe.json"
         manifest_key = f"{public_prefix}/manifest.json"
         sidecar_key = f"{self.run_prefix(run_id)}/checkpoints/{identifier}/recovery-sidecar.json"
+        beat()
         self.control.put_json(sidecar_key, recovery_sidecar, create_only=True)
+        beat()
         self.models.put_file(
             model_key,
             model_path,
@@ -1109,6 +1235,7 @@ class RunAuthority:
             content_type="application/zip",
             cache_control="public, max-age=31536000, immutable",
         )
+        beat()
         self.models.put_file(
             model_document_key,
             model_sidecar,
@@ -1116,6 +1243,7 @@ class RunAuthority:
             content_type="application/json",
             cache_control="public, max-age=31536000, immutable",
         )
+        beat()
         self.models.put_file(
             recipe_document_key,
             recipe_sidecar,
@@ -1142,13 +1270,16 @@ class RunAuthority:
             recovery_sidecar_key=sidecar_key,
             created_at=str(created_at or self.clock.utc_now()),
         )
+        beat()
         self.models.put_json(
             manifest_key,
             manifest.to_dict(),
             create_only=True,
             cache_control="public, max-age=31536000, immutable",
         )
-        self._upsert_public_index(manifest)
+        beat()
+        self._update_public_index(run_id, checkpoint=manifest, heartbeat=heartbeat)
+        beat()
         return manifest
 
     def _update_public_index(
@@ -1157,9 +1288,13 @@ class RunAuthority:
         *,
         checkpoint: CheckpointManifest | None = None,
         promotion: PromotionReceipt | None = None,
+        telemetry: Mapping[str, Any] | None = None,
+        heartbeat: Callable[[], None] | None = None,
     ) -> None:
         key = f"{self.run_prefix(run_id)}/index.json"
         for _attempt in range(8):
+            if heartbeat is not None:
+                heartbeat()
             current = self.models.get_json_optional(key)
             etag = str(self.models.head(key)["etag"]) if current is not None else None
             rows = list((current or {}).get("checkpoints") or [])
@@ -1197,7 +1332,15 @@ class RunAuthority:
                 "checkpoints": rows,
                 "promotion": promoted,
             }
+            if telemetry is not None:
+                if str(telemetry.get("run_id") or "") != run_id:
+                    raise ValueError("public telemetry belongs to another Run")
+                document["telemetry"] = dict(telemetry)
+            elif (current or {}).get("telemetry") is not None:
+                document["telemetry"] = dict(current["telemetry"])
             try:
+                if heartbeat is not None:
+                    heartbeat()
                 self.models.put_json(
                     key,
                     document,
@@ -1209,6 +1352,175 @@ class RunAuthority:
             except ConditionalWriteConflict:
                 continue
         raise RuntimeError("public run index CAS did not converge")
+
+    def publish_run_telemetry(
+        self,
+        run_id: str,
+        *,
+        verified_checkpoint_id: str | None = None,
+        tracker_sync_status: str | None = None,
+    ) -> dict[str, Any]:
+        """Publish verified scientific histories only after a successful Run drain."""
+        from gradlab.json_utils import canonical_json_bytes
+        from gradlab.metric_journal import JournalHistory, read_control_journal
+
+        prefix = self.run_prefix(run_id)
+        terminals = [
+            self.control.get_json(key)
+            for key in self.control.iter_keys(f"{prefix}/attempts/")
+            if key.endswith("/terminal.json")
+        ]
+        complete_run = any(
+            row.get("state") in {"succeeded", "complete_local"} for row in terminals
+        )
+        if not complete_run:
+            verified_snapshot = False
+            if verified_checkpoint_id is not None:
+                for key in self.evaluation.iter_keys(f"{prefix}/evals/"):
+                    if not key.endswith("/verified-result.json"):
+                        continue
+                    result = self.evaluation.get_json(key)
+                    if (
+                        result.get("checkpoint_id") == verified_checkpoint_id
+                        and result.get("status") in {"accepted", "rejected"}
+                    ):
+                        verified_snapshot = True
+                        break
+            if not verified_snapshot:
+                raise ValueError("public telemetry requires a complete Run or verified snapshot")
+        events = read_control_journal(self.control, run_id)
+        if not events:
+            raise ValueError("public telemetry requires a nonempty verified journal")
+        if complete_run:
+            terminal_high_water = max(
+                int((row.get("drain") or {}).get("metric_segment_high_water") or 0)
+                for row in terminals
+                if row.get("state") in {"succeeded", "complete_local"}
+            )
+            if int(events[-1]["event_seq"]) < terminal_high_water:
+                raise ValueError("public telemetry journal is shorter than the terminal receipt")
+        rows = JournalHistory(events).rows
+        media = self._publish_public_journal_media(run_id, events)
+        document = {
+            "schema_version": 1,
+            "run_id": run_id,
+            "event_high_water": int(events[-1]["event_seq"]),
+            "histories": rows,
+            "media": media,
+        }
+        payload = canonical_json_bytes(document)
+        digest = hashlib.sha256(payload).hexdigest()
+        key = f"{prefix}/telemetry/{digest}.json"
+        self.models.put_bytes(
+            key,
+            payload,
+            content_type="application/json",
+            cache_control="public, max-age=31536000, immutable",
+            create_only=True,
+        )
+        if self.models.get_bytes(key) != payload:
+            raise ValueError("public telemetry failed read-back verification")
+        reference = {
+            "run_id": run_id,
+            "url": self.models.public_url(key),
+            "sha256": digest,
+            "history_count": len(rows),
+            "event_high_water": int(events[-1]["event_seq"]),
+        }
+        manifest = self.manifest(run_id)
+        tracking = manifest.get("tracking") if isinstance(manifest, Mapping) else None
+        if isinstance(tracking, Mapping):
+            delivery = str(tracking.get("delivery") or "")
+            status = tracker_sync_status or (
+                "pending" if delivery == "local_only" else "delivered"
+            )
+            if status not in {"pending", "delivered"}:
+                raise ValueError("public tracker sync status is invalid")
+            reference["tracking"] = {
+                "backend": tracking["backend"],
+                "delivery": delivery,
+                "tracker_sync_status": status,
+            }
+        self._update_public_index(run_id, telemetry=reference)
+        return reference
+
+    def _publish_public_journal_media(
+        self, run_id: str, events: Sequence[Mapping[str, Any]],
+    ) -> list[dict[str, Any]]:
+        prefix = self.run_prefix(run_id)
+        public_index = self.models.get_json_optional(f"{prefix}/index.json") or {}
+        checkpoints = {row["checkpoint_id"]: row for row in public_index.get("checkpoints", [])}
+        media = []
+        for event in events:
+            kind = event.get("kind")
+            payload = event.get("payload") or {}
+            video = (
+                payload if kind == "evaluation_video"
+                else {**payload["video"], "bucket_uri": payload["bucket_uri"]}
+                if kind == "monitoring" and payload.get("video") else None
+            )
+            if video is None:
+                continue
+            identifier = payload.get("checkpoint_id")
+            if not identifier:
+                # Resolve immutable earlier frames through their evaluation evidence,
+                # never through a step that distinct Policies may share.
+                if kind == "evaluation_video":
+                    match = re.fullmatch(r"eval:([0-9a-f]{64}):video", str(event["source"]))
+                    if match is None:
+                        raise ValueError("public video has no immutable evaluation identity")
+                    if not str(video.get("key") or "").startswith(
+                        f"{prefix}/evals/{match.group(1)}/"
+                    ):
+                        raise ValueError("public video disagrees with its evaluation identity")
+                    evidence = self.evaluation.get_json(
+                        f"{prefix}/evals/{match.group(1)}/intent.json"
+                    )
+                else:
+                    evidence = self.models.get_json(
+                        f"monitoring/{run_id}/{payload['evaluation_id']}/result.json"
+                    )
+                identifier = evidence.get("checkpoint_id")
+                if not identifier:
+                    raise ValueError("public video evidence has no checkpoint identity")
+            if identifier not in checkpoints:
+                continue
+            if int(checkpoints[identifier]["step"]) != int(event["step"]):
+                raise ValueError("public video checkpoint step mismatch")
+            source = self.evaluation if kind == "evaluation_video" else self.models
+            source_prefix = (
+                f"{prefix}/" if kind == "evaluation_video"
+                else f"monitoring/{run_id}/{payload['evaluation_id']}/"
+            )
+            key = str(video.get("key") or "")
+            digest = str(video.get("sha256") or "")
+            size = video.get("bytes")
+            if (
+                video.get("bucket_uri") != source.config.uri
+                or not key.startswith(source_prefix)
+                or SHA256_PATTERN.fullmatch(digest) is None
+                or type(size) is not int or not 0 < size <= 512 * 1024**2
+            ):
+                raise ValueError("public video has an invalid immutable reference")
+            public_key = f"{prefix}/media/{digest}.mp4"
+            with tempfile.TemporaryDirectory(prefix="gradlab-public-video-") as temporary:
+                path = Path(temporary) / "video.mp4"
+                try:
+                    source.download_verified(key, path, size=size, sha256=digest)
+                    self.models.put_file(public_key, path, sha256=digest,
+                                         content_type="video/mp4",
+                                         cache_control="public, max-age=31536000, immutable")
+                    self.models.download_verified(public_key, path, size=size, sha256=digest)
+                except ValueError as exc:
+                    raise ValueError("public video integrity verification failed") from exc
+            media.append({
+                "kind": kind, "step": int(event["step"]),
+                "checkpoint_id": identifier,
+                "event_seq": int(event["event_seq"]),
+                "episode_id": str(video.get("episode_id") or ""),
+                "url": self.models.public_url(public_key), "sha256": digest, "bytes": size,
+            })
+        return media
 
     def _upsert_public_index(self, checkpoint: CheckpointManifest) -> None:
         self._update_public_index(checkpoint.run_id, checkpoint=checkpoint)
@@ -1343,19 +1655,7 @@ class RunAuthority:
                 or not isinstance(threshold, int | float)
             ):
                 continue
-            criteria.append(
-                {
-                    "metric": metric,
-                    "operator": operator,
-                    "threshold": float(threshold),
-                    "value": value,
-                    "passed": (
-                        None
-                        if value is None
-                        else bool(EARLY_STOP_OPERATORS[operator](value, float(threshold)))
-                    ),
-                }
-            )
+            criteria.append(metric_threshold_evidence(raw_rule, value))
         event = (
             self._goal_catalog_enrichment_event(
                 manifest=manifest,
@@ -1503,29 +1803,39 @@ class RunAuthority:
 
     def create_terminal(self, receipt: TerminalReceipt) -> str:
         receipt.validate()
-        if receipt.state != "succeeded":
+        if receipt.state not in {"succeeded", "complete_local"}:
             raise ValueError("canonical terminal receipt is reserved for scientific success")
         if receipt.acceptance_required is not True:
             raise ValueError("canonical terminal receipt requires acceptance-backed evaluation")
         drain = dict(receipt.drain)
         if drain.get("complete") is not True:
             raise ValueError("successful terminal receipt requires a complete drain")
-        if int(receipt.wandb_high_water_mark) <= 0:
-            raise ValueError("successful terminal receipt requires W&B metric delivery")
-        if int(drain.get("metric_segment_high_water") or 0) != int(receipt.wandb_high_water_mark):
-            raise ValueError("R2 and W&B delivery high-water marks do not match")
-        if int(drain.get("wandb_remote_high_water_mark") or 0) < int(receipt.wandb_high_water_mark):
-            raise ValueError("W&B delivery is not remotely visible")
+        if receipt.tracking is None:
+            if int(receipt.wandb_high_water_mark) <= 0:
+                raise ValueError("successful terminal receipt requires W&B metric delivery")
+            if int(drain.get("metric_segment_high_water") or 0) != int(receipt.wandb_high_water_mark):
+                raise ValueError("R2 and W&B delivery high-water marks do not match")
+            if int(drain.get("wandb_remote_high_water_mark") or 0) < int(receipt.wandb_high_water_mark):
+                raise ValueError("W&B delivery is not remotely visible")
+        elif receipt.tracking["delivery"] == "local_only":
+            if receipt.state != "complete_local" or int(drain.get("metric_segment_high_water") or 0) <= 0:
+                raise ValueError("local-only canonical success requires a complete durable journal")
+        elif receipt.state != "succeeded":
+            raise ValueError("online canonical success requires succeeded state")
         capacity_ratio = drain.get("publication_capacity_ratio")
-        if capacity_ratio is not None and float(capacity_ratio) < 2.0:
+        if (
+            capacity_ratio is not None
+            and (receipt.tracking or {}).get("delivery", "online") == "online"
+            and float(capacity_ratio) < 2.0
+        ):
             raise ValueError("W&B publication capacity is below twice peak ingress")
         journal_archive = drain.get("journal_archive")
-        if (
-            not isinstance(journal_archive, Mapping)
-            or int(journal_archive.get("segment_count") or 0) <= 0
-            or not str(drain.get("journal_expires_at") or "")
-        ):
+        if not isinstance(journal_archive, Mapping) or int(journal_archive.get("segment_count") or 0) <= 0:
+            raise ValueError("delivered metric journal inventory is missing")
+        if receipt.tracking is None and not str(drain.get("journal_expires_at") or ""):
             raise ValueError("delivered metric journals are not scheduled for expiry")
+        if receipt.tracking is not None and journal_archive.get("retention") != "durable":
+            raise ValueError("selected-service metric journals must be retained durably")
 
         checkpoints = [dict(row) for row in receipt.checkpoint_inventory]
         evals = [dict(row) for row in receipt.eval_inventory]
@@ -1577,6 +1887,7 @@ class RunAuthority:
         except ValueError:
             manifest = None
         attempt_terminal_exists = self.control.get_json_optional(attempt_terminal_key) is not None
+        self._validate_dataset_terminal(receipt, manifest)
         event = (
             self._goal_catalog_event_for_terminal(
                 manifest,
@@ -1605,6 +1916,38 @@ class RunAuthority:
             )
         return etag
 
+    def _validate_dataset_terminal(self, receipt: TerminalReceipt, manifest: RunManifest | None) -> None:
+        if manifest is None or receipt.drain.get("complete") is not True:
+            return
+        recipe = self.recipe_document_optional(manifest.recipe_sha256)
+        settings = ((recipe or {}).get("recipe", {}).get("train_config", {})
+                    .get("checkpoint_monitoring") or {})
+        if not settings.get("enabled"):
+            return
+        delivery = receipt.drain.get("checkpoint_monitoring") or {}
+        inventory = delivery.get("inventory", [])
+        checkpoints = {row["checkpoint_id"] for row in receipt.checkpoint_inventory}
+        if len(inventory) != len(checkpoints) or {row["checkpoint_id"] for row in inventory} != checkpoints:
+            raise ValueError("monitoring inventory does not cover every unique saved checkpoint")
+        if receipt.state == "canceled":
+            if delivery.get("workers_quiescent") is not True or any(row.get("status") not in {"complete", "failed", "canceled"} for row in delivery.get("inventory", [])):
+                raise ValueError("canceled monitoring requires settled workers and partial inventory")
+            return
+        if delivery.get("complete") is not True or delivery.get("workers_quiescent") is not True:
+            raise ValueError("complete terminal drain requires verified checkpoint monitoring")
+        from gradlab.checkpoint_monitoring import episode_manifest, verify_monitoring_inventory
+        for row in inventory:
+            expected = f"monitoring/{receipt.run_id}/{row['evaluation_id']}/result.json"
+            if row["status"] != "complete" or row["result_key"] != expected:
+                raise ValueError("monitoring inventory has incomplete delivery")
+            result = self.models.get_json(expected)
+            if canonical_json_sha256(result) != row["result_sha256"]:
+                raise ValueError("monitoring result checksum mismatch")
+            if result["checkpoint_id"] != row["checkpoint_id"] or result["evaluation_id"] != row["evaluation_id"]:
+                raise ValueError("monitoring terminal identity mismatch")
+            verify_monitoring_inventory(self.models, result, episode_manifest(settings["episodes"], settings.get("record_episodes")),
+                                        prefix=expected.removesuffix("/result.json"))
+
     def create_attempt_terminal(
         self,
         receipt: TerminalReceipt,
@@ -1625,6 +1968,7 @@ class RunAuthority:
                 manifest = self._manifest_for_attempt(receipt.run_id, receipt.attempt_id)
             except ValueError:
                 manifest = None
+        self._validate_dataset_terminal(receipt, manifest)
         event = (
             self._goal_catalog_event_for_terminal(
                 manifest,

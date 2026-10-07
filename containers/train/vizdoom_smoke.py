@@ -13,7 +13,7 @@ from gradlab.env_providers import make_provider_vec_env, provider_native_vec_kwa
 
 
 SMOKE_CONTRACT_VERSION = 3
-PROVIDER_DISTRIBUTION = "vizdoom-turbo"
+PROVIDER_DISTRIBUTION = "env-vizdoom-turbo"
 DEATHMATCH_ACTIONS = [
     [],
     ["ATTACK"],
@@ -65,7 +65,7 @@ def _config(game: str) -> EnvConfig:
     deathmatch = game == "VizdoomDeathmatch-v1"
     return resolve_env_config(
         EnvConfig(
-            env_provider="vizdoom-turbo",
+            env_provider="env-vizdoom-turbo",
             game=game,
             state="default",
             frame_skip=4,

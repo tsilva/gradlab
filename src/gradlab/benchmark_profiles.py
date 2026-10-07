@@ -141,8 +141,8 @@ class _PPOBackendComparisonProfile(_Profile):
     @field_validator("required_metrics")
     @classmethod
     def validate_required_metrics(cls, values: list[str]) -> list[str]:
-        if "train/throughput/loop/rate" not in values:
-            raise ValueError("must include train/throughput/loop/rate")
+        if "train/throughput/rate" not in values:
+            raise ValueError("must include train/throughput/rate")
         for metric_name in values:
             validate_metric_name(metric_name)
         return values
@@ -325,14 +325,11 @@ def _command(
 
 
 def _local_smoke_commands(profile: Mapping[str, Any]) -> list[BenchmarkCommand]:
-    goal_file = str(profile["goal_file"])
     recipe_file = str(profile["recipe_file"])
     enqueue = [
         "gradlab",
         "experiment",
         "launch",
-        "--goal-file",
-        goal_file,
         "--recipe-file",
         recipe_file,
         "--seed",
@@ -521,6 +518,9 @@ def _assert_ppo_backend_equivalence(
         backend_config = dict(backend["config"])
         backend_config.pop("precision", None)
         backend_config.pop("execution_profile", None)
+        # Only GradLab PPO materializes an empty checkpoint update schedule.
+        if backend_config.get("checkpoint_update_steps") == []:
+            backend_config.pop("checkpoint_update_steps")
         backend["config"] = backend_config
         result["training_backend"] = backend
         return result

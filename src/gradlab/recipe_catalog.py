@@ -128,7 +128,9 @@ def latest_local_recipe_model(
                 receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
             except (OSError, UnicodeError, json.JSONDecodeError):
                 continue
-            if not isinstance(receipt, dict) or receipt.get("status") != "completed":
+            if not isinstance(receipt, dict) or receipt.get("status") not in {
+                "completed", "complete_local"
+            }:
                 continue
             if (
                 str(receipt.get("goal_id") or "") != goal_id

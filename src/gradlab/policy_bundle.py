@@ -98,11 +98,21 @@ class _RecipeValueDocument(BoundaryModel):
     policy_environment_hash: Any = None
     evaluation_environment_hash: Any = None
     value_contract: Any = None
+    monitoring: dict[str, Any] | None = None
     eval: _EvaluationDocument | None = None
     playback: _PlaybackDocument | None = None
 
     @model_validator(mode="after")
     def validate_portable_contract(self) -> "_RecipeValueDocument":
+        settings = self.train_config.get("checkpoint_monitoring") or {}
+        if settings.get("enabled"):
+            from gradlab.checkpoint_monitoring import episode_manifest
+            expected_monitoring = {"protocol": "checkpoint-monitoring-v1", "settings": settings,
+                                   "manifest": episode_manifest(settings["episodes"], settings.get("record_episodes"))}
+            if self.monitoring != expected_monitoring:
+                raise ValueError("monitoring differs from its immutable neutral episode contract")
+        elif self.monitoring is not None:
+            raise ValueError("monitoring contract requires enabled checkpoint monitoring")
         if self.eval is None and self.playback is None:
             raise ValueError("must define eval or playback")
         if self.eval is not None and self.playback is not None:
@@ -1014,6 +1024,15 @@ def _derive_critic_value_contract(
         and 0.0 <= float(gamma) <= 1.0
         else None
     )
+    schedule = None
+    if backend_config.get("gamma_final") is not None and backend_config["gamma_final"] != gamma:
+        schedule = {
+            "initial": gamma,
+            "final": backend_config["gamma_final"],
+            "timesteps": backend_config.get("gamma_schedule_timesteps", 0)
+            or train_config.get("timesteps"),
+        }
+        discount = None
     from gradlab.policy_registry import (
         backend_provenance_algorithm,
         default_action_selection_mode,
@@ -1027,6 +1046,7 @@ def _derive_critic_value_contract(
         "policy_environment_hash": policy_environment_hash,
         "reward_stream": "task",
         "discount": discount,
+        **({"discount_schedule": schedule} if schedule is not None else {}),
         "action_sampling": default_action_selection_mode(algorithm_id),
         "truncation_bootstrap": "terminal-value",
     }
@@ -1141,6 +1161,11 @@ def _build_recipe_contract(
     train_config.pop("rom_asset_manifest", None)
     train_config["seed"] = int(seed)
     recipe["train_config"] = train_config
+    monitoring = train_config.get("checkpoint_monitoring") or {}
+    if monitoring.get("enabled"):
+        from gradlab.checkpoint_monitoring import episode_manifest
+        recipe["monitoring"] = {"protocol": "checkpoint-monitoring-v1", "settings": monitoring,
+                                "manifest": episode_manifest(monitoring["episodes"], monitoring.get("record_episodes"))}
     if run_description:
         recipe["description"] = str(run_description)
     recipe = dict(

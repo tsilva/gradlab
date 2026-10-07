@@ -9,6 +9,7 @@ from gradlab.operator_credentials import (
     DstackCoordinatorProfile,
     KeychainReference,
     OperatorConfigurationError,
+    SshTunnelProfile,
     load_operator_environment,
     reject_protected_dotenv,
     resolve_dstack_token,
@@ -52,6 +53,7 @@ default_fleet = "local-gpu"
 project = "main"
 server_url = "http://127.0.0.1:3000"
 token = {{ service = "gradlab-dstack-admin", account = "operator" }}
+ssh_tunnel = {{ destinations = ["operator@gpu.local", "operator@gpu.fallback"], remote_host = "127.0.0.1", remote_port = 3000 }}
 
 [dstack.fleets.local-gpu]
 coordinator = "primary"
@@ -91,6 +93,11 @@ path = "{modal_path}"
     assert report.dstack.fleet().coordinator_id == "primary"
     assert report.dstack.coordinator().token == KeychainReference(
         "gradlab-dstack-admin", "operator"
+    )
+    assert report.dstack.coordinator().ssh_tunnel == SshTunnelProfile(
+        destinations=("operator@gpu.local", "operator@gpu.fallback"),
+        remote_host="127.0.0.1",
+        remote_port=3000,
     )
     assert report.loaded_sources["MODAL_TOKEN_SECRET"] == "modal-profile"
     assert not report.unavailable_sources
@@ -246,6 +253,58 @@ def test_process_dstack_token_overrides_only_the_selected_profile() -> None:
     assert token == "process-token"
     assert source == "process-environment"
     assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("ssh_tunnel", "message"),
+    [
+        ('{ destinations = [], remote_host = "127.0.0.1", remote_port = 3000 }', "non-empty"),
+        (
+            '{ destinations = ["-oBad=yes"], remote_host = "127.0.0.1", remote_port = 3000 }',
+            "without options",
+        ),
+        (
+            '{ destinations = ["operator@gpu"], remote_host = "127.0.0.1", remote_port = 70000 }',
+            "between 1 and 65535",
+        ),
+    ],
+)
+def test_operator_config_rejects_invalid_ssh_tunnel_metadata(
+    tmp_path: Path,
+    ssh_tunnel: str,
+    message: str,
+) -> None:
+    config_path = _write(
+        tmp_path / "operator.toml",
+        f"""
+schema_version = 3
+
+[dstack]
+default_coordinator = "primary"
+default_fleet = "local-gpu"
+
+[dstack.coordinators.primary]
+project = "main"
+server_url = "http://127.0.0.1:3000"
+token = {{ service = "gradlab-dstack-admin", account = "operator" }}
+ssh_tunnel = {ssh_tunnel}
+
+[dstack.fleets.local-gpu]
+coordinator = "primary"
+cpu = 12
+memory = "40GB"
+gpu = "1"
+disk = "50GB"
+""".strip()
+        + "\n",
+    )
+
+    with pytest.raises(OperatorConfigurationError, match=message):
+        load_operator_environment(
+            environment={},
+            config_path=config_path,
+            keychain_lookup=lambda _reference: None,
+        )
 
 
 def test_schema_v3_rejects_ambient_dstack_routing_metadata(tmp_path: Path) -> None:

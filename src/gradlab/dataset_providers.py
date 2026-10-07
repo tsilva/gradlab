@@ -17,6 +17,7 @@ from gradlab.action_contract import (
     declared_action_contract,
     provider_buttons,
 )
+from gradlab.action_overrides import with_conditional_action_overrides
 from gradlab.batch_runtime import ProviderDescriptor
 from gradlab.env import EnvConfig, make_native_provider, resolve_env_config
 from gradlab.env_config import env_config_from_mapping
@@ -32,6 +33,7 @@ from gradlab.rom_assets import (
     rom_asset_manifest_for_game,
 )
 from gradlab.rom_runtime import bind_cached_rom
+from gradlab.task_kernels import IdentityTaskDefinition
 
 
 PROVIDER_CONTRACT_VERSION = 2
@@ -73,10 +75,11 @@ def _lane_info(infos: Any) -> dict[str, Any]:
 class SingleLaneEnv(gym.Env):
     metadata = {"render_modes": ["rgb_array"]}
 
-    def __init__(self, vector_env: Any) -> None:
+    def __init__(self, vector_env: Any, action_kernel: Any | None = None) -> None:
         if int(vector_env.num_envs) != 1:
             raise ValueError("dataset providers require exactly one environment lane")
         self.vector_env = vector_env
+        self.action_kernel = action_kernel
         self.action_space = vector_env.single_action_space
         self.observation_space = vector_env.single_observation_space
         self.render_mode = "rgb_array"
@@ -85,6 +88,12 @@ class SingleLaneEnv(gym.Env):
     def reset(self, *, seed: int | None = None, options: Mapping[str, Any] | None = None):
         super().reset(seed=seed)
         observations, infos = self.vector_env.reset(seed=seed, options=options)
+        if self.action_kernel is not None:
+            self.action_kernel.on_reset(
+                observations,
+                infos,
+                np.ones(1, dtype=np.bool_),
+            )
         self._needs_reset = False
         return observations[0], _lane_info(infos)
 
@@ -101,7 +110,13 @@ class SingleLaneEnv(gym.Env):
             if not self.action_space.contains(scalar):
                 raise ValueError(f"action {action!r} is not in {self.action_space}")
             batched = scalar[np.newaxis, ...]
-        observations, rewards, terminated, truncated, infos = self.vector_env.step(batched)
+        native_actions = (
+            batched if self.action_kernel is None else self.action_kernel.map_actions(batched)
+        )
+        observations, rewards, terminated, truncated, infos = self.vector_env.step(native_actions)
+        observe_step = getattr(self.action_kernel, "observe_step", None)
+        if callable(observe_step):
+            observe_step(infos)
         is_terminated = bool(terminated[0])
         is_truncated = bool(truncated[0])
         self._needs_reset = is_terminated or is_truncated
@@ -143,9 +158,7 @@ def _validate_declared_config(config: Mapping[str, Any]) -> None:
         raise ValueError("env config env_args must be an object")
     managed_args = sorted(_MANAGED_ENV_ARGS.intersection(env_args))
     if managed_args:
-        raise ValueError(
-            "dataset runtime owns env_args key(s): " + ", ".join(managed_args)
-        )
+        raise ValueError("dataset runtime owns env_args key(s): " + ", ".join(managed_args))
     state = config.get("state")
     if state is not None and not isinstance(state, str):
         raise ValueError("dataset recording accepts only a default or named scalar state")
@@ -188,9 +201,8 @@ def _control_action_table(
         return None
     normalized: list[tuple[str, ...]] = []
     for entry in table:
-        if (
-            not isinstance(entry, list | tuple)
-            or any(not isinstance(label, str) for label in entry)
+        if not isinstance(entry, list | tuple) or any(
+            not isinstance(label, str) for label in entry
         ):
             return None
         normalized.append(tuple(label.upper() for label in entry))
@@ -210,7 +222,6 @@ class ProviderSession:
         self.provider_id = provider.provider_id
         self.environment_id = config.game
         self.effective_config = json_value(asdict(config))
-        self.env = SingleLaneEnv(vector_env)
         system = str(
             getattr(vector_env, "system", None)
             or ("Nes" if provider == SUPERMARIOBROS_NES_TURBO_PROVIDER else config.game)
@@ -224,11 +235,21 @@ class ProviderSession:
         )
         self._control_actions = _control_action_table(config)
         self._descriptor = descriptor
+        action_kernel = IdentityTaskDefinition(
+            signals=config.task.get("signals", {}),
+        ).bind(descriptor, 1)
         self.action_contract = compile_runtime_action_contract(
             config,
             descriptor,
-            descriptor.native_action_space,
+            action_kernel.action_space,
         )
+        action_kernel = with_conditional_action_overrides(
+            action_kernel,
+            descriptor,
+            config.task.get("signals", {}),
+            self.action_contract,
+        )
+        self.env = SingleLaneEnv(vector_env, action_kernel)
         self.provenance = {
             "distribution": provider.distribution_name,
             "version": importlib.metadata.version(provider.distribution_name),
@@ -260,9 +281,9 @@ class ProviderSession:
             ):
                 raise ValueError("policy action shape does not match the provider")
         policy_observation = getattr(policy, "observation_space", None)
-        if policy_observation is not None and getattr(
-            policy_observation, "shape", None
-        ) != getattr(self.env.observation_space, "shape", None):
+        if policy_observation is not None and getattr(policy_observation, "shape", None) != getattr(
+            self.env.observation_space, "shape", None
+        ):
             raise ValueError("policy observation space does not match the provider")
 
     def action_from_labels(self, labels: Sequence[str]) -> Any:
@@ -279,10 +300,7 @@ class ProviderSession:
             meanings = self._descriptor.action_meanings or ()
             action_buttons = getattr(self.env.vector_env, "ACTION_BUTTONS", {})
             for index, meaning in enumerate(meanings):
-                actual = {
-                    str(label).upper()
-                    for label in action_buttons.get(str(meaning), ())
-                }
+                actual = {str(label).upper() for label in action_buttons.get(str(meaning), ())}
                 if actual == requested:
                     return index
             raise ValueError(f"no configured action matches controls {sorted(requested)!r}")
