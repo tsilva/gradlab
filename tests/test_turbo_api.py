@@ -6,7 +6,12 @@ import gymnasium as gym
 import numpy as np
 import pytest
 
-from gradlab.turbo_api import CAPABILITY_KEYS, TURBO_API_VERSION, validate_turbo_vector_env
+from gradlab.turbo_api import (
+    CAPABILITY_KEYS,
+    FILTERED_ACTION_CAPABILITY_KEYS,
+    TURBO_API_VERSION,
+    validate_turbo_vector_env,
+)
 
 
 def _capabilities() -> dict[str, object]:
@@ -37,11 +42,20 @@ def _capabilities() -> dict[str, object]:
     }
 
 
+def _filtered_action_capabilities() -> dict[str, object]:
+    base = _capabilities()
+    values = {
+        **base,
+        "supported_filtered_actions": ((0, 0), (1, 0), (0, 1)),
+    }
+    return {name: values[name] for name in FILTERED_ACTION_CAPABILITY_KEYS}
+
+
 def _contract_env(*, capabilities: dict[str, object] | None = None):
     active = np.zeros(2, dtype=np.int32)
     active.setflags(write=False)
     declared_capabilities = _capabilities() if capabilities is None else capabilities
-    assert tuple(declared_capabilities) == CAPABILITY_KEYS
+    assert tuple(declared_capabilities) in {CAPABILITY_KEYS, FILTERED_ACTION_CAPABILITY_KEYS}
     signal_spec = MappingProxyType(
         {
             "dtype": "int64",
@@ -103,17 +117,37 @@ def test_validates_the_declarative_v2_surface_without_resetting_or_stepping() ->
 @pytest.mark.parametrize(
     "provider_id",
     (
-        "stable-retro-turbo",
-        "supermariobrosnes-turbo",
-        "breakout-turbo-env",
-        "vizdoom-turbo",
-        "gradoom",
+        "env-stableretro-turbo",
+        "env-supermariobrosnes-turbo-emu",
+        "env-breakoutatari2600-turbo-native",
+        "env-vizdoom-turbo",
+        "env-gradoom-turbo-torch",
     ),
 )
 def test_all_pinned_providers_share_the_exact_capability_contract(provider_id: str) -> None:
     contract = validate_turbo_vector_env(_contract_env(), provider_id)
 
     assert tuple(contract.capabilities) == CAPABILITY_KEYS
+
+
+def test_accepts_and_validates_declared_filtered_action_transport_rows() -> None:
+    contract = validate_turbo_vector_env(
+        _contract_env(capabilities=_filtered_action_capabilities()),
+        "env-breakoutatari2600-turbo-native",
+    )
+
+    assert tuple(contract.capabilities) == FILTERED_ACTION_CAPABILITY_KEYS
+
+
+def test_rejects_filtered_action_rows_with_wrong_transport_width() -> None:
+    capabilities = _filtered_action_capabilities()
+    capabilities["supported_filtered_actions"] = ((0,), (1,))
+
+    with pytest.raises(ValueError, match="button transport width"):
+        validate_turbo_vector_env(
+            _contract_env(capabilities=capabilities),
+            "env-breakoutatari2600-turbo-native",
+        )
 
 
 def test_rejects_capability_key_order_drift() -> None:
@@ -172,9 +206,46 @@ def test_validates_device_resident_torch_state_indices() -> None:
     capabilities["supported_transition_transports"] = ("torch",)
     env.capabilities = MappingProxyType(capabilities)
 
-    contract = validate_turbo_vector_env(env, "gradoom")
+    contract = validate_turbo_vector_env(env, "env-gradoom-turbo-torch")
 
     assert contract.api_version == 2
+
+
+def test_gradoom_contract_adapter_aligns_unindexed_cuda_env_device() -> None:
+    import torch
+
+    from gradlab.gradoom_device_runtime import _GraDoomTorchContractAdapter
+
+    class _FakeCudaTensor(torch.Tensor):
+        @classmethod
+        def __torch_dispatch__(cls, func, types, args=(), kwargs=None):
+            raise NotImplementedError(func)
+
+    active = _FakeCudaTensor._make_wrapper_subclass(
+        _FakeCudaTensor,
+        (2,),
+        dtype=torch.int32,
+        device=torch.device("cuda", 0),
+    )
+    env = _contract_env()
+    env.metadata = {**env.metadata, "transition_transport": "torch"}
+    env.transport = "torch"
+    # GraDOOM reports env.device as unindexed "cuda" while its tensors live on
+    # the concrete cuda:N device.
+    env.device = torch.device("cuda")
+    env.active_state_indices = lambda: active
+    capabilities = _capabilities()
+    capabilities["supported_transition_transports"] = ("torch",)
+    env.capabilities = MappingProxyType(capabilities)
+
+    with pytest.raises(TypeError, match="must remain on env.device"):
+        validate_turbo_vector_env(env, "env-gradoom-turbo-torch")
+
+    adapted = _GraDoomTorchContractAdapter(env)
+    contract = validate_turbo_vector_env(adapted, "env-gradoom-turbo-torch")
+
+    assert contract.api_version == TURBO_API_VERSION
+    assert adapted.device == torch.device("cuda", 0)
 
 
 def test_rejects_nonportable_signal_dtype_declarations() -> None:

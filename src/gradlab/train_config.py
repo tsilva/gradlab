@@ -5,7 +5,10 @@ import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
+
+if TYPE_CHECKING:
+    from gradlab.resolved_training import ResolvedTrainConfig
 
 from gradlab.environment_fields import (
     ENVIRONMENT_FIELD_SPECS,
@@ -31,8 +34,11 @@ SourceSection = Literal["runtime", "train", "goal_train"]
 
 
 def wandb_publication_enabled(train_config: Mapping[str, Any]) -> bool:
-    """Return whether the canonical W&B mode enables metric publication."""
+    """Return whether the Run owes delivery to its selected metrics service."""
 
+    tracking = train_config.get("tracking")
+    if isinstance(tracking, Mapping):
+        return tracking.get("delivery") == "online"
     return str(train_config.get("wandb_mode") or "online") != "disabled"
 
 
@@ -40,7 +46,7 @@ def checkpoint_eval_requires_acceptance(train_config: Mapping[str, Any]) -> bool
     """Derive acceptance behavior from the evaluation backend and contract."""
 
     return (
-        str(train_config.get("checkpoint_eval_backend") or "none") == "modal"
+        str(train_config.get("checkpoint_eval_backend") or "none") in {"modal", "training-container"}
         and train_config.get("checkpoint_eval_acceptance") is not None
     )
 
@@ -176,7 +182,7 @@ def add_env_config_args(
     )
 
 
-def load_materialized_train_config(path: Path) -> dict[str, Any]:
+def load_materialized_train_config(path: Path) -> ResolvedTrainConfig:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError(f"train config file must contain a JSON object: {path}")
@@ -187,7 +193,9 @@ def load_materialized_train_config(path: Path) -> dict[str, Any]:
         required_keys=("training_backend",),
         enforce_early_stop_policy=True,
     )
-    return {**defaults, **normalized}
+    from gradlab.resolved_training import ResolvedTrainConfig
+
+    return ResolvedTrainConfig.from_validated({**defaults, **normalized})
 
 
 def train_config_field_for_key(key: str) -> TrainConfigField | None:
@@ -407,6 +415,12 @@ def validate_and_normalize_train_config(
 
     normalized = dict(train_config)
     validate_train_config_fields(normalized, label=label, required_keys=required_keys)
+    from gradlab.checkpoint_schedule import normalize_checkpoint_config
+
+    normalize_checkpoint_config(normalized, metric_validator=metric_validator)
+    from gradlab.occupancy import resolve_cell_spaces
+
+    resolve_cell_spaces(normalized)
     if "obs_resize" in normalized:
         normalized["obs_resize"] = normalize_obs_resize(
             normalized["obs_resize"],
@@ -512,10 +526,18 @@ def validate_and_normalize_train_config(
                 "id": backend_id,
                 "config": backend_config,
             }
+    if normalized.get("checkpoint_monitoring") is not None:
+        from gradlab.monitor_config import resolve_monitoring
+
+        normalized["checkpoint_monitoring"] = resolve_monitoring(
+            normalized["checkpoint_monitoring"], normalized
+        )
     return normalized
 
 
 TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
+    _field("cell_spaces", type_name="json", default=None, mapping_value=True, source_section="train"),
+    _field("occupancy", type_name="json", default=None, mapping_value=True, source_section="train"),
     _field(
         "timesteps",
         type_name="int",
@@ -562,6 +584,7 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         type_name="int",
         default=DEFAULT_TRAIN_SEED,
     ),
+    _field("checkpoint_monitoring", type_name="json", default=None, mapping_value=True, source_section="train"),
     _field("run_name", default="ppo_retro"),
     _field("run_description", default=""),
     _field("runs_dir", default=PORTABLE_DEFAULT_RUNS_DIR),
@@ -571,8 +594,11 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
         type_name="int",
         default=500_000,
         validation_min=0,
-        source_section="goal_train",
+        source_section="train",
     ),
+    _field("checkpoint_steps", type_name="json", default=(), source_section="train"),
+    _field("checkpoint_candidates", type_name="json", default=None,
+           source_section="train"),
     _field(
         "post_train_eval_episodes",
         type_name="int",
@@ -612,7 +638,7 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
     _field(
         "checkpoint_eval_backend",
         default="modal",
-        choices=("modal", "none"),
+        choices=("modal", "training-container", "none"),
         non_empty=True,
         source_section="train",
     ),
@@ -666,6 +692,8 @@ TRAIN_CONFIG_FIELDS: tuple[TrainConfigField, ...] = (
     _field("wandb_display_name", default=None),
     _field("wandb_group", default=None),
     _field("wandb_tags", default=""),
+    _field("tracking", mapping_value=True, default=None),
+    _field("tracking_created_at", default=""),
     _field(
         "wandb_mode",
         default="online",

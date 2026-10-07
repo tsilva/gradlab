@@ -12,11 +12,17 @@ NON_SEMANTIC_ENV_ARG_KEYS = frozenset(
     {
         "batch_size",
         "compile_engine",
+        "copy",
+        "daemon",
         "game",
+        "multiprocessing_context",
         "num_envs",
         "num_threads",
+        "observation_mode",
         "rom_path",
+        "shared_memory",
         "thread_affinity_offset",
+        "vectorization_mode",
     }
 )
 
@@ -44,7 +50,7 @@ def provider_env_id(config: Any) -> str | None:
     game = provider_game(config)
     if not game:
         return None
-    provider = str(_get(config, "env_provider", "stable-retro-turbo") or "stable-retro-turbo")
+    provider = str(_get(config, "env_provider", "env-stableretro-turbo") or "env-stableretro-turbo")
     return qualify_env_id(provider, game)
 
 

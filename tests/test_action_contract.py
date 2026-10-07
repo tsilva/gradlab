@@ -1,3 +1,4 @@
+import builtins
 from types import MappingProxyType, SimpleNamespace
 
 import gymnasium as gym
@@ -14,6 +15,7 @@ from gradlab.action_contract import (
     configured_action_meanings,
     configured_action_name,
     declared_action_contract,
+    provider_buttons,
     runtime_action_contract,
 )
 from gradlab.batch_runtime import ProviderDescriptor
@@ -23,6 +25,44 @@ from gradlab.env_identity import validate_task_config
 
 BREAKOUT_NO_NOOP_ACTIONS = [["BUTTON"], ["RIGHT"], ["LEFT"]]
 BREAKOUT_NO_NOOP_HASH = "a1f69721fbf7ef8a00084b9426767b0bce61f39ee0880b932a954c7d5789ee15"
+
+
+def test_gradoom_button_metadata_does_not_import_the_cuda_runtime(monkeypatch):
+    original_import = builtins.__import__
+
+    def guarded_import(name, *args, **kwargs):
+        if name == "gradoom" or name.startswith("gradoom."):
+            raise AssertionError("GraDOOM metadata resolution imported the CUDA runtime")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", guarded_import)
+
+    assert provider_buttons(
+        "env-gradoom-turbo-torch",
+        "VizdoomDeathmatch-v1",
+        env_args={"scenario": "scenario"},
+    ) == (
+        "ATTACK",
+        "SPEED",
+        "STRAFE",
+        "MOVE_RIGHT",
+        "MOVE_LEFT",
+        "MOVE_BACKWARD",
+        "MOVE_FORWARD",
+        "TURN_RIGHT",
+        "TURN_LEFT",
+        "SELECT_WEAPON1",
+        "SELECT_WEAPON2",
+        "SELECT_WEAPON3",
+        "SELECT_WEAPON4",
+        "SELECT_WEAPON5",
+        "SELECT_WEAPON6",
+        "SELECT_NEXT_WEAPON",
+        "SELECT_PREV_WEAPON",
+        "LOOK_UP_DOWN_DELTA",
+        "TURN_LEFT_RIGHT_DELTA",
+        "MOVE_LEFT_RIGHT_DELTA",
+    )
 
 
 def test_runtime_action_contract_traverses_common_environment_wrappers():
@@ -42,7 +82,7 @@ def test_live_config_rejects_unknown_provider_and_task_action_fields():
     with pytest.raises(ValueError, match="constructor argument"):
         resolve_env_config(
             EnvConfig(
-                env_provider="supermariobrosnes-turbo",
+                env_provider="env-supermariobrosnes-turbo-emu",
                 game="SuperMarioBros-Nes-v0",
                 env_args={"action_set": "basic"},
             )
@@ -65,25 +105,25 @@ def test_live_config_rejects_unknown_provider_and_task_action_fields():
     ("provider", "game", "action_set", "expected_hash"),
     [
         (
-            "stable-retro-turbo",
+            "env-stableretro-turbo",
             "SuperMarioBros-Nes-v0",
             "basic",
             "2eaa8ce13795d654097e6fbeb16460de8ae78f0af39b7f88259bc51604504134",
         ),
         (
-            "supermariobrosnes-turbo",
+            "env-supermariobrosnes-turbo-emu",
             "SuperMarioBros-Nes-v0",
             "basic",
             "2eaa8ce13795d654097e6fbeb16460de8ae78f0af39b7f88259bc51604504134",
         ),
         (
-            "breakout-turbo-env",
+            "env-breakoutatari2600-turbo-native",
             "Breakout-Atari2600-v0",
             "simple",
             "ae2fea9e05910b0db9ba3980c162573a8ad9ad562e077babfeb5f6144d94a091",
         ),
         (
-            "stable-retro-turbo",
+            "env-stableretro-turbo",
             "Breakout-Atari2600-v0",
             "simple",
             "ae2fea9e05910b0db9ba3980c162573a8ad9ad562e077babfeb5f6144d94a091",
@@ -107,7 +147,7 @@ def test_provider_metadata_resolves_shared_semantic_hash(provider, game, action_
 
 def test_vizdoom_discrete_request_preflights_to_the_scenario_minimal_table():
     config = SimpleNamespace(
-        env_provider="vizdoom-turbo",
+        env_provider="env-vizdoom-turbo",
         game="VizdoomBasic-v1",
         env_args={"use_restricted_actions": "discrete"},
         task={"action": {"set": "native"}},
@@ -124,7 +164,7 @@ def test_vizdoom_discrete_request_preflights_to_the_scenario_minimal_table():
 
 def test_vizdoom_preflight_uses_configured_available_buttons():
     config = SimpleNamespace(
-        env_provider="vizdoom-turbo",
+        env_provider="env-vizdoom-turbo",
         game="VizdoomBasic-v1",
         env_args={
             "use_restricted_actions": "discrete",
@@ -195,7 +235,7 @@ def test_every_bundled_vizdoom_scenario_preflights_exact_discrete_meanings(
     meanings,
 ):
     config = SimpleNamespace(
-        env_provider="vizdoom-turbo",
+        env_provider="env-vizdoom-turbo",
         game=game,
         env_args={"use_restricted_actions": "discrete"},
         task={"action": {"set": "native"}},
@@ -206,7 +246,7 @@ def test_every_bundled_vizdoom_scenario_preflights_exact_discrete_meanings(
 
 def test_stable_retro_mario_preset_compiles_to_native_button_masks():
     config = SimpleNamespace(
-        env_provider="stable-retro-turbo",
+        env_provider="env-stableretro-turbo",
         game="SuperMarioBros-Nes-v0",
         env_args={"players": 1, "use_restricted_actions": "basic"},
         task={"action": {"set": "native"}},
@@ -221,7 +261,7 @@ def test_stable_retro_mario_preset_compiles_to_native_button_masks():
     assert values[2] == (1, 0, 0, 0, 0, 0, 0, 1, 0)
 
 
-@pytest.mark.parametrize("provider", ["breakout-turbo-env", "stable-retro-turbo"])
+@pytest.mark.parametrize("provider", ["env-breakoutatari2600-turbo-native", "env-stableretro-turbo"])
 def test_breakout_inline_table_without_noop_preserves_order_and_semantic_hash(provider):
     config = SimpleNamespace(
         env_provider=provider,
@@ -289,7 +329,7 @@ def test_breakout_inline_table_without_noop_preserves_order_and_semantic_hash(pr
 )
 def test_mario_action_set_catalogs_stay_aligned(action_set, expected_meanings):
     contracts = []
-    for provider in ("stable-retro-turbo", "supermariobrosnes-turbo"):
+    for provider in ("env-stableretro-turbo", "env-supermariobrosnes-turbo-emu"):
         config = SimpleNamespace(
             env_provider=provider,
             game="SuperMarioBros-Nes-v0",
@@ -305,7 +345,7 @@ def test_mario_action_set_catalogs_stay_aligned(action_set, expected_meanings):
 
 def test_multiplayer_inline_table_is_joint_not_cartesian_and_order_stable():
     base = SimpleNamespace(
-        env_provider="stable-retro-turbo",
+        env_provider="env-stableretro-turbo",
         game="SuperMarioBros-Nes-v0",
         env_args={
             "players": 2,
@@ -339,7 +379,7 @@ def test_multiplayer_inline_table_is_joint_not_cartesian_and_order_stable():
 
 def _descriptor(
     *,
-    provider_id="vizdoom-turbo",
+    provider_id="env-vizdoom-turbo",
     action_space=None,
     mode="custom_discrete",
     table=None,
@@ -374,7 +414,7 @@ def test_runtime_vizdoom_contract_uses_provider_meanings_and_structured_controls
         buttons=("MOVE_LEFT", "MOVE_RIGHT", "ATTACK"),
     )
     config = SimpleNamespace(
-        env_provider="vizdoom-turbo",
+        env_provider="env-vizdoom-turbo",
         game="VizdoomBasic-v1",
         env_args={"use_restricted_actions": "discrete"},
         task={"action": {"set": "native"}},
@@ -425,14 +465,14 @@ def test_runtime_vizdoom_contract_uses_provider_meanings_and_structured_controls
 
 def test_runtime_discrete_cartesian_contract_is_compact_and_exact():
     descriptor = _descriptor(
-        provider_id="stable-retro-turbo",
+        provider_id="env-stableretro-turbo",
         action_space=gym.spaces.Discrete(6),
         mode="discrete",
         buttons=("A", "LEFT", "RIGHT"),
         combos=((0, 1), (0, 2, 4)),
     )
     config = SimpleNamespace(
-        env_provider="stable-retro-turbo",
+        env_provider="env-stableretro-turbo",
         game="Fixture-Nes-v0",
         env_args={"use_restricted_actions": "discrete"},
         task={"action": {"set": "native"}},
@@ -466,13 +506,13 @@ def test_runtime_discrete_cartesian_contract_is_compact_and_exact():
 
 def test_runtime_component_contract_payload_preserves_structured_labels():
     descriptor = _descriptor(
-        provider_id="stable-retro-turbo",
+        provider_id="env-stableretro-turbo",
         action_space=gym.spaces.MultiBinary(3),
         mode="all",
         buttons=("A", "LEFT", "RIGHT"),
     )
     config = SimpleNamespace(
-        env_provider="stable-retro-turbo",
+        env_provider="env-stableretro-turbo",
         game="Fixture-Nes-v0",
         env_args={"use_restricted_actions": "all"},
         task={"action": {"set": "native"}},
@@ -499,7 +539,7 @@ def test_runtime_action_contract_compatibility_checks_execution_and_semantics():
         table_hash="4" * 64,
     )
     config = SimpleNamespace(
-        env_provider="vizdoom-turbo",
+        env_provider="env-vizdoom-turbo",
         game="VizdoomBasic-v1",
         env_args={"use_restricted_actions": "discrete"},
         task={"action": {"set": "native"}},
@@ -529,13 +569,13 @@ def test_runtime_action_contract_compatibility_checks_execution_and_semantics():
 
 def test_explicit_task_codec_derives_policy_semantics_from_native_components():
     descriptor = _descriptor(
-        provider_id="stable-retro-turbo",
+        provider_id="env-stableretro-turbo",
         action_space=gym.spaces.MultiBinary(3),
         mode="all",
         buttons=("A", "LEFT", "RIGHT"),
     )
     config = SimpleNamespace(
-        env_provider="stable-retro-turbo",
+        env_provider="env-stableretro-turbo",
         game="Fixture-Nes-v0",
         env_args={"use_restricted_actions": "all"},
         task={

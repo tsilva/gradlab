@@ -2,11 +2,14 @@ exclude-newer = "7 days"
 constraint-dependencies = [
     "mistralai!=2.4.6",
     "guardrails-ai!=0.10.1",
+    "cryptography>=50",
+    "gitpython>=3.1.58",
+    "h2>=4.4.1",
+    "setuptools>=83",
 ]
-
 [exclude-newer-package]
-breakout-turbo-env = "2026-08-13T20:30:00Z"
-gradoom = "2026-08-13T20:30:00Z"
-stable-retro-turbo = "2026-08-13T20:30:00Z"
-supermariobrosnes-turbo = "2026-08-13T20:30:00Z"
-vizdoom-turbo = "2026-08-13T20:30:00Z"
+env-breakoutatari2600-turbo-native = false
+env-gradoom-turbo-torch = false
+env-stableretro-turbo = false
+env-supermariobrosnes-turbo-emu = false
+env-vizdoom-turbo = false

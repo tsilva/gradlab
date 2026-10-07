@@ -13,6 +13,27 @@ to copy, not shared infrastructure declarations.
 The dstack API must remain private. The checked-in systemd unit runs the pinned
 image directly, so a host does not need Docker Compose.
 
+## CPU-only local workers
+
+CPU workers use the same fleet template and training image as GPU workers.
+Their private operator resource configuration must explicitly set `gpu = "0"`.
+Retain one unsplit worker and size CPU, memory, and disk requests from its
+verified capacity. Keep the selected coordinator private and bind every attempt
+to it using the existing launch path.
+
+For Apple silicon, the current `linux/amd64` training image requires emulation.
+An x86-64 Linux VM provides the Docker, SSH, and systemd host expected by the
+pinned dstack SSH provisioner. Image emulation, available disk space, and CPU
+training must pass live checks before marking that worker ready. Do not publish
+an ARM image as a substitute for a requested identical image digest.
+
+Copy `cpu-smoke.task.dstack.example.yml` outside the repository and replace its
+image digest, fleet, and resource placeholders with verified operator values.
+This credential-free task checks CPU tensor training and bundled environment
+imports. It does not certify the supervisor lifecycle or prove a complete
+training run. Follow it with lifecycle certification and a bounded run through
+`gradlab experiment launch`, verifying the authoritative terminal receipt.
+
 Host-owned configuration and secrets include:
 
 - `/etc/gradlab/dstack/server.env`, which must provide the server admin token,

@@ -7,6 +7,8 @@ from gradlab.metric_names import (
     TRAIN_EXPLORATION_CELL_UNIQUE_ORIGIN_TARGET_ROLLING_MEAN,
     TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN,
     TRAIN_PROGRESS_KILLS_ORIGIN_TARGET_ROLLING_MEAN,
+    train_progress_origin_target_rolling_max_metric,
+    train_progress_origin_target_rolling_min_metric,
     validate_metric_name,
 )
 from gradlab.training_metrics import EpisodeMetricsReducer
@@ -87,15 +89,22 @@ def test_configured_frag_mean_rolls_over_latest_100_target_episodes() -> None:
 
     partial = reducer.consume(_episode(1.0, kills=1) for _ in range(99))
     assert partial[TRAIN_PROGRESS_KILLS_ORIGIN_TARGET_ROLLING_MEAN] == 1.0
+    assert partial[train_progress_origin_target_rolling_max_metric("kills")] == 1.0
 
     mature = reducer.consume((_episode(3.0, kills=3),))
     assert mature[TRAIN_PROGRESS_KILLS_ORIGIN_TARGET_ROLLING_MEAN] == pytest.approx(1.02)
+    assert mature[train_progress_origin_target_rolling_max_metric("kills")] == 3.0
 
     archive_only = reducer.consume((_episode(1000.0, origin="curriculum", kills=1000),))
     assert archive_only[TRAIN_PROGRESS_KILLS_ORIGIN_TARGET_ROLLING_MEAN] == pytest.approx(1.02)
+    assert archive_only[train_progress_origin_target_rolling_max_metric("kills")] == 3.0
 
     rolled = reducer.consume((_episode(-1.0, kills=-1),))
     assert rolled[TRAIN_PROGRESS_KILLS_ORIGIN_TARGET_ROLLING_MEAN] == 1.0
+    assert rolled[train_progress_origin_target_rolling_max_metric("kills")] == 3.0
+
+    expired = reducer.consume(_episode(0.0, kills=0) for _ in range(100))
+    assert expired[train_progress_origin_target_rolling_max_metric("kills")] == 0.0
     assert (
         validate_metric_name(TRAIN_PROGRESS_KILLS_ORIGIN_TARGET_ROLLING_MEAN)
         == TRAIN_PROGRESS_KILLS_ORIGIN_TARGET_ROLLING_MEAN
@@ -107,3 +116,55 @@ def test_configured_progress_field_requires_a_finite_episode_value() -> None:
 
     with pytest.raises(ValueError, match="kills.*finite number"):
         reducer.consume((_episode(0.0),))
+
+
+def test_progress_minimum_uses_only_finite_target_values_and_expires():
+    reducer = EpisodeMetricsReducer(progress_fields=("kills",), track_success=False)
+    key = train_progress_origin_target_rolling_min_metric("kills")
+    assert key not in reducer.snapshot()
+    assert reducer.consume([_episode(0, kills=5)])[key] == 5
+    assert reducer.consume([_episode(0, kills=-2)])[key] == -2
+    assert reducer.consume([_episode(0, origin="curriculum", kills=-100)])[key] == -2
+    with pytest.raises(ValueError, match="must be a finite number"):
+        reducer.consume([_episode(0, kills=float("nan"))])
+    assert reducer.snapshot()[key] == -2
+    assert reducer.consume(_episode(0, kills=8) for _ in range(99))[key] == -2
+    assert reducer.consume([_episode(0, kills=8)])[key] == 8
+
+
+def test_throughput_window_weights_rates_and_flushes_partial_tail():
+    from gradlab.training_metrics import ThroughputWindow
+
+    window = ThroughputWindow()
+    window.add(steps=100, loop_seconds=1, rollout_seconds=0.75,
+               between_rollouts_seconds=0.25, provider_step_seconds=0.5)
+    assert window.flush() == {}
+    window.add(steps=100, loop_seconds=4, rollout_seconds=1.25,
+               between_rollouts_seconds=2.75, provider_step_seconds=1)
+    metrics = window.flush()
+    assert metrics == {
+        "train/throughput/rate": 40,
+        "train/provider/rate": pytest.approx(200 / 1.5),
+        "train/rollout_overhead/seconds": 0.5,
+        "train/between_rollouts/seconds": 3,
+    }
+    window.add(steps=20, loop_seconds=0.2, rollout_seconds=0.1,
+               between_rollouts_seconds=0.1, provider_step_seconds=None)
+    assert window.flush() == {}
+    assert window.flush(final=True) == {
+        "train/throughput/rate": 100, "train/between_rollouts/seconds": 0.1,
+    }
+    assert window.flush(final=True) == {}
+
+
+def test_throughput_window_never_fabricates_partial_provider_rate():
+    from gradlab.training_metrics import ThroughputWindow
+
+    window = ThroughputWindow()
+    for provider in (0.5, None):
+        window.add(steps=100, loop_seconds=3, rollout_seconds=2,
+                   between_rollouts_seconds=1, provider_step_seconds=provider)
+    assert window.flush() == {
+        "train/throughput/rate": pytest.approx(200 / 6),
+        "train/between_rollouts/seconds": 2,
+    }

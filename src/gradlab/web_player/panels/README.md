@@ -21,6 +21,13 @@ controls processing. A disabled panel stays in its workspace position but is
 excluded from browser rendering, frame subscriptions, retained-history demand,
 inspection work, and policy-diagnostic demand.
 
+Game fullscreen temporarily suspends other panels in that window without changing
+their persisted enabled state, configuration, or layout. Suspended panels receive
+no rendering, frame decoding, or optional processing demand. Exiting fullscreen
+refreshes the existing instances at the current cursor. Other windows retain their
+own demand; required trajectory and reward recording continues. Diagnostics not
+computed during fullscreen remain missing in recorded history.
+
 Telemetry configuration is a list of visualization blocks:
 
 - `stats`: current or selected-transition values for multiple metrics.
@@ -32,7 +39,7 @@ Telemetry configuration is a list of visualization blocks:
   components.
 - `reward-breakdown`: a signed, reconciling reward ledger at the selected step
   or from episode step 1 through the selected cursor. It has a persisted `scope`
-  (`step` or `episode`) and no metric selector.
+  (`step` or `episode`), defaults to episode-to-cursor, and has no metric selector.
 
 `telemetry.js` is the descriptor registry for the live playback protocol. These
 keys are local visualization descriptors, not W&B metric names. A descriptor
@@ -44,7 +51,7 @@ telemetry. `session.reward_accounting` declares availability, the unit-interval
 `reward_scale`, and optional `clip_bounds`; each transition supplies
 `reward.raw`, `reward.components`, and `reward.accounting_error`, with matching
 `reward_raw` and `reward_accounting_error` history fields. Components use the
-explicit player wire IDs `native_reward`, `cell_novelty_reward`,
+explicit player wire IDs `native_reward`, `cell_novelty_reward`, `event_reward`,
 `progress_reward`, `score_reward`, `completion_reward`, `death_penalty`, and
 `time_penalty`. Other task signals are not inferred as reward components.
 
@@ -62,20 +69,20 @@ The built-in Reward analysis panel is visible in newly created workspaces.
 Normalization adds it hidden on the shelf when an existing v6 workspace does
 not contain it, preserving the existing layout without a schema-version reset.
 
-The built-in Observation panel owns the one canonical policy-input viewport and
+The built-in Input panel owns the one canonical model-input viewport and
 requests only base-observation processing. Enabling the standalone Attribution
 or CNN feature explorer panel changes that viewport with its exact-transition
 overlay; the most recently enabled diagnostic wins while both remain active.
-Observation subscribes to both generated frame kinds without requesting their
-processing, so neither overlay is computed merely because Observation is open.
+Input subscribes to both generated frame kinds without requesting their
+processing, so neither overlay is computed merely because Input is open.
 Base observations and generated overlays must match the selected transition
 sequence, and generated overlays must also match its generation.
 
 The built-in Attribution panel is an opt-in specialized control panel for live
 policy attribution. Its standardized Enabled switch controls attribution
-processing and whether the resulting overlay changes Observation. Its shared
+processing and whether the resulting overlay changes Input. Its shared
 controls select Grad-CAM or occlusion and their capture cadence. It does not own
-an observation viewport.
+an input viewport.
 
 The built-in CNN feature explorer is an opt-in specialized panel for a live
 policy's actor image encoder. It is disabled by default. Its standardized
@@ -85,7 +92,7 @@ count. Each exact transition ranks filters by peak raw positive post-activation
 response. The generation-tagged binary atlas holds a categorical winner map, a
 signed per-group-input-channel kernel mosaic, and a per-filter activation map.
 The explorer renders the kernel, activation, response, and receptive-field
-details; Observation renders the spatial winner map over the policy input.
+details; Input renders the spatial winner map over the model input.
 Winner colors compare only the displayed filters and describe activation, not
 selected-action attribution.
 
@@ -106,7 +113,18 @@ export function mount({ definition, services }) {
 
 Only `element` is required. The shared `view` identifies the selected and live
 transition with `sessionEpoch`, `selectedSequence`, `liveSequence`, and
-`inspection`. History is already filtered to the active episode. Panels render
+`inspection`. `chartHistory` supplies the separate extrema-preserving episode
+overview or shared `chartRange` for line and signal plots and the reward table.
+`chartStatus` supplies their shared loading, refreshing, recovering, ready, or error
+state. Null chart data means the current selection has not loaded; panels must
+not fall back to retained history. `retryChartHistory` restarts recovery for all
+affected panels in that window. The chart-history module owns requests, revisions,
+refresh cadence, recovery, and live-tail merging. The shell supplies its Playback
+context and eligible panel demand and disposes it when the window closes.
+Exact history remains
+separate for selected-step values and action frequencies; never compute statistics
+from display samples. `setChartRange` synchronizes zoom and `inspectStep` seeks an
+original recorded step. History is already filtered to the active episode. Panels render
 the supplied selected snapshot; controls intentionally read the live snapshot.
 
 Add a visualization metric by adding a descriptor. Add a reusable visualization

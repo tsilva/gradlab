@@ -1,32 +1,15 @@
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping
 from typing import Any
 
 from gradlab.metric_names import (
     EVAL_ACCEPTANCE_EPISODE_COMPLETED_COUNT,
-    EVAL_ACCEPTANCE_EPISODE_PLANNED_COUNT,
     EVAL_ACCEPTANCE_PASS,
     EVAL_CHECKPOINT_STEP,
-    EVAL_FULL_EPISODE_RETURN_SHAPED_MAX,
-    EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
-    EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MEAN,
-    EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MIN,
     metric_definition,
     require_current_metrics_schema,
 )
-
-
-_CURRENT_FIXED_FULL_METRICS = frozenset(
-    {
-        EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
-        EVAL_FULL_EPISODE_RETURN_SHAPED_MAX,
-        EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MIN,
-        EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MEAN,
-    }
-)
-_PROGRESS_METRIC_RE = re.compile(r"^eval/full/progress/[A-Za-z0-9_.-]+/(?:mean|max)$")
 
 
 def metrics_schema_version_from_recipe_document(document: Mapping[str, Any]) -> int:
@@ -46,9 +29,8 @@ def metrics_schema_version_from_recipe_document(document: Mapping[str, Any]) -> 
 
 def _allowed_full_metric(name: str, *, schema_version: int) -> bool:
     require_current_metrics_schema(schema_version)
-    if _PROGRESS_METRIC_RE.fullmatch(name):
-        return True
-    return name in _CURRENT_FIXED_FULL_METRICS and metric_definition(name) is not None
+    definition = metric_definition(name)
+    return definition is not None and definition.evidence == "evaluation"
 
 
 def validate_evaluation_scientific_metric(
@@ -73,7 +55,6 @@ def validate_evaluation_metric_payload(
     require_current_metrics_schema(schema_version)
     fixed = {
         EVAL_CHECKPOINT_STEP,
-        EVAL_ACCEPTANCE_EPISODE_PLANNED_COUNT,
         EVAL_ACCEPTANCE_EPISODE_COMPLETED_COUNT,
         EVAL_ACCEPTANCE_PASS,
     }
@@ -85,8 +66,7 @@ def validate_evaluation_metric_payload(
     )
     if invalid:
         raise ValueError(
-            f"metrics schema v{schema_version} does not allow evaluation metric: "
-            f"{invalid[0]}"
+            f"metrics schema v{schema_version} does not allow evaluation metric: {invalid[0]}"
         )
 
 
@@ -96,8 +76,8 @@ def evaluation_wandb_projection(
     schema_version: int,
     checkpoint_step: int,
     accepted: bool,
-    episodes_planned: int,
     episodes_completed: int,
+    required_metrics: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     require_current_metrics_schema(schema_version)
     projected = {
@@ -109,8 +89,14 @@ def evaluation_wandb_projection(
         {
             EVAL_CHECKPOINT_STEP: int(checkpoint_step),
             EVAL_ACCEPTANCE_PASS: 1.0 if accepted else 0.0,
-            EVAL_ACCEPTANCE_EPISODE_PLANNED_COUNT: float(episodes_planned),
             EVAL_ACCEPTANCE_EPISODE_COMPLETED_COUNT: float(episodes_completed),
         }
     )
+    rates = aggregates.get("success_rate_by_start")
+    if (
+        isinstance(rates, Mapping)
+        and len(rates) == 1
+        and "eval/success/mean" not in required_metrics
+    ):
+        projected.pop("eval/success/mean", None)
     return projected

@@ -12,7 +12,7 @@ from gradlab.reward_programs import validate_reward_shape_catalog
 
 MARIO_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml")
 MARIO_RECIPE = MARIO_GOAL.parent / "recipes/ppo.yaml"
-BREAKOUT_GOAL = Path("experiments/goals/Breakout-Atari2600-v0/_goal.yaml")
+BREAKOUT_GOAL = Path("experiments/goals/Breakout-Atari2600-v0/FirstWall/_goal.yaml")
 BREAKOUT_RECIPE = BREAKOUT_GOAL.parent / "recipes/ppo.yaml"
 VIZDOOM_GOAL = Path("experiments/goals/VizdoomBasic-v1/_goal.yaml")
 VIZDOOM_RECIPE = VIZDOOM_GOAL.parent / "recipes/ppo.yaml"
@@ -68,6 +68,39 @@ def test_all_mario_recipes_select_the_speedrun_default() -> None:
         assert (
             config["checkpoint_eval_environment"]["task"]["reward"]["reward_mode"] == "additive"
         ), recipe
+
+
+def test_breakout_base_recipe_penalizes_life_loss_and_serve_stall() -> None:
+    document = compose_train_document(BREAKOUT_GOAL, BREAKOUT_RECIPE)
+    config = document["train_config"]
+
+    assert document["recipe_id"] == "ppo"
+    assert config["env_args"]["use_restricted_actions"] == [
+        ["BUTTON"],
+        ["RIGHT"],
+        ["LEFT"],
+    ]
+    assert config["task"]["action"] == {
+        "set": "native",
+        "conditional_overrides": [
+            {
+                "id": "auto_serve",
+                "when": {
+                    "signal": "ball_y",
+                    "operation": "equals",
+                    "value": 0,
+                },
+                "replace_with": {"semantic_id": "button"},
+            }
+        ],
+    }
+    assert "serve_wait" not in config["task"]["events"]
+    assert config["task"]["events"]["serve_stall"]["steps"] == 256
+    assert config["task"]["reward"]["event_rewards"] == {
+        "life_loss": -0.1,
+        "serve_stall": -5.0,
+        "wall_cleared": 20.0,
+    }
 
 
 def test_deathmatch_reward_shape_defaults_native_and_materializes_optional_signals() -> None:

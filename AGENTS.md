@@ -10,6 +10,10 @@ Before every task in this repository, use the `$specs-author` skill to read the 
 - Never edit `SPECS.md` from inference. Propose the exact change, explain why it reflects stakeholder intent, and edit the file only after the user explicitly approves that exact change.
 - Keep `SPECS.md` complete, concise, and compacted. It must contain stakeholder intent rather than implementation, architecture, operations, or transient project detail.
 
+## Scoped Specifications
+
+Before changing publication, playback, queued execution, or Go-Explore behavior, read the matching authoritative scoped specification indexed by `docs/specs/README.md`. Treat each scoped requirement as user product intent for that capability, preserve its original presumption of immutability until the user explicitly evolves it, and keep it consistent with root `SPECS.md` and `CONTEXT.md`.
+
 ## GPU Instances
 
 Before choosing hardware, launching training, changing concurrency, or recommending compute targets, read `COMPUTE.md`. For local compute, also read the operator-local `~/.config/gradlab/instances.md`; it is the source of truth for that operator's fleet names, access commands, capacity, enrollment, cleanup, and host-specific gotchas. If the local inventory is absent, do not invent a target or capacity.
@@ -18,33 +22,33 @@ When changing dstack host behavior, preserve the root-owned runtime-image cleanu
 
 ## Stable Retro
 
-- Use PyPI `stable-retro-turbo`; import path remains `stable_retro`.
-- Current required Turbo API v2 runtimes are `stable-retro-turbo==1.0.1.post43`, `supermariobrosnes-turbo==0.6.6`, `breakout-turbo-env==0.5.5`, `vizdoom-turbo==1.3.0.post26`, and `gradoom==0.1.0a3`.
-- Native-vector code should use `stable_retro.RetroVecEnv`, whose constructor follows the original `RetroEnv` positional signature plus vector-only keyword arguments.
-- Runtime version source of truth: the exact pins in `pyproject.toml` and the resolved versions in `uv.lock`. Use `uv sync --frozen`; make overrides explicit in recipes, compute policy, run descriptions, and W&B tags.
+- Use PyPI `env-stableretro-turbo`; import it as `env_stableretro_turbo`.
+- Current required Turbo API v2 runtimes are `env-stableretro-turbo==1.0.1.post48`, `env-supermariobrosnes-turbo-emu==0.7.3`, `env-breakoutatari2600-turbo-native==0.5.13`, `env-vizdoom-turbo==1.3.0.post30`, and `env-gradoom-turbo-torch==0.2.1`.
+- Native-vector code should use `env_stableretro_turbo.RetroVecEnv`, whose constructor follows the original `RetroEnv` positional signature plus vector-only keyword arguments.
+- Runtime version source of truth: the exact pins in `pyproject.toml` and the resolved versions in `uv.lock`. Use `uv sync --frozen`; make overrides explicit in recipes, compute policy, run descriptions, and selected-service tags.
 - Every Turbo provider must declare and pass the strict Turbo Vector API v2 contract before gradlab consumes it. Do not add provider probing or legacy fallbacks.
 - Native-vector observations are channel-first `(n_envs, channels, height, width)`. Reject other layouts instead of transposing or guessing.
 - Keep portable runtime history and benchmark conclusions in experiment reports. Keep machine-specific access and benchmark facts in the operator-local inventory.
 
 ## Training Runs
 
-- When asked to certify, regression-test, validate, or debug the orchestration lifecycle, use the project-level `$certify-lifecycle` skill in `.codex/skills/certify-lifecycle`. Its credential-free deterministic Tier 1 gate exercises the real supervisor core against file-backed R2 and SQLite plus scripted W&B, Modal, learner, clock, and host boundaries; preserve and replay its failure evidence before changing invariants.
-- When asked to launch, run, start, execute, or monitor a dstack-backed training recipe, use the project-level `$launch-experiment` skill in `.codex/skills/launch-experiment`. It reports the W&B URL immediately, monitors through the authoritative R2 terminal receipt, and delegates active-run potential-bug diagnosis to the read-only `training_run_investigator` custom agent. Its default mode is observation-only; explicit user authorization enables its evidence-preserving repair mode.
+- When asked to certify, regression-test, validate, or debug the orchestration lifecycle, use the project-level `$certify-lifecycle` skill in `.codex/skills/certify-lifecycle`. Its credential-free deterministic Tier 1 gate exercises the real supervisor core against file-backed R2 and SQLite plus scripted metrics-service, Modal, learner, clock, and host boundaries; preserve and replay its failure evidence before changing invariants.
+- When asked to launch, run, start, execute, or monitor a dstack-backed training recipe, use the project-level `$launch-experiment` skill in `.codex/skills/launch-experiment`. Report the selected metrics-service URL when available, monitor through the authoritative R2 terminal or local-only receipt, and delegate active-run potential-bug diagnosis to the read-only `training_run_investigator` custom agent. Its default mode is observation-only; explicit user authorization enables its evidence-preserving repair mode.
 - When asked to tune or optimize a checked-in SB3 PPO/A2C recipe for sample efficiency and stability across training seeds, use the project-level `$autoresearch` skill in `.codex/skills/autoresearch`. It runs a bounded training-only 20%/50% fixed-rung search, launches no checkpoint evaluations, confirms the winner from five untouched full-cap training seeds, and patches only the pointed leaf recipe. Its result is training-signal-confirmed, not checkpoint-promoted or goal-accepted.
 - Active research goal contracts live under goal-scoped folders in `experiments/goals/`. For current Mario Level1-1 work, read `experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml` before choosing recipes, caps, metrics, or promotion criteria. Seed ranges are owned by `gradlab.seeds`, not goal files.
 - Launchable recipes live under their owning active goal's `recipes/` directory and may inherit reusable defaults from `experiments/recipes/_presets/`.
 - Keep generated artifacts out of source control; store runs under `~/.config/gradlab/runs/` and use ignored `logs/` and `models/` paths for other generated outputs.
-- The lease-holding run supervisor is the sole W&B writer. Training attempts use the training-container supervisor; operator-initiated post-training evaluation may use the local background evaluation supervisor after it exclusively acquires the run writer lease. W&B stores metrics, metadata, hashes, and R2 URLs only; checkpoints, evidence, replays, ROMs, and recovery bytes belong in their scoped R2 buckets.
-- Every training run needs a specific description via `--run-description`.
+- The lease-holding run supervisor is the sole selected metrics-service writer. Training attempts use the training-container supervisor; operator-initiated post-training evaluation may use the local background evaluation supervisor after it exclusively acquires the run writer lease. The validated GradLab metric journal is the durable scientific record; the selected online service stores projected metrics, metadata, hashes, R2 URLs, and representative video, while local-only Runs retain the journal without a service projection. Canonical checkpoints, evidence, replays, ROMs, and recovery bytes belong in their scoped R2 buckets.
+- Every training run needs a specific description; `gradlab experiment launch` derives one from the goal, recipe, and seed when `--run-description` is omitted.
 - Training tasks are profileless and locked to exact-source immutable runtime-image digests. One task owns one single-GPU host in v1.
 - Logical run IDs are `gradlab-<32 lowercase hex>` and attempt IDs are `attempt-<16 lowercase hex>`. Retries preserve the run ID and create a new attempt ID. Do not introduce numeric database job IDs or batch IDs.
 - Route W&B projects by canonical game family and keep provider identity and `environment_hash` in config. The W&B run ID and group are the immutable gradlab run ID.
-- Acceptance evaluation is the only checkpoint-promotion workflow for orchestrated runs. Automatically evaluate ready checkpoints against the immutable goal-owned episode manifest until the first accepted result closes evaluation admission; allow already-submitted evaluations to finish without retries, leave later checkpoints unevaluated for future explicit user action, fail fast on the first valid failed episode, and atomically promote the lowest-step accepted checkpoint. Modal never receives W&B or control-private credentials.
-- dstack task success is not scientific success. Require the private R2 terminal receipt proving the complete checkpoint inventory, the terminal inventory of automatically submitted evaluations, promotion, W&B high-water delivery, and drain.
+- Acceptance is the only policy-promotion authority for orchestrated runs; use goal-owned checkpoint evaluation except for an explicitly declared deterministic-search workflow. Automatically evaluate ready checkpoints against the immutable goal-owned episode manifest until the first accepted result closes Acceptance evaluation admission; allow already-submitted evaluations to finish without retries, leave later checkpoints without Acceptance evaluation for future explicit user action, fail fast on the first valid failed episode only when the declared acceptance rule permits it, require fixed-episode mean contracts to finish every declared episode, and atomically promote the lowest-step accepted checkpoint. Modal never receives selected metrics-service or control-private credentials.
+- dstack task success is not scientific success. Require the private R2 terminal receipt proving the complete checkpoint inventory, the terminal inventory of automatically submitted evaluations, promotion, retained metric journal, selected-service high-water delivery when online, and drain. Local-only completion has a distinct `complete_local` outcome without a remote-delivery claim.
 
 ## Metrics
 
-- `METRICS.md` is the source of truth for W&B metric names and semantics.
+- `METRICS.md` is the source of truth for registered metric names and semantics across selected services.
 - When adding, removing, renaming, or changing the meaning of a logged metric, update `METRICS.md` in the same change.
 - When touching metric logging, dashboards, reports, eval summaries, or answering metric semantics questions, audit the relevant emitted metric names/templates against `METRICS.md` and patch any missing or stale entries before finishing.
 - When the user asks a metric question and the answer is not already clear from `METRICS.md`, improve `METRICS.md` with that clarification before finishing.
@@ -57,9 +61,30 @@ When changing dstack host behavior, preserve the root-owned runtime-image cleanu
 
 ## Package Releases
 
-When asked to build, cut, tag, publish, or verify a GradLab PyPI release, use the project-level `$build-release` skill in `.codex/skills/build-release`. Build and audit a local release candidate before publishing. Normal publication must use the tag-triggered trusted-publishing workflow; do not manually upload to PyPI.
+When asked to build, cut, tag, publish, or verify a GradLab PyPI release, use the project-level `$build-release` skill in `.codex/skills/build-release`. The project launcher prepares metadata and pushes the release tag; GitHub Actions owns source validation, all release builds, artifact audits, and trusted publication. Normal release or validation requests do not build locally. Do not manually upload to PyPI.
 
 ## Dependencies
 
 Use `uv` for dependency resolution and keep `uv.lock` committed. Preserve Python supply-chain hardening in `pyproject.toml`.
-The intentional exceptions to the seven-day `exclude-newer` window are `breakout-turbo-env`, `gradoom`, `stable-retro-turbo`, `supermariobrosnes-turbo`, and `vizdoom-turbo`, because this project tracks current forward native Breakout, GraDOOM, Stable Retro, Mario, and ViZDoom runtimes while keeping the rest of the dependency graph age-gated. Keep the per-package cutoffs in `[tool.uv.exclude-newer-package]`, `uv-tool.toml`, and the user-level uv config in sync so `uv tool install . --editable` remains installable without extra flags.
+The intentional exceptions to the seven-day `exclude-newer` window are `env-breakoutatari2600-turbo-native`, `env-gradoom-turbo-torch`, `env-stableretro-turbo`, `env-supermariobrosnes-turbo-emu`, and `env-vizdoom-turbo`, because this project tracks current forward native Breakout, Torch-native Doom, Stable Retro, Mario, and ViZDoom runtimes while keeping the rest of the dependency graph age-gated. Keep the per-package cutoffs in `[tool.uv.exclude-newer-package]`, `uv-tool.toml`, and the user-level uv config in sync so `uv tool install . --editable` remains installable without extra flags.
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked in this repository's GitHub Issues. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The five canonical triage roles use their default label names. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This is a single-context repository with a root `CONTEXT.md` and ADRs under `docs/adr/`. See `docs/agents/domain.md`.
+
+## Shared release procedure
+
+The project `build-release` skill composes `$release-workflow` from
+`/Users/tsilva/.codex/skills/release-workflow/SKILL.md`.
+Read both for release work; keep project commands, version policy, artifact
+requirements, and approval gates in the project adapter.

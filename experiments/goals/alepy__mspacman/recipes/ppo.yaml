@@ -4,6 +4,15 @@ defaults:
 recipe_id: ppo
 description: Standard Atari PPO for {{ goal_id }}.
 train:
+  checkpoint_freq: 5000000
+  checkpoint_candidates:
+    metric: train/return/mean
+    direction: maximize
+    min_delta: 0.05
+    delta_mode: relative
+    start_after_steps: 5000000
+    min_interval_steps: 5000000
+    max_checkpoints: 3
   backend:
     config:
       learning_rate: 1.25e-4

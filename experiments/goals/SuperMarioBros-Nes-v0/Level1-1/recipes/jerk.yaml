@@ -4,6 +4,7 @@ reward_shape: speedrun-v1
 recipe_id: jerk
 description: Vectorized deterministic JERK search for a level-clearing {{ goal_id }} action sequence.
 train:
+  checkpoint_freq: 1000000
   checkpoint_eval_backend: none
   timesteps: 10000000
   backend:
@@ -17,5 +18,3 @@ train:
       retained_limit: 256
       fallback_action: noop
       log_interval_steps: 10000
-logging:
-  wandb_mode: online

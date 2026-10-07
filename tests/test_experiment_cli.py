@@ -10,7 +10,7 @@ from unittest import mock
 
 import pytest
 
-from gradlab.dstack_backend import DstackResources, DstackTask
+from gradlab.dstack_backend import ComputeRequest, DstackResources, DstackTask
 from gradlab.metric_names import METRICS_SCHEMA_VERSION
 from gradlab.experiment_cli import (
     _bind_launch_contract,
@@ -19,11 +19,16 @@ from gradlab.experiment_cli import (
     _catalog_rebuild_contract_failures,
     _compute,
     _dstack_backend_for_attempt,
+    _finish_launch_command,
+    _follow_run,
     _follow_fingerprint,
+    _goal_path_for_recipe,
     _latest_attempt_terminal,
     _manifest_rom_asset,
     _manifest_vizdoom_iwad,
     _operator_preflight,
+    _preflight_mlflow_compute_route,
+    _preflight_mlflow_service_uri,
     _poll_status,
     _project_reconciled_terminal,
     _public_dstack_state,
@@ -33,6 +38,7 @@ from gradlab.experiment_cli import (
     _require_retryable_attempt_terminal,
     _required_operator_environment,
     _run_completed,
+    _run_description,
     _stage_rom,
     _stage_vizdoom_iwad,
     _status,
@@ -80,7 +86,7 @@ def test_wandb_identity_uses_project_relative_goal_display_names(
     run_id = "gradlab-0123456789abcdef0123456789abcdef"
     document = {
         "train_config": {
-            "env_provider": "supermariobrosnes-turbo",
+            "env_provider": "env-supermariobrosnes-turbo-emu",
             "game": "SuperMarioBros-Nes-v0",
         }
     }
@@ -106,7 +112,7 @@ def test_wandb_identity_prefers_declared_campaign_group() -> None:
     document = {
         "campaign_id": "mario-local-confirmation",
         "train_config": {
-            "env_provider": "supermariobrosnes-turbo",
+            "env_provider": "env-supermariobrosnes-turbo-emu",
             "game": "SuperMarioBros-Nes-v0",
         },
     }
@@ -168,7 +174,7 @@ def test_catalog_rebuild_rejects_conflicting_current_descriptors_before_clear() 
 def test_wandb_identity_cohort_group_includes_override_variant() -> None:
     document = {
         "train_config": {
-            "env_provider": "supermariobrosnes-turbo",
+            "env_provider": "env-supermariobrosnes-turbo-emu",
             "game": "SuperMarioBros-Nes-v0",
         }
     }
@@ -269,14 +275,16 @@ def test_launch_parser_exposes_bounded_compute_and_hash_bound_overrides() -> Non
     args = parser.parse_args(
         [
             "launch",
-            "--goal-file",
-            "experiments/goals/goal/_goal.yaml",
             "--recipe-file",
             "experiments/goals/goal/recipes/ppo.yaml",
             "--seed",
             "123",
             "--run-description",
             "one isolated learning-rate ablation",
+            "--resume-checkpoint",
+            "https://models.example/runs/gradlab-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/"
+            "checkpoints/1-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/"
+            "manifest.json",
             "--set",
             "train.backend.config.learning_rate=0.0002",
             "--compute",
@@ -293,7 +301,9 @@ def test_launch_parser_exposes_bounded_compute_and_hash_bound_overrides() -> Non
     )
 
     assert args.recipe_overrides == ["train.backend.config.learning_rate=0.0002"]
+    assert args.resume_checkpoint.endswith("/manifest.json")
     assert args.checkpoint_eval_backend is None
+    assert args.follow is False
     compute = _compute(args)
     assert compute.kind == "spot"
     assert compute.target == "aws"
@@ -313,12 +323,11 @@ def test_fault_test_is_bounded_and_not_exposed_as_a_launch_override() -> None:
     assert forwarded.target is None
     assert forwarded.checkpoint_eval_backend == "none"
     assert forwarded.recipe_overrides == []
+    assert forwarded.follow is False
     assert forwarded.supervision_fault_fixture == "failed-result-live-process"
     launch_args = parser.parse_args(
         [
             "launch",
-            "--goal-file",
-            "experiments/goals/VizdoomBasic-v1/_goal.yaml",
             "--recipe-file",
             "experiments/goals/VizdoomBasic-v1/recipes/ppo.yaml",
             "--seed",
@@ -328,6 +337,99 @@ def test_fault_test_is_bounded_and_not_exposed_as_a_launch_override() -> None:
         ]
     )
     assert not hasattr(launch_args, "supervision_fault_fixture")
+
+
+def test_launch_parser_accepts_native_follow_mode() -> None:
+    args = build_parser().parse_args(
+        [
+            "launch",
+            "--recipe-file",
+            "experiments/goals/CartPole-v1/recipes/ppo.yaml",
+            "--follow",
+            "--json",
+        ]
+    )
+
+    assert args.follow is True
+    assert args.json is True
+    assert args.seed == 12
+    assert args.run_description is None
+    assert args.goal_file is None
+
+
+def test_launch_resolves_goal_and_description_from_recipe() -> None:
+    root = Path("/repo")
+    recipe = root / "experiments/goals/CartPole-v1/recipes/ppo.yaml"
+    goal = _goal_path_for_recipe(root, recipe)
+
+    assert goal == root / "experiments/goals/CartPole-v1/_goal.yaml"
+    assert (
+        _run_description(
+            root=root,
+            goal_path=goal,
+            recipe_path=recipe,
+            seed=12,
+            requested=None,
+        )
+        == "CartPole-v1 ppo seed 12"
+    )
+
+
+def test_launch_rejects_recipe_outside_goal_owned_recipes_directory() -> None:
+    root = Path("/repo")
+
+    with pytest.raises(ValueError, match="launchable recipe must be under"):
+        _goal_path_for_recipe(root, root / "experiments/recipes/_presets/ppo.yaml")
+
+
+def test_launch_follow_emits_launch_event_and_hands_off_in_memory_run_id(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    run_id = "gradlab-" + "c" * 32
+    output = {"schema_version": 1, "run_id": run_id, "attempt_id": "attempt-1234"}
+    args = SimpleNamespace(follow=True, json=True)
+
+    with mock.patch("gradlab.experiment_cli._follow_run", return_value=0) as follow:
+        result = _finish_launch_command(
+            root=tmp_path,
+            args=args,
+            output=output,
+            human_output="unused human output",
+            follow_timeout=43_200,
+        )
+
+    assert result == 0
+    assert json.loads(capsys.readouterr().out)["event"] == "launch"
+    follow.assert_called_once_with(
+        tmp_path,
+        run_id,
+        timeout=43_200,
+        poll_seconds=2.0,
+        json_events=True,
+        terminal_exit_status=True,
+    )
+
+
+def test_launch_without_follow_remains_asynchronous(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    output = {"schema_version": 1, "run_id": "gradlab-" + "d" * 32}
+    args = SimpleNamespace(follow=False, json=True)
+
+    with mock.patch("gradlab.experiment_cli._follow_run") as follow:
+        result = _finish_launch_command(
+            root=tmp_path,
+            args=args,
+            output=output,
+            human_output="unused human output",
+            follow_timeout=43_200,
+        )
+
+    assert result == 0
+    assert json.loads(capsys.readouterr().out) == output
+    follow.assert_not_called()
 
 
 def test_auto_without_cloud_budget_uses_operator_local_fleet() -> None:
@@ -348,10 +450,10 @@ def test_auto_without_cloud_budget_uses_operator_local_fleet() -> None:
     assert compute.bounded_duration_seconds == 3600
 
 
-def test_operator_preflight_parser_defaults_to_modal() -> None:
+def test_operator_preflight_parser_defers_eval_mode_to_recipe() -> None:
     args = build_parser().parse_args(["operator-preflight", "--json"])
 
-    assert args.checkpoint_eval_backend == "modal"
+    assert args.checkpoint_eval_backend is None
     assert args.target is None
     assert args.json is True
 
@@ -425,6 +527,7 @@ def test_bound_attempt_resolves_only_its_selected_coordinator(tmp_path: Path) ->
 
     with (
         mock.patch("gradlab.experiment_cli._load_environment", return_value=report),
+        mock.patch("gradlab.experiment_cli._ensure_coordinator_connection") as connection,
         mock.patch(
             "gradlab.experiment_cli.resolve_dstack_token",
             return_value=("b2-token", "macos-keychain"),
@@ -442,6 +545,7 @@ def test_bound_attempt_resolves_only_its_selected_coordinator(tmp_path: Path) ->
     assert backend.environment["DSTACK_TOKEN"] == "b2-token"
     config.coordinator.assert_called_once_with("b2")
     config.fleet.assert_called_once_with("b2")
+    connection.assert_called_once_with(coordinator)
     token.assert_called_once_with(coordinator)
 
 
@@ -449,7 +553,8 @@ def test_operator_preflight_reports_resolved_project_fleet_and_sources(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    for name in _required_operator_environment("none"):
+    tracking = {"backend": "wandb", "delivery": "online"}
+    for name in _required_operator_environment("none", tracking):
         monkeypatch.setenv(name, "operator-value")
     coordinator = SimpleNamespace(
         coordinator_id="primary",
@@ -482,6 +587,14 @@ def test_operator_preflight_reports_resolved_project_fleet_and_sources(
     )
     bucket = mock.MagicMock()
     bucket.iter_keys.return_value = iter(())
+    connection_report = SimpleNamespace(
+        as_manifest=lambda: {
+            "mode": "managed-ssh-tunnel",
+            "endpoint": "http://127.0.0.1:3000",
+            "coordinator_id": "primary",
+            "owned": True,
+        }
+    )
     with (
         mock.patch(
             "gradlab.experiment_cli._load_environment",
@@ -493,6 +606,10 @@ def test_operator_preflight_reports_resolved_project_fleet_and_sources(
         ),
         mock.patch("gradlab.experiment_cli.RunAuthority", return_value=mock.MagicMock()),
         mock.patch("gradlab.experiment_cli.R2Bucket", return_value=bucket),
+        mock.patch(
+            "gradlab.experiment_cli._ensure_coordinator_connection",
+            return_value=connection_report,
+        ) as connection,
         mock.patch("gradlab.experiment_cli.DstackBackend.preflight"),
         mock.patch(
             "gradlab.experiment_cli.resolve_dstack_token",
@@ -502,21 +619,41 @@ def test_operator_preflight_reports_resolved_project_fleet_and_sources(
             "gradlab.experiment_cli.wandb_entity_from_env",
             return_value="example-entity",
         ),
+        mock.patch("wandb.Api") as wandb_api,
     ):
+        wandb_api.return_value.projects.return_value = []
         _storage, _authority, backend, report = _operator_preflight(
             tmp_path,
             checkpoint_eval_backend="none",
+            tracking=tracking,
         )
 
     assert backend.project == "research"
     assert report["dstack"]["coordinator_id"] == "primary"
     assert report["dstack"]["project"] == "research"
+    assert report["dstack"]["connection"] == connection_report.as_manifest()
+    connection.assert_called_once_with(coordinator)
     assert report["compute"] == {
         "local_fleet": "configured-local",
         "source": "operator-config",
         "resources": {"cpu": 12, "memory": "40GB", "gpu": "1", "disk": "50GB"},
         "resources_source": "operator-config",
     }
+
+
+def test_main_always_closes_owned_coordinator_connections() -> None:
+    handler = mock.Mock(side_effect=OperatorConfigurationError("unavailable"))
+    parser = mock.Mock()
+    parser.parse_args.return_value = SimpleNamespace(func=handler)
+
+    with (
+        mock.patch("gradlab.experiment_cli.build_parser", return_value=parser),
+        mock.patch("gradlab.experiment_cli.close_coordinator_connections") as close,
+    ):
+        result = main([])
+
+    assert result == 2
+    close.assert_called_once_with()
 
 
 def test_resume_submit_parser_requires_one_existing_run() -> None:
@@ -533,8 +670,10 @@ def test_launch_operator_preflight_runs_before_runtime_readiness(
     goal = tmp_path / "experiments/goals/example/_goal.yaml"
     recipe = goal.parent / "recipes/ppo.yaml"
     args = SimpleNamespace(
-        goal_file=goal,
+        goal_file=None,
         recipe_file=recipe,
+        seed=12,
+        run_description=None,
         recipe_overrides=[],
         checkpoint_eval_backend="modal",
         compute="local",
@@ -552,7 +691,7 @@ def test_launch_operator_preflight_runs_before_runtime_readiness(
         mock.patch("gradlab.experiment_cli.current_git_branch", return_value="main"),
         mock.patch(
             "gradlab.experiment_cli._tracked_committed_path",
-            side_effect=[goal, recipe],
+            side_effect=[recipe, goal],
         ),
         mock.patch(
             "gradlab.experiment_cli.compose_resolved_train_documents",
@@ -561,6 +700,7 @@ def test_launch_operator_preflight_runs_before_runtime_readiness(
                     "train_config": {
                         "checkpoint_eval_backend": "modal",
                         "env_provider": "gradlab",
+                        "tracking": {"backend": "wandb", "delivery": "online"},
                     }
                 },
             ),
@@ -574,6 +714,47 @@ def test_launch_operator_preflight_runs_before_runtime_readiness(
         with pytest.raises(OperatorConfigurationError, match="missing operator"):
             cmd_launch(args)
 
+    runtime_release.assert_not_called()
+
+
+def test_launch_rejects_invalid_recipe_override_before_external_preflight() -> None:
+    root = Path.cwd().resolve()
+    goal = (root / "experiments/goals/Breakout-Atari2600-v0/FirstWall/_goal.yaml").resolve()
+    recipe = (goal.parent / "recipes/ppo.yaml").resolve()
+    args = SimpleNamespace(
+        goal_file=None,
+        recipe_file=recipe,
+        seed=12,
+        run_description=None,
+        recipe_overrides=["train.preprocessing.frame_skip=1"],
+        checkpoint_eval_backend="none",
+        compute="local",
+        target="local-gpu",
+        max_price=None,
+        max_cost_usd=None,
+        allow_on_demand=False,
+        max_duration=3600,
+        rom_path=None,
+    )
+
+    with (
+        mock.patch("gradlab.experiment_cli.repository_root", return_value=root),
+        mock.patch("gradlab.experiment_cli.clean_git_source_sha", return_value="a" * 40),
+        mock.patch("gradlab.experiment_cli.current_git_branch", return_value="main"),
+        mock.patch(
+            "gradlab.experiment_cli._tracked_committed_path",
+            side_effect=[recipe, goal],
+        ),
+        mock.patch("gradlab.experiment_cli._operator_preflight") as preflight,
+        mock.patch("gradlab.experiment_cli.runtime_release_from_args") as runtime_release,
+        pytest.raises(
+            ValueError,
+            match=r"unsupported flat field\(s\): preprocessing",
+        ),
+    ):
+        cmd_launch(args)
+
+    preflight.assert_not_called()
     runtime_release.assert_not_called()
 
 
@@ -737,6 +918,91 @@ def test_follow_fingerprint_ignores_only_poll_observation_time() -> None:
 
 
 @pytest.mark.parametrize(
+    ("terminal_state", "expected_exit_code"),
+    [
+        ("succeeded", 0),
+        ("stopped", 0),
+        ("failed", 1),
+        ("canceled", 1),
+        ("interrupted", 1),
+        ("resumable_failure", 1),
+    ],
+)
+def test_launch_follow_streams_json_events_and_reflects_terminal_state(
+    terminal_state: str,
+    expected_exit_code: int,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    run_id = "gradlab-" + "a" * 32
+    running = {
+        "schema_version": 1,
+        "run_id": run_id,
+        "attempt_terminal": None,
+        "completed": False,
+        "dstack": {"status": "running"},
+        "semantic": {},
+    }
+    terminal = {
+        **running,
+        "attempt_terminal": {"state": terminal_state},
+        "completed": True,
+        "dstack": {"status": "done"},
+    }
+
+    with mock.patch(
+        "gradlab.experiment_cli._poll_status",
+        return_value=iter([(running, False), (terminal, False)]),
+    ):
+        result = _follow_run(
+            tmp_path,
+            run_id,
+            timeout=3600,
+            poll_seconds=2.0,
+            json_events=True,
+            terminal_exit_status=True,
+        )
+
+    assert result == expected_exit_code
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [event["event"] for event in events] == ["status", "terminal"]
+    assert events[-1]["attempt_terminal"]["state"] == terminal_state
+
+
+def test_launch_follow_reports_timeout_as_a_json_event(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    run_id = "gradlab-" + "b" * 32
+    status = {
+        "schema_version": 1,
+        "run_id": run_id,
+        "attempt_terminal": None,
+        "completed": False,
+        "dstack": {"status": "unreachable"},
+        "semantic": {},
+    }
+
+    with mock.patch(
+        "gradlab.experiment_cli._poll_status",
+        return_value=iter([(status, True)]),
+    ):
+        result = _follow_run(
+            tmp_path,
+            run_id,
+            timeout=3600,
+            poll_seconds=2.0,
+            json_events=True,
+            terminal_exit_status=True,
+        )
+
+    assert result == 1
+    events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [event["event"] for event in events] == ["status", "follow_timeout"]
+    assert events[-1]["timeout_seconds"] == 3600
+
+
+@pytest.mark.parametrize(
     ("semantic_terminal", "attempt_terminal", "dstack_terminal", "expected"),
     [
         (None, None, False, False),
@@ -881,24 +1147,155 @@ def test_reconciliation_accepts_deployed_goal_variant_schema_one_without_mutatin
     assert document["goal_variant"]["schema_version"] == 1
 
 
-def test_pre_submit_failure_records_typed_attempt_evidence() -> None:
-    manifest = _manifest_only_run()
-    authority = mock.MagicMock()
-    prefix = f"runs/{manifest.run_id}"
-    authority.run_prefix.return_value = prefix
-    authority.control.iter_keys.return_value = iter(
-        [f"{prefix}/attempts/{manifest.attempt_id}/manifest.json"]
+def _pre_submit_authority(tmp_path: Path):
+    from gradlab.r2_store import BucketConfig, RunStorageConfig
+    from gradlab.run_authority import RunAuthority
+
+    return RunAuthority(
+        RunStorageConfig(
+            control=BucketConfig((tmp_path / "control").as_uri()),
+            evaluation=BucketConfig((tmp_path / "eval").as_uri()),
+            models=BucketConfig(
+                (tmp_path / "models").as_uri(),
+                public_base_url="https://models.example.test",
+            ),
+        )
     )
+
+
+def test_pre_submit_failure_records_typed_attempt_evidence(tmp_path: Path) -> None:
+    manifest = _manifest_only_run()
+    authority = _pre_submit_authority(tmp_path)
+    authority.create_manifest(manifest)
 
     _record_pre_submit_failure(authority, manifest)
 
-    receipt = authority.create_attempt_terminal.call_args.args[0]
-    assert receipt.run_id == manifest.run_id
-    assert receipt.attempt_id == manifest.attempt_id
-    assert receipt.state == "resumable_failure"
-    assert receipt.stop_reason == "pre_submit_failure"
-    assert receipt.final_step == 0
-    assert receipt.drain["complete"] is False
+    receipt = authority.semantic_state(manifest.run_id)["attempt_terminals"][0]
+    assert receipt["run_id"] == manifest.run_id
+    assert receipt["attempt_id"] == manifest.attempt_id
+    assert receipt["state"] == "resumable_failure"
+    assert receipt["stop_reason"] == "pre_submit_failure"
+    assert receipt["final_step"] == 0
+    assert receipt["drain"]["complete"] is False
+
+
+def test_retry_cannot_change_frozen_tracking_or_service_identity(tmp_path: Path) -> None:
+    manifest = _manifest_only_run()
+    authority = _pre_submit_authority(tmp_path)
+    authority.create_manifest(manifest)
+    attempt_id = new_attempt_id()
+    tracking = {
+        "backend": "mlflow",
+        "delivery": "online",
+        "sources": {"backend": "launch override", "delivery": "built-in default"},
+    }
+    with pytest.raises(ValueError, match="tracking selection"):
+        authority.create_attempt_manifest(replace(manifest, attempt_id=attempt_id, tracking=tracking, wandb={}))
+    with pytest.raises(ValueError, match="service identity"):
+        authority.create_attempt_manifest(
+            replace(manifest, attempt_id=attempt_id, wandb={**manifest.wandb, "entity": "other"})
+        )
+
+
+def test_mlflow_private_route_rejects_unapproved_fleet(monkeypatch) -> None:
+    monkeypatch.setenv("MLFLOW_OPERATOR_PROFILE", "pilot-profile")
+    monkeypatch.setenv("MLFLOW_ALLOWED_FLEETS", "private-gpu")
+    local = ComputeRequest(
+        kind="local", target="private-gpu", max_price=None, max_cost_usd=None,
+        allow_on_demand=False, max_duration_seconds=3600,
+    )
+    assert _preflight_mlflow_compute_route(local) == "pilot-profile"
+    with pytest.raises(RuntimeError, match="approved private route"):
+        _preflight_mlflow_compute_route(replace(local, target="other-gpu"))
+    with pytest.raises(RuntimeError, match="approved private route"):
+        _preflight_mlflow_compute_route(replace(local, kind="spot"))
+    assert _preflight_mlflow_service_uri("https://private.example.test/mlflow") == (
+        "https://private.example.test/mlflow"
+    )
+    with pytest.raises(RuntimeError, match="HTTPS service URI"):
+        _preflight_mlflow_service_uri("http://private.example.test/mlflow")
+
+
+def test_local_only_mlflow_launch_requires_storage_but_no_service_credentials() -> None:
+    required = _required_operator_environment(
+        "training-container", {"backend": "mlflow", "delivery": "local_only"}
+    )
+    assert "GRADLAB_CONTROL_R2_URI" in required
+    assert not any(name.startswith("MLFLOW_") for name in required)
+    assert "WANDB_API_KEY" not in required
+
+
+def test_private_mlflow_ca_is_frozen_as_required_task_secret() -> None:
+    tracking = {
+        "backend": "mlflow",
+        "delivery": "online",
+        "private_tls_ca": True,
+        "auth_mode": "network",
+    }
+    required = _required_operator_environment("none", tracking)
+    assert "GRADLAB_MLFLOW_TLS_CA_B64" in required
+    assert "GRADLAB_MLFLOW_TLS_CA_B64" not in _required_operator_environment(
+        "none", {"backend": "mlflow", "delivery": "online"}
+    )
+    assert "GRADLAB_MLFLOW_TLS_CA_B64" not in _required_operator_environment(
+        "none", {"backend": "wandb", "delivery": "online"}
+    )
+
+    manifest = SimpleNamespace(
+        run_id=new_run_id(),
+        image_digest="docker:example/gradlab@sha256:" + "a" * 64,
+        compute={
+            "selected": {
+                "kind": "local", "target": "private-gpu", "max_price": None,
+                "max_cost_usd": None, "allow_on_demand": False,
+                "max_duration_seconds": 3600,
+            },
+            "dstack_task": "private-mlflow-ca",
+        },
+        modal={"enabled": False, "environment_name": "gradlab-eval"},
+        tracking=tracking,
+    )
+    task = _task_request(manifest, manifest_uri="s3://control/run/manifest.json")
+    assert "GRADLAB_MLFLOW_TLS_CA_B64" in task.secret_env
+    assert "MLFLOW_AUTH_MODE" in task.secret_env
+    assert "MLFLOW_TRACKING_PASSWORD" not in task.secret_env
+
+    run = _manifest_only_run()
+    tracking = {
+        **tracking,
+        "sources": {"backend": "launch override", "delivery": "launch override"},
+        "operator_profile": "pilot",
+    }
+    private_run = replace(run, tracking=tracking, wandb={})
+    private_run.validate()
+    assert RunManifest.from_dict(private_run.to_dict()).tracking["auth_mode"] == "network"
+    with pytest.raises(ValueError, match="auth_mode"):
+        replace(private_run, tracking={**tracking, "auth_mode": "anonymous"}).validate()
+    with pytest.raises(ValueError, match="private_tls_ca"):
+        replace(private_run, tracking={**tracking, "private_tls_ca": "yes"}).validate()
+
+
+@pytest.mark.parametrize("invalid", ["activity", "binding_hash", "missing_binding"])
+def test_pre_submit_failure_rejects_activity_or_invalid_binding(
+    tmp_path: Path, invalid: str
+) -> None:
+    manifest = _manifest_only_run()
+    authority = _pre_submit_authority(tmp_path)
+    authority.create_manifest(manifest)
+    prefix = f"runs/{manifest.run_id}/attempts/{manifest.attempt_id}"
+    if invalid == "activity":
+        authority.control.put_json(f"{prefix}/activity.json", {"started": True})
+    elif invalid == "binding_hash":
+        key = f"{prefix}/coordinator.json"
+        binding = authority.control.get_json_optional(key)
+        binding["manifest_sha256"] = "0" * 64
+        authority.control.put_json(key, binding, create_only=False)
+    else:
+        (tmp_path / "control" / prefix / "coordinator.json").unlink()
+
+    with pytest.raises(RuntimeError):
+        _record_pre_submit_failure(authority, manifest)
+    assert authority.control.get_json_optional(f"{prefix}/terminal.json") is None
 
 
 def test_terminal_task_without_receipt_records_typed_startup_failure() -> None:
@@ -1018,7 +1415,10 @@ def test_reconcile_acquires_lease_writes_r2_before_wandb_and_releases(
 def test_reconciled_failure_closes_wandb_with_nonzero_exit() -> None:
     manifest = _manifest_only_run()
     projector = mock.MagicMock()
-    receipt = SimpleNamespace(state="resumable_failure")
+    receipt = SimpleNamespace(
+        state="resumable_failure", stop_reason="supervisor_startup_failure",
+        final_step=0, checkpoint_inventory=(),
+    )
 
     with (
         mock.patch(
@@ -1039,6 +1439,7 @@ def test_reconciled_failure_closes_wandb_with_nonzero_exit() -> None:
             "wandb_group": manifest.wandb.get("group"),
             "metrics_schema_version": METRICS_SCHEMA_VERSION,
         },
+        allow_create=True,
         update_finish_state=True,
     )
     publish.assert_called_once_with(projector.run, receipt)
@@ -1048,18 +1449,22 @@ def test_reconciled_failure_closes_wandb_with_nonzero_exit() -> None:
 def test_reconciled_stopped_run_closes_wandb_with_zero_exit() -> None:
     manifest = _manifest_only_run()
     projector = mock.MagicMock()
-    receipt = SimpleNamespace(state="stopped")
+    receipt = SimpleNamespace(
+        state="stopped", stop_reason="training_plateau", final_step=17,
+        checkpoint_inventory=({"step": 17},),
+    )
 
     with (
         mock.patch(
             "gradlab.experiment_cli.WandbProjector.resume",
             return_value=projector,
-        ),
+        ) as resume,
         mock.patch("gradlab.experiment_cli.publish_terminal_summary"),
     ):
         _project_reconciled_terminal(manifest, receipt)
 
     projector.close.assert_called_once_with(timeout_seconds=300, exit_code=0)
+    assert resume.call_args.kwargs["allow_create"] is False
 
 
 def test_resume_submit_recovers_only_the_original_manifest(
@@ -1179,8 +1584,6 @@ def test_launch_parser_supports_explicit_training_only_runs() -> None:
     args = build_parser().parse_args(
         [
             "launch",
-            "--goal-file",
-            "experiments/goals/goal/_goal.yaml",
             "--recipe-file",
             "experiments/goals/goal/recipes/ppo.yaml",
             "--seed",
@@ -1398,13 +1801,13 @@ def test_local_vizdoom_iwad_contract_is_hash_bound_and_mounts_cache(
         hashlib.sha256(iwad.read_bytes()).hexdigest(),
     )
     binding = _bind_vizdoom_iwad_for_launch(
-        env_provider="vizdoom-turbo",
+        env_provider="env-vizdoom-turbo",
         rom_path=iwad,
     )
     assert binding is not None
     assert (
         _bind_vizdoom_iwad_for_launch(
-            env_provider="gradoom",
+            env_provider="env-gradoom-turbo-torch",
             rom_path=iwad,
         )
         == binding

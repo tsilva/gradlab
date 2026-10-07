@@ -4,6 +4,7 @@ reward_shape: speedrun-v1
 recipe_id: go-explore-20m
 description: Route-aware 20M-transition Go-Explore search for {{ goal_id }}.
 train:
+  checkpoint_freq: 2000000
   checkpoint_eval_backend: none
   timesteps: 20000000
   state_archive:
@@ -41,5 +42,3 @@ train:
       progress_signal: x
       log_interval_steps: 10000
       compaction_interval_steps: 250000
-logging:
-  wandb_mode: online
