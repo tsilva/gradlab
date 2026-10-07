@@ -23,39 +23,39 @@ from gradlab.wandb_utils import (
     [
         ("gradlab", "Bandit-v0", "Bandit-v0", "Bandit"),
         (
-            "supermariobrosnes-turbo",
+            "env-supermariobrosnes-turbo-emu",
             "SuperMarioBros-Nes-v0",
             "SuperMarioBros-Nes-v0",
             "NES-SuperMarioBros",
         ),
         (
-            "stable-retro-turbo",
+            "env-stableretro-turbo",
             "SuperMarioBros-Nes-v0",
             "SuperMarioBros-Nes-v0",
             "NES-SuperMarioBros",
         ),
         ("ale-py", "breakout", "Breakout-Atari2600-v0", "Atari2600-Breakout"),
         (
-            "breakout-turbo-env",
+            "env-breakoutatari2600-turbo-native",
             "Breakout-Atari2600-v0",
             "Breakout-Atari2600-v0",
             "Atari2600-Breakout",
         ),
         (
-            "stable-retro-turbo",
+            "env-stableretro-turbo",
             "Breakout-Atari2600-v0",
             "Breakout-Atari2600-v0",
             "Atari2600-Breakout",
         ),
         ("ale-py", "ms_pacman", "MsPacman-Atari2600-v0", "Atari2600-MsPacman"),
         (
-            "stable-retro-turbo",
+            "env-stableretro-turbo",
             "MsPacman-Atari2600-v0",
             "MsPacman-Atari2600-v0",
             "Atari2600-MsPacman",
         ),
         (
-            "stable-retro-turbo",
+            "env-stableretro-turbo",
             "SuperMarioBros3-Nes-v0",
             "SuperMarioBros3-Nes-v0",
             "NES-SuperMarioBros3",
@@ -66,17 +66,15 @@ def test_canonical_wandb_environment_mapping(provider, game, project, family) ->
     assert canonical_wandb_environment(provider, game) == (project, family)
 
 
-def test_explicit_project_wins_and_unknown_environment_falls_back() -> None:
+def test_explicit_project_wins_and_registered_providers_reject_unknown_environments() -> None:
     assert (
         resolve_wandb_project("custom-project", "breakout", env_provider="ale-py")
         == "custom-project"
     )
-    assert resolve_wandb_project(None, "CustomNativeVector-v0", env_provider="gymnasium") == (
-        "CustomNativeVector-v0"
-    )
-    assert game_family_for_environment("gymnasium", "CustomNativeVector-v0") == (
-        "custom-native-vector-v0"
-    )
+    with pytest.raises(ValueError, match="not registered"):
+        resolve_wandb_project(None, "CustomNativeVector-v0", env_provider="gymnasium")
+    with pytest.raises(ValueError, match="not registered"):
+        game_family_for_environment("gymnasium", "CustomNativeVector-v0")
 
 
 def test_environment_identity_requires_a_current_registered_provider() -> None:
@@ -204,7 +202,7 @@ def test_resume_wandb_requires_or_uses_display_name(
         "wandb_group": "cohort::SuperMarioBros-Nes-v0/Level1-1::ppo::base",
         "wandb_mode": "offline",
         "run_name": "gradlab-0123456789abcdef0123456789abcdef",
-        "env_provider": "supermariobrosnes-turbo",
+        "env_provider": "env-supermariobrosnes-turbo-emu",
         "game": "SuperMarioBros-Nes-v0",
         "metrics_schema_version": METRICS_SCHEMA_VERSION,
     }
@@ -229,9 +227,39 @@ def test_resume_wandb_requires_or_uses_display_name(
 
     assert captured["name"] == expected_name
     assert captured["id"] == train_config["wandb_run_id"]
+    assert captured["resume"] == "must"
+    assert captured["config"] is None
     assert captured["group"] == train_config["wandb_group"]
     assert captured["settings"]["x_update_finish_state"] is True
     assert captured["settings"]["x_server_side_expand_glob_metrics"] is False
+
+
+def test_reconciled_startup_can_create_missing_wandb_run() -> None:
+    captured = {}
+
+    class FakeRun:
+        def define_metric(self, *_args, **_kwargs) -> None:
+            return None
+
+    fake_wandb = SimpleNamespace(
+        init=lambda **kwargs: captured.update(kwargs) or FakeRun(),
+        Settings=lambda **kwargs: kwargs,
+    )
+    config = {
+        "wandb_run_id": "gradlab-0123456789abcdef0123456789abcdef",
+        "wandb_entity": "entity", "wandb_project": "Bandit-v0",
+        "wandb_display_name": "bandit-startup-failure",
+        "metrics_schema_version": METRICS_SCHEMA_VERSION,
+    }
+    with (
+        patch("gradlab.wandb_publisher.load_wandb_env"),
+        patch.dict(sys.modules, {"wandb": fake_wandb}),
+    ):
+        WandbProjector.resume(config, allow_create=True)
+
+    assert captured["resume"] == "allow"
+    assert captured["id"] == config["wandb_run_id"]
+    assert captured["config"]["wandb_run_id"] == config["wandb_run_id"]
 
 
 def test_resume_wandb_requires_current_metrics_schema() -> None:
@@ -242,7 +270,7 @@ def test_resume_wandb_requires_current_metrics_schema() -> None:
         "wandb_display_name": "Level1-1__ppo__s7__01234567",
         "wandb_group": "cohort::SuperMarioBros-Nes-v0/Level1-1::ppo::base",
         "wandb_mode": "offline",
-        "env_provider": "supermariobrosnes-turbo",
+        "env_provider": "env-supermariobrosnes-turbo-emu",
         "game": "SuperMarioBros-Nes-v0",
     }
     with (

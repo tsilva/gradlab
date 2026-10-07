@@ -1,5 +1,5 @@
 export function workspaceIsEditable(preset) {
-  return preset === "custom";
+  return preset === "all";
 }
 
 export function playbackSourceTitle(route = {}) {
@@ -16,12 +16,23 @@ export function playbackSourceTitle(route = {}) {
   return `${environment} · ${Number(match[1]).toLocaleString()} steps`;
 }
 
+export function timelineProgress(index, count) {
+  const retainedCount = Math.max(0, Number(count) || 0);
+  if (retainedCount === 0) return 0;
+  if (retainedCount === 1) return 100;
+  const selectedIndex = Math.min(
+    retainedCount - 1,
+    Math.max(0, Number(index) || 0),
+  );
+  return (selectedIndex / (retainedCount - 1)) * 100;
+}
+
 export function statusMessageShouldToast({ status_message: statusMessage = "", session = {} } = {}) {
   const message = String(statusMessage || "").trim();
   if (!message) return false;
   if (/^playing next episode$/i.test(message)) return false;
   if (!session.awaiting_next_episode) return true;
-  return /error|expired|unsupported|no configured/i.test(message);
+  return /error|expired|unsupported|no configured|stop condition matched/i.test(message);
 }
 
 export function transportPresentation({
@@ -29,16 +40,19 @@ export function transportPresentation({
   hasControl = false,
   canReplay = false,
   replaying = false,
+  independentInference = false,
   session = {},
   recording = false,
 } = {}) {
   if (running) {
     return {
       action: "pause",
-      label: replaying ? "Pause replay" : "Pause",
+      label: replaying && !independentInference ? "Pause replay" : "Pause",
       icon: "player-pause",
       disabled: !hasControl,
-      reason: hasControl ? "Pause after the current transition" : "Another window has control",
+      reason: !hasControl ? "Another window has control"
+        : independentInference ? "Pause playback and policy inference"
+          : "Pause after the current transition",
     };
   }
   if (canReplay) {
@@ -50,25 +64,19 @@ export function transportPresentation({
       reason: hasControl ? "Replay from the selected step" : "Another window has control",
     };
   }
-  if (session.awaiting_next_episode) {
-    const available = Boolean(session.can_start_next_episode) && !recording;
-    return {
-      action: "next_episode",
-      label: "Next episode",
-      icon: "player-skip-forward",
-      disabled: !hasControl || !available,
-      reason: !hasControl
-        ? "Another window has control"
-        : available
-          ? "Start the prepared next episode"
-          : "The configured episode limit has been reached",
-    };
-  }
+  const conditionValid = session.stop_condition?.valid !== false;
+  const limitReached = session.awaiting_next_episode && !session.can_start_next_episode;
+  const disabled = !hasControl || !conditionValid || limitReached || recording;
   return {
     action: "play",
     label: "Play",
     icon: "player-play",
-    disabled: !hasControl,
-    reason: hasControl ? "Play the current episode" : "Another window has control",
+    disabled,
+    reason: !hasControl ? "Another window has control"
+      : !conditionValid ? "Fix the stop condition before playing"
+        : limitReached ? "The configured episode limit has been reached"
+          : recording ? "The recorded episode is complete"
+            : session.awaiting_next_episode ? "Start the next episode"
+              : "Play the current episode",
   };
 }

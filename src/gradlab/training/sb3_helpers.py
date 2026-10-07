@@ -12,9 +12,8 @@ from gradlab.callbacks import CallbackHelper
 from gradlab.file_utils import atomic_write_json
 from gradlab.metric_names import (
     TRAIN_EPISODE_RETURN_SHAPED_ORIGIN_TARGET_ROLLING_MEAN,
-    TRAIN_OUTCOME_SUCCESS_STARTS_OBSERVED_CUMULATIVE_RATE_MEAN,
 )
-
+from gradlab.training_metrics import LOCAL_COMPLETION_FRACTION
 
 SB3_HUMAN_OUTPUT_MAX_LENGTH = 512
 SB3_ROLLOUT_MEAN_RETURN = "rollout/ep_rew_mean"
@@ -37,9 +36,7 @@ class CompactTrainingOutputFormat(HumanOutputFormat):
         if mean_return is not None:
             output["mean return"] = float(mean_return)
 
-        completion_rate = key_values.get(
-            TRAIN_OUTCOME_SUCCESS_STARTS_OBSERVED_CUMULATIVE_RATE_MEAN
-        )
+        completion_rate = key_values.get(LOCAL_COMPLETION_FRACTION)
         if completion_rate is not None:
             output["completion rate"] = f"{100.0 * float(completion_rate):.2f}%"
 
@@ -109,6 +106,7 @@ class Sb3HumanOutputFormatHelper(CallbackHelper):
             compact=self.compact,
             suppress=self.suppress,
         )
+
 
 class GracefulStopHelper(CallbackHelper):
     def __init__(
@@ -183,7 +181,14 @@ def _stop_aware_model_class(original_class: type) -> type:
         return [
             *original_class._excluded_save_params(model),
             "_gradlab_graceful_stop",
+            "_gradlab_after_update",
         ]
+
+    def train(model: Any) -> None:
+        original_class.train(model)
+        after_update = getattr(model, "_gradlab_after_update", None)
+        if after_update is not None:
+            after_update()
 
     stop_aware_class = type(
         f"GradLabStopAware{original_class.__name__}",
@@ -193,6 +198,7 @@ def _stop_aware_model_class(original_class: type) -> type:
             "__slots__": (),
             "_gradlab_stop_aware": True,
             "collect_rollouts": collect_rollouts,
+            "train": train,
             "_excluded_save_params": excluded_save_params,
         },
     )
@@ -204,11 +210,13 @@ def install_on_policy_safe_boundary_stop(
     model: Any,
     *,
     graceful_stop: GracefulStopHelper,
+    after_update: Callable[[], None] | None = None,
 ) -> Any:
-    """Make the next SB3 rollout collection stop before stepping the environment."""
+    """Stop before the next rollout and optionally publish after complete updates."""
 
     if not getattr(type(model), "_gradlab_stop_aware", False):
         original_class = type(model)
         model.__class__ = _stop_aware_model_class(original_class)
     model._gradlab_graceful_stop = graceful_stop
+    model._gradlab_after_update = after_update
     return model

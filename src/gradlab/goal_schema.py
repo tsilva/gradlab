@@ -18,13 +18,14 @@ GOAL_FIELDS = frozenset(
     }
 )
 GOAL_EVALUATION_MODES = frozenset({"evaluated", "training_only"})
-GOAL_OBJECTIVE_FIELDS = frozenset({"rank", "states"})
+GOAL_OBJECTIVE_FIELDS = frozenset({"rank", "states", "training_success"})
 GOAL_TRAIN_FIELDS = frozenset(
     {
         "checkpoint_freq",
         "early_stop",
         "environment",
         "episode_progress_fields",
+        "state_archive",
     }
 )
 GOAL_EVAL_FIELDS = frozenset({"acceptance", "environment", "episodes", "policy"})
@@ -49,7 +50,7 @@ def goal_evaluation_mode(
     *,
     label: str,
 ) -> str:
-    value = document.get("evaluation_mode")
+    value = document.get("evaluation_mode", "evaluated")
     if not isinstance(value, str) or value not in GOAL_EVALUATION_MODES:
         choices = ", ".join(sorted(GOAL_EVALUATION_MODES))
         raise ValueError(f"{label}.evaluation_mode must be one of: {choices}")

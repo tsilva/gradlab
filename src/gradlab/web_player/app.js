@@ -1,8 +1,14 @@
+import { flushSync } from "svelte";
+import { shellState } from "../../../frontend/shell-state.svelte.ts";
+import { frameScheduler } from "./chart-transport.js";
+import { desktopChannel } from "./desktop-workspace.js";
+import { createPlaybackInspection, hasIndependentInference } from "./playback-inspection.js";
+import { rewardReferenceStore } from "./panels/reward-reference.js";
+import { createChartHistory } from "./chart-history.js";
+import { usesChartHistory } from "./panels/chart-status.js";
+import { bindTimelineRange } from "./chart-range.js";
 import {
-  FRAME_ATTRIBUTION,
-  FRAME_CNN_INSPECTION,
   FRAME_GAME,
-  FRAME_OBSERVATION,
   PANEL_TYPES,
   panelDefinition,
   panelLabels,
@@ -10,22 +16,26 @@ import {
   panelSubscriptions,
 } from "./panels/catalog.js";
 import { episodeReport } from "./episode-report.js";
-import { mountPlaybackSettings } from "./playback-settings.js";
+import { timelineEventMarkers } from "./episode-timeline.js";
+import { eventColorFill, eventLabels } from "./event-colors.js";
+import { mountPlaybackSettings, mountSourceBrowser, mountContractViewer } from "../../../frontend/mount.ts";
+import { CheckpointSelection } from "./checkpoint-selection.js";
 import {
   playbackSourceTitle,
   statusMessageShouldToast,
+  timelineProgress,
   transportPresentation,
   workspaceIsEditable,
 } from "./player-presentation.js";
-import { PanelManager } from "./panels/manager.js";
-import { PanelRuntime } from "./panels/runtime.js";
+import { PanelManager } from "../../../frontend/panel-manager.ts";
+import { PanelHost } from "../../../frontend/panel-host.svelte.ts";
 import {
   DEFAULT_GRID_CELL_HEIGHT,
   viewportGridCellHeight,
 } from "./panels/layout-sizing.js";
+import { mountTrajectoryControls } from "./trajectory-controls.js";
 import { setSvgUseHref, text, timelineLabel } from "./panels/shared.js";
 import {
-  applyWorkspacePreset,
   bumpWorkspaceRevision,
   compareWorkspaceRevisions,
   createDefaultWorkspace,
@@ -42,16 +52,23 @@ const workspaceWindowName = location.pathname.startsWith("/workspace/")
   ? location.pathname.slice("/workspace/".length)
   : null;
 const pairedWorkspace = new URLSearchParams(location.search).get("workspace") === "paired";
+const desktopWorkspace = new URLSearchParams(location.search).get("desktop");
 const token = new URLSearchParams(location.hash.slice(1)).get("token") || "";
 const WORKSPACE_ID_KEY = "gradlab.player.workspace.v7.id";
 const LAYOUT_KEY = pairedWorkspace
-  ? "gradlab.player.workspace.v7.paired"
+  ? "gradlab.player.workspace.v8.paired"
   : "gradlab.player.workspace.v7.single";
 const SAVED_LAYOUTS_KEY = "gradlab.player.workspace.saved.v7";
 const STATS_WINDOW_ID = "stats";
-const workspaceId = localStorage.getItem(WORKSPACE_ID_KEY) || crypto.randomUUID();
+const workspaceId = desktopWorkspace || localStorage.getItem(WORKSPACE_ID_KEY) || crypto.randomUUID();
 localStorage.setItem(WORKSPACE_ID_KEY, workspaceId);
+const rewardReferences = rewardReferenceStore(localStorage, workspaceId);
 const windowId = panelName ? `panel-${panelName}` : (workspaceWindowName || "main");
+const viewerIcon = document.querySelector('link[rel="icon"]');
+viewerIcon.type = "image/png";
+viewerIcon.href = `/assets/viewer-${windowId === "main" ? "player" : "stats"}.png`;
+const workspaceWindowTarget = (id) => `gradlab-${workspaceId}-${id}`;
+window.name = workspaceWindowTarget(windowId);
 
 function defaultLayout() {
   return createDefaultWorkspace({ paired: pairedWorkspace, writer: windowId });
@@ -61,25 +78,9 @@ const state = {
   socket: null,
   connected: false,
   clientId: null,
-  snapshot: null,
-  liveSnapshot: null,
-  snapshots: new Map(),
-  frameBlobs: new Map([
-    [FRAME_GAME, new Map()],
-    [FRAME_OBSERVATION, new Map()],
-    [FRAME_ATTRIBUTION, new Map()],
-    [FRAME_CNN_INSPECTION, new Map()],
-  ]),
-  inspectionSequence: null,
-  replayingInspection: false,
-  inspectionReplayTimer: null,
-  inspectionPauseCommandId: null,
   attributionCommand: null,
   attributionPreference: { mode: "gradcam", interval: 1 },
   cnnCaptureCommand: null,
-  timelineSequences: [],
-  history: [],
-  historyLimit: 4096,
   hasControl: false,
   publicationAuthority: false,
   publicationCapability: null,
@@ -87,10 +88,6 @@ const state = {
   publicationCurrent: null,
   publicationJob: null,
   publicationPoll: null,
-  frameSequence: new Map(),
-  receivedFrameSequence: new Map(),
-  retainedEpisode: null,
-  pendingSnapshot: null,
   mode: null,
   lastStatus: null,
   actionNamesKey: "",
@@ -99,12 +96,8 @@ const state = {
   layout: null,
   selectedPanel: null,
   activeWindows: new Map(),
-  sessionEpoch: 0,
-  sourceMode: false,
-  backgroundPlaybackSnapshot: null,
   applicationSnapshot: null,
   workspaceReady: false,
-  checkpointLoad: null,
 };
 let panelRuntime = null;
 let sourceBrowser = null;
@@ -116,12 +109,9 @@ let gridCellHeight = DEFAULT_GRID_CELL_HEIGHT;
 let syncingGrid = false;
 let panelManager = null;
 let playbackSettings = null;
-const DEBUG_TIMELINE_HIDE_DELAY_MS = 1600;
-let debugTimelineHideTimer = null;
-let debugTimelineEvents = null;
 let youtubeOAuthPopup = null;
 
-const workspaceChannel = "BroadcastChannel" in window
+const workspaceChannel = desktopWorkspace ? desktopChannel(token) : "BroadcastChannel" in window
   ? new BroadcastChannel(`gradlab-player-${workspaceId}`)
   : null;
 
@@ -134,14 +124,10 @@ function clamp(value, minimum, maximum) {
 
 function readStoredLayout() {
   try {
-    const workspace = normalizeWorkspace(
+    return normalizeWorkspace(
       JSON.parse(localStorage.getItem(LAYOUT_KEY) || "null"),
       { paired: pairedWorkspace, writer: windowId },
     );
-    if (!workspaceIsEditable(workspace.preset)) {
-      applyWorkspacePreset(workspace, workspace.preset, { paired: pairedWorkspace });
-    }
-    return workspace;
   } catch {
     return defaultLayout();
   }
@@ -156,20 +142,35 @@ function panelsInThisWindow() {
     .map(([name]) => name);
 }
 
+function panelSuspended(id) {
+  const fullscreen = document.fullscreenElement;
+  if (!fullscreen?.matches(".game-stage")) return false;
+  return fullscreen.closest("[data-panel]")?.dataset.panel !== id;
+}
+
+function processingPanels() {
+  return panelsInThisWindow().filter((id) => !panelSuspended(id));
+}
+
 function subscriptions() {
-  return panelSubscriptions(state.layout, panelsInThisWindow());
+  return panelSubscriptions(state.layout, processingPanels()).filter(
+    (name) => name !== "game" || inspection.view.rgbEnabled !== false,
+  );
 }
 
 function processing() {
-  const features = new Set(panelProcessing(state.layout, panelsInThisWindow()));
+  const features = new Set(panelProcessing(state.layout, processingPanels()));
   if (state.windowId === "main") features.add("rewards");
   return [...features];
 }
 
 function enabledPanelDefinitions() {
-  return panelsInThisWindow()
+  return processingPanels()
     .map((id) => panelDefinition(state.layout, id))
-    .filter((definition) => definition?.enabled);
+    .filter((definition) => definition?.enabled)
+    .map((definition) => inspection.view.rgbEnabled === false
+      ? { ...definition, frameKinds: definition.frameKinds.filter((kind) => kind !== FRAME_GAME) }
+      : definition);
 }
 
 function setDetachedLayout() {
@@ -179,84 +180,51 @@ function setDetachedLayout() {
     "stats-window",
     pairedWorkspace && state.windowId === STATS_WINDOW_ID,
   );
-  $("#workspace-preset-picker").hidden = secondary;
 }
 
 function showToast(message, error = false) {
-  const toast = $("#toast");
-  toast.textContent = message;
-  toast.style.borderColor = error ? "var(--red)" : "var(--cyan)";
-  toast.classList.add("visible");
+  shellState.toast = {message, error, visible: true};
   clearTimeout(showToast.timer);
-  showToast.timer = setTimeout(() => toast.classList.remove("visible"), 3200);
+  showToast.timer = setTimeout(() => { shellState.toast.visible = false; }, 3200);
 }
 
-function beginCheckpointLoad({ commandId, checkpointId }) {
-  state.checkpointLoad = {
-    commandId: String(commandId || ""),
-    checkpointId: String(checkpointId || ""),
-  };
+const checkpointSelection = new CheckpointSelection(command);
+checkpointSelection.subscribe(({ loading }) => {
   const mask = $("#checkpoint-loading-mask");
-  mask.hidden = false;
-  document.activeElement?.blur?.();
-  document.body.classList.add("checkpoint-loading");
-  document.body.setAttribute("aria-busy", "true");
-}
-
-function finishCheckpointLoad() {
-  if (!state.checkpointLoad) return;
-  state.checkpointLoad = null;
-  $("#checkpoint-loading-mask").hidden = true;
-  document.body.classList.remove("checkpoint-loading");
-  document.body.removeAttribute("aria-busy");
-}
-
-function snapshotCompletesCheckpointLoad(snapshot) {
-  return Boolean(
-    state.checkpointLoad
-    && snapshot?.app?.phase === "active"
-    && String(snapshot?.app?.route?.checkpoint_id || "")
-      === state.checkpointLoad.checkpointId
-  );
-}
+  if (loading && mask.hidden) document.activeElement?.blur?.();
+  mask.hidden = !loading;
+  document.body.classList.toggle("checkpoint-loading", loading);
+  if (loading) document.body.setAttribute("aria-busy", "true");
+  else document.body.removeAttribute("aria-busy");
+});
 
 function updateConnection(label, kind = "") {
-  const badge = $("#connection-status");
-  badge.textContent = label;
-  badge.className = `sync-status ${kind}`.trim();
-  badge.hidden = label === "Synced" && !kind;
+  shellState.connection = {label, kind};
 }
 
 function resetSession(epoch) {
-  state.sessionEpoch = Number(epoch) || 0;
-  state.retainedEpisode = null;
-  state.pendingSnapshot = null;
-  state.inspectionSequence = null;
-  state.inspectionPauseCommandId = null;
   state.attributionCommand = null;
   state.cnnCaptureCommand = null;
-  state.liveSnapshot = null;
-  state.snapshot = null;
-  state.history = [];
-  clearRetainedEpisode();
-  stopInspectionReplay({ render: false });
+  inspection.reset(epoch);
+  chartHistory.updateContext({ epoch: inspection.view.sessionEpoch });
 }
 
 async function ensureSourceBrowser() {
   if (sourceBrowser) return sourceBrowser;
   if (!sourceBrowserPromise) {
-    sourceBrowserPromise = import("./sources/browser.js").then(({ SourceBrowser }) => {
-      sourceBrowser = new SourceBrowser($("#source-browser"), $("#source-breadcrumbs"), {
+    sourceBrowserPromise = import("./sources/browser.js").then(async ({ SourceBrowser }) => {
+      const browser = new SourceBrowser($("#source-browser"), $("#source-breadcrumbs"), {
         token,
         command,
-        getState: () => state,
+        getState: playerState,
         showToast,
         checkpointNavigationRoot: $("#checkpoint-navigation"),
-        beginCheckpointLoad,
+        selection: checkpointSelection,
         openInspection: (endpoint, options) => openContractInspection(endpoint, options),
         openSourceRoute: (route) => openSourceRoute(route),
-        resumePlayback: () => resumeCurrentPlayback(),
       });
+      browser.view = await mountSourceBrowser(browser, $("#source-browser"), $("#source-breadcrumbs"), $("#checkpoint-navigation"));
+      sourceBrowser = browser;
       return sourceBrowser;
     });
   }
@@ -266,8 +234,10 @@ async function ensureSourceBrowser() {
 async function ensureContractViewer() {
   if (contractViewer) return contractViewer;
   if (!contractViewerPromise) {
-    contractViewerPromise = import("./documents/viewer.js").then(({ ContractViewer }) => {
-      contractViewer = new ContractViewer($("#contract-viewer"), { token, showToast });
+    contractViewerPromise = import("./documents/viewer.js").then(async ({ ContractViewer }) => {
+      const viewer = new ContractViewer($("#contract-viewer"), { token, showToast });
+      viewer.presentation = await mountContractViewer(viewer, $("#contract-viewer"));
+      contractViewer = viewer;
       return contractViewer;
     });
   }
@@ -280,10 +250,7 @@ async function openContractInspection(endpoint, options = {}) {
 }
 
 function openSourceRoute(route) {
-  const current = state.applicationSnapshot || state.liveSnapshot || {};
-  if (!state.sourceMode && current?.app?.has_active_runner) {
-    state.backgroundPlaybackSnapshot = current;
-  }
+  const current = state.applicationSnapshot || inspection.view.liveSnapshot || {};
   const snapshot = {
     ...current,
     app: {
@@ -293,63 +260,47 @@ function openSourceRoute(route) {
       error: "",
       route: { ...route },
       has_active_runner: Boolean(
-        current?.app?.has_active_runner || state.backgroundPlaybackSnapshot,
+        current?.app?.has_active_runner || checkpointSelection.view.backgroundSnapshot,
       ),
     },
   };
   state.applicationSnapshot = snapshot;
-  state.liveSnapshot = snapshot;
-  state.snapshot = snapshot;
-  setSourceMode(true, snapshot);
+  renderSourceMode(snapshot);
 }
 
-function resumeCurrentPlayback() {
-  const snapshot = state.backgroundPlaybackSnapshot;
-  if (!snapshot) return false;
-  state.applicationSnapshot = snapshot;
-  state.liveSnapshot = snapshot;
-  state.snapshot = snapshot;
-  state.backgroundPlaybackSnapshot = null;
-  if (sourceBrowser) sourceBrowser.activeBreadcrumbRoute = "";
-  setSourceMode(false, snapshot);
-  renderSnapshot();
-  return true;
-}
-
-function setSourceMode(active, snapshot = null) {
-  state.sourceMode = Boolean(active);
+function renderSourceMode(snapshot = null) {
+  const { route, sourceMode } = checkpointSelection.view;
   const activeCheckpointRoute = (
-    !state.sourceMode
-    && snapshot?.app?.route?.checkpoint_id
+    !sourceMode
+    && route?.checkpoint_id
   );
-  document.body.classList.toggle("source-selection", state.sourceMode);
-  $("#source-browser").hidden = !state.sourceMode;
-  $("#workspace-preset-picker").hidden = state.sourceMode || state.windowId !== "main";
-  $("#checkpoint-navigation").hidden = Boolean(state.sourceMode || !activeCheckpointRoute);
-  $("#page-title").hidden = state.sourceMode;
-  $("#source-back").hidden = Boolean(
-    state.sourceMode
-    || !(snapshot?.app?.has_active_runner || state.liveSnapshot?.app?.has_active_runner)
+  const activeRecordingRoute = (
+    !sourceMode
+    && snapshot?.mode === "trajectory"
+    && route?.environment_id
   );
-  $("#more-toggle").hidden = state.sourceMode;
-  $("#change-source").hidden = (
-    state.sourceMode
-    || !(snapshot?.app?.has_active_runner || state.liveSnapshot?.app?.has_active_runner)
-  );
+  document.body.classList.toggle("source-selection", sourceMode);
+  $("#source-browser").hidden = !sourceMode;
+  $("#checkpoint-navigation").hidden = Boolean(sourceMode || !activeCheckpointRoute);
+  $("#page-title").hidden = Boolean(sourceMode || activeRecordingRoute);
+  const atFirstScreen = Boolean(sourceMode && (!route || route?.level === "environments"));
+  $("#source-back").hidden = atFirstScreen;
+  $("#source-back").disabled = false;
+  $("#more-toggle").hidden = sourceMode;
   $("#inspect-active").hidden = !(
-    snapshot?.app?.has_active_runner || state.liveSnapshot?.app?.has_active_runner
+    snapshot?.app?.has_active_runner || inspection.view.liveSnapshot?.app?.has_active_runner
   );
-  if (!state.sourceMode) {
+  if (!sourceMode) {
     const expected = snapshot;
-    if (activeCheckpointRoute) {
+    if (activeCheckpointRoute || activeRecordingRoute) {
       if (sourceBrowser) {
         sourceBrowser.renderActiveBreadcrumbs(expected);
-        $("#source-breadcrumbs").hidden = true;
+        $("#source-breadcrumbs").hidden = Boolean(activeCheckpointRoute);
       } else {
         void ensureSourceBrowser().then((browser) => {
-          if (!state.sourceMode && state.applicationSnapshot === expected) {
+          if (!checkpointSelection.view.sourceMode && state.applicationSnapshot === expected) {
             browser.renderActiveBreadcrumbs(expected);
-            $("#source-breadcrumbs").hidden = true;
+            $("#source-breadcrumbs").hidden = Boolean(activeCheckpointRoute);
           }
         }).catch((error) => showToast(`Source breadcrumbs failed: ${error.message || error}`, true));
       }
@@ -363,10 +314,10 @@ function setSourceMode(active, snapshot = null) {
     updateLayoutTitle();
     return;
   }
-  document.title = "Select playback source · gradlab";
+  document.title = `GradLab — ${windowId === "main" ? "Player" : "Stats"} · Select playback source`;
   const expected = snapshot;
   void ensureSourceBrowser().then((browser) => {
-    if (state.sourceMode && state.applicationSnapshot === expected) browser.render(expected);
+    if (checkpointSelection.view.sourceMode && state.applicationSnapshot === expected) browser.render(expected);
   }).catch((error) => showToast(`Source browser failed: ${error.message || error}`, true));
 }
 
@@ -396,36 +347,41 @@ function connect() {
     if (typeof event.data === "string") handleMessage(JSON.parse(event.data));
     else handleFrame(event.data);
   });
-  socket.addEventListener("close", () => {
+  socket.addEventListener("close", (event) => {
     state.connected = false;
     state.hasControl = false;
+    inspection.updateConnection({ connected: false, hasControl: false });
     state.publicationAuthority = false;
     state.publicationCapability = null;
-    finishCheckpointLoad();
+    checkpointSelection.terminate();
     updateConnection("Disconnected", "error");
     updateControlState();
+    if (event.code === 1001 && event.reason === "player shutting down") {
+      updateConnection("Player stopped — you can close this tab", "warning");
+      // Browsers may refuse to close the initial tab opened by the CLI.
+      window.close();
+    }
   });
   socket.addEventListener("error", () => {
-    finishCheckpointLoad();
+    checkpointSelection.terminate();
     updateConnection("Connection error", "error");
   });
 }
 
 function handleMessage(message) {
+  if (message.type === "publication_credentials_changed" && desktopWorkspace) {
+    void checkPublicationCredentials().catch(error => showToast(error.message, true));
+    return;
+  }
   if (message.type === "welcome") {
     state.connected = true;
     state.clientId = message.client_id;
-    state.historyLimit = Math.max(1, Number(message.history_limit) || 4096);
+    inspection.updateConnection({ connected: true, hasControl: state.hasControl, historyLimit: message.history_limit });
     updateConnection("Synced", "");
     return;
   }
   if (message.type === "history") {
-    if (
-      message.session_epoch !== undefined
-      && Number(message.session_epoch) !== state.sessionEpoch
-    ) return;
-    state.history = normalizedHistory(message.points);
-    renderHistory();
+    inspection.receiveHistory(message);
     return;
   }
   if (message.type === "publication_authority") {
@@ -436,50 +392,47 @@ function handleMessage(message) {
     return;
   }
   if (message.type === "session_changed") {
+    checkpointSelection.receive(message);
     resetSession(message.session_epoch);
     return;
   }
   if (message.type === "snapshot") {
     const epoch = Number(message.session_epoch || 0);
-    if (epoch !== state.sessionEpoch) resetSession(epoch);
-    if (
-      state.sourceMode
-      && state.backgroundPlaybackSnapshot
-      && message.app?.phase === "active"
-    ) {
-      state.backgroundPlaybackSnapshot = message;
+    if (epoch !== inspection.view.sessionEpoch) resetSession(epoch);
+    const selectionResult = checkpointSelection.receive(message);
+    if (selectionResult.error) showToast(selectionResult.error, true);
+    if (selectionResult.background) {
       state.hasControl = Boolean(message.control?.has_control);
+      inspection.updateConnection({ hasControl: state.hasControl });
       state.controlEpoch = Number(message.control_epoch || 0);
+      sourceBrowser?.renderView();
+      trajectoryControls.render();
       return;
     }
     state.applicationSnapshot = message;
     state.hasControl = Boolean(message.control?.has_control);
+    inspection.updateConnection({ hasControl: state.hasControl });
     state.controlEpoch = Number(message.control_epoch || 0);
     updatePublicationButton();
+    if (typeof message.session?.rgb_enabled === "boolean" && inspection.view.rgbEnabled !== message.session.rgb_enabled) {
+      void inspection.setFrameDemand({ rgbEnabled: message.session.rgb_enabled });
+      send({ type: "subscribe", subscriptions: subscriptions(), processing: processing() });
+      refreshPanels();
+    }
     if (message.app && message.app.phase !== "active") {
-      state.liveSnapshot = message;
-      state.snapshot = message;
-      setSourceMode(true, message);
+      renderSourceMode(message);
+      updateControlState();
       return;
     }
-    setSourceMode(false, message);
-    prepareRetainedEpisode(message);
-    if (!requiredFramesAvailable(message)) {
-      state.pendingSnapshot = message;
-    } else {
-      applySnapshot(message);
-    }
+    renderSourceMode(message);
+    void inspection.admitSnapshot(message, checkpointSelection.presentationFor(message));
     return;
   }
   if (message.type === "command_result") {
-    if (message.id === state.inspectionPauseCommandId && !message.ok) {
-      state.inspectionPauseCommandId = null;
-    }
+    inspection.commandResult(message);
     if (message.id === state.attributionCommand?.id) state.attributionCommand = null;
     if (message.id === state.cnnCaptureCommand?.id) state.cnnCaptureCommand = null;
-    if (message.id === state.checkpointLoad?.commandId && !message.ok) {
-      finishCheckpointLoad();
-    }
+    checkpointSelection.receive(message);
     if (!message.ok) showToast(message.error || "Command failed", true);
     return;
   }
@@ -487,12 +440,10 @@ function handleMessage(message) {
 }
 
 function updatePublicationButton() {
-  const button = $("#publish-episode");
-  if (!button) return;
-  const snapshot = state.applicationSnapshot || state.liveSnapshot;
+  const snapshot = state.applicationSnapshot || inspection.view.liveSnapshot;
   const configured = Boolean(snapshot?.publication?.configured);
   const complete = snapshot?.publication_capture?.ready === true;
-  button.hidden = !(configured && complete && state.publicationAuthority);
+  shellState.publication.enabled = Boolean(configured && complete && state.publicationAuthority);
 }
 
 async function publicationApi(path, { method = "GET", body } = {}) {
@@ -506,6 +457,7 @@ async function publicationApi(path, { method = "GET", body } = {}) {
       "X-Gradlab-Client": state.clientId,
       "X-Gradlab-Control-Epoch": String(state.controlEpoch),
       "X-Gradlab-Publication-Capability": state.publicationCapability,
+      ...(desktopWorkspace ? { "X-Gradlab-Desktop": "1" } : {}),
       ...(body === undefined ? {} : { "Content-Type": "application/json" }),
     },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
@@ -515,39 +467,24 @@ async function publicationApi(path, { method = "GET", body } = {}) {
   return payload;
 }
 
-function publicationFact(term, value, selector = "#publication-capture") {
-  const facts = $(selector);
-  const dt = document.createElement("dt");
-  const dd = document.createElement("dd");
-  dt.textContent = term;
-  dd.textContent = String(value ?? "—");
-  facts.append(dt, dd);
-}
-
 function publicationSettings() {
   return {
-    privacy: $("#publication-privacy").value,
-    thumbnail_time: Number($("#publication-thumbnail-time").value),
-    tags: $("#publication-tags").value.split(",").map((value) => value.trim()).filter(Boolean),
-    operator_note: $("#publication-note").value,
-    feature: $("#publication-feature").checked,
+    privacy: shellState.publication.privacy,
+    thumbnail_time: Number(shellState.publication.thumbnailTime),
+    tags: shellState.publication.tags.split(",").map((value) => value.trim()).filter(Boolean),
+    operator_note: shellState.publication.note,
   };
 }
 
 function renderPublicationPreview(preview) {
-  const facts = $("#publication-generated");
-  facts.replaceChildren();
-  if (!preview) return;
-  publicationFact("Generated title", preview.title, "#publication-generated");
-  publicationFact("Generated description", preview.description, "#publication-generated");
-  publicationFact("Repository", `${preview.repo_id}@${preview.release_tag}`, "#publication-generated");
-  publicationFact("Release tier", preview.release_tier, "#publication-generated");
-  publicationFact("Acceptance", preview.acceptance?.passed ? "Accepted" : "Not accepted", "#publication-generated");
-  publicationFact("Replay", `${preview.replay?.status}: ${preview.replay?.outcome}`, "#publication-generated");
-  publicationFact("Comparison", preview.comparison?.reason, "#publication-generated");
-  publicationFact("Environment container", preview.containers?.environment, "#publication-generated");
-  publicationFact("Featured container", preview.feature ? preview.containers?.featured : "Not requested", "#publication-generated");
-  publicationFact("Operator note", preview.operator_note || "None", "#publication-generated");
+  shellState.publication.generated = !preview ? [] : [
+    ["Generated title", preview.title], ["Generated description", preview.description],
+    ["Repository", `${preview.repo_id}@${preview.release_tag}`], ["Release tier", preview.release_tier],
+    ["Acceptance", preview.acceptance?.passed ? "Accepted" : "Not accepted"],
+    ["Replay", `${preview.replay?.status}: ${preview.replay?.outcome}`],
+    ["Comparison", preview.comparison?.reason], ["Environment container", preview.containers?.environment],
+    ["Operator note", preview.operator_note || "None"],
+  ];
 }
 
 async function refreshPublicationPreview() {
@@ -562,63 +499,38 @@ async function refreshPublicationPreview() {
 function renderPublicationCurrent(current) {
   state.publicationCurrent = current;
   const capture = current?.capture;
-  const facts = $("#publication-capture");
-  facts.replaceChildren();
+  shellState.publication.capture = [];
   if (!current?.available || !capture) {
-    $("#publication-status").textContent = current?.message || "No publishable episode is ready.";
-    $("#publication-submit").disabled = true;
+    shellState.publication.status = current?.message || "No publishable episode is ready.";
+    shellState.publication.submitDisabled = true;
     return;
   }
-  publicationFact("Outcome", capture.outcome);
-  publicationFact("Episode seed", capture.seed);
-  publicationFact("Steps", capture.steps);
-  publicationFact("Return", capture.return);
-  publicationFact("Action selection", capture.sampling_mode);
-  publicationFact("Capture", capture.capture_id);
-  $("#publication-status").textContent = "The exact completed episode will be uploaded to both destinations.";
+  shellState.publication.capture = [
+    ["Outcome", capture.outcome], ["Episode seed", capture.seed], ["Steps", capture.steps],
+    ["Return", capture.return], ["Action selection", capture.sampling_mode], ["Capture", capture.capture_id],
+  ];
+  shellState.publication.status = "The exact completed episode will be uploaded to both destinations.";
   renderPublicationPreview(current.preview);
   if (current.job) renderPublicationJob(current.job);
 }
 
 function renderPublicationCredentials(result) {
-  const panel = $("#publication-credentials");
   const hf = result?.huggingface || {};
   const yt = result?.youtube || {};
-  panel.textContent = [
+  shellState.publication.credentials = [
     `Hugging Face: ${hf.ready ? `${hf.username} → ${hf.namespace}` : (hf.message || "not ready")}`,
     `YouTube: ${yt.ready ? `${yt.channel_title} (${yt.channel_id})` : (yt.message || "not ready")}`,
   ].join("\n");
-  panel.style.whiteSpace = "pre-line";
-  $("#publication-authorize-youtube").hidden = Boolean(yt.ready);
-  $("#publication-submit").disabled = !(result?.ready && state.publicationCurrent?.available && !state.publicationJob);
+  shellState.publication.youtubeReady = Boolean(yt.ready);
+  shellState.publication.submitDisabled = !(result?.ready && state.publicationCurrent?.available && !state.publicationJob);
 }
 
 function renderPublicationJob(job) {
   if (!job) return;
   state.publicationJob = job;
-  const panel = $("#publication-job");
-  panel.hidden = false;
-  panel.replaceChildren();
-  const summary = document.createElement("div");
-  summary.textContent = `${job.state || "queued"} · ${job.progress?.phase || "queued"}${job.message ? ` · ${job.message}` : ""}`;
-  panel.append(summary);
-  Object.entries(job.urls || {}).forEach(([label, url]) => {
-    if (!String(url).startsWith("https://")) return;
-    const row = document.createElement("div");
-    const link = document.createElement("a");
-    link.href = String(url);
-    link.target = "_blank";
-    link.rel = "noopener noreferrer";
-    link.textContent = `${label}: ${url}`;
-    row.append(link);
-    panel.append(row);
-  });
+  shellState.publication.job = job;
+  shellState.publication.submitDisabled = true;
   const terminal = ["succeeded", "failed", "blocked", "canceled"].includes(job.state);
-  $("#publication-submit").disabled = true;
-  $("#publication-retry").hidden = !["failed", "blocked", "canceled"].includes(job.state);
-  $("#publication-cancel").hidden = terminal;
-  $("#publication-resolve").hidden = !(job.state === "blocked" && job.progress?.phase === "youtube_uncertain");
-  $("#publication-cleanup").hidden = !terminal;
   clearInterval(state.publicationPoll);
   state.publicationPoll = null;
   if (!terminal && job.job_id) {
@@ -635,7 +547,7 @@ function renderPublicationJob(job) {
 }
 
 async function checkPublicationCredentials() {
-  $("#publication-credentials").textContent = "Checking both accounts…";
+  shellState.publication.credentials = "Checking both accounts…";
   const result = await publicationApi("/api/publication/preflight", { method: "POST" });
   renderPublicationCredentials(result);
   return result;
@@ -645,7 +557,7 @@ async function openPublicationDialog() {
   const dialog = $("#publication-dialog");
   dialog.showModal();
   try {
-    $("#publication-status").textContent = "Rendering the completed episode…";
+    shellState.publication.status = "Rendering the completed episode…";
     await publicationApi("/api/publication/render", { method: "POST" });
     const [current, ticket] = await Promise.all([
       publicationApi("/api/publication/current"),
@@ -653,192 +565,86 @@ async function openPublicationDialog() {
     ]);
     renderPublicationCurrent(current);
     await refreshPublicationPreview();
-    $("#publication-video").src = ticket.url;
+    shellState.publication.videoUrl = ticket.url;
     if (current.job) renderPublicationJob(current.job);
     else await checkPublicationCredentials();
   } catch (error) {
-    $("#publication-status").textContent = error.message || String(error);
-    $("#publication-submit").disabled = true;
-  }
-}
-
-function frameKey(sequence, generation = 0) {
-  return `${Number(sequence)}:${Number(generation)}`;
-}
-
-function frameKeySequence(key) {
-  return Number(String(key).split(":", 1)[0]);
-}
-
-function rememberFrame(kind, sequence, generation, blob, preserveSequence = null) {
-  const frames = state.frameBlobs.get(kind);
-  if (!frames) return;
-  frames.set(frameKey(sequence, generation), blob);
-  while (frames.size > state.historyLimit) {
-    const candidates = [...frames.keys()].filter(
-      (candidate) => preserveSequence === null
-        || frameKeySequence(candidate) !== Number(preserveSequence),
-    );
-    if (!candidates.length) break;
-    const oldest = candidates.sort((left, right) => (
-      frameKeySequence(left) - frameKeySequence(right)
-    ))[0];
-    frames.delete(oldest);
+    shellState.publication.status = error.message || String(error);
+    shellState.publication.submitDisabled = true;
   }
 }
 
 async function handleFrame(buffer) {
-  const view = new DataView(buffer);
   if (buffer.byteLength <= FRAME_HEADER_BYTES) return;
+  const view = new DataView(buffer);
   const magic = String.fromCharCode(...new Uint8Array(buffer, 0, 4));
   if (magic !== "RLP3") return;
-  const kind = view.getUint8(4);
-  const epoch = Number(view.getBigUint64(8));
-  const sequence = Number(view.getBigUint64(16));
-  const generation = Number(view.getBigUint64(24));
-  if (epoch !== state.sessionEpoch) return;
-  state.receivedFrameSequence.set(
-    kind,
-    Math.max(sequence, state.receivedFrameSequence.get(kind) ?? -1),
-  );
-  const blob = new Blob([buffer.slice(FRAME_HEADER_BYTES)], { type: "image/png" });
-  rememberFrame(kind, sequence, generation, blob, state.inspectionSequence);
-  const selectedSnapshot = state.inspectionSequence === null
-    ? state.liveSnapshot
-    : state.snapshot;
-  const expectedGeneration = frameGeneration(kind, selectedSnapshot);
-  const exactGeneration = !isGeneratedFrame(kind)
-    || (expectedGeneration > 0 && expectedGeneration === generation);
-  if (
-    exactGeneration
-    && (
-      state.inspectionSequence === sequence
-      || (
-        state.inspectionSequence === null
-        && Number(state.liveSnapshot?.sequence) === sequence
-      )
-    )
-  ) {
-    await panelRuntime.renderFrame(kind, blob, { sequence, generation });
-  }
-  state.frameSequence.set(kind, sequence);
-  flushPendingSnapshot();
-}
-
-function requiredFrameKinds(snapshot) {
-  const visible = new Set(
-    enabledPanelDefinitions().flatMap((definition) => definition.frameKinds),
-  );
-  const required = [];
-  if (visible.has(FRAME_GAME) && snapshot.transition?.after?.game_frame) {
-    required.push(FRAME_GAME);
-  }
-  if (
-    visible.has(FRAME_OBSERVATION)
-    && Number(snapshot.transition?.before?.observation_frames || 0) > 0
-  ) required.push(FRAME_OBSERVATION);
-  return required.filter((kind) => !isGeneratedFrame(kind));
-}
-
-function requiredFramesAvailable(snapshot) {
-  const sequence = Number(snapshot?.sequence);
-  return requiredFrameKinds(snapshot).every(
-    (kind) => exactFrameBlob(kind, sequence) !== null,
-  );
+  await inspection.receiveFrame({
+    epoch: Number(view.getBigUint64(8)), sequence: Number(view.getBigUint64(16)),
+    generation: Number(view.getBigUint64(24)), kind: view.getUint8(4),
+    blob: new Blob([buffer.slice(FRAME_HEADER_BYTES)], { type: "image/png" }),
+  });
 }
 
 function episodeForSnapshot(snapshot) {
   const episode = snapshot?.transition?.episode ?? snapshot?.session?.episode;
-  return episode === undefined || episode === null ? null : Number(episode);
+  return episode == null ? null : Number(episode);
 }
 
-function historyKey(point) {
-  return `${Number(point?.episode)}:${Number(point?.sequence)}`;
-}
+function currentEpisodeHistory() { return inspection.view.currentHistory; }
 
-function normalizedHistory(points) {
-  const byTransition = new Map();
-  (Array.isArray(points) ? points : []).forEach((point) => {
-    if (!point || !Number.isFinite(Number(point.sequence))) return;
-    byTransition.set(historyKey(point), point);
+function setRewardReference(step) {
+  if (!Number.isInteger(step) || step !== inspection.view.snapshot?.transition?.step) return;
+  rewardReferences.set(inspection.view.snapshot, inspection.view.sessionEpoch);
+  if (desktopWorkspace) workspaceChannel.postMessage({
+    type: "reward-reference", source: state.windowId,
+    value: localStorage.getItem(`gradlab-reward-reference-${workspaceId}`),
   });
-  return [...byTransition.values()]
-    .sort((a, b) => Number(a.sequence) - Number(b.sequence))
-    .slice(-state.historyLimit);
+  panelRuntime?.renderHistory(currentEpisodeHistory(), inspection.view.snapshot, panelView());
 }
 
-function ingestHistoryPoint(point) {
-  if (!point || !Number.isFinite(Number(point.sequence))) return false;
-  const key = historyKey(point);
-  const index = state.history.findIndex((candidate) => historyKey(candidate) === key);
-  if (index >= 0) {
-    state.history[index] = { ...state.history[index], ...point };
-    return true;
-  }
-  state.history.push(point);
-  state.history = normalizedHistory(state.history);
-  return true;
+function updateChartContext() {
+  chartHistory.updateContext({
+    epoch: inspection.view.sessionEpoch,
+    episodeId: inspection.view.liveSnapshot?.trajectory?.episode_id,
+    episode: episodeForSnapshot(inspection.view.liveSnapshot),
+    lastStep: inspection.view.liveSnapshot?.trajectory?.last_step,
+    liveHistory: inspection.view.history,
+    throughStep: inspection.view.snapshot?.transition?.step ?? 0,
+  });
 }
 
-function currentEpisodeHistory() {
-  const episode = episodeForSnapshot(state.liveSnapshot) ?? state.retainedEpisode;
-  if (episode === null) return state.history;
-  return state.history.filter((point) => Number(point.episode) === episode);
+function updateChartDemand() {
+  chartHistory.setDemand(enabledPanelDefinitions().some(usesChartHistory));
+}
+
+let chartHover = null;
+
+function chartHoverKey() {
+  return JSON.stringify([inspection.view.sessionEpoch, inspection.view.liveSnapshot?.trajectory?.episode_id, chartHistory.read().range]);
+}
+
+function setChartHoverStep(step) {
+  chartHover = Number.isFinite(step) ? { step, key: chartHoverKey() } : null;
+  scheduleHistoryRender();
 }
 
 function panelView() {
+  updateChartContext();
+  const chart = chartHistory.read();
+  if (chartHover && chartHover.key !== chartHoverKey()) chartHover = null;
   return {
     history: currentEpisodeHistory(),
-    inspection: state.inspectionSequence !== null,
-    sessionEpoch: state.sessionEpoch,
-    selectedSequence: state.inspectionSequence ?? state.snapshot?.sequence ?? null,
-    liveSequence: state.liveSnapshot?.sequence ?? null,
+    chartHistory: chart.data,
+    chartHoverStep: chartHover?.step ?? null,
+    chartStatus: chart,
+    rewardReference: rewardReferences.get(inspection.view.snapshot, inspection.view.sessionEpoch),
+    chartRange: chart.range,
+    inspection: inspection.view.inspectionSequence !== null,
+    sessionEpoch: inspection.view.sessionEpoch,
+    selectedSequence: inspection.view.inspectionSequence ?? inspection.view.snapshot?.sequence ?? null,
+    liveSequence: inspection.view.liveSnapshot?.sequence ?? null,
   };
-}
-
-function pruneRetainedTrace(preserveSequence = null) {
-  const sequences = [...state.snapshots.keys()].sort((a, b) => a - b);
-  const remove = sequences
-    .filter(
-      (sequence) => preserveSequence === null
-        || Number(sequence) !== Number(preserveSequence),
-    )
-    .slice(0, Math.max(0, sequences.length - state.historyLimit));
-  remove.forEach((sequence) => {
-    state.snapshots.delete(sequence);
-    state.frameBlobs.forEach((frames) => {
-      [...frames.keys()]
-        .filter((key) => frameKeySequence(key) === Number(sequence))
-        .forEach((key) => frames.delete(key));
-    });
-  });
-  if (
-    state.inspectionSequence !== null
-    && !state.snapshots.has(Number(state.inspectionSequence))
-  ) {
-    stopInspectionReplay({ render: false });
-    state.inspectionSequence = null;
-    state.snapshot = state.liveSnapshot;
-    showToast("The selected transition expired from the bounded history.", true);
-    broadcastInspection(null);
-  }
-}
-
-function clearRetainedEpisode() {
-  state.snapshots.clear();
-  state.frameBlobs.forEach((frames) => frames.clear());
-  state.frameSequence.clear();
-  state.receivedFrameSequence.clear();
-  state.timelineSequences = [];
-}
-
-function prepareRetainedEpisode(snapshot) {
-  const episode = episodeForSnapshot(snapshot);
-  if (episode === null) return;
-  if (state.retainedEpisode !== null && state.retainedEpisode !== episode) {
-    clearRetainedEpisode();
-  }
-  state.retainedEpisode = episode;
 }
 
 function hideGoExploreValuePanel(snapshot) {
@@ -850,54 +656,41 @@ function hideGoExploreValuePanel(snapshot) {
   return true;
 }
 
-function applySnapshot(snapshot) {
-  state.pendingSnapshot = null;
-  const previousEnvironmentId = state.liveSnapshot?.session?.env_id;
-  const previousEpisode = episodeForSnapshot(state.liveSnapshot);
-  const nextEpisode = episodeForSnapshot(snapshot);
-  const episodeChanged = (
-    previousEpisode !== null
-    && nextEpisode !== null
-    && previousEpisode !== nextEpisode
-  );
-  state.liveSnapshot = snapshot;
-  if (hideGoExploreValuePanel(snapshot)) void applyLayout();
-  if (snapshot.run_state === "paused") state.inspectionPauseCommandId = null;
-  if (snapshot.session?.env_id !== previousEnvironmentId) updateLayoutTitle();
-  if (state.inspectionSequence !== null && episodeChanged) {
-    stopInspectionReplay({ render: false });
-    state.inspectionSequence = null;
-    state.snapshot = snapshot;
-  }
-  state.snapshots.set(Number(snapshot.sequence), snapshot);
-  pruneRetainedTrace();
-  state.hasControl = Boolean(snapshot.control?.has_control);
-  const historyChanged = snapshot.history_point
-    ? ingestHistoryPoint(snapshot.history_point)
-    : false;
-  if (state.inspectionSequence === null) {
-    state.snapshot = snapshot;
-    renderSnapshot();
-    void showFramesForSequence(Number(snapshot.sequence)).then(() => {
-      if (snapshotCompletesCheckpointLoad(snapshot)) finishCheckpointLoad();
+const inspection = createPlaybackInspection({
+  windowId, command, send,
+  peer: message => workspaceChannel?.postMessage(message),
+  async fetchStep({ epoch, episode_id, step, rgbEnabled }, { signal } = {}) {
+    const query = new URLSearchParams({ epoch, episode_id, step });
+    if (rgbEnabled === false) query.set("rgb", "off");
+    const response = await fetch(`/api/playback/recorded-step?${query}`, {
+      signal, headers: { Authorization: `Bearer ${token}` },
     });
-  } else {
-    panelRuntime.invoke("controls", "render", snapshot);
-    updateControlState();
-    renderWorkspaceStatus();
-    renderTimeline();
-    if (snapshotCompletesCheckpointLoad(snapshot)) finishCheckpointLoad();
-  }
-  if (historyChanged) renderHistory();
+    const payload = await response.json();
+    if (!response.ok) throw new Error(payload.error || "Unable to load the recorded step");
+    return payload;
+  },
+  prepareFrame: (...args) => panelRuntime.prepareFrame(...args),
+  renderFrame: (...args) => panelRuntime.renderFrame(...args),
+  resetFrames: () => panelRuntime?.resetFrames(),
+  presented: (ticket, snapshot) => checkpointSelection.presented(ticket, snapshot),
+  onError: error => showToast(error.message, true),
+});
+inspection.subscribe(view => {
+  updateChartContext();
+  // Source admission belongs to CheckpointSelection. Inspection can never
+  // bring a background runner over a locally selected discovery route.
+  if (!view.snapshot || !panelRuntime || checkpointSelection.view.sourceMode) return;
+  if (hideGoExploreValuePanel(view.liveSnapshot)) void applyLayout();
+  renderSnapshot();
+  if (view.inspectionSequence !== null) panelRuntime.invoke("controls", "render", view.liveSnapshot);
+  renderHistory();
+  updateControlState();
   syncAttributionToPanel();
   syncCnnCaptureToPanel();
-}
+});
 
-function flushPendingSnapshot() {
-  const snapshot = state.pendingSnapshot;
-  if (!snapshot) return;
-  if (requiredFramesAvailable(snapshot)) applySnapshot(snapshot);
-}
+// Existing panel/settings services consume a read-only projection of inspection.
+function playerState() { return { ...state, ...inspection.view }; }
 
 function send(value) {
   if (state.socket?.readyState === WebSocket.OPEN) state.socket.send(JSON.stringify(value));
@@ -908,26 +701,28 @@ function command(name, payload = {}) {
     showToast("This window is an observer. Choose Control here first.", true);
     return null;
   }
+  if (name === "set_fps") payload = { rgb_enabled: inspection.view.rgbEnabled !== false, ...payload };
   const id = crypto.randomUUID();
   send({
     type: "command",
     id,
     name,
     payload,
-    expected_revision: state.liveSnapshot?.revision ?? null,
+    expected_revision: inspection.view.liveSnapshot?.revision ?? null,
   });
   return id;
 }
 
 function syncAttributionToPanel() {
+  if (inspection.view.liveSnapshot?.mode === "trajectory") return;
   const panel = state.layout?.panels?.attribution;
-  const attribution = state.liveSnapshot?.session?.attribution;
+  const attribution = inspection.view.liveSnapshot?.session?.attribution;
   if (
     !panel
     || panel.placement?.window !== state.windowId
     || !attribution
   ) return;
-  const supported = state.liveSnapshot?.policy?.attribution?.supported_modes;
+  const supported = inspection.view.liveSnapshot?.policy?.attribution?.supported_modes;
   if (!Array.isArray(supported)) return;
   if (supported.includes(attribution.mode) && attribution.mode !== "none") {
     state.attributionPreference = {
@@ -957,15 +752,16 @@ function syncAttributionToPanel() {
 }
 
 function syncCnnCaptureToPanel() {
+  if (inspection.view.liveSnapshot?.mode === "trajectory") return;
   const panel = state.layout?.panels?.cnn;
-  const cnn = state.liveSnapshot?.session?.cnn;
+  const cnn = inspection.view.liveSnapshot?.session?.cnn;
   if (
     !panel
     || panel.placement?.window !== state.windowId
     || !cnn
   ) return;
   const desired = Boolean(panel.enabled && panel.placement.visible);
-  const layers = state.liveSnapshot?.policy?.cnn?.layers;
+  const layers = inspection.view.liveSnapshot?.policy?.cnn?.layers;
   if (desired && (!Array.isArray(layers) || !layers.length)) return;
   if (Boolean(cnn.enabled) === desired) {
     if (state.cnnCaptureCommand?.desired === desired) state.cnnCaptureCommand = null;
@@ -976,201 +772,54 @@ function syncCnnCaptureToPanel() {
   if (id) state.cnnCaptureCommand = { id, desired };
 }
 
-function inspectionEpisodeSequences() {
-  if (state.inspectionSequence === null) return [];
-  const selected = state.snapshots.get(Number(state.inspectionSequence));
-  const episode = episodeForSnapshot(selected);
-  if (episode === null) return [];
-  return state.timelineSequences.filter(
-    (sequence) => episodeForSnapshot(state.snapshots.get(Number(sequence))) === episode,
-  );
-}
-
-function canReplayInspection() {
-  if (state.liveSnapshot?.run_state !== "paused") return false;
-  const sequences = inspectionEpisodeSequences();
-  const selectedIndex = sequences.indexOf(Number(state.inspectionSequence));
-  return selectedIndex >= 0 && selectedIndex < sequences.length - 1;
-}
-
-function stopInspectionReplay({ render = true } = {}) {
-  if (state.inspectionReplayTimer !== null) {
-    window.clearTimeout(state.inspectionReplayTimer);
-    state.inspectionReplayTimer = null;
-  }
-  const wasReplaying = state.replayingInspection;
-  state.replayingInspection = false;
-  if (render && wasReplaying && state.snapshot) renderSnapshot();
-}
-
-function inspectionReplayDelay() {
-  const fps = Number(state.liveSnapshot?.session?.target_fps || 0);
-  return fps > 0 ? 1000 / fps : 0;
-}
-
-function scheduleInspectionReplay() {
-  state.inspectionReplayTimer = window.setTimeout(() => {
-    state.inspectionReplayTimer = null;
-    if (!state.replayingInspection) return;
-    const sequences = inspectionEpisodeSequences();
-    const selectedIndex = sequences.indexOf(Number(state.inspectionSequence));
-    const nextSequence = sequences[selectedIndex + 1];
-    if (selectedIndex < 0 || nextSequence === undefined) {
-      stopInspectionReplay();
-      return;
-    }
-    const reachedEpisodeEnd = selectedIndex + 1 === sequences.length - 1;
-    if (reachedEpisodeEnd) state.replayingInspection = false;
-    if (nextSequence === state.timelineSequences.at(-1)) returnToLive();
-    else setInspectionCursor(nextSequence, { preserveReplay: true });
-    if (!reachedEpisodeEnd) scheduleInspectionReplay();
-  }, inspectionReplayDelay());
-}
-
-function playFromCurrentPosition() {
-  if (canReplayInspection()) {
-    state.replayingInspection = true;
-    renderSnapshot();
-    scheduleInspectionReplay();
-    return;
-  }
-  command("play");
-}
-
-function pauseCurrentPlayback() {
-  if (state.replayingInspection) {
-    stopInspectionReplay();
-    return;
-  }
-  command("pause");
-}
-
-function playbackIsRunning() {
-  return state.replayingInspection
-    || ["playing", "stepping", "continuing"].includes(
-      state.liveSnapshot?.run_state,
-    );
-}
-
 function updateTimelinePlaybackControl() {
-  const playbackToggle = $("#timeline-playback-toggle");
-  const playbackIcon = $("#timeline-playback-icon");
-  if (!playbackToggle || !playbackIcon) return;
-  const session = state.liveSnapshot?.session || state.snapshot?.session || {};
+  const session = inspection.view.liveSnapshot?.session || inspection.view.snapshot?.session || {};
   const presentation = transportPresentation({
-    running: playbackIsRunning(),
-    replaying: state.replayingInspection,
+    running: inspection.view.running,
+    replaying: inspection.view.replayingInspection,
+    independentInference: hasIndependentInference(inspection.view.liveSnapshot),
     hasControl: state.hasControl,
-    canReplay: canReplayInspection(),
+    canReplay: inspection.view.canReplay || Boolean(inspection.view.liveSnapshot?.trajectory?.imported && session.awaiting_next_episode),
     session,
-    recording: (state.liveSnapshot?.mode || state.snapshot?.mode) === "recording",
+    recording: (inspection.view.liveSnapshot?.mode || inspection.view.snapshot?.mode) === "recording"
+      || Boolean(inspection.view.liveSnapshot?.trajectory?.enabled && session.awaiting_next_episode),
   });
-  playbackToggle.dataset.action = presentation.action;
-  playbackToggle.disabled = presentation.disabled;
-  playbackToggle.title = presentation.reason;
-  playbackToggle.classList.toggle("primary", presentation.action !== "pause");
-  playbackToggle.setAttribute("aria-label", presentation.label);
-  setSvgUseHref(playbackIcon, `/assets/tabler-icons.svg#ti-${presentation.icon}`);
-  const reset = $("#timeline-reset");
-  if (reset) {
-    const mode = state.liveSnapshot?.mode || state.snapshot?.mode;
-    const canReset = (
-      state.hasControl
-      && !["recording", "dataset"].includes(mode)
-      && (!session.awaiting_next_episode || session.can_start_next_episode)
-    );
-    reset.disabled = !canReset;
-    reset.title = !state.hasControl
-      ? "Another window has control"
-      : canReset
-        ? "Reset to the selected seed and pause"
-        : "The configured episode limit has been reached";
-  }
+  Object.assign(shellState.transport, presentation);
+  const mode = inspection.view.liveSnapshot?.mode || inspection.view.snapshot?.mode;
+  const canReset = state.hasControl && !["recording", "dataset", "trajectory"].includes(mode)
+    && (!session.awaiting_next_episode || session.can_start_next_episode);
+  shellState.transport.resetDisabled = !canReset;
+  shellState.transport.resetTitle = !state.hasControl ? "Another window has control"
+    : canReset ? "Reset to the selected seed and pause" : "The configured episode limit has been reached";
 }
 
 function updateControlState() {
+  trajectoryControls?.render();
   updateTimelinePlaybackControl();
   playbackSettings?.updateControl();
   panelRuntime?.invoke("controls", "updateControl");
 }
 
 function renderWorkspaceStatus() {
-  $("#timeline-label").textContent = timelineLabel(
-    state.snapshot || state.liveSnapshot,
+  shellState.timeline.label = timelineLabel(
+    inspection.view.snapshot || inspection.view.liveSnapshot,
+    inspection.view.liveSnapshot,
   );
 }
 
 function renderPlaybackEvidenceStatus(snapshot) {
-  const status = $("#playback-evidence-status");
-  if (!status || !snapshot || state.sourceMode || state.windowId !== "main") {
-    if (status) status.hidden = true;
+  if (!snapshot || checkpointSelection.view.sourceMode || state.windowId !== "main") {
+    shellState.evidence.text = "";
     return;
   }
   const report = episodeReport(snapshot);
-  const evidenceWarning = /not evidence|differ|incomparable/i.test(
-    `${report.semantics} ${report.disclaimer}`,
-  );
-  status.hidden = !evidenceWarning;
-  status.textContent = evidenceWarning ? report.semantics : "";
-  status.title = evidenceWarning ? report.disclaimer : "";
-}
-
-function unavailableDiagnosticPresentation(statuses) {
-  if (statuses.includes("protocol-error") || statuses.includes("error")) {
-    return { label: "Protocol error", tone: "error" };
-  }
-  if (statuses.includes("contract-incomparable")) {
-    return { label: "Incomparable", tone: "incomparable" };
-  }
-  if (statuses.includes("unsupported") || statuses.includes("disabled")) {
-    return { label: "Unsupported", tone: "unsupported" };
-  }
-  return { label: "Waiting for data", tone: "waiting" };
-}
-
-function renderUnavailableDiagnostics() {
-  const root = $("#unavailable-diagnostics");
-  const explain = state.layout?.preset === "explain";
-  const rows = [];
-  $$("#dashboard .grid-stack-item").forEach((gridItem) => {
-    gridItem.classList.remove("explain-unavailable");
-    if (!explain || gridItem.dataset.panel === "game") return;
-    const telemetryStatuses = [...gridItem.querySelectorAll("[data-telemetry-status]")]
-      .map((element) => String(element.dataset.telemetryStatus || ""))
-      .filter(Boolean);
-    if (!telemetryStatuses.length || telemetryStatuses.includes("available")) return;
-    const presentation = unavailableDiagnosticPresentation(telemetryStatuses);
-    gridItem.classList.add("explain-unavailable");
-    rows.push({
-      panel: panelLabel(gridItem.dataset.panel),
-      ...presentation,
-    });
-  });
-  root.hidden = !explain || !rows.length;
-  if (!root.hidden) {
-    root.querySelector("[data-unavailable-diagnostics-title]").textContent = (
-      `Unavailable diagnostics (${rows.length.toLocaleString()})`
-    );
-    root.querySelector("[data-unavailable-diagnostics-list]").replaceChildren(
-      ...rows.map((row) => {
-        const item = document.createElement("li");
-        const name = document.createElement("span");
-        name.textContent = row.panel;
-        const status = document.createElement("span");
-        status.className = `unavailable-diagnostics-status ${row.tone}`;
-        status.textContent = row.panel === "Policy decision" && row.tone === "waiting"
-          ? "Waiting for first policy decision"
-          : row.label;
-        item.append(name, status);
-        return item;
-      }),
-    );
-  }
-  fitGridToViewport();
+  const warning = /not evidence|differ|incomparable/i.test(`${report.semantics} ${report.disclaimer}`);
+  shellState.evidence.text = warning ? report.semantics : "";
+  shellState.evidence.title = warning ? report.disclaimer : "";
 }
 
 function renderSnapshot() {
-  const snapshot = state.snapshot;
+  const snapshot = inspection.view.snapshot;
   const session = snapshot.session || {};
   configureMode(snapshot.mode || "playback");
   updateControlState();
@@ -1184,7 +833,7 @@ function renderSnapshot() {
     state.actionNamesKey = actionNamesKey;
     renderHistory();
   }
-  if (state.inspectionSequence === null && snapshot.status_message && snapshot.status_message !== state.lastStatus) {
+  if (inspection.view.inspectionSequence === null && snapshot.status_message && snapshot.status_message !== state.lastStatus) {
     state.lastStatus = snapshot.status_message;
     if (statusMessageShouldToast(snapshot)) {
       showToast(snapshot.status_message, snapshot.run_state === "paused" && /error|expired|unsupported|no configured/i.test(snapshot.status_message));
@@ -1192,7 +841,7 @@ function renderSnapshot() {
   }
   panelRuntime.renderSnapshot(snapshot, panelView());
   playbackSettings?.render(snapshot, panelView());
-  renderUnavailableDiagnostics();
+  fitGridToViewport();
   renderTimeline();
 }
 
@@ -1203,288 +852,77 @@ function configureMode(mode) {
   document.body.classList.toggle("recording", recording);
 }
 
-function renderHistory() {
-  panelRuntime.renderHistory(currentEpisodeHistory(), state.snapshot, panelView());
-  renderUnavailableDiagnostics();
+function setChartRange(range, { broadcast = true } = {}) {
+  chartHistory.selectRange(range);
+  if (broadcast) workspaceChannel?.postMessage({ type: "chart-range", source: state.windowId, epoch: inspection.view.sessionEpoch, episode: inspection.view.liveSnapshot?.trajectory?.episode_id, range });
   renderTimeline();
 }
 
-function attributionGeneration(snapshot) {
-  const attribution = snapshot?.transition?.attribution;
-  return attribution?.status === "available" ? Number(attribution.generation || 0) : 0;
-}
+const chartHistory = createChartHistory({ token, onChange: () => scheduleHistoryRender() });
 
-function cnnInspectionGeneration(snapshot) {
-  const cnn = snapshot?.transition?.cnn;
-  return cnn?.status === "available" ? Number(cnn.generation || 0) : 0;
-}
+const scheduleHistoryRender = frameScheduler(() => {
+  if (!inspection.view.snapshot || !panelRuntime) return;
+  panelRuntime.renderHistory(currentEpisodeHistory(), inspection.view.snapshot, panelView());
+  fitGridToViewport();
+  renderTimeline();
+});
 
-function isGeneratedFrame(kind) {
-  return [FRAME_ATTRIBUTION, FRAME_CNN_INSPECTION].includes(Number(kind));
-}
-
-function frameGeneration(kind, snapshot) {
-  if (Number(kind) === FRAME_ATTRIBUTION) return attributionGeneration(snapshot);
-  if (Number(kind) === FRAME_CNN_INSPECTION) return cnnInspectionGeneration(snapshot);
-  return 0;
-}
-
-function exactFrameBlob(kind, sequence, generation = 0) {
-  return state.frameBlobs.get(kind)?.get(frameKey(sequence, generation)) || null;
-}
-
-async function showFramesForSequence(sequence) {
-  const snapshot = state.snapshots.get(Number(sequence)) || state.snapshot;
-  const kinds = [...new Set(
-    enabledPanelDefinitions().flatMap((definition) => definition.frameKinds),
-  )];
-  const missing = [];
-  await Promise.all(kinds.map(async (kind) => {
-    const generation = frameGeneration(kind, snapshot);
-    const expected = !isGeneratedFrame(kind) || generation > 0;
-    const blob = expected ? exactFrameBlob(kind, sequence, generation) : null;
-    if (expected && !blob) missing.push(kind);
-    await panelRuntime.renderFrame(kind, blob, { sequence, generation });
-  }));
-  return missing;
-}
-
-function inspectionFrames(sequence) {
-  const snapshot = state.snapshots.get(Number(sequence)) || state.snapshot;
-  return [FRAME_GAME, FRAME_OBSERVATION, FRAME_ATTRIBUTION, FRAME_CNN_INSPECTION]
-    .map((kind) => {
-      const generation = frameGeneration(kind, snapshot);
-      return {
-        kind,
-        generation,
-        blob: generation || !isGeneratedFrame(kind)
-          ? exactFrameBlob(kind, sequence, generation)
-          : null,
-      };
-    })
-    .filter((item) => item.blob);
-}
-
-function broadcastInspection(sequence) {
-  if (!workspaceChannel) return;
-  if (sequence === null) {
-    workspaceChannel.postMessage({
-      type: "inspection-cursor",
-      session_epoch: state.sessionEpoch,
-      episode: episodeForSnapshot(state.liveSnapshot),
-      sequence: null,
-      source: state.windowId,
-    });
-    return;
-  }
-  const snapshot = state.snapshots.get(Number(sequence)) || state.snapshot;
-  workspaceChannel.postMessage({
-    type: "inspection-cursor",
-    session_epoch: state.sessionEpoch,
-    episode: episodeForSnapshot(snapshot),
-    sequence: Number(sequence),
-    snapshot,
-    frames: inspectionFrames(sequence),
-    source: state.windowId,
-  });
-}
-
-function requestInspectionFrames(sequence, kinds) {
-  if (!kinds.length) return;
-  const request = {
-    session_epoch: state.sessionEpoch,
-    sequence: Number(sequence),
-    kinds,
-    source: state.windowId,
-  };
-  workspaceChannel?.postMessage({
-    type: "inspection-frame-request",
-    ...request,
-  });
-  send({
-    type: "inspection_frames",
-    ...request,
-  });
-}
-
-function maybePauseForInspection() {
-  if (
-    !state.hasControl
-    || state.inspectionPauseCommandId !== null
-    || state.liveSnapshot?.mode === "recording"
-    || !["playing", "stepping", "continuing"].includes(state.liveSnapshot?.run_state)
-  ) return;
-  state.inspectionPauseCommandId = command("pause");
-}
-
-function setInspectionCursor(
-  sequence,
-  {
-    announce = true,
-    snapshot: suppliedSnapshot = null,
-    frames = [],
-    preserveReplay = false,
-  } = {},
-) {
-  if (sequence === null) {
-    returnToLive({ announce });
-    return;
-  }
-  const numericSequence = Number(sequence);
-  const snapshot = suppliedSnapshot || state.snapshots.get(numericSequence);
-  if (!snapshot) {
-    showToast("That transition is not retained in this window.", true);
-    return;
-  }
-  if (
-    Number(snapshot.session_epoch || 0) !== state.sessionEpoch
-    || (
-      state.retainedEpisode !== null
-      && episodeForSnapshot(snapshot) !== state.retainedEpisode
-    )
-  ) return;
-  frames.forEach(({ kind, generation = 0, blob }) => {
-    if ([FRAME_GAME, FRAME_OBSERVATION, FRAME_ATTRIBUTION, FRAME_CNN_INSPECTION].includes(Number(kind)) && blob instanceof Blob) {
-      rememberFrame(
-        Number(kind),
-        numericSequence,
-        Number(generation),
-        blob,
-        numericSequence,
-      );
-    }
-  });
-  state.snapshots.set(numericSequence, snapshot);
-  pruneRetainedTrace(numericSequence);
-  if (!preserveReplay) stopInspectionReplay({ render: false });
-  if (announce) maybePauseForInspection();
-  state.inspectionSequence = numericSequence;
-  state.snapshot = snapshot;
-  renderSnapshot();
-  renderHistory();
-  void showFramesForSequence(numericSequence).then((missing) => {
-    if (!missing.length) return;
-    requestInspectionFrames(numericSequence, missing);
-  });
-  if (announce) broadcastInspection(numericSequence);
-}
-
-function inspectSequence(sequence) {
-  setInspectionCursor(sequence);
-}
-
-function returnToLive({ announce = true } = {}) {
-  stopInspectionReplay({ render: false });
-  state.inspectionSequence = null;
-  state.snapshot = state.liveSnapshot;
-  if (state.snapshot) {
-    renderSnapshot();
-    renderHistory();
-    void showFramesForSequence(Number(state.snapshot.sequence));
-  }
-  if (announce) broadcastInspection(null);
+function renderHistory() {
+  updateChartContext();
+  scheduleHistoryRender();
 }
 
 function renderTimeline() {
   const scrubber = $("#timeline-scrubber");
   if (!scrubber) return;
-  const currentEpisode = episodeForSnapshot(state.liveSnapshot);
-  state.timelineSequences = [...state.snapshots.entries()]
-    .filter(([, snapshot]) => (
-      currentEpisode === null || episodeForSnapshot(snapshot) === currentEpisode
-    ))
-    .map(([sequence]) => Number(sequence))
-    .sort((a, b) => a - b);
-  const sequences = state.timelineSequences;
-  scrubber.min = "0";
-  scrubber.max = String(Math.max(0, sequences.length - 1));
-  scrubber.step = "1";
-  scrubber.disabled = sequences.length < 2;
-  const selected = state.inspectionSequence ?? sequences.at(-1);
-  const selectedIndex = sequences.indexOf(selected);
-  scrubber.value = String(selectedIndex < 0 ? Math.max(0, sequences.length - 1) : selectedIndex);
+  const trajectory = inspection.view.liveSnapshot?.trajectory;
+  const range = inspection.view.range;
+  const selected = inspection.view.seekingStep ?? Number(trajectory?.imported ? trajectory.current_step
+    : inspection.view.snapshot?.transition?.step ?? inspection.view.snapshot?.session?.step ?? range?.first ?? 0);
+  Object.assign(shellState.timeline, {
+    first: range?.first ?? 0, last: range?.last ?? 0, selected,
+    disabled: !range || range.first === range.last || Boolean(trajectory?.imported && !state.hasControl),
+    progress: timelineProgress(selected - (range?.first ?? 0), (range?.last ?? 0) - (range?.first ?? 0) + 1),
+    busy: inspection.view.seekingStep !== null,
+    zoom: chartHistory.read().range,
+  });
   renderWorkspaceStatus();
+  const markerSlots = Math.max(1, Math.min(120, Math.floor(scrubber.clientWidth / 9)));
+  const markers = range ? timelineEventMarkers(inspection.view.eventPoints, range, markerSlots) : [];
+  const key = JSON.stringify(markers);
+  if (shellState.timeline.markerKey !== key) {
+    shellState.timeline.markerKey = key;
+    shellState.timeline.markers = markers;
+  }
 
-  const markers = $("#timeline-markers");
-  if (!sequences.length) { markers.replaceChildren(); return; }
-  const minimum = sequences[0];
-  const maximum = sequences.at(-1);
-  const range = Math.max(1, maximum - minimum);
-  const interesting = currentEpisodeHistory().filter((point) =>
-    Number(point.sequence) >= minimum
-    && Number(point.sequence) <= maximum
-    && (currentEpisode === null || Number(point.episode) === currentEpisode)
-    && (point.boundary || point.events?.length)
-  );
-  markers.replaceChildren(...interesting.slice(-120).map((point) => {
-    const marker = document.createElement("span");
-    marker.className = "timeline-marker";
-    marker.style.left = `${((Number(point.sequence) - minimum) / range) * 100}%`;
-    marker.style.setProperty("--marker-color", point.boundary ? "var(--red)" : "var(--magenta)");
-    return marker;
-  }));
-}
-
-function debugTimelineInteractionActive() {
-  const timeline = $("#timeline");
-  const stage = timeline?.closest(".game-stage");
-  const settingsMenu = $("#playback-settings-menu");
-  const settingsOpen = Boolean(settingsMenu && !settingsMenu.hidden);
-  return Boolean(
-    stage?.matches(":hover")
-    || timeline?.matches(":hover")
-    || timeline?.contains(document.activeElement)
-    || settingsOpen
-  );
-}
-
-function revealDebugTimeline() {
-  const timeline = $("#timeline");
-  if (!timeline?.classList.contains("game-timeline-overlay")) return;
-  clearTimeout(debugTimelineHideTimer);
-  debugTimelineHideTimer = null;
-  timeline.classList.add("visible");
-}
-
-function scheduleDebugTimelineHide() {
-  const timeline = $("#timeline");
-  clearTimeout(debugTimelineHideTimer);
-  debugTimelineHideTimer = null;
-  if (!timeline?.classList.contains("game-timeline-overlay")) return;
-  debugTimelineHideTimer = window.setTimeout(() => {
-    debugTimelineHideTimer = null;
-    if (!debugTimelineInteractionActive()) timeline.classList.remove("visible");
-  }, DEBUG_TIMELINE_HIDE_DELAY_MS);
+  flushSync();
 }
 
 function restoreTimelineHome() {
-  debugTimelineEvents?.abort();
-  debugTimelineEvents = null;
-  clearTimeout(debugTimelineHideTimer);
-  debugTimelineHideTimer = null;
   const timeline = $("#timeline");
   const home = $("#timeline-home");
-  timeline?.classList.remove("game-timeline-overlay", "visible");
+  const actions = timeline?.querySelector(".timeline-actions");
+  for (const selector of ["#timeline-reset", "#playback-settings-toggle"]) {
+    const button = $(selector);
+    if (actions && button) actions.append(button);
+  }
+  timeline?.classList.remove("game-timeline-docked", "visible");
   if (timeline && home && timeline.previousElementSibling !== home) home.after(timeline);
 }
 
-function syncDebugTimelineOverlay() {
+function syncTimelineDock() {
   restoreTimelineHome();
-  if (state.layout?.preset !== "debug") return;
   const timeline = $("#timeline");
   const stage = $(".game-panel .game-stage");
   if (!timeline || !stage) return;
   stage.append(timeline);
-  timeline.classList.add("game-timeline-overlay", "visible");
-  debugTimelineEvents = new AbortController();
-  const options = { signal: debugTimelineEvents.signal };
-  ["pointerenter", "pointermove", "pointerdown", "focusin"].forEach((name) => {
-    stage.addEventListener(name, revealDebugTimeline, options);
-  });
-  stage.addEventListener("pointerleave", scheduleDebugTimelineHide, options);
-  timeline.addEventListener("focusout", scheduleDebugTimelineHide, options);
-  timeline.addEventListener("input", revealDebugTimeline, options);
-  scheduleDebugTimelineHide();
+  timeline.classList.add("game-timeline-docked");
+  const actions = stage.querySelector(".game-actions");
+  if (actions) {
+    const menu = actions.querySelector('[data-panel-menu="game"]');
+    actions.append($("#timeline-reset"), $("#playback-settings-toggle"));
+    if (menu) actions.append(menu);
+  }
 }
 
 function maxPanelRow(targetWindow = state.windowId) {
@@ -1492,11 +930,6 @@ function maxPanelRow(targetWindow = state.windowId) {
     .filter((panel) => (
       panel.placement.visible
       && panel.placement.window === targetWindow
-      && !$$(`#dashboard .grid-stack-item`).some((item) => (
-        item.dataset.panel
-        && state.layout.panels[item.dataset.panel] === panel
-        && item.classList.contains("explain-unavailable")
-      ))
     ))
     .map((panel) => panel.placement.y + panel.placement.h));
 }
@@ -1521,16 +954,17 @@ function gridWidgetFor(name, placement = state.layout.panels[name]?.placement) {
 }
 
 function fitGridToViewport() {
-  if (!gridStack || state.windowId !== "main") return;
+  if (!gridStack) return;
   const dashboard = $("#dashboard");
   const timeline = $("#timeline");
   const nextCellHeight = viewportGridCellHeight({
     viewportHeight: window.innerHeight,
     dashboardTop: dashboard.getBoundingClientRect().top,
-    timelineHeight: timeline.hidden || timeline.classList.contains("game-timeline-overlay")
+    timelineHeight: timeline.hidden || timeline.classList.contains("game-timeline-docked")
       ? 0
       : timeline.getBoundingClientRect().height,
     rows: maxPanelRow(),
+    maxFillRows: state.windowId === STATS_WINDOW_ID ? 23 : undefined,
   });
   if (nextCellHeight !== gridCellHeight) {
     gridCellHeight = nextCellHeight;
@@ -1554,17 +988,17 @@ function syncGridNodes(nodes = null) {
   });
 }
 
-function persistLayout({ announce = true, customize = true } = {}) {
-  if (customize) state.layout.preset = "custom";
+function persistLayout({ announce = true } = {}) {
+  state.layout.preset = "all";
   bumpWorkspaceRevision(state.layout, state.windowId);
   localStorage.setItem(LAYOUT_KEY, JSON.stringify(state.layout));
   if (announce) workspaceChannel?.postMessage({ type: "layout", layout: state.layout, source: state.windowId });
 }
 
 function updateLayoutTitle() {
-  const route = (state.applicationSnapshot || state.liveSnapshot)?.app?.route || {};
+  const route = (state.applicationSnapshot || inspection.view.liveSnapshot)?.app?.route || {};
   const environmentId = String(
-    route.environment_id || state.liveSnapshot?.session?.env_id || "",
+    route.environment_id || inspection.view.liveSnapshot?.session?.env_id || "",
   ).trim();
   const environmentTitle = playbackSourceTitle({
     ...route,
@@ -1575,18 +1009,16 @@ function updateLayoutTitle() {
     : pairedWorkspace && state.windowId === STATS_WINDOW_ID
       ? `${environmentTitle} · Stats`
       : environmentTitle;
-  $("#page-title").textContent = title;
+  shellState.pageTitle = title;
   $("#layout-name-input").value = state.layout.name;
-  $("#workspace-preset").value = state.layout.preset || "custom";
-  document.title = `${title} · gradlab`;
+  const role = state.windowId === "main" ? "Player" : "Stats";
+  document.title = `GradLab — ${role} · ${environmentTitle}${panelName ? ` · ${panelLabel(panelName)}` : ""}`;
 }
 
 function updateWorkspaceEditing() {
-  const preset = state.layout?.preset || "watch";
-  const editable = workspaceIsEditable(preset);
-  document.body.dataset.workspaceView = preset;
+  const editable = workspaceIsEditable(state.layout?.preset);
+  document.body.dataset.workspaceView = "all";
   document.body.classList.toggle("workspace-editing", editable);
-  document.body.classList.toggle("workspace-debug", preset === "debug");
   $$('[data-customize-actions]').forEach((element) => { element.hidden = !editable; });
   gridStack?.enableMove(editable);
   gridStack?.enableResize(editable);
@@ -1606,6 +1038,7 @@ function updateWorkspaceEditing() {
 }
 
 async function applyLayout() {
+  updateChartDemand();
   restoreTimelineHome();
   const visibleHere = panelsInThisWindow();
   document.body.classList.toggle("empty-workspace", visibleHere.length === 0);
@@ -1627,47 +1060,18 @@ async function applyLayout() {
     syncingGrid = false;
   }
   updateWorkspaceEditing();
-  syncDebugTimelineOverlay();
+  syncTimelineDock();
   fitGridToViewport();
   syncGridNodes();
-  if (state.snapshot) {
-    panelRuntime.renderSnapshot(state.snapshot, panelView());
-    panelRuntime.renderHistory(currentEpisodeHistory(), state.snapshot, panelView());
-    const sequence = Number(state.snapshot.sequence);
-    const visibleKinds = new Set(
-      enabledPanelDefinitions().flatMap((definition) => definition.frameKinds),
-    );
-    if (visibleKinds.has(FRAME_GAME)) {
-      panelRuntime.renderFrame(
-        FRAME_GAME,
-        exactFrameBlob(FRAME_GAME, sequence),
-        { sequence, generation: 0 },
-      );
-    }
-    if (visibleKinds.has(FRAME_OBSERVATION)) {
-      panelRuntime.renderFrame(
-        FRAME_OBSERVATION,
-        exactFrameBlob(FRAME_OBSERVATION, sequence),
-        { sequence, generation: 0 },
-      );
-    }
-    if (visibleKinds.has(FRAME_ATTRIBUTION)) {
-      const generation = attributionGeneration(state.snapshot);
-      panelRuntime.renderFrame(
-        FRAME_ATTRIBUTION,
-        generation ? exactFrameBlob(FRAME_ATTRIBUTION, sequence, generation) : null,
-        { sequence, generation },
-      );
-    }
-    if (visibleKinds.has(FRAME_CNN_INSPECTION)) {
-      const generation = cnnInspectionGeneration(state.snapshot);
-      panelRuntime.renderFrame(
-        FRAME_CNN_INSPECTION,
-        generation ? exactFrameBlob(FRAME_CNN_INSPECTION, sequence, generation) : null,
-        { sequence, generation },
-      );
-    }
-    renderUnavailableDiagnostics();
+  refreshPanels();
+}
+
+function refreshPanels() {
+  void inspection.setFrameDemand({ kinds: enabledPanelDefinitions().flatMap(definition => definition.frameKinds) });
+  if (inspection.view.snapshot) {
+    panelRuntime.renderSnapshot(inspection.view.snapshot, panelView());
+    panelRuntime.renderHistory(currentEpisodeHistory(), inspection.view.snapshot, panelView());
+    fitGridToViewport();
   }
   requestAnimationFrame(() => panelRuntime.resize());
   syncAttributionToPanel();
@@ -1684,48 +1088,22 @@ function readSavedLayouts() {
 }
 
 function renderSavedLayouts() {
-  const target = $("#saved-layouts");
-  const saved = readSavedLayouts();
-  const rows = Object.keys(saved).sort().map((name) => {
-    const row = document.createElement("div");
-    row.className = "saved-layout-row";
-    const load = document.createElement("button");
-    load.type = "button";
-    load.className = "quiet";
-    load.textContent = name;
-    load.title = `Load layout ${name}`;
-    load.addEventListener("click", () => {
-      state.layout = normalizeWorkspace(saved[name], {
-        paired: pairedWorkspace,
-        writer: state.windowId,
-      });
-      state.layout.name = name;
-      persistLayout();
-      applyLayout();
-      $("#layout-menu").hidden = true;
-      showToast(`Loaded layout “${name}”.`);
-    });
-    const remove = document.createElement("button");
-    remove.type = "button";
-    remove.className = "quiet danger";
-    remove.textContent = "Delete";
-    remove.title = `Delete layout ${name}`;
-    remove.addEventListener("click", () => {
-      const next = readSavedLayouts();
-      delete next[name];
-      localStorage.setItem(SAVED_LAYOUTS_KEY, JSON.stringify(next));
-      renderSavedLayouts();
-    });
-    row.append(load, remove);
-    return row;
-  });
-  if (!rows.length) {
-    const empty = document.createElement("span");
-    empty.className = "empty-state";
-    empty.textContent = "No named layouts saved yet.";
-    target.replaceChildren(empty);
-  } else target.replaceChildren(...rows);
+  shellState.savedLayouts = Object.keys(readSavedLayouts()).sort();
 }
+shellState.loadLayout = (name) => {
+  state.layout = normalizeWorkspace(readSavedLayouts()[name], {paired: pairedWorkspace, writer: state.windowId});
+  state.layout.name = name;
+  persistLayout();
+  applyLayout();
+  $("#layout-menu").hidden = true;
+  showToast(`Loaded layout “${name}”.`);
+};
+shellState.deleteLayout = (name) => {
+  const next = readSavedLayouts();
+  delete next[name];
+  localStorage.setItem(SAVED_LAYOUTS_KEY, JSON.stringify(next));
+  renderSavedLayouts();
+};
 
 function renderPanelShelf() {
   panelManager?.renderShelf();
@@ -1733,43 +1111,6 @@ function renderPanelShelf() {
 
 function bindPanelElement(panel, name) {
   const definition = panelDefinition(state.layout, name);
-  if (definition?.switchable) {
-    const captureLabel = name === "cnn"
-      ? "CNN features"
-      : name === "attribution"
-        ? "attribution"
-        : null;
-    const toggle = document.createElement("label");
-    toggle.className = "panel-processing-toggle";
-    toggle.title = captureLabel
-      ? `Enable or disable ${captureLabel} capture`
-      : `Enable or disable ${panelLabel(name)} data processing`;
-    const input = document.createElement("input");
-    input.type = "checkbox";
-    input.role = "switch";
-    input.checked = definition.enabled;
-    input.dataset.panelEnabled = name;
-    input.setAttribute(
-      "aria-label",
-      captureLabel ? `${captureLabel} capture` : `${panelLabel(name)} data processing`,
-    );
-    input.title = toggle.title;
-    input.addEventListener("change", () => {
-      const instance = state.layout.panels[name];
-      if (!instance) return;
-      instance.enabled = input.checked;
-      persistLayout({ customize: false });
-      void applyLayout();
-      showToast(
-        captureLabel
-          ? `${panelLabel(name)} capture ${input.checked ? "enabled" : "disabled"}.`
-          : `${panelLabel(name)} processing ${input.checked ? "enabled" : "disabled"}.`,
-      );
-    });
-    toggle.append(input);
-    const menu = panel.querySelector("[data-panel-menu]");
-    menu?.after(toggle);
-  }
   const handle = panel.querySelector("[data-drag-handle]");
   if (handle) {
     handle.draggable = false;
@@ -1808,6 +1149,7 @@ function bindPanelElement(panel, name) {
 
 function bindPanelLayout() {
   gridStack = window.GridStack.init({
+    alwaysShowResizeHandle: true,
     animate: false,
     cellHeight: DEFAULT_GRID_CELL_HEIGHT,
     column: 12,
@@ -1849,11 +1191,8 @@ function openPanelMenu(name, anchor) {
   if (!workspaceIsEditable(state.layout.preset)) return;
   state.selectedPanel = name;
   const instance = state.layout.panels[name];
-  $("#panel-menu-title").textContent = panelLabel(name);
-  $("#panel-dock-main").hidden = state.windowId === "main";
-  $("#panel-edit").hidden = instance?.type !== "telemetry";
-  $("#panel-duplicate").hidden = instance?.type !== "telemetry";
-  $("#panel-remove").hidden = Boolean(instance?.builtin);
+  shellState.panelMenu = {title: panelLabel(name), dockMain: state.windowId !== "main", telemetry: instance?.type === "telemetry", removable: !instance?.builtin};
+  flushSync();
   positionMenu($("#panel-menu"), anchor);
 }
 
@@ -1861,10 +1200,26 @@ function windowUrl(targetWindow) {
   return `${location.origin}/workspace/${encodeURIComponent(targetWindow)}${location.search}#token=${encodeURIComponent(token)}`;
 }
 
-function movePanelToNewWindow(name) {
+async function openWorkspaceWindow(targetWindow) {
+  if (desktopWorkspace) {
+    const response = await fetch("/api/desktop/window", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ window: targetWindow }),
+    });
+    if (!response.ok) throw new Error(await response.text());
+    return;
+  }
+  const tab = window.open("", workspaceWindowTarget(targetWindow));
+  if (!tab) throw new Error("The browser blocked the workspace tab. Allow popups and try again.");
+  if (tab.location.href === "about:blank") tab.location.replace(windowUrl(targetWindow));
+  tab.focus();
+}
+
+async function movePanelToNewWindow(name) {
   const targetWindow = `window-${crypto.randomUUID().slice(0, 8)}`;
-  const popup = window.open(windowUrl(targetWindow), `gradlab-${targetWindow}`, "popup");
-  if (!popup) { showToast("The browser blocked the new workspace window.", true); return; }
+  try { await openWorkspaceWindow(targetWindow); }
+  catch (error) { showToast(error.message, true); return; }
   const placement = state.layout.panels[name].placement;
   placement.window = targetWindow;
   placement.visible = true;
@@ -1946,13 +1301,20 @@ function removeTelemetryPanel(name) {
 }
 
 function bindWorkspaceMenus() {
+  const switchWindow = $("#switch-window");
+  const targetWindow = windowId === "main" ? STATS_WINDOW_ID : "main";
+  const targetLabel = targetWindow === "main" ? "Player" : "Stats";
+  shellState.switchWindow = {visible: pairedWorkspace, label: targetLabel};
+  switchWindow.addEventListener("click", () => {
+    void openWorkspaceWindow(targetWindow).catch(error => showToast(error.message, true));
+  });
   const closePlayerMenu = () => {
     $("#player-menu").hidden = true;
     $("#more-toggle").setAttribute("aria-expanded", "false");
   };
   $("#source-back").addEventListener("click", () => {
     void ensureSourceBrowser()
-      .then((browser) => browser.browseCurrentSource())
+      .then((browser) => browser.goBack())
       .catch((error) => showToast(`Source browser failed: ${error.message || error}`, true));
   });
   $("#more-toggle").addEventListener("click", (event) => {
@@ -1962,32 +1324,11 @@ function bindWorkspaceMenus() {
     event.currentTarget.setAttribute("aria-expanded", String(opening));
     if (opening) positionMenu(menu, event.currentTarget);
   });
-  $("#change-source").addEventListener("click", () => {
-    closePlayerMenu();
-    void ensureSourceBrowser()
-      .then((browser) => browser.browseCurrentSource())
-      .catch((error) => showToast(`Source browser failed: ${error.message || error}`, true));
-  });
   $("#layouts-toggle").addEventListener("click", (event) => {
     if (!workspaceIsEditable(state.layout.preset)) return;
     $("#panel-shelf").hidden = true;
     $("#panels-toggle").setAttribute("aria-expanded", "false");
     positionMenu($("#layout-menu"), event.currentTarget);
-  });
-  $("#workspace-preset").addEventListener("change", (event) => {
-    const preset = event.target.value;
-    if (preset === "custom") {
-      state.layout.preset = "custom";
-      state.layout.name = "Customize";
-      persistLayout({ customize: false });
-      void applyLayout();
-      showToast("Customize mode enabled. Panels can now be moved and resized.");
-      return;
-    }
-    applyWorkspacePreset(state.layout, preset, { paired: pairedWorkspace });
-    persistLayout({ customize: false });
-    void applyLayout();
-    showToast(`${event.target.selectedOptions[0].textContent} view applied.`);
   });
   $("#save-layout").addEventListener("click", () => {
     if (!workspaceIsEditable(state.layout.preset)) return;
@@ -2003,10 +1344,10 @@ function bindWorkspaceMenus() {
   });
   $("#reset-layout").addEventListener("click", () => {
     state.layout = defaultLayout();
-    persistLayout({ customize: false });
+    persistLayout();
     applyLayout();
     $("#layout-menu").hidden = true;
-    showToast("Watch view restored.");
+    showToast("All panels restored.");
   });
   $("#panel-new-window").addEventListener("click", () => {
     if (!workspaceIsEditable(state.layout.preset)) return;
@@ -2080,8 +1421,7 @@ function bindWorkspaceMenus() {
   $("#new-window").addEventListener("click", () => {
     if (!workspaceIsEditable(state.layout.preset)) return;
     const targetWindow = `window-${crypto.randomUUID().slice(0, 8)}`;
-    const popup = window.open(windowUrl(targetWindow), `gradlab-${targetWindow}`, "popup");
-    if (!popup) showToast("The browser blocked the new workspace window.", true);
+    void openWorkspaceWindow(targetWindow).catch(error => showToast(error.message, true));
   });
   document.addEventListener("click", (event) => {
     if (!$("#player-menu").contains(event.target) && !event.target.closest("#more-toggle")) {
@@ -2093,11 +1433,14 @@ function bindWorkspaceMenus() {
       $("#panel-shelf").hidden = true;
       $("#panels-toggle").setAttribute("aria-expanded", "false");
     }
-    if (!$("#playback-settings-menu").contains(event.target) && !event.target.closest("#playback-settings-toggle")) {
+    if (
+      !$("#playback-settings-menu").contains(event.target)
+      && !event.target.closest("#playback-settings-toggle")
+      && !event.target.closest("[data-playback-settings-popover]")
+    ) {
       $("#playback-settings-menu").hidden = true;
       $("#playback-settings-toggle").setAttribute("aria-expanded", "false");
     }
-    scheduleDebugTimelineHide();
   });
   document.addEventListener("keydown", (event) => {
     if (event.key !== "Escape") return;
@@ -2108,7 +1451,6 @@ function bindWorkspaceMenus() {
     $("#panels-toggle").setAttribute("aria-expanded", "false");
     $("#playback-settings-menu").hidden = true;
     $("#playback-settings-toggle").setAttribute("aria-expanded", "false");
-    scheduleDebugTimelineHide();
   });
 }
 
@@ -2131,10 +1473,17 @@ function reclaimWindow(closedWindow) {
 }
 
 function bindWorkspaceSync() {
+  window.addEventListener("storage", (event) => {
+    if (event.key === `gradlab-reward-reference-${workspaceId}`) {
+      panelRuntime?.renderHistory(currentEpisodeHistory(), inspection.view.snapshot, panelView());
+    }
+  });
   if (workspaceChannel) {
     workspaceChannel.addEventListener("message", (event) => {
       const message = event.data || {};
-      if (message.type === "layout" && message.source !== state.windowId) {
+      if (message.type === "chart-range" && message.source !== state.windowId) {
+        if (message.epoch === inspection.view.sessionEpoch && message.episode === inspection.view.liveSnapshot?.trajectory?.episode_id) setChartRange(message.range, { broadcast: false });
+      } else if (message.type === "layout" && message.source !== state.windowId) {
         const next = normalizeWorkspace(message.layout, {
           paired: pairedWorkspace,
           writer: state.windowId,
@@ -2144,73 +1493,17 @@ function bindWorkspaceSync() {
           applyLayout();
         }
       } else if (message.type === "heartbeat") {
-        state.activeWindows.set(message.window, Date.now());
-      } else if (
-        message.type === "inspection-cursor"
-        && message.source !== state.windowId
-        && Number(message.session_epoch || 0) === state.sessionEpoch
-      ) {
-        if (message.sequence === null) {
-          returnToLive({ announce: false });
-        } else if (
-          message.snapshot
-          && Number(message.episode) === episodeForSnapshot(message.snapshot)
-        ) {
-          setInspectionCursor(Number(message.sequence), {
-            announce: false,
-            snapshot: message.snapshot,
-            frames: Array.isArray(message.frames) ? message.frames : [],
-          });
+        if (desktopWorkspace && !state.activeWindows.has(message.window)) {
+          workspaceChannel.postMessage({ type: "layout", layout: state.layout, source: state.windowId });
+          workspaceChannel.postMessage({ type: "reward-reference", source: state.windowId,
+            value: localStorage.getItem(`gradlab-reward-reference-${workspaceId}`) });
         }
-      } else if (
-        message.type === "inspection-frame-request"
-        && message.source !== state.windowId
-        && Number(message.session_epoch || 0) === state.sessionEpoch
-      ) {
-        (Array.isArray(message.kinds) ? message.kinds : []).forEach((kind) => {
-          const numericKind = Number(kind);
-          const snapshot = state.snapshots.get(Number(message.sequence));
-          const generation = frameGeneration(numericKind, snapshot);
-          const blob = exactFrameBlob(
-            numericKind,
-            Number(message.sequence),
-            generation,
-          );
-          if (!blob) return;
-          workspaceChannel.postMessage({
-            type: "inspection-frame",
-            session_epoch: state.sessionEpoch,
-            sequence: Number(message.sequence),
-            kind: numericKind,
-            generation,
-            blob,
-            source: state.windowId,
-            target: message.source,
-          });
-        });
-      } else if (
-        message.type === "inspection-frame"
-        && message.target === state.windowId
-        && Number(message.session_epoch || 0) === state.sessionEpoch
-        && Number(message.sequence) === Number(state.inspectionSequence)
-        && [FRAME_GAME, FRAME_OBSERVATION, FRAME_ATTRIBUTION, FRAME_CNN_INSPECTION].includes(Number(message.kind))
-        && message.blob instanceof Blob
-      ) {
-        rememberFrame(
-          Number(message.kind),
-          Number(message.sequence),
-          Number(message.generation || 0),
-          message.blob,
-          Number(message.sequence),
-        );
-        void panelRuntime.renderFrame(
-          Number(message.kind),
-          message.blob,
-          {
-            sequence: Number(message.sequence),
-            generation: Number(message.generation || 0),
-          },
-        );
+        state.activeWindows.set(message.window, Date.now());
+      } else if (message.type === "reward-reference" && desktopWorkspace && message.value) {
+        localStorage.setItem(`gradlab-reward-reference-${workspaceId}`, message.value);
+        panelRuntime?.renderHistory(currentEpisodeHistory(), inspection.view.snapshot, panelView());
+      } else if (["inspection-cursor", "inspection-frame-request", "inspection-frame"].includes(message.type)) {
+        inspection.receivePeer(message);
       } else if (message.type === "window-closing" && state.windowId === "main") {
         setTimeout(() => {
           const lastSeen = state.activeWindows.get(message.window) || 0;
@@ -2236,32 +1529,38 @@ function bindWorkspaceSync() {
   heartbeat();
   setInterval(heartbeat, 1000);
   window.addEventListener("beforeunload", () => {
+    inspection.dispose();
+    chartHistory.dispose();
     workspaceChannel?.postMessage({ type: "window-closing", window: state.windowId });
   });
 }
 
 function bindTimeline() {
+  bindTimelineRange($("#timeline-zoom-band"), () => {
+    const scrubber = $("#timeline-scrubber");
+    return { first: Number(scrubber.min), last: Number(scrubber.max) };
+  }, () => chartHistory.read().range, setChartRange);
+  $("#timeline-zoom").addEventListener("click", () => setChartRange(null));
   const scrubber = $("#timeline-scrubber");
+  let trackWidth = 0;
+  const markerResizeObserver = new ResizeObserver(([entry]) => {
+    if (entry.contentRect.width === trackWidth) return;
+    trackWidth = entry.contentRect.width;
+    if (inspection.view.liveSnapshot) renderTimeline();
+  });
+  markerResizeObserver.observe(scrubber);
   $("#timeline-playback-toggle").addEventListener("click", (event) => {
     const action = event.currentTarget.dataset.action;
     if (action === "pause") {
-      pauseCurrentPlayback();
-    } else if (action === "next_episode") {
-      const options = playbackSettings?.episodeOptions() || {};
-      command("next_episode", {
-        sampling_mode: options.sampling_mode,
-        driver: "policy",
-        enabled_termination_conditions: options.enabled_termination_conditions,
-      });
+      inspection.pause();
     } else {
-      playFromCurrentPosition();
+      inspection.play();
     }
   });
   $("#timeline-reset").addEventListener("click", () => {
     const options = playbackSettings?.episodeOptions() || {};
     command("reset_episode", {
       seed: options.seed,
-      enabled_termination_conditions: options.enabled_termination_conditions,
     });
   });
   $("#playback-settings-toggle").addEventListener("click", (event) => {
@@ -2270,40 +1569,16 @@ function bindTimeline() {
     menu.hidden = true;
     event.currentTarget.setAttribute("aria-expanded", String(opening));
     if (opening) {
-      revealDebugTimeline();
       positionMenu(menu, event.currentTarget);
-    } else {
-      scheduleDebugTimelineHide();
     }
   });
   $("#playback-settings-close").addEventListener("click", () => {
     $("#playback-settings-menu").hidden = true;
     $("#playback-settings-toggle").setAttribute("aria-expanded", "false");
-    scheduleDebugTimelineHide();
   });
-  const selectIndex = (index) => {
-    stopInspectionReplay({ render: false });
-    const sequence = state.timelineSequences[index];
-    if (sequence === undefined) return;
-    if (index === state.timelineSequences.length - 1) returnToLive();
-    else inspectSequence(sequence);
-  };
-  scrubber.addEventListener("input", (event) => {
-    selectIndex(Number(event.target.value));
-  });
+  const selectStep = (step) => { void inspection.selectStep(step); };
+  scrubber.addEventListener("input", (event) => selectStep(Number(event.target.value)));
   scrubber.addEventListener("keydown", (event) => {
-    if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-      event.preventDefault();
-      const direction = event.key === "ArrowLeft" ? -1 : 1;
-      const index = clamp(
-        Number(scrubber.value) + direction,
-        0,
-        Math.max(0, state.timelineSequences.length - 1),
-      );
-      scrubber.value = String(index);
-      selectIndex(index);
-      return;
-    }
     if (event.code !== "Space" || event.repeat) return;
     event.preventDefault();
     $("#timeline-playback-toggle").click();
@@ -2320,7 +1595,7 @@ function initWorkspace() {
   panelManager = new PanelManager({
     getWorkspace: () => state.layout,
     getContext: () => ({
-      snapshot: state.snapshot,
+      snapshot: inspection.view.snapshot,
       history: currentEpisodeHistory(),
     }),
     getWindowId: () => state.windowId,
@@ -2333,7 +1608,7 @@ function initWorkspace() {
   });
   playbackSettings = mountPlaybackSettings({
     services: {
-      getState: () => state,
+      getState: playerState,
       command,
     },
     idPrefix: "player-playback",
@@ -2364,7 +1639,8 @@ function initWorkspace() {
     state.publicationPoll = null;
     const video = $("#publication-video");
     video.pause();
-    video.removeAttribute("src");
+    shellState.publication.videoUrl = "";
+    flushSync();
     video.load();
   });
   $("#publication-check").addEventListener("click", () => {
@@ -2372,7 +1648,13 @@ function initWorkspace() {
   });
   $("#publication-authorize-youtube").addEventListener("click", async () => {
     try {
-      const result = await publicationApi("/api/publication/oauth/start", { method: "POST" });
+      const result = await publicationApi("/api/publication/oauth/start", {
+        method: "POST",
+      });
+      if (result.opened_external) {
+        showToast("Finish YouTube authorization in your browser, then return to GradLab.");
+        return;
+      }
       youtubeOAuthPopup = window.open(
         result.authorization_url,
         "gradlab-youtube-oauth",
@@ -2407,8 +1689,7 @@ function initWorkspace() {
   });
   $("#publication-form").addEventListener("submit", async (event) => {
     event.preventDefault();
-    const submit = $("#publication-submit");
-    submit.disabled = true;
+    shellState.publication.submitDisabled = true;
     try {
       const result = await publicationApi("/api/publication/admit", {
         method: "POST",
@@ -2419,11 +1700,11 @@ function initWorkspace() {
       renderPublicationJob(result.job);
       showToast(result.created ? "Combined publication queued." : "Publication is already queued.");
     } catch (error) {
-      submit.disabled = false;
+      shellState.publication.submitDisabled = false;
       showToast(error.message || String(error), true);
     }
   });
-  ["#publication-privacy", "#publication-thumbnail-time", "#publication-tags", "#publication-note", "#publication-feature"].forEach((selector) => {
+  ["#publication-privacy", "#publication-thumbnail-time", "#publication-tags", "#publication-note"].forEach((selector) => {
     $(selector).addEventListener("change", () => {
       void refreshPublicationPreview().catch((error) => showToast(error.message || String(error), true));
     });
@@ -2450,14 +1731,52 @@ function initWorkspace() {
   });
 }
 
-panelRuntime = new PanelRuntime({
+panelRuntime = new PanelHost({
   definitionFor: panelDefinition,
+  isSuspended: panelSuspended,
   container: $("#dashboard"),
   services: {
-    getState: () => state,
+    getState: playerState,
+    setPanelEnabled(name, enabled) {
+      const instance = state.layout.panels[name];
+      if (!instance) return;
+      instance.enabled = enabled;
+      persistLayout();
+      void applyLayout();
+      const kind = ["cnn", "attribution"].includes(name) ? "capture" : "processing";
+      showToast(`${panelLabel(name)} ${kind} ${enabled ? "enabled" : "disabled"}.`);
+    },
+    setRgbEnabled(enabled) {
+      command("set_fps", {
+        fps: Number(inspection.view.liveSnapshot?.session?.target_fps || 0),
+        rgb_enabled: enabled,
+      });
+    },
     send,
     command,
-    inspectSequence,
+    inspectSequence: inspection.selectSequence,
+    async loadRewardHistory(episodeId, first, last) {
+      const query = new URLSearchParams({ epoch: inspection.view.sessionEpoch, episode_id: episodeId });
+      query.set("first", first);
+      if (last !== null) query.set("last", last);
+      const response = await fetch(`/api/playback/reward-history?${query}`, { headers: { Authorization: `Bearer ${token}` } });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Unable to load rewards");
+      return result;
+    },
+    async loadEvents(episodeId, last) {
+      const query = new URLSearchParams({ epoch: inspection.view.sessionEpoch, episode_id: episodeId });
+      if (last !== null) query.set("last", last);
+      const response = await fetch(`/api/playback/event-history?${query}`, { headers: { Authorization: `Bearer ${token}` } });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || "Unable to load events");
+      return result;
+    },
+    inspectStep: inspection.selectStep,
+    setRewardReference,
+    setChartRange,
+    setChartHoverStep,
+    retryChartHistory: () => chartHistory.retry(),
     showToast,
     setAttributionPreference: (config) => {
       state.attributionPreference = {
@@ -2483,11 +1802,6 @@ panelRuntime = new PanelRuntime({
   },
   onLayout: (panel, name, placement, gridItem, definition) => {
     gridStack.update(gridItem, gridWidgetFor(name, placement));
-    panel.classList.toggle("panel-disabled", !definition.enabled);
-    const enabled = panel.querySelector("[data-panel-enabled]");
-    if (enabled) {
-      enabled.checked = definition.enabled;
-    }
   },
   onUnmount: (_panel, _name, gridItem) => {
     gridStack.removeWidget(gridItem, false, false);
@@ -2502,6 +1816,35 @@ window.addEventListener("resize", () => {
   fitGridToViewport();
   panelRuntime.resize();
 });
+const trajectoryControls = mountTrajectoryControls({
+  command,
+  inspectStep: inspection.selectStep,
+  getState: playerState,
+  toast: showToast,
+  request: async (path, body) => {
+    const response = await fetch(path, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "X-Gradlab-Client": state.clientId,
+        "X-Gradlab-Control-Epoch": String(state.controlEpoch),
+        "Content-Type": "application/octet-stream",
+      },
+      body,
+    });
+    const result = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+    if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+    return result;
+  },
+});
 initWorkspace();
 updateControlState();
 connect();
+
+// Fullscreen is a local processing override, never a persisted layout edit.
+document.addEventListener("fullscreenchange", () => {
+  updateChartDemand();
+  panelRuntime.resetFrames();
+  send({ type: "subscribe", subscriptions: subscriptions(), processing: processing() });
+  refreshPanels();
+});

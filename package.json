@@ -5,9 +5,19 @@
   "packageManager": "pnpm@10.33.0",
   "scripts": {
     "test:web": "node --test tests/web_player/*.test.mjs",
-    "vendor:web": "node scripts/vendor-web-assets.mjs"
+    "vendor:web": "node scripts/vendor-web-assets.mjs",
+    "build:web": "vite build",
+    "check:web": "svelte-check --tsconfig ./tsconfig.json",
+    "build:web:fixtures": "vite build --mode fixtures"
   },
   "devDependencies": {
-    "gridstack": "12.6.0"
+    "@sveltejs/vite-plugin-svelte": "6.2.4",
+    "gridstack": "12.6.0",
+    "prettier": "^3.9.6",
+    "prettier-plugin-svelte": "^3.5.2",
+    "svelte": "5.57.0",
+    "svelte-check": "4.7.6",
+    "typescript": "5.9.3",
+    "vite": "7.3.6"
   }
 }

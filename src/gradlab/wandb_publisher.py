@@ -4,13 +4,14 @@ import json
 import math
 import os
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 from gradlab.env_metadata import env_config_metadata, training_metadata
 from gradlab.evaluation_projection import validate_evaluation_metric_payload
 from gradlab.metric_names import (
+    MONITORING_SCALAR_METRICS,
     EVAL_CHECKPOINT_STEP,
     EVAL_FULL_START_TABLE,
     EVAL_START_TABLE_COLUMNS,
@@ -26,6 +27,7 @@ from gradlab.metric_names import (
     ORCHESTRATION_RUN_TERMINAL_STATE,
     leader_metric_for_rank_metric,
     require_current_metrics_schema,
+    summary_metric_value,
     summary_value,
     validate_metric_payload,
 )
@@ -53,6 +55,12 @@ def _write_wandb_identity(run, run_dir: str) -> None:
             Path(run_dir, filename).write_text(f"{value}\n", encoding="utf-8")
 
 
+def wandb_delivery_high_water(summary: Mapping[str, Any]) -> int:
+    reducer_high_water = int(summary_metric_value(summary, ORCHESTRATION_EVENT_SEQUENCE) or 0)
+    history_high_water = int(summary_value(summary.get("_step")) or 0)
+    return max(reducer_high_water, history_high_water)
+
+
 def _wandb_tags(value: Any) -> list[str]:
     if isinstance(value, str):
         return [tag.strip() for tag in value.split(",") if tag.strip()]
@@ -72,6 +80,9 @@ def _start_wandb(
 
     if not wandb_publication_enabled(train_config):
         raise ValueError("supervised training requires W&B metric publication")
+    tracking = train_config.get("tracking")
+    if isinstance(tracking, Mapping) and tracking.get("backend") != "wandb":
+        raise ValueError("W&B projector cannot deliver an MLflow Run")
     load_wandb_env()
     wandb_dir = os.path.abspath(run_dir)
     for env_name, path in {
@@ -131,7 +142,7 @@ def _start_wandb(
             dir=wandb_dir,
             sync_tensorboard=False,
             save_code=False,
-            mode=str(train_config["wandb_mode"]),
+            mode="online",
             id=str(train_config["wandb_run_id"]),
             resume="allow",
             settings=wandb.Settings(
@@ -143,7 +154,7 @@ def _start_wandb(
 
 
 class WandbProjector:
-    """The sole W&B SDK owner for one logical dstack run."""
+    """The sole W&B SDK owner for one logical training run."""
 
     def __init__(
         self,
@@ -155,6 +166,78 @@ class WandbProjector:
         self.run = run
         self.run_dir = run_dir
         self.metrics_schema_version = require_current_metrics_schema(metrics_schema_version)
+
+    @property
+    def run_id(self) -> str:
+        return str(self.run.id)
+
+    def publish_frame(
+        self,
+        row: Mapping[str, Any],
+        *,
+        event_seq_offset: int = 0,
+        occupancy_page=None,
+    ) -> None:
+        _publish_frame(
+            self.run, row, event_seq_offset=event_seq_offset,
+            metrics_schema_version=self.metrics_schema_version,
+            occupancy_page=occupancy_page,
+        )
+
+    def publish_promotion(
+        self,
+        *,
+        checkpoint_step: int,
+        checkpoint_url: str,
+        metrics: Mapping[str, Any],
+        updated_at: str,
+        selection_rank: Sequence[str],
+        evaluation_source: str,
+        metrics_schema_version: int = METRICS_SCHEMA_VERSION,
+    ) -> None:
+        if require_current_metrics_schema(metrics_schema_version) != self.metrics_schema_version:
+            raise ValueError("W&B promotion metrics schema differs from the selected Run")
+        publish_promotion_summary(
+            self.run,
+            checkpoint_step=checkpoint_step,
+            checkpoint_url=checkpoint_url,
+            metrics=metrics,
+            updated_at=updated_at,
+            selection_rank=selection_rank,
+            evaluation_source=evaluation_source,
+            metrics_schema_version=self.metrics_schema_version,
+        )
+
+    def publish_terminal(
+        self, *, state: str, reason: str, timeout_seconds: float | None = None
+    ) -> None:
+        projection = {
+            ORCHESTRATION_RUN_TERMINAL_STATE: state,
+            ORCHESTRATION_RUN_TERMINAL_REASON: reason,
+        }
+        validate_metric_payload(projection, placement="summary")
+        self.run.summary.update(projection)
+        self.close(
+            timeout_seconds=timeout_seconds,
+            exit_code=0 if state in {"succeeded", "stopped", "complete_local"} else 1,
+        )
+
+    def remote_summary(self) -> dict[str, Any]:
+        import wandb
+
+        api = wandb.Api(timeout=10)
+        flush = getattr(api, "flush", None)
+        if callable(flush):
+            flush()
+        path = self.run.path
+        run_path = "/".join(path) if isinstance(path, (list, tuple)) else str(path)
+        return dict(getattr(api.run(run_path), "summary", {}) or {})
+
+    def remote_high_water(self) -> int:
+        return wandb_delivery_high_water(self.remote_summary())
+
+    def finish_projection(self, *, timeout_seconds: float) -> None:
+        self.close(timeout_seconds=timeout_seconds)
 
     @classmethod
     def start_live(
@@ -215,7 +298,7 @@ class WandbProjector:
                 project=project,
                 id=run_id,
                 resume="allow" if allow_create else "must",
-                mode=str(train_config.get("wandb_mode") or "online"),
+                mode="online",
                 name=display_name,
                 group=str(train_config.get("wandb_group") or "") or None,
                 tags=tags,
@@ -266,9 +349,7 @@ class WandbProjector:
         )
         thread.start()
         if not finished.wait(timeout_seconds):
-            raise TimeoutError(
-                f"W&B did not finish uploading within {timeout_seconds:g} seconds"
-            )
+            raise TimeoutError(f"W&B did not finish uploading within {timeout_seconds:g} seconds")
         if errors:
             raise errors[0]
 
@@ -279,6 +360,7 @@ def _publish_frame(
     *,
     event_seq_offset: int = 0,
     metrics_schema_version: int = METRICS_SCHEMA_VERSION,
+    occupancy_page=None,
 ) -> None:
     if run is None:
         raise RuntimeError("W&B run is unavailable")
@@ -287,6 +369,77 @@ def _publish_frame(
     event_seq = int(row["id"]) + int(event_seq_offset)
     step = int(row["step"] or 0)
     source = str(row.get("source") or "")
+
+    if kind == "evaluation_video":
+        import shutil
+        import tempfile
+        import wandb
+        from gradlab.r2_store import BucketConfig, R2Bucket
+
+        config = (
+            BucketConfig(uri=payload["bucket_uri"])
+            if str(payload["bucket_uri"]).startswith("file://")
+            else BucketConfig.from_env("GRADLAB_EVAL_R2")
+        )
+        if config.uri != payload["bucket_uri"]:
+            raise ValueError("evaluation video bucket differs from configured evidence storage")
+        size = int(payload["bytes"])
+        media_root = Path(run.dir)
+        if size < 1 or size > 256 * 1024**2:
+            raise ValueError("evaluation video size is outside the declared bound")
+        if shutil.disk_usage(media_root).free < int(payload["scratch_headroom_bytes"]) + 2 * size:
+            raise OSError("evaluation video delivery lacks scratch headroom")
+        with tempfile.TemporaryDirectory(prefix="eval-video-", dir=media_root) as temporary:
+            path = Path(temporary) / "episode.mp4"
+            R2Bucket(config).download_verified(
+                str(payload["key"]), path, size=size, sha256=str(payload["sha256"])
+            )
+            metrics = {
+                EVAL_CHECKPOINT_STEP: step,
+                ORCHESTRATION_EVENT_SEQUENCE: event_seq,
+                "eval/video": wandb.Video(str(path), format="mp4"),
+            }
+            validate_metric_payload(metrics)
+            configure_wandb_metric_axes(run, metrics, metrics_schema_version=metrics_schema_version)
+            run.log(metrics, step=event_seq)
+        return
+
+    if kind == "monitoring":
+        import tempfile
+        import wandb
+        import shutil
+        from gradlab.r2_store import BucketConfig, R2Bucket
+
+        config = (BucketConfig(uri=payload["bucket_uri"])
+                  if str(payload["bucket_uri"]).startswith("file://")
+                  else BucketConfig.from_env("GRADLAB_MODELS_R2", public=True))
+        if config.uri != payload["bucket_uri"]:
+            raise ValueError("monitoring media bucket differs from configured canonical storage")
+        metrics = dict(payload["metrics"])
+        if not set(metrics).issubset(MONITORING_SCALAR_METRICS):
+            raise ValueError("monitoring cannot project Acceptance metrics")
+        metrics.update({EVAL_CHECKPOINT_STEP: step, ORCHESTRATION_EVENT_SEQUENCE: event_seq})
+        if payload["video"] is None:
+            validate_metric_payload(metrics)
+            configure_wandb_metric_axes(run, metrics, metrics_schema_version=metrics_schema_version)
+            run.log(metrics, step=event_seq)
+            return
+        media_root = Path(run.dir)
+        size = int(payload["video"]["bytes"])
+        retained = sum(p.stat().st_size for p in media_root.rglob("*.mp4"))
+        if retained + 2 * size > payload["media_spool_bytes"]:
+            raise OSError("monitoring W&B media spool budget exhausted")
+        if shutil.disk_usage(media_root).free < payload["scratch_headroom_bytes"] + 2 * size:
+            raise OSError("monitoring W&B media scratch headroom exhausted")
+        with tempfile.TemporaryDirectory(prefix="monitor-video-", dir=media_root) as temporary:
+            path = Path(temporary) / "representative.mp4"
+            R2Bucket(config).download_verified(payload["video"]["key"], path, size=size,
+                                               sha256=payload["video"]["sha256"])
+            metrics["eval/monitor/video"] = wandb.Video(str(path), format="mp4")
+            validate_metric_payload(metrics)
+            configure_wandb_metric_axes(run, metrics, metrics_schema_version=metrics_schema_version)
+            run.log(metrics, step=event_seq)
+        return
 
     if kind == "history":
         if source.startswith("eval"):
@@ -301,7 +454,7 @@ def _publish_frame(
             require_current_metrics_schema(metrics_schema_version)
             payload[EVAL_CHECKPOINT_STEP] = step
         elif not source.startswith("orchestration"):
-            payload["train/global_step"] = step
+            payload["train/step"] = step
         # Use the durable outbox sequence as W&B's internal step. If the SDK call
         # succeeded but the local acknowledgement was interrupted, replaying the
         # same sequence is rejected by W&B as an already-committed step instead
@@ -312,6 +465,30 @@ def _publish_frame(
             metrics_schema_version=metrics_schema_version,
         )
         run.log(payload, step=event_seq)
+        return
+
+    if kind == "curriculum_distribution":
+        from gradlab.curriculum_reporting import TABLE, distribution_table
+
+        converted = {
+            "train/step": step,
+            ORCHESTRATION_EVENT_SEQUENCE: event_seq,
+            TABLE: distribution_table(payload, run_id=run.id),
+        }
+        configure_wandb_metric_axes(run, converted, metrics_schema_version=metrics_schema_version)
+        run.log(converted, step=event_seq)
+        return
+
+    if kind == "occupancy":
+        from gradlab.occupancy import OCCUPANCY_TABLE, occupancy_table
+
+        converted = {
+            "train/step": step,
+            ORCHESTRATION_EVENT_SEQUENCE: event_seq,
+            OCCUPANCY_TABLE: occupancy_table(payload, page=occupancy_page),
+        }
+        configure_wandb_metric_axes(run, converted, metrics_schema_version=metrics_schema_version)
+        run.log(converted, step=event_seq)
         return
 
     if kind == "eval_by_start":
@@ -359,29 +536,16 @@ def publish_pending_frames(
     limit: int,
     event_seq_offset: int = 0,
     metrics_schema_version: int = METRICS_SCHEMA_VERSION,
+    heartbeat: Callable[[], None] | None = None,
+    should_continue: Callable[[], bool] | None = None,
 ) -> int:
-    published = 0
-    for row in store.pending_metric_frames(limit=limit):
-        frame_id = int(row["id"])
-        if not store.claim_metric_frame(frame_id):
-            continue
-        try:
-            _publish_frame(
-                run,
-                row,
-                event_seq_offset=event_seq_offset,
-                metrics_schema_version=metrics_schema_version,
-            )
-        except Exception as exc:
-            store.mark_metric_frame_failed(frame_id, repr(exc))
-            print(f"W&B frame publish failed id={frame_id}: {exc}", flush=True)
-            break
-        store.mark_metric_frame_published(
-            frame_id,
-            step=int(row["step"]) if row.get("step") is not None else None,
-        )
-        published += 1
-    return published
+    from gradlab.selected_delivery import publish_outbox
+
+    return publish_outbox(
+        store, WandbProjector(run, metrics_schema_version=metrics_schema_version),
+        limit=limit, event_seq_offset=event_seq_offset, heartbeat=heartbeat,
+        should_continue=should_continue,
+    )
 
 
 def publish_promotion_summary(
@@ -444,13 +608,11 @@ def promotion_summary_matches(
         selection_rank,
         metrics_schema_version=metrics_schema_version,
     )
-    if str(summary_value(summary.get(LEADER_CHECKPOINT_ARTIFACT_REF)) or "") != str(
-        checkpoint_url
-    ):
+    if str(summary_value(summary.get(LEADER_CHECKPOINT_ARTIFACT_REF)) or "") != str(checkpoint_url):
         return False
     try:
         remote_step = int(summary_value(summary.get(LEADER_CHECKPOINT_STEP)))
-    except (TypeError, ValueError):
+    except TypeError, ValueError:
         return False
     if remote_step != int(checkpoint_step):
         return False

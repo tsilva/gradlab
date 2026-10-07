@@ -5,6 +5,7 @@ from typing import Any
 
 import numpy as np
 
+from gradlab.json_utils import json_value
 from gradlab.metric_names import (
     EVAL_FULL_EPISODE_RETURN_SHAPED_MAX,
     EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
@@ -17,7 +18,7 @@ from gradlab.env_registry import EvalSemantics, environment_spec
 from gradlab.task_kernels import Outcome
 
 DEFAULT_EVAL_SEMANTICS = environment_spec(
-    "stable-retro-turbo",
+    "env-stableretro-turbo",
     "SuperMarioBros-Nes-v0",
 ).eval_semantics
 
@@ -106,6 +107,7 @@ def episode_result_from_record(
     info = serializable_info(dict(terminal_info or {}))
     # Canonical task metrics are authoritative for overlapping provider fields.
     info.update(metrics)
+    info = json_value(info)
 
     start_id = getattr(record, "start_id", None)
     result: dict[str, Any] = {
@@ -140,7 +142,9 @@ def episode_result_from_record(
         value = metrics.get(field.result_key, info.get(field.info_key))
         if value is None and field.result_key == "max_level_x_pos":
             value = metrics.get("max_x_pos", 0)
-        result[field.result_key] = int(value or 0)
+        if value is None and field.required:
+            raise ValueError(f"required evaluation progress is missing: {field.result_key}")
+        result[field.result_key] = float(value or 0)
 
     if semantics.death_flag_key:
         death_x_pos = metrics.get("death_x_pos", info.get(semantics.death_position_key or ""))
@@ -329,10 +333,10 @@ def summarize_episode_results(
         )
         mean_key, max_key = progress_summary_fields(field.result_key)
         progress_metrics[mean_key] = float(values.mean())
-        progress_metrics[max_key] = int(values.max())
+        progress_metrics[max_key] = float(values.max())
         progress_name = progress_metric_name(field.result_key)
         progress_metrics[eval_full_progress_metric(progress_name, "mean")] = float(values.mean())
-        progress_metrics[eval_full_progress_metric(progress_name, "max")] = int(values.max())
+        progress_metrics[eval_full_progress_metric(progress_name, "max")] = float(values.max())
     death_x_positions = [
         int(episode["death_x_pos"])
         for episode in episode_results

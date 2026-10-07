@@ -63,8 +63,16 @@ FROM ${PYTHON_IMAGE} AS dependency-overlay-build
 
 ENV UV_PROJECT_ENVIRONMENT=/opt/gradlab-dependencies
 ENV UV_LINK_MODE=copy
+ENV CXX=g++
+ENV LDCXXSHARED="g++ -shared"
 
 COPY --from=uv /uv /uvx /usr/local/bin/
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        g++ \
+        swig \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /root/gradlab
 
@@ -121,8 +129,20 @@ WORKDIR /src
 COPY pyproject.toml ./
 COPY THIRD_PARTY_NOTICES.md ./
 COPY METRICS.md ./
+COPY TRAJECTORIES.md ./
+COPY hatch_build.py ./
+COPY package.json ./
+COPY pnpm-lock.yaml ./
+COPY pnpm-workspace.yaml ./
+COPY .npmrc ./
+COPY vite.config.ts ./
+COPY svelte.config.js ./
+COPY tsconfig.json ./
+COPY frontend ./frontend
+COPY scripts ./scripts
 COPY experiments/goals ./experiments/goals
 COPY experiments/recipes ./experiments/recipes
+COPY experiments/tracking.yaml ./experiments/tracking.yaml
 COPY src ./src
 
 RUN --mount=type=cache,target=/root/.cache/uv \
@@ -137,6 +157,7 @@ COPY src /root/gradlab/src
 COPY scripts /root/gradlab/scripts
 COPY experiments/goals /root/gradlab/experiments/goals
 COPY experiments/recipes /root/gradlab/experiments/recipes
+COPY experiments/tracking.yaml /root/gradlab/experiments/tracking.yaml
 COPY experiments/modal_eval.yaml /root/gradlab/experiments/modal_eval.yaml
 COPY --chmod=755 containers/train/gradlab /usr/local/bin/gradlab
 COPY --chmod=755 containers/train/entrypoint.sh /usr/local/bin/gradlab-container-entrypoint

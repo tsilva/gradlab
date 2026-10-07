@@ -12,10 +12,12 @@ import threading
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any
+from uuid import uuid4
 from urllib.parse import unquote, urlparse
 
 from gradlab.cli_parser import ExactArgumentParser
 from gradlab.local_paths import default_runs_dir
+from gradlab.local_metrics import local_metrics_writer
 from gradlab.clock import utc_now as _utc_now
 from gradlab.config_loader import RECIPE_TEMPLATE_VALUES, render_template_vars
 from gradlab.env import task_termination
@@ -93,8 +95,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--wandb",
-        action="store_true",
-        help="Preserve the recipe's W&B logging settings. Local training disables W&B by default.",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Sync metrics to the selected backend and checkpoints to R2; "
+            "--no-wandb keeps the run local."
+        ),
     )
     parser.add_argument(
         "--rom-path",
@@ -261,7 +267,7 @@ def main(argv: list[str] | None = None) -> int:
     source = resolve_recipe_source(args.recipe)
     overrides = list(args.recipe_overrides)
     if not args.wandb:
-        overrides.append("logging.wandb_mode=disabled")
+        overrides.append("tracking.delivery=local_only")
 
     source_commit = repo_git_commit(source.repository_root) or _installed_source_commit()
 
@@ -280,6 +286,8 @@ def main(argv: list[str] | None = None) -> int:
         source_sha=source_commit or "",
     )
     document = resolved_documents.effective
+    if (document["train_config"].get("checkpoint_monitoring") or {}).get("enabled"):
+        raise ValueError("checkpoint monitoring requires the lease-holding experiment supervisor")
     goal_id, recipe_id = recipe_identity(document)
     description = _render_run_description(
         document,
@@ -290,7 +298,8 @@ def main(argv: list[str] | None = None) -> int:
     run_name = args.run_name or _default_run_name(goal_id, recipe_id, args.seed)
     run_dir = _safe_run_dir(args.runs_dir, run_name)
 
-    config = dict(document["train_config"])
+    config = resolved_documents.effective_training.to_document()
+    local_run_id = f"gradlab-{uuid4().hex}"
     config.update(
         {
             "seed": int(args.seed),
@@ -309,6 +318,11 @@ def main(argv: list[str] | None = None) -> int:
             "recipe_slug": recipe_id,
             "source_sha": source_commit or "",
             "checkpoint_eval_backend": "none",
+            "wandb_run_id": local_run_id,
+            "wandb_group": local_run_id,
+            "wandb_display_name": run_name,
+            "attempt_id": f"attempt-{uuid4().hex[:16]}",
+            "compute_target": "local",
         }
     )
     provider = resolve_env_provider(str(config["env_provider"]))
@@ -317,7 +331,7 @@ def main(argv: list[str] | None = None) -> int:
     if (
         args.rom_path is not None
         and not uses_local_rom_cache
-        and provider.provider_id != "vizdoom-turbo"
+        and provider.provider_id != "env-vizdoom-turbo"
     ):
         raise ValueError(
             f"--rom-path is not valid for ROM-free provider {provider.provider_id!r}"
@@ -331,7 +345,7 @@ def main(argv: list[str] | None = None) -> int:
             config["rom_asset_manifest"] = rom_asset_manifest_for_game(str(config["game"]))
     document["train_config"] = config
     document["description"] = description
-    base_config = dict(resolved_documents.base["train_config"])
+    base_config = resolved_documents.base_training.to_document()
     if "rom_asset_manifest" in config:
         base_config["rom_asset_manifest"] = config["rom_asset_manifest"]
     resolved_documents.base["train_config"] = base_config
@@ -359,14 +373,15 @@ def main(argv: list[str] | None = None) -> int:
     config_path = run_dir / "train-config.json"
     write_canonical_json(config_path, config)
 
+    execution_mode = TrainingExecutionMode.LOCAL_TRAINING
     started_at = _utc_now()
     receipt = {
         "document_type": "gradlab.local-run",
         "format_version": 1,
         "status": "running",
-        "training_execution": TrainingExecutionPolicy.for_mode(
-            TrainingExecutionMode.LOCAL_DEMO
-        ).to_document(),
+        "run_id": local_run_id,
+        "attempt_id": config["attempt_id"],
+        "training_execution": TrainingExecutionPolicy.for_mode(execution_mode).to_document(),
         "recipe_ref": source.reference,
         "goal_id": goal_id,
         "recipe_id": recipe_id,
@@ -397,14 +412,18 @@ def main(argv: list[str] | None = None) -> int:
                 "--train-config-json",
                 str(config_path),
                 "--execution-mode",
-                TrainingExecutionMode.LOCAL_DEMO.value,
+                execution_mode.value,
             ]
 
             def invoke_learner(runtime_control=None) -> int:
                 kwargs = {"runtime_rom_binding": runtime_rom_binding}
                 if runtime_control is not None:
                     kwargs["runtime_control"] = runtime_control
-                return learner_main(learner_args, **kwargs)
+                with local_metrics_writer(run_dir, config) as wandb_url:
+                    if wandb_url:
+                        receipt["wandb_url"] = wandb_url
+                        _write_receipt(run_dir, receipt)
+                    return learner_main(learner_args, **kwargs)
 
             if use_training_tui:
                 try:
@@ -495,7 +514,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         _write_receipt(run_dir, receipt)
         raise RuntimeError("local learner produced an invalid terminal result") from exc
-    if terminal_execution_mode != TrainingExecutionMode.LOCAL_DEMO.value:
+    if terminal_execution_mode != execution_mode.value:
         receipt.update(
             {
                 "status": "failed",
@@ -519,7 +538,12 @@ def main(argv: list[str] | None = None) -> int:
         raise RuntimeError("local learner reported a non-playable terminal result")
     receipt.update(
         {
-            "status": terminal_status,
+            "status": (
+                "complete_local"
+                if terminal_status == "completed" and config["tracking"]["delivery"] == "local_only"
+                else terminal_status
+            ),
+            "tracking": config["tracking"],
             f"{terminal_status}_at": _utc_now(),
             "terminal_reason": terminal_reason,
             "first_completion_step": first_completion_step,

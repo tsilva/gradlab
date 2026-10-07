@@ -142,7 +142,7 @@ class WrongStartProvider(FakeNativeProvider):
 
 def _descriptor(native: FakeNativeProvider) -> ProviderDescriptor:
     return ProviderDescriptor(
-        provider_id="supermariobrosnes-turbo",
+        provider_id="env-supermariobrosnes-turbo-emu",
         native_observation_space=native.single_observation_space,
         native_action_space=native.single_action_space,
         start_catalog=("Level1-1",),
@@ -233,12 +233,12 @@ import json, sys
 from gradlab.env_cli import main
 assert 'stable_retro' not in sys.modules
 assert 'supermariobrosnes_turbo' not in sys.modules
-assert 'breakout_turbo_env' not in sys.modules
+assert 'env_breakoutatari2600_turbo_native' not in sys.modules
 assert 'vizdoom_turbo' not in sys.modules
 assert main(['list', '--json']) == 0
 assert 'stable_retro' not in sys.modules
 assert 'supermariobrosnes_turbo' not in sys.modules
-assert 'breakout_turbo_env' not in sys.modules
+assert 'env_breakoutatari2600_turbo_native' not in sys.modules
 assert 'vizdoom_turbo' not in sys.modules
 """
     result = subprocess.run(
@@ -252,13 +252,13 @@ assert 'vizdoom_turbo' not in sys.modules
     payload = json.loads(result.stdout)
     assert {item["provider_id"] for item in payload["providers"]} == {
         "ale-py",
-        "breakout-turbo-env",
+        "env-breakoutatari2600-turbo-native",
         "gymnasium",
         "gradlab",
-        "gradoom",
-        "stable-retro-turbo",
-        "supermariobrosnes-turbo",
-        "vizdoom-turbo",
+        "env-gradoom-turbo-torch",
+        "env-stableretro-turbo",
+        "env-supermariobrosnes-turbo-emu",
+        "env-vizdoom-turbo",
     }
 
 
@@ -267,15 +267,16 @@ def test_env_check_requires_goal_file() -> None:
         env_main(["preflight", "--recipe-file", str(MARIO_RECIPE)])
 
 
-def test_inspect_reports_dynamic_gymnasium_contract() -> None:
+def test_inspect_reports_fixed_registered_gymnasium_contract() -> None:
     stdout = io.StringIO()
     with patch("sys.stdout", stdout):
-        exit_code = env_main(["inspect", "gymnasium:CustomNativeVector-v0", "--json"])
+        exit_code = env_main(["inspect", "gymnasium:CartPole-v1", "--json"])
 
     payload = json.loads(stdout.getvalue())
     assert exit_code == 0
-    assert payload["environment"]["qualified_env_id"] == ("gymnasium:CustomNativeVector-v0")
-    assert payload["environment"]["constructor_contract"] == {"kind": "dynamic"}
+    assert payload["environment"]["qualified_env_id"] == "gymnasium:CartPole-v1"
+    assert payload["environment"]["allows_unregistered_env_ids"] is False
+    assert payload["environment"]["constructor_contract"]["kind"] == "fixed"
 
 
 def test_check_keeps_json_clean_and_closes_provider(tmp_path: Path) -> None:

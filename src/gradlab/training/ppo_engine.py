@@ -19,6 +19,7 @@ from gradlab.callbacks import (
     ARCHIVE_CURRICULUM_METRIC_MAP,
     RewardStatsAccumulator,
 )
+from gradlab.metric_inventory import required_metric_names
 from gradlab.metric_names import (
     TRAIN_PPO_APPROX_KL,
     TRAIN_PPO_CLIP_FRACTION,
@@ -34,7 +35,7 @@ from gradlab.ppo import GradLabPPO
 from gradlab.training.sb3_on_policy import (
     active_reward_components,
     checkpoint_prefix,
-    checkpoint_save_frequency,
+    LearnedPolicyCheckpoints,
     policy_kwargs_from_config,
     policy_type_for_config,
     save_model_bundle,
@@ -43,8 +44,7 @@ from gradlab.training.sb3_on_policy import (
 )
 from gradlab.training_backend import BackendContext
 from gradlab.training_lifecycle import ProgressField, TrainingExecutionMode, TrainingResult
-from gradlab.training_metrics import throughput_delta_metrics
-
+from gradlab.training_metrics import ThroughputWindow
 
 ObservationTree = torch.Tensor | dict[str, "ObservationTree"]
 
@@ -81,6 +81,25 @@ def _copy_observation_slot(destination: Any, observations: Any, step: int) -> No
             _copy_observation_slot(destination[key], observations[key], step)
         return
     destination[step].copy_(torch.as_tensor(observations))
+
+
+def _is_compatible_cuda_device(
+    device_a: torch.device | Any,
+    device_b: torch.device | Any,
+) -> bool:
+    if not isinstance(device_a, torch.device) or not isinstance(device_b, torch.device):
+        return device_a == device_b
+    if device_a == device_b:
+        return True
+    if device_a.type != "cuda" or device_b.type != "cuda":
+        return False
+    if device_a.index is None and device_b.index is None:
+        return True
+    if device_a.index is None:
+        return device_b.index == 0
+    if device_b.index is None:
+        return device_a.index == 0
+    return device_a.index == device_b.index
 
 
 def _observation_slot(observations: Any, step: int) -> Any:
@@ -371,6 +390,8 @@ class _ThroughputTracker:
         self.started_at = 0.0
         self.started_step = 0
         self.native_start: Mapping[str, float | int] | None = None
+        self.window = ThroughputWindow()
+        self.last_completed_step = 0
 
     def begin(self, step: int) -> None:
         _synchronize(self.device)
@@ -402,25 +423,30 @@ class _ThroughputTracker:
         )
 
     def flush(self) -> None:
-        if self.completed is None:
-            return
-        _synchronize(self.device)
-        self._publish(self.completed, next_start=time.perf_counter())
-        self.completed = None
+        if self.completed is not None:
+            _synchronize(self.device)
+            self._publish(self.completed, next_start=time.perf_counter())
+            self.completed = None
+        payload = self.window.flush(final=True)
+        if payload:
+            self.context.session.metric_sink.publish(payload, step=self.last_completed_step)
 
     def _publish(self, rollout: _CompletedRollout, *, next_start: float) -> None:
         loop_seconds = next_start - rollout.started_at
         between_seconds = next_start - rollout.ended_at
         if rollout.steps <= 0 or loop_seconds <= 0.0 or between_seconds < 0.0:
             return
-        payload = throughput_delta_metrics(
+        self.window.add(
             steps=rollout.steps,
             loop_seconds=loop_seconds,
             provider_step_seconds=rollout.env_step_seconds,
             rollout_seconds=rollout.rollout_seconds,
             between_rollouts_seconds=between_seconds,
         )
-        self.context.session.metric_sink.publish(payload, step=rollout.step)
+        self.last_completed_step = rollout.step
+        payload = self.window.flush()
+        if payload:
+            self.context.session.metric_sink.publish(payload, step=rollout.step)
 
 
 class _CurriculumFeedback:
@@ -743,8 +769,8 @@ def _rollout_diagnostics(
     payload: dict[str, torch.Tensor] = {}
     omit_if_nonfinite: set[str] = set()
     for suffix, values in (
-        ("rollout/value/prediction", buffer.values),
-        ("rollout/advantage", buffer.advantages),
+        ("rollout_value", buffer.values),
+        ("rollout_advantage", buffer.advantages),
     ):
         prefix = train_algorithm_metric("ppo", suffix)
         mean_name = stat_metric(prefix, "mean")
@@ -759,7 +785,7 @@ def _rollout_diagnostics(
         omit_if_nonfinite.update((mean_name, std_name))
     dominant_action_rate = _dominant_action_rate(buffer.actions.detach(), action_space)
     if dominant_action_rate is not None:
-        payload[train_algorithm_metric("ppo", "policy/dominant/action/rate")] = dominant_action_rate
+        payload[train_algorithm_metric("ppo", "dominant_action_rate")] = dominant_action_rate
     return payload, frozenset(omit_if_nonfinite)
 
 
@@ -937,14 +963,14 @@ def _ppo_update(
             TRAIN_PPO_VALUE_LOSS: metric_means[1],
             TRAIN_PPO_LEARNING_RATE: learning_rate,
             TRAIN_PPO_POLICY_ENTROPY: -metric_means[2],
-            train_algorithm_metric("ppo", "update/policy_gradient_loss"): metric_means[0],
+            train_algorithm_metric("ppo", "policy_loss"): metric_means[0],
             TRAIN_PPO_EXPLAINED_VARIANCE: explained_variance,
         }
     )
     optional_metrics = set(omit_if_nonfinite)
     optional_metrics.add(TRAIN_PPO_EXPLAINED_VARIANCE)
     if hasattr(model.policy, "log_std"):
-        payload[train_algorithm_metric("ppo", "policy/distribution/std")] = (
+        payload[train_algorithm_metric("ppo", "action_std")] = (
             torch.exp(model.policy.log_std).mean().detach()
         )
     return _materialize_metrics(
@@ -968,12 +994,37 @@ def _environment_actions(
 
 
 def _entropy_coefficient(config: Mapping[str, Any], step: int, total: int) -> float:
-    final = config["ent_coef_final"]
-    if final is None:
-        return float(config["ent_coef"])
-    duration = int(config["ent_coef_schedule_timesteps"] or total)
-    progress = min(max(int(step) / duration, 0.0), 1.0)
-    return float(config["ent_coef"]) + (float(final) - float(config["ent_coef"])) * progress
+    from gradlab.schedules import scheduled_scalar
+
+    return scheduled_scalar(
+        config["ent_coef"],
+        config["ent_coef_final"],
+        step,
+        int(config["ent_coef_schedule_timesteps"] or total),
+    )
+
+
+class _UpdateCheckpoints:
+    """Publish requested branch points only after their rollout has been consumed."""
+
+    def __init__(self, steps: Sequence[int], *, initial_step: int, quantum: int, limit: int):
+        self.pending = {step for step in steps if initial_step < step < limit}
+        if any((step - initial_step) % quantum for step in self.pending):
+            raise ValueError("checkpoint_update_steps must align with completed PPO updates")
+
+    def after_update(self, model: Any, context: BackendContext, game: str) -> None:
+        step = int(model.num_timesteps)
+        if step not in self.pending:
+            return
+        save_model_bundle(
+            model=model,
+            context=context,
+            model_path=context.checkpoint_dir
+            / f"{checkpoint_prefix(game, algorithm_id='ppo')}_{step}_steps.zip",
+            kind="checkpoint",
+            step=step,
+        )
+        self.pending.remove(step)
 
 
 def run_gradlab_ppo(
@@ -982,6 +1033,8 @@ def run_gradlab_ppo(
     progress_fields: Sequence[ProgressField] = (),
 ) -> TrainingResult:
     from stable_baselines3.common.utils import set_random_seed
+
+    from gradlab.schedules import apply_rollout_gamma
 
     from gradlab.device import resolve_sb3_device
     from gradlab.env import make_training_vec_env, preflight_state_archive_provider
@@ -1030,8 +1083,10 @@ def run_gradlab_ppo(
             rom_binding=getattr(context, "rom_binding", None),
             state_archive=common_config.get("state_archive"),
             state_archive_root=context.run_dir / "state-archive",
+            occupancy=common_config.get("occupancy"),
         )
     runtime = env.runtime
+    occupancy_reporter = None
     try:
         set_random_seed(int(common_config["seed"]))
         validate_action_space(env.action_space, algorithm_id="ppo")
@@ -1039,7 +1094,7 @@ def run_gradlab_ppo(
         device = torch.device(device_name)
         if device_resident and device.type != "cuda":
             raise ValueError("GraDOOM device training requires backend device='cuda'")
-        if device_resident and runtime.device != device:
+        if device_resident and not _is_compatible_cuda_device(runtime.device, device):
             raise ValueError(
                 f"GraDOOM simulator device {runtime.device} differs from learner device {device}"
             )
@@ -1076,6 +1131,12 @@ def run_gradlab_ppo(
             progress_fields=progress_fields,
         )
         model._total_timesteps = int(budget.execution_total)
+        update_checkpoints = _UpdateCheckpoints(
+            backend_config["checkpoint_update_steps"],
+            initial_step=int(model.num_timesteps),
+            quantum=rollout_quantum,
+            limit=int(budget.execution_total),
+        )
         graceful_stop = GracefulStopHelper(
             context.stop_flag,
             marker_path=context.run_dir / "learner_stop_observed.json",
@@ -1093,6 +1154,15 @@ def run_gradlab_ppo(
                 "training-loop eval disabled; async checkpoint eval handles promotion metrics"
             )
 
+        if (
+            common_config.get("occupancy") is not None
+            or (common_config.get("state_archive") or {}).get("curriculum") is not None
+        ):
+            from gradlab.occupancy import OccupancyReporter
+
+            occupancy_reporter = OccupancyReporter(
+                runtime, context, initial_step=model.num_timesteps
+            )
         observations = runtime.reset(seed=int(common_config["seed"]))
         _preflight_cuda_memory(
             observations,
@@ -1119,22 +1189,23 @@ def run_gradlab_ppo(
         precision = _Precision(str(backend_config["precision"]), device)
         reward_stats = RewardStatsAccumulator(
             active_components=active_reward_components(config.task),
+            task=config.task,
+            required_metrics=required_metric_names(common_config),
         )
         curriculum = _CurriculumFeedback(runtime)
         throughput = _ThroughputTracker(context, runtime, device)
         episode_starts = torch.ones(n_envs, dtype=torch.bool, device=device)
         dones = torch.zeros(n_envs, dtype=torch.bool, device=device)
-        checkpoint_calls = checkpoint_save_frequency(
-            int(common_config["checkpoint_freq"]),
-            n_envs,
-        )
-        calls_since_start = 0
+        scheduled_checkpoints = LearnedPolicyCheckpoints(model, context, algorithm_id="ppo")
         context.mark_ready()
 
         while int(model.num_timesteps) < budget.execution_total:
+            if occupancy_reporter is not None:
+                occupancy_reporter.flush()
             if context.stop_flag.requested:
                 graceful_stop.acknowledge_safe_boundary(num_timesteps=int(model.num_timesteps))
                 break
+            apply_rollout_gamma(model, backend_config, int(common_config["timesteps"]))
             buffer.reset()
             curriculum.begin()
             model.policy.set_training_mode(False)
@@ -1198,7 +1269,6 @@ def run_gradlab_ppo(
                     dones.copy_(torch.as_tensor(done_array))
                 episode_starts = dones
                 model.num_timesteps += n_envs
-                calls_since_start += 1
                 records = [] if device_resident else runtime.drain_records()
                 episodes: list[Any] = []
                 for record in records:
@@ -1214,20 +1284,6 @@ def run_gradlab_ppo(
                     step=int(model.num_timesteps),
                     records=episodes,
                 )
-                if (
-                    checkpoint_calls is not None
-                    and calls_since_start % checkpoint_calls == 0
-                    and int(model.num_timesteps) < int(common_config["timesteps"])
-                ):
-                    step = int(model.num_timesteps)
-                    save_model_bundle(
-                        model=model,
-                        context=context,
-                        model_path=context.checkpoint_dir
-                        / f"{checkpoint_prefix(config.game, algorithm_id='ppo')}_{step}_steps.zip",
-                        kind="checkpoint",
-                        step=step,
-                    )
 
             if device_resident:
                 episodes = runtime.drain_records()
@@ -1283,9 +1339,11 @@ def run_gradlab_ppo(
                 extra_metric_tensors=rollout_metric_tensors,
                 omit_if_nonfinite=optional_rollout_metrics,
             )
+            update_checkpoints.after_update(model, context, config.game)
             rollout_metrics = dict(curriculum_metrics)
             rollout_metrics.update(reward_stats.flush())
             rollout_metrics.update(update_metrics)
+            rollout_metrics["train/gamma"] = float(model.gamma)
             progress_metrics = {
                 "train/approx_kl": update_metrics[TRAIN_PPO_APPROX_KL],
                 "train/entropy_loss": -update_metrics[TRAIN_PPO_POLICY_ENTROPY],
@@ -1302,6 +1360,7 @@ def run_gradlab_ppo(
                 step=int(model.num_timesteps),
                 metrics=rollout_metrics,
             )
+            scheduled_checkpoints.after_update()
             if context.stop_flag.requested:
                 graceful_stop.acknowledge_safe_boundary(num_timesteps=int(model.num_timesteps))
                 break
@@ -1310,7 +1369,10 @@ def run_gradlab_ppo(
         reason = context.session.terminal_reason()
         if (
             context.session.should_persist_interrupted_checkpoint(reason)
-            and int(common_config["checkpoint_freq"]) > 0
+            and (int(common_config["checkpoint_freq"]) > 0
+                 or common_config.get("checkpoint_steps")
+                 or common_config.get("checkpoint_candidates")
+                 or backend_config["checkpoint_update_steps"])
         ):
             step = int(model.num_timesteps)
             save_model_bundle(
@@ -1343,4 +1405,8 @@ def run_gradlab_ppo(
             model_kind=terminal_kind,
         )
     finally:
-        env.close()
+        try:
+            if occupancy_reporter is not None:
+                occupancy_reporter.flush(final=True)
+        finally:
+            env.close()

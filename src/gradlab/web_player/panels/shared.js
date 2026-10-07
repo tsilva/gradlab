@@ -39,8 +39,13 @@ export function displayedEpisode(snapshot) {
   return snapshot?.transition?.episode ?? snapshot?.session?.episode;
 }
 
-export function timelineLabel(snapshot) {
-  return `EPISODE ${text(displayedEpisode(snapshot))} · STEP ${text(displayedStep(snapshot))}`;
+export function timelineLabel(snapshot, liveSnapshot = snapshot) {
+  const sameEpisode = displayedEpisode(snapshot) === displayedEpisode(liveSnapshot)
+    && (!snapshot?.trajectory?.episode_id || !liveSnapshot?.trajectory?.episode_id
+      || snapshot.trajectory.episode_id === liveSnapshot.trajectory.episode_id);
+  const head = sameEpisode ? liveSnapshot : snapshot;
+  const latestStep = head?.trajectory?.last_step ?? displayedStep(head);
+  return `EPISODE ${text(displayedEpisode(snapshot))} · STEP ${text(displayedStep(snapshot))} / ${text(latestStep)}`;
 }
 
 export function setSvgUseHref(element, href) {
@@ -51,81 +56,6 @@ export function setSvgUseHref(element, href) {
 
 export function number(value, digits = 3) {
   return Number.isFinite(Number(value)) ? Number(value).toFixed(digits) : "—";
-}
-
-export function createPanel({
-  id,
-  label,
-  body = "",
-  className = "",
-  tag = "section",
-  headerClass = "",
-}) {
-  const element = document.createElement(tag);
-  element.className = `panel ${className}`.trim();
-  element.dataset.panel = id;
-  const heading = `${id}-panel-heading`;
-  element.setAttribute("aria-labelledby", heading);
-  element.innerHTML = `
-    <header class="panel-header ${headerClass}">
-      <button data-drag-handle class="icon-button icon-only panel-drag" type="button"><svg class="icon" aria-hidden="true"><use href="${ICONS}#ti-grip-vertical"></use></svg></button>
-      <div class="panel-title"><h2 id="${heading}"></h2></div>
-      <button data-panel-menu="${id}" class="icon-button icon-only" type="button"><svg class="icon" aria-hidden="true"><use href="${ICONS}#ti-dots-vertical"></use></svg></button>
-    </header>
-    ${body}
-  `;
-  const renderedLabel = text(label, "Panel");
-  const drag = element.querySelector("[data-drag-handle]");
-  const menu = element.querySelector("[data-panel-menu]");
-  element.querySelector("h2").textContent = renderedLabel;
-  drag.setAttribute("aria-label", `Move ${renderedLabel} panel`);
-  drag.title = drag.getAttribute("aria-label");
-  menu.setAttribute("aria-label", `${renderedLabel} panel options`);
-  menu.title = menu.getAttribute("aria-label");
-  return element;
-}
-
-export function setStats(target, values) {
-  target.replaceChildren(...values.map(([label, value]) => {
-    const box = document.createElement("div");
-    box.className = "stat";
-    const key = document.createElement("span");
-    key.className = "stat-label";
-    key.textContent = label;
-    const rendered = document.createElement("span");
-    rendered.className = "stat-value";
-    rendered.textContent = text(value);
-    box.append(key, rendered);
-    return box;
-  }));
-}
-
-export function renderJson(target, value, fallback) {
-  if (value === null || value === undefined) {
-    target.textContent = fallback;
-    return;
-  }
-  const source = JSON.stringify(value, null, 2);
-  const tokens = /"(?:\\.|[^"\\])*"(?=\s*:)|"(?:\\.|[^"\\])*"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?|\b(?:true|false|null)\b/g;
-  const fragment = document.createDocumentFragment();
-  let cursor = 0;
-  for (const match of source.matchAll(tokens)) {
-    fragment.append(document.createTextNode(source.slice(cursor, match.index)));
-    const token = document.createElement("span");
-    const raw = match[0];
-    if (raw.startsWith('"')) {
-      token.className = source.slice(match.index + raw.length).match(/^\s*:/)
-        ? "json-key"
-        : "json-string";
-    } else if (raw === "true" || raw === "false") token.className = "json-boolean";
-    else if (raw === "null") token.className = "json-null";
-    else token.className = "json-number";
-    token.textContent = raw;
-    fragment.append(token);
-    cursor = match.index + raw.length;
-  }
-  fragment.append(document.createTextNode(source.slice(cursor)));
-  target.replaceChildren(fragment);
 }
 
 function resizeCanvas(canvas) {
@@ -187,13 +117,21 @@ export function lineCursorIndex(plot, x, pointCount) {
   if (!plot || !Number.isFinite(x) || !Number.isInteger(pointCount) || pointCount <= 0) {
     return null;
   }
+  if (plot.positions?.length) {
+    let nearest = 0;
+    plot.positions.forEach((position, index) => {
+      if (Math.abs(position - x) < Math.abs(plot.positions[nearest] - x)) nearest = index;
+    });
+    return nearest;
+  }
   const span = plot.right - plot.left;
   if (!(span > 0)) return null;
   const fraction = Math.max(0, Math.min(1, (x - plot.left) / span));
   return Math.round(fraction * Math.max(0, pointCount - 1));
 }
 
-export function drawLines(canvas, series, { cursorIndex = null } = {}) {
+export function drawLines(canvas, series, { cursorIndex = null, steps = null, cursorStep = null, cursorLabel = null, referenceStep = null, dimBeforeStep = null, showStepTicks = Boolean(steps?.length) } = {}) {
+  if (steps?.length) canvas.setAttribute("aria-description", `Episode steps ${steps[0]}–${steps.at(-1)}. Drag to zoom; double-click to reset.`);
   const { context, ratio, width, height } = resizeCanvas(canvas);
   const chartSurface = themeColor("chartSurface");
   const chartGrid = themeColor("chartGrid");
@@ -219,7 +157,7 @@ export function drawLines(canvas, series, { cursorIndex = null } = {}) {
     left: Math.ceil(labelWidth) + 16,
     right: width - 12,
     top: 10,
-    bottom: height - 10,
+    bottom: height - (showStepTicks ? 28 : 10),
   };
   context.strokeStyle = chartGrid;
   context.lineWidth = 1;
@@ -235,30 +173,80 @@ export function drawLines(canvas, series, { cursorIndex = null } = {}) {
     context.stroke();
     context.fillText(labels[index], plot.left - 6, y);
   });
-  series.forEach(({ values: points, color }) => {
+  if (showStepTicks && steps?.length) {
+    const first = steps[0], last = steps.at(-1);
+    const interval = Math.max(1, niceTickStep(Math.max(1, last - first), Math.max(1, Math.floor((plot.right - plot.left) / 75))));
+    const ticks = [];
+    for (let tick = Math.ceil(first / interval) * interval; tick <= last; tick += interval) {
+      ticks.push(tick);
+    }
+    context.textBaseline = "top";
+    ticks.forEach((tick) => {
+      const x = plot.left + (tick - first) / Math.max(1, last - first) * (plot.right - plot.left);
+      context.textAlign = x < plot.left + 24 ? "left" : x > plot.right - 24 ? "right" : "center";
+      context.fillText(String(tick), x, plot.bottom + 9);
+    });
+  }
+  const fraction = (index, count) => steps?.length > 1
+    ? (steps[index] - steps[0]) / Math.max(1, steps.at(-1) - steps[0])
+    : index / Math.max(1, count - 1);
+  if (steps?.length) plot.positions = steps.map((_, index) => plot.left + fraction(index, steps.length) * (plot.right - plot.left));
+  series.forEach(({ values: points, color, dash = [] }) => {
+    context.setLineDash(dash);
     context.strokeStyle = color;
     context.lineWidth = 1.5;
     context.beginPath();
+    let connected = false;
     points.forEach((value, index) => {
-      if (!Number.isFinite(value)) return;
+      if (!Number.isFinite(value)) { connected = false; return; }
       const x = plot.left
-        + (index / Math.max(1, points.length - 1)) * (plot.right - plot.left);
+        + fraction(index, points.length) * (plot.right - plot.left);
       const y = plot.bottom
         - ((value - scale.min) / (scale.max - scale.min)) * (plot.bottom - plot.top);
-      if (index === 0) context.moveTo(x, y);
+      if (!connected) context.moveTo(x, y);
       else context.lineTo(x, y);
+      connected = true;
     });
     context.stroke();
   });
+  context.setLineDash([]);
+  if (Number.isFinite(dimBeforeStep) && steps?.length && dimBeforeStep > steps[0]) {
+    const end = Math.min(plot.right, plot.left + (dimBeforeStep - steps[0]) / Math.max(1, steps.at(-1) - steps[0]) * (plot.right - plot.left));
+    context.save(); context.globalAlpha = 0.7; context.fillStyle = chartSurface;
+    context.fillRect(plot.left, plot.top, end - plot.left, plot.bottom - plot.top); context.restore();
+  }
+  if (steps?.length && Number.isFinite(referenceStep)
+      && referenceStep >= steps[0] && referenceStep <= steps.at(-1)) {
+    const x = Math.max(plot.left + 1, Math.min(plot.right - 1,
+      plot.left + (referenceStep - steps[0]) / Math.max(1, steps.at(-1) - steps[0]) * (plot.right - plot.left)));
+    context.save();
+    context.strokeStyle = themeColor("seriesViolet");
+    context.fillStyle = themeColor("seriesViolet");
+    context.lineWidth = 2;
+    context.setLineDash([]);
+    context.beginPath();
+    context.moveTo(x, plot.top);
+    context.lineTo(x, plot.bottom);
+    context.stroke();
+    context.beginPath();
+    context.moveTo(x - 5, plot.top);
+    context.lineTo(x + 5, plot.top);
+    context.lineTo(x, plot.top + 7);
+    context.closePath();
+    context.fill();
+    context.restore();
+  }
   const pointCount = Math.max(0, ...series.map((item) => item.values.length));
-  if (
-    Number.isInteger(cursorIndex)
-    && cursorIndex >= 0
-    && cursorIndex < pointCount
-  ) {
-    // Keep the dashed stroke inside the bitmap at both endpoints. A cursor at
-    // the final sample otherwise sits on the right clipping edge and vanishes.
-    const x = lineCursorX(plot, cursorIndex, pointCount);
+  let cursorX = null;
+  if (steps?.length && Number.isFinite(cursorStep)) {
+    if (cursorStep >= steps[0] && cursorStep <= steps.at(-1)) {
+      cursorX = plot.left + (cursorStep - steps[0]) / Math.max(1, steps.at(-1) - steps[0]) * (plot.right - plot.left);
+    }
+  } else if (Number.isInteger(cursorIndex) && cursorIndex >= 0 && cursorIndex < pointCount) {
+    cursorX = plot.positions?.[cursorIndex] ?? lineCursorX(plot, cursorIndex, pointCount);
+  }
+  if (cursorX !== null) {
+    const x = Math.max(plot.left + 1, Math.min(plot.right - 1, cursorX));
     context.save();
     context.strokeStyle = themeColor("chartHighlight");
     context.lineWidth = 1.5;
@@ -268,6 +256,10 @@ export function drawLines(canvas, series, { cursorIndex = null } = {}) {
     context.lineTo(x, plot.bottom);
     context.stroke();
     context.restore();
+    if (cursorLabel) {
+      context.fillStyle = themeColor("chartHighlight"); context.textAlign = x > (plot.left + plot.right) / 2 ? "right" : "left";
+      context.textBaseline = "top"; context.fillText(cursorLabel, x + (context.textAlign === "right" ? -4 : 4), plot.top + 2);
+    }
   }
   return { plot, pointCount };
 }
@@ -280,6 +272,7 @@ function fitCanvasLabel(context, value, maxWidth) {
   return end > 0 ? `${label.slice(0, end)}…` : "…";
 }
 
+/** @param {any} canvas @param {number[]} counts @param {(string|null)[]} names @param {{highlightIndex?: number|null}} options */
 export function drawHistogram(
   canvas,
   counts,
