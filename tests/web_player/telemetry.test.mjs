@@ -20,10 +20,17 @@ import {
   cursorIndex,
   distributionBlockVisible,
   histogramSelectedLabel,
+  lineBlockAvailability,
   lineLegendPrefix,
   lineLegendPresentation,
   lineLegendPresentationAtIndex,
+  lineCursorSequence,
   lineBlockFootPresentation,
+  ordinal,
+  policyDecisionLayoutEnabled,
+  policyDecisionPresentation,
+  policyDecisionRank,
+  rewardSummaryCards,
   selectedPoint,
   statsBlockFoot,
 } from "../../src/gradlab/web_player/panels/telemetry-panel.js";
@@ -44,10 +51,6 @@ const styles = readFileSync(
   new URL("../../src/gradlab/web_player/styles.css", import.meta.url),
   "utf8",
 );
-const telemetryPanelSource = readFileSync(
-  new URL("../../src/gradlab/web_player/panels/telemetry-panel.js", import.meta.url),
-  "utf8",
-);
 
 test("signal selectors leave focus-safe space before the chart", () => {
   assert.match(
@@ -63,20 +66,381 @@ test("distribution contents use the panel as their only scroll container", () =>
   assert.doesNotMatch(comparisonRule, /(?:max-height|overflow)\s*:/);
 });
 
+test("policy distribution legend labels align with their data columns", () => {
+  const layoutRule = styles.match(/\.action-comparison-layout \{([^}]*)\}/)?.[1] || "";
+  const legendRule = styles.match(/\.action-comparison-legend \{([^}]*)\}/)?.[1] || "";
+  const legendSeriesRule = styles.match(
+    /\.action-comparison-legend-series \{([^}]*)\}/,
+  )?.[1] || "";
+  const comparisonRule = styles.match(/\.action-comparison \{([^}]*)\}/)?.[1] || "";
+  const rowRule = styles.match(/\.action-comparison-row \{([^}]*)\}/)?.[1] || "";
+  const barsRule = styles.match(/\.action-comparison-bars \{([^}]*)\}/)?.[1] || "";
+
+  assert.match(layoutRule, /grid-template-columns: max-content minmax\(0, 1fr\);/);
+  assert.match(legendRule, /grid-template-columns: subgrid;/);
+  assert.match(comparisonRule, /grid-template-columns: subgrid;/);
+  assert.match(rowRule, /grid-template-columns: subgrid;/);
+  assert.match(legendSeriesRule, /grid-column: 2;/);
+  assert.match(
+    legendSeriesRule,
+    /grid-template-columns: minmax\(0, 1fr\);/,
+  );
+  assert.match(barsRule, /grid-template-columns: minmax\(0, 1fr\);/);
+  assert.match(barsRule, /gap: 0;/);
+  assert.match(
+    styles,
+    /\.action-comparison-track \{[^}]*border-radius: 0;/,
+  );
+  assert.match(
+    styles,
+    /\.action-comparison-bar\.step \.action-comparison-track \{\s*align-self: end;/,
+  );
+  assert.match(
+    styles,
+    /\.action-comparison-bar\.episode \.action-comparison-track \{\s*align-self: start;/,
+  );
+  assert.doesNotMatch(
+    styles,
+    /\.action-comparison-bar\.(?:step|episode) \.action-comparison-track \{[^}]*border-radius:/,
+  );
+});
+
+
+test("the built-in policy panel uses the decision-first layout only for its canonical blocks", () => {
+  const definition = {
+    id: "policy",
+    config: {
+      blocks: [
+        {
+          kind: "stats",
+          metrics: [
+            "policy/mode",
+            "action/policy",
+            "policy/value",
+            "policy/entropy",
+            "policy/log-probability",
+            "policy/program",
+          ],
+        },
+        { kind: "distribution", metric: "policy/distribution" },
+      ],
+    },
+  };
+
+  assert.equal(policyDecisionLayoutEnabled(definition), true);
+  assert.equal(policyDecisionLayoutEnabled({ ...definition, id: "custom" }), false);
+  assert.equal(policyDecisionLayoutEnabled({
+    ...definition,
+    config: { blocks: definition.config.blocks.slice(1) },
+  }), false);
+});
+
+test("policy decision presentation keeps selection, probability, and episode frequency distinct", () => {
+  const entries = ["noop", "button", "right", "left"].map((label, value) => ({
+    value,
+    semantic_id: label,
+    label,
+  }));
+  const snapshot = {
+    policy: {
+      algorithm_id: "ppo",
+      introspection: [
+        "actor_distribution",
+        "state_value",
+        "entropy",
+        "selected_action_log_probability",
+      ],
+    },
+    transition: {
+      episode: 1, step: 100, sequence: 100, executed_action: 3,
+      decision: {
+        action_selection_mode: "stochastic",
+        selected_action: 3,
+        probabilities: [0.041, 0.165, 0.014, 0.78],
+        value: 3.7437,
+        entropy: 0.6828,
+        log_probability: -0.2486,
+      },
+    },
+    session: {
+      action_contract: {
+        policy: {
+          space: { type: "discrete", n: 4, start: 0 },
+          semantics: { status: "available", encoding: "explicit", entries },
+        },
+      },
+    },
+  };
+  const history = [
+    ...Array.from({ length: 10 }, () => ({ executed_action: 0 })),
+    ...Array.from({ length: 26 }, () => ({ executed_action: 1 })),
+    ...Array.from({ length: 22 }, () => ({ executed_action: 2 })),
+    ...Array.from({ length: 42 }, () => ({ executed_action: 3 })),
+  ].map((point, index) => ({ ...point, episode: 1, step: index + 1, sequence: index + 1, action_source: "policy", policy_action: point.executed_action, effective_action: point.executed_action }));
+
+  const presentation = policyDecisionPresentation(snapshot, history, {});
+
+  assert.equal(presentation.discrete, true);
+  assert.equal(presentation.action, "left");
+  assert.equal(presentation.mode, "stochastic");
+  assert.equal(presentation.rank, 1);
+  assert.equal(presentation.choiceCount, 4);
+  assert.equal(presentation.stepProbability, 0.78);
+  assert.equal(presentation.selectedIsHighest, true);
+  assert.deepEqual(
+    presentation.rows.map(({ selected, highest }) => ({ selected, highest })),
+    [
+      { selected: false, highest: false },
+      { selected: false, highest: false },
+      { selected: false, highest: false },
+      { selected: true, highest: true },
+    ],
+  );
+  assert.deepEqual(
+    presentation.rows.map(({ policyFrequency }) => policyFrequency),
+    [0.10, 0.26, 0.22, 0.42],
+  );
+  assert.deepEqual(
+    presentation.stats.map(({ label, value }) => [label, value]),
+    [["V(s)", "3.7437"], ["Entropy", "0.6828"], ["Log p", "-0.2486"]],
+  );
+});
+
+test("policy decision separates the selected action from the effective auto-serve action", () => {
+  const snapshot = {
+    policy: { introspection: ["actor_distribution"] },
+    transition: {
+      sequence: 1,
+      executed_action: 2,
+      effective_action: 0,
+      native_action: 7,
+      action_override_rule_id: "auto_serve",
+      decision: {
+        action_selection_mode: "stochastic",
+        selected_action: 2,
+        probabilities: [0.01, 0.04, 0.95],
+      },
+    },
+    session: {
+      action_contract: {
+        policy: {
+          space: { type: "discrete", n: 3, start: 0 },
+          semantics: {
+            status: "available",
+            encoding: "explicit",
+            entries: ["button", "right", "left"].map((label, value) => ({ value, label })),
+          },
+        },
+      },
+    },
+  };
+  const history = [{ sequence: 1, executed_action: 2, effective_action: 0 }];
+  const before = structuredClone(snapshot);
+  const presentation = policyDecisionPresentation(snapshot, history, { selectedSequence: 1 });
+  assert.equal(presentation.action, "left");
+  assert.equal(presentation.stepProbability, 0.95);
+  assert.equal(presentation.effectiveAction, "button");
+  assert.equal(presentation.overrideRuleId, "auto_serve");
+  assert.equal(presentation.rows.find((row) => row.selected).name, "left");
+  assert.deepEqual(snapshot, before);
+
+  // A later ordinary decision must clear the override, even when history retains it.
+  snapshot.transition = {
+    ...snapshot.transition,
+    sequence: 2,
+    effective_action: 2,
+    action_override_rule_id: null,
+  };
+  const ordinary = policyDecisionPresentation(snapshot, history, {});
+  assert.equal(ordinary.effectiveAction, "left");
+  assert.equal(ordinary.overrideRuleId, null);
+
+  // Missing evidence must not borrow the selected action or provider-native encoding.
+  snapshot.transition.effective_action = null;
+  assert.equal(
+    policyDecisionPresentation(snapshot, history, {}).effectiveAction,
+    "Unavailable · not recorded",
+  );
+  delete snapshot.transition.effective_action;
+  assert.equal(
+    policyDecisionPresentation(snapshot, history, {}).effectiveAction,
+    "Unavailable · not recorded",
+  );
+
+  snapshot.transition.effective_action = 0;
+  snapshot.session.action_contract.policy.semantics = {
+    status: "unavailable", reason: "not supplied by provider",
+  };
+  assert.match(
+    policyDecisionPresentation(snapshot, history, {}).effectiveAction,
+    /raw action 0 .*semantics unavailable: not supplied by provider/,
+  );
+});
+
+test("policy decision table omits the redundant standalone series legend", () => {
+  assert.doesNotMatch(styles, /\.policy-decision-legend/);
+});
+
+test("policy decision rank follows the action-selection mode", () => {
+  assert.match(
+    styles,
+    /\.policy-decision-mode-line \{[^}]*display: flex;[^}]*gap: \.6rem;/,
+  );
+  assert.doesNotMatch(
+    styles.match(/\.policy-decision-rank \{([^}]*)\}/)?.[1] || "",
+    /margin-left: auto;/,
+  );
+});
+
+test("policy decision hero omits the redundant step probability label", () => {
+  assert.doesNotMatch(styles, /\.policy-decision-probability-label/);
+});
+
+test("policy decision rank orders current-step choices and preserves ties", () => {
+  const rows = [
+    { name: "first", stepProbability: 0.5 },
+    { name: "tied", stepProbability: 0.25 },
+    { name: "selected", stepProbability: 0.25 },
+    { name: "last", stepProbability: 0 },
+  ];
+
+  assert.equal(policyDecisionRank(rows, rows[2]), 2);
+  assert.equal(policyDecisionRank(rows, { stepProbability: null }), null);
+  assert.equal(ordinal(1), "1st");
+  assert.equal(ordinal(2), "2nd");
+  assert.equal(ordinal(3), "3rd");
+  assert.equal(ordinal(11), "11th");
+  assert.equal(ordinal(23), "23rd");
+});
+
+test("policy decision colors selected and highest-probability actions independently", () => {
+  const snapshot = {
+    policy: {
+      introspection: ["actor_distribution"],
+    },
+    transition: {
+      decision: {
+        action_selection_mode: "stochastic",
+        selected_action: 2,
+        probabilities: [0.1, 0.7, 0.2],
+      },
+    },
+    session: {
+      action_contract: {
+        policy: {
+          space: { type: "discrete", n: 3, start: 0 },
+        },
+      },
+    },
+  };
+
+  const presentation = policyDecisionPresentation(snapshot, [], {});
+
+  assert.equal(presentation.selectedIsHighest, false);
+  assert.deepEqual(
+    presentation.rows.map(({ selected, highest }) => ({ selected, highest })),
+    [
+      { selected: false, highest: false },
+      { selected: false, highest: true },
+      { selected: true, highest: false },
+    ],
+  );
+});
+
+test("policy decision marks every tied probability maximum", () => {
+  const snapshot = {
+    policy: {
+      introspection: ["actor_distribution"],
+    },
+    transition: {
+      decision: {
+        action_selection_mode: "stochastic",
+        selected_action: 1,
+        probabilities: [0.5, 0.5, 0],
+      },
+    },
+    session: {
+      action_contract: {
+        policy: {
+          space: { type: "discrete", n: 3, start: 0 },
+        },
+      },
+    },
+  };
+
+  const presentation = policyDecisionPresentation(snapshot, [], {});
+
+  assert.equal(presentation.selectedIsHighest, true);
+  assert.deepEqual(
+    presentation.rows.map(({ selected, highest }) => ({ selected, highest })),
+    [
+      { selected: false, highest: true },
+      { selected: true, highest: true },
+      { selected: false, highest: false },
+    ],
+  );
+});
+
+test("policy decision does not fabricate a maximum for invalid probabilities", () => {
+  const snapshot = {
+    transition: { episode: 1, step: 2, sequence: 2, executed_action: 0 },
+    session: {
+      action_contract: {
+        policy: {
+          space: { type: "discrete", n: 3, start: 0 },
+        },
+      },
+    },
+  };
+  const presentation = actionComparisonPresentation(snapshot, [], {
+    selected_action: 0,
+    probabilities: [0.5, 1.5, 0.5],
+  });
+
+  assert.equal(presentation.step.status, "protocol-error");
+  assert.deepEqual(presentation.rows.map(({ highest }) => highest), [null, null, null]);
+});
+
+test("policy decision color system renders separate selected and highest stripes", () => {
+  assert.match(
+    styles,
+    /\.policy-decision-comparison-row\.selected\.highest \{[^}]*inset 3px 0 var\(--color-evaluation-text\)[^}]*inset 6px 0 var\(--color-series-amber\)/,
+  );
+});
+
+test("reward totals show pre-clip and post-clip values without a formula", () => {
+  assert.match(styles, /\.reward-analysis-toolbar\.titleless \{ justify-content: flex-end; \}/);
+  assert.deepEqual(
+    rewardSummaryCards({
+      positive: 4,
+      negative: -2,
+      preclip: 2,
+      final: 2,
+    }),
+    [
+      ["Bonuses", 4, "positive"],
+      ["Penalties", -2, "negative"],
+      ["Pre-clip", 2, "preclip"],
+      ["Post-clip", 2, "postclip"],
+    ],
+  );
+});
+
 test("namespace telemetry tables use the panel as their only scroll container", () => {
-  assert.match(telemetryPanelSource, /table\.className = "telemetry-namespace-table";/);
   const rule = styles.match(/\.telemetry-namespace-table \{([^}]*)\}/)?.[1] || "";
   assert.match(rule, /margin-top: \.55rem;/);
   assert.doesNotMatch(rule, /(?:max-height|overflow)\s*:/);
 });
 
-test("long action labels truncate on one line and retain their full tooltip", () => {
+test("action labels fit one content-sized column and retain their full tooltip", () => {
   const rule = styles.match(/\.action-comparison-label \{([^}]*)\}/)?.[1] || "";
-  assert.match(rule, /overflow: hidden;/);
-  assert.match(rule, /text-overflow: ellipsis;/);
+  const policyRule = styles.match(/\.policy-decision-action-label \{([^}]*)\}/)?.[1] || "";
+  assert.match(rule, /margin-left: \.3rem;/);
+  assert.match(policyRule, /margin-left: \.3rem;/);
   assert.match(rule, /white-space: nowrap;/);
+  assert.doesNotMatch(rule, /overflow: hidden;/);
+  assert.doesNotMatch(rule, /text-overflow: ellipsis;/);
   assert.doesNotMatch(rule, /overflow-wrap/);
-  assert.match(telemetryPanelSource, /label\.title = row\.name;/);
 });
 
 test("dynamic metric names round-trip without path ambiguity", () => {
@@ -107,6 +471,7 @@ test("catalog discovers signal and reward-component descriptors", () => {
 
 test("action descriptors distinguish policy-selected and executed action", () => {
   const point = { policy_action: 2, executed_action: 1 };
+  assert.equal(descriptorFor("action/policy").shortLabel, "Action");
   assert.equal(
     descriptorValue(descriptorFor("action/policy"), { point }),
     2,
@@ -130,7 +495,7 @@ test("action comparison aligns episode frequencies with selected-step probabilit
     label,
   }));
   const snapshot = {
-    transition: { executed_action: 3 },
+    transition: { episode: 1, step: 4, sequence: 4, executed_action: 3 },
     session: {
       action_contract: {
         policy: {
@@ -145,7 +510,7 @@ test("action comparison aligns episode frequencies with selected-step probabilit
     { executed_action: [1] },
     { executed_action: 1 },
     { executed_action: 3 },
-  ];
+  ].map((point, index) => ({ ...point, episode: 1, step: index + 1, sequence: index + 1, action_source: "policy", policy_action: point.executed_action, effective_action: point.executed_action }));
   const presentation = actionComparisonPresentation(snapshot, history, {
     probabilities: [0.1, 0.6, 0.2, 0.1],
     selected_action: 1,
@@ -154,7 +519,7 @@ test("action comparison aligns episode frequencies with selected-step probabilit
   assert.equal(presentation.history.status, "available");
   assert.equal(presentation.history.sampleCount, 4);
   assert.deepEqual(
-    presentation.rows.map((row) => row.episodeProbability),
+    presentation.rows.map((row) => row.policyFrequency),
     [0.25, 0.5, 0, 0.25],
   );
   assert.deepEqual(
@@ -179,7 +544,7 @@ test("legal-tuple action comparison aligns the joint categorical support", () =>
     }),
   );
   const snapshot = {
-    transition: { executed_action: legalTuples[2] },
+    transition: { episode: 1, step: 3, sequence: 3, executed_action: legalTuples[2] },
     session: {
       action_contract: {
         policy: {
@@ -199,29 +564,29 @@ test("legal-tuple action comparison aligns the joint categorical support", () =>
       { executed_action: legalTuples[0] },
       { executed_action: legalTuples[1] },
       { executed_action: legalTuples[1] },
-    ],
+    ].map((point, index) => ({ ...point, episode: 1, step: index + 1, sequence: index + 1, action_source: "policy", policy_action: index === 0 ? 0 : 1, effective_action: point.executed_action })),
     { probabilities: [0.1, 0.7, 0.2], selected_action: 1 },
   );
 
   assert.equal(formatActionValue(legalTuples[1], snapshot), "move forward");
   assert.deepEqual(discreteActionLabels(snapshot, 3), ["noop", "move forward", "attack"]);
   assert.deepEqual(
-    presentation.rows.map((row) => row.episodeProbability),
+    presentation.rows.map((row) => row.policyFrequency),
     [1 / 3, 2 / 3, 0],
   );
   assert.equal(presentation.rows[1].selected, true);
   assert.equal(presentation.rows[2].executed, true);
 });
 
-test("action comparison keeps the episode aggregate fixed across inspected steps", () => {
+test("action episode prefix stays fixed when only the supplied distribution changes", () => {
   const snapshot = {
-    transition: { executed_action: 0 },
+    transition: { episode: 1, step: 2, sequence: 2, executed_action: 0 },
     session: {
       action_names: ["noop", "move"],
       action_contract: { policy: { space: { type: "discrete", n: 2, start: 0 } } },
     },
   };
-  const history = [{ executed_action: 0 }, { executed_action: 1 }];
+  const history = [0, 1].map((action, index) => ({ episode: 1, step: index + 1, sequence: index + 1, action_source: "policy", policy_action: action, effective_action: action }));
   const first = actionComparisonPresentation(snapshot, history, {
     probabilities: [0.8, 0.2],
     selected_action: 0,
@@ -232,8 +597,8 @@ test("action comparison keeps the episode aggregate fixed across inspected steps
   });
 
   assert.deepEqual(
-    first.rows.map((row) => row.episodeProbability),
-    inspected.rows.map((row) => row.episodeProbability),
+    first.rows.map((row) => row.policyFrequency),
+    inspected.rows.map((row) => row.policyFrequency),
   );
   assert.notDeepEqual(
     first.rows.map((row) => row.stepProbability),
@@ -243,7 +608,7 @@ test("action comparison keeps the episode aggregate fixed across inspected steps
 
 test("action comparison exposes empty and contract-incomparable history", () => {
   const snapshot = {
-    transition: { executed_action: 1 },
+    transition: { episode: 1, step: 1, sequence: 1, executed_action: 1 },
     session: {
       action_names: ["noop", "move"],
       action_contract: { policy: { space: { type: "discrete", n: 2, start: 0 } } },
@@ -251,17 +616,17 @@ test("action comparison exposes empty and contract-incomparable history", () => 
   };
   const decision = { probabilities: [0.4, 0.6], selected_action: 1 };
   const empty = actionComparisonPresentation(snapshot, [], decision);
-  assert.equal(empty.history.status, "not-yet-observed");
-  assert.ok(empty.rows.every((row) => row.episodeProbability === null));
+  assert.equal(empty.history.status, "partial-history");
+  assert.ok(empty.rows.every((row) => row.policyFrequency === null));
 
   const incomparable = actionComparisonPresentation(
     snapshot,
-    [{ executed_action: ["A", "RIGHT"] }],
+    [{ episode: 1, step: 1, sequence: 1, action_source: "policy", policy_action: ["A", "RIGHT"], effective_action: ["A", "RIGHT"] }],
     decision,
   );
   assert.equal(incomparable.history.status, "contract-incomparable");
-  assert.match(incomparable.history.message, /1 of 1 executed actions/);
-  assert.ok(incomparable.rows.every((row) => row.episodeProbability === null));
+  assert.match(incomparable.history.message, /1 of 1 actions/);
+  assert.ok(incomparable.rows.every((row) => row.policyFrequency === null));
 });
 
 test("numeric series preserve gaps and unit compatibility is explicit", () => {
@@ -348,10 +713,19 @@ test("hovered line-chart samples drive every legend value", () => {
   );
 });
 
-test("line legends place the label and equals sign before the value", () => {
+test("step reward legends use native and shaped reward labels", () => {
+  assert.deepEqual(
+    ["reward/provider", "reward/shaped"].map((key) => (
+      lineLegendPrefix(descriptorFor(key))
+    )),
+    ["Native R = ", "Shaped R = "],
+  );
+});
+
+test("value error legends identify the signed critic error", () => {
   assert.equal(
-    lineLegendPrefix(descriptorFor("reward/provider")),
-    "Provider r = ",
+    lineLegendPrefix(descriptorFor("policy/value-error")),
+    "V(s) − G(s) = ",
   );
 });
 
@@ -401,6 +775,20 @@ test("line-chart pointer positions select the nearest sample", () => {
   assert.equal(lineCursorIndex(plot, 500, 5), 4);
 });
 
+test("line-chart pointer positions resolve to retained playback sequences", () => {
+  const history = [
+    { sequence: 40 },
+    { sequence: 44 },
+    { sequence: 51 },
+  ];
+  const plot = { left: 20, right: 200 };
+  assert.equal(lineCursorSequence(history, plot, 20, history.length), 40);
+  assert.equal(lineCursorSequence(history, plot, 110, history.length), 44);
+  assert.equal(lineCursorSequence(history, plot, 200, history.length), 51);
+  assert.equal(lineCursorSequence(history, null, 110, history.length), null);
+});
+
+
 test("the timeline shows the displayed episode and step across a boundary", () => {
   assert.equal(
     displayedEpisode({ session: { episode: 3 }, transition: null }),
@@ -428,7 +816,7 @@ test("the timeline shows the displayed episode and step across a boundary", () =
       session: { episode: 4, step: 1228 },
       transition: { episode: 3, step: 763 },
     }),
-    "EPISODE 3 · STEP 763",
+    "EPISODE 3 · STEP 763 / 763",
   );
 });
 
@@ -466,6 +854,60 @@ test("policy descriptors distinguish pending and incomparable data", () => {
   );
 });
 
+test("line charts recognize retained post-episode diagnostics", () => {
+  const snapshot = {
+    policy: {
+      algorithm_id: "ppo",
+      introspection: ["state_value"],
+    },
+    transition: {
+      boundary: true,
+      decision: { value: -14.153 },
+    },
+    session: { critic_comparison: { reasons: [] } },
+  };
+  const history = [{
+    value: -14.153,
+    realized_return: -3.5,
+    value_error: -10.653,
+  }];
+  const descriptors = [
+    descriptorFor("policy/value"),
+    descriptorFor("policy/realized-return"),
+    descriptorFor("policy/value-error"),
+  ];
+
+  assert.deepEqual(
+    lineBlockAvailability(descriptors, snapshot, history),
+    { unavailable: null, status: "available" },
+  );
+  assert.deepEqual(
+    lineLegendPresentationAtIndex(descriptors, history, 0),
+    [
+      { key: "policy/value", value: "-14.1530" },
+      { key: "policy/realized-return", value: "-3.500" },
+      { key: "policy/value-error", value: "-10.653" },
+    ],
+  );
+
+  assert.deepEqual(
+    lineBlockAvailability(
+      descriptors,
+      {
+        ...snapshot,
+        transition: { boundary: false, decision: { value: -14.153 } },
+      },
+      [{ value: -14.153 }],
+    ),
+    { unavailable: null, status: "available" },
+  );
+
+  assert.equal(
+    lineBlockAvailability(descriptors, snapshot, [{ value: -14.153 }]).status,
+    "protocol-error",
+  );
+});
+
 test("distribution blocks omit diagnostics unsupported by the active policy", () => {
   assert.equal(distributionBlockVisible("unsupported"), false);
   assert.equal(distributionBlockVisible("available"), true);
@@ -491,6 +933,41 @@ test("line charts omit protocol-error labels without hiding contract warnings", 
       warning: true,
     },
   );
+  assert.deepEqual(
+    lineBlockFootPresentation({}, null, {
+      message: "Truncated episode: G(s) includes the final state's V(s) as a bootstrap.",
+    }),
+    {
+      text: "Truncated episode: G(s) includes the final state's V(s) as a bootstrap.",
+      warning: true,
+    },
+  );
+});
+
+test("bootstrapped truncated returns remain available with an explanatory warning", () => {
+  const descriptors = [
+    descriptorFor("policy/value"),
+    descriptorFor("policy/realized-return"),
+    descriptorFor("policy/value-error"),
+  ];
+  const result = lineBlockAvailability(
+    descriptors,
+    {
+      policy: { introspection: ["state_value"] },
+      transition: { boundary: true },
+      session: { critic_comparison: { reasons: [] } },
+    },
+    [{
+      value: 1.0,
+      realized_return: 2.0,
+      value_error: -1.0,
+      realized_return_bootstrapped: true,
+    }],
+  );
+
+  assert.equal(result.status, "available");
+  assert.equal(result.unavailable, null);
+  assert.match(result.notice.message, /final state's V\(s\)/);
 });
 
 test("the default policy distribution omits its redundant heading", () => {
@@ -641,27 +1118,104 @@ test("component action spaces render only complete declared semantics", () => {
   );
 });
 
-test("value comparison foot explains returns and finite-horizon aliasing", () => {
+test("value comparison omits its redundant explanatory label", () => {
   const presentation = lineBlockFootPresentation(
     {
       metrics: ["policy/value", "policy/realized-return"],
     },
     null,
-    {
-      session: {
-        termination_conditions: [
-          {
-            id: "limit:max_episode_steps",
-            enabled: true,
-            value: 512,
-          },
-        ],
-      },
-    },
   );
 
-  assert.match(presentation.text, /not its success flag or cumulative episode return/);
-  assert.match(presentation.text, /Finite horizon: 512 policy steps/);
-  assert.match(presentation.text, /remaining time is absent from the policy observation/);
+  assert.equal(presentation.text, "");
   assert.equal(presentation.warning, false);
+});
+
+test("action frequencies cover the episode to cursor and separate overrides and human input", () => {
+  const source = { transition: { episode: 1, step: 70, sequence: 70 }, session: {
+    action_contract: { policy: { space: { type: "discrete", n: 2, start: 0 } } },
+  } };
+  const history = Array.from({ length: 100 }, (_, index) => ({
+    episode: 1, step: index + 1, sequence: index + 1,
+    action_source: index === 69 ? "human" : "policy",
+    policy_action: index === 69 ? null : index < 6 ? 0 : 1, executed_action: 1,
+    effective_action: index === 6 ? 0 : 1, native_action: 99,
+  }));
+  const decision = { probabilities: [0.2, 0.8], selected_action: 1 };
+  const render = (points) => actionComparisonPresentation(source, points, decision);
+  const first = render(history);
+  assert.equal(first.history.firstStep, 1);
+  assert.equal(first.history.lastStep, 70);
+  assert.equal(first.history.sampleCount, 70);
+  assert.equal(first.history.policy.sampleCount, 69);
+  assert.equal(first.history.environment.sampleCount, 70);
+  assert.deepEqual(first.rows.map((row) => row.policyFrequency), [6 / 69, 63 / 69]);
+  assert.deepEqual(first.rows.map((row) => row.environmentFrequency), [1 / 70, 69 / 70]);
+  assert.deepEqual(render(history.slice(0, 70)), first);
+  assert.deepEqual(render([...history, { ...history[9], episode: 2 }]), first);
+  assert.equal(render(history.slice(6)).history.status, "partial-history");
+  const missing = history.map((point) => point.step === 7 ? { ...point, effective_action: null } : point);
+  assert.equal(render(missing).history.environment.status, "unavailable");
+  assert.ok(render(missing).rows.every((row) => row.environmentFrequency === null));
+  assert.deepEqual(render(missing).rows.map((row) => row.policyFrequency), [6 / 69, 63 / 69]);
+  const unknownSource = history.map((point) => ({ ...point, action_source: undefined }));
+  assert.equal(render(unknownSource).history.policy.status, "unavailable");
+  assert.ok(render(unknownSource).rows.every((row) => row.policyFrequency === null));
+});
+
+test("frozen episode counts survive eviction and arbitrary scrubbing without future leakage", () => {
+  const snapshot = { transition: { episode: 1, step: 488, sequence: 488 }, session: {
+    action_contract: { policy: { space: { type: "discrete", n: 2, start: 0 } } },
+  } };
+  const totals = (step, counts) => ({ episode: 1, step, sequence: step, status: "available",
+    policy: { counts, population_count: step, missing_count: 0, unmappable_count: 0 },
+    environment: { counts, population_count: step, missing_count: 0, unmappable_count: 0 },
+  });
+  const decision = { probabilities: [0.99, 0.01], selected_action: 0 };
+  const future = [{ episode: 1, step: 999, policy_action: 0, effective_action: 0 }];
+  const render = (step, counts) => actionComparisonPresentation({ ...snapshot,
+    transition: { episode: 1, step, sequence: step }, episode_actions: totals(step, counts),
+  }, future, decision);
+  const end = render(488, [64, 424]);
+  assert.deepEqual(end.rows.map((row) => row.policyFrequency), [64 / 488, 424 / 488]);
+  assert.deepEqual(render(10, [0, 10]).rows.map((row) => row.policyFrequency), [0, 1]);
+  assert.deepEqual(render(488, [64, 424]), end);
+  const stale = actionComparisonPresentation({ ...snapshot, episode_actions: totals(10, [0, 10]) }, [], decision);
+  assert.equal(stale.history.status, "protocol-error");
+  assert.ok(stale.rows.every((row) => row.policyFrequency === null));
+  const corrupt = actionComparisonPresentation({ ...snapshot, episode_actions: totals(488, [488, 488]) }, [], decision);
+  assert.equal(corrupt.history.status, "protocol-error");
+  assert.ok(corrupt.rows.every((row) => row.policyFrequency === null));
+});
+
+test("late-opened value legend uses recorded calibration at the exact cursor", () => {
+  const descriptors = [descriptorFor("policy/value"), descriptorFor("policy/realized-return"), descriptorFor("policy/value-error")];
+  const history = [{ sequence: 6, value: 0.9981 }];
+  const view = {
+    selectedSequence: 6,
+    chartHistory: [{ sequence: 6, value: 0.9981, realized_return: 1, value_error: -0.0019 }],
+  };
+  assert.deepEqual(
+    lineLegendPresentation(descriptors, history, view),
+    lineLegendPresentationAtIndex(descriptors, view.chartHistory, 0),
+  );
+});
+
+test("action decision explains recorded environment dynamics separately from policy probability", () => {
+  const note = "Slippery ice: commands can move perpendicular to the chosen direction.";
+  const snapshot = {
+    policy: { introspection: ["actor_distribution"] },
+    transition: {
+      effective_action: 0,
+      decision: { selected_action: 0, probabilities: [0.973, 0.016, 0.01, 0.001] },
+    },
+    session: {
+      playback_contract: { environment_action_note: note },
+      action_contract: { policy: { space: { type: "discrete", n: 4, start: 0 } } },
+    },
+  };
+  const presentation = policyDecisionPresentation(snapshot, [], {});
+  assert.equal(presentation.environmentActionNote, note);
+  assert.equal(presentation.stepProbability, 0.973);
+  delete snapshot.session.playback_contract;
+  assert.equal(policyDecisionPresentation(snapshot, [], {}).environmentActionNote, null);
 });

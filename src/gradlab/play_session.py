@@ -8,9 +8,8 @@ from collections import deque
 from collections.abc import Mapping
 from copy import deepcopy
 from dataclasses import dataclass, replace
-from pathlib import Path
 
-from gradlab.local_paths import configure_matplotlib_cache, default_runs_dir
+from gradlab.local_paths import configure_matplotlib_cache
 
 configure_matplotlib_cache()
 
@@ -24,7 +23,6 @@ from gradlab.action_contract import (
     configured_action_name,
 )
 from gradlab.batch_runtime import StepDiagnostics
-from gradlab.cli_parser import ExactArgumentParser
 from gradlab.env import (
     info_value_from_state_name,
     state_name_candidates_from_level_id,
@@ -39,10 +37,6 @@ from gradlab.eval_metrics import (
     episode_records,
     episode_result_from_record,
     is_level_complete,
-)
-from gradlab.model_sources import (
-    DEFAULT_PUBLIC_MODELS_BASE_URL,
-    positional_model_source_arg,
 )
 from gradlab.play_attribution import (
     ATTRIBUTION_MODES,
@@ -76,8 +70,15 @@ from gradlab.play_termination import (
     termination_condition_payload,
     with_enabled_termination_conditions,
 )
-from gradlab.seeds import DEFAULT_EVAL_SEED, EVAL_SEED_START
 from gradlab.env_registry import environment_spec
+
+
+from gradlab.play_args import (
+    PLAYBACK_DEVICE as PLAYBACK_DEVICE,
+    add_play_source_args as add_play_source_args,
+    build_parser as build_parser,
+    nonnegative_int_arg as nonnegative_int_arg,
+)
 
 
 ANSI_RESET = "\033[0m"
@@ -240,149 +241,6 @@ def render_attribution_stack(
     return np.concatenate(rendered, axis=1)
 
 
-def add_play_source_args(parser: argparse.ArgumentParser) -> None:
-    def positional_play_source_arg(value: str) -> str:
-        from gradlab.play_catalog import is_wandb_url
-
-        if is_wandb_url(value):
-            return value
-        return positional_model_source_arg(value)
-
-    parser.add_argument(
-        "artifact_ref",
-        nargs="?",
-        type=positional_play_source_arg,
-        help=(
-            "W&B run URL, immutable public checkpoint manifest, or Hugging Face model ref. "
-            "Use --model for a local checkpoint or --run for an gradlab public run."
-        ),
-    )
-    parser.add_argument(
-        "--model",
-        default=None,
-        help="Local gradlab policy path. The artifact must have model.json and recipe.json sidecars.",
-    )
-    parser.add_argument(
-        "--recipe",
-        help=(
-            "Play the newest completed local run for a built-in <goal-path>/<recipe> "
-            "reference or recipe YAML."
-        ),
-    )
-    parser.add_argument(
-        "--runs-dir",
-        type=Path,
-        default=default_runs_dir(),
-        help="Local run root searched by --recipe; defaults to ~/.config/gradlab/runs.",
-    )
-    parser.add_argument(
-        "--rom-path",
-        type=Path,
-        help=(
-            "Use a provider-compatible raw .nes ROM, or a local ViZDoom IWAD as a "
-            "visible counterfactual when it differs from training."
-        ),
-    )
-    parser.add_argument(
-        "--run",
-        help=(
-            "Immutable gradlab run ID or exact public checkpoint manifest URL. A run ID "
-            "resolves its promoted checkpoint, or its highest-step final checkpoint when "
-            "no promotion exists, without W&B or private R2 credentials."
-        ),
-    )
-    parser.add_argument(
-        "--public-models-base-url",
-        default=DEFAULT_PUBLIC_MODELS_BASE_URL,
-        help="Public models bucket URL. Defaults to gradlab's checked-in public endpoint.",
-    )
-    parser.add_argument(
-        "--public-model-root",
-        default=str(default_runs_dir() / "public_models"),
-        help="Local cache for public run checkpoints.",
-    )
-    parser.set_defaults(
-        hf_revision=None,
-        hf_model_root=str(default_runs_dir() / "hf_models"),
-    )
-
-
-def nonnegative_int_arg(value: str) -> int:
-    parsed = int(value)
-    if parsed < 0 or parsed > 65535:
-        raise argparse.ArgumentTypeError("must be in [0, 65535]")
-    return parsed
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = ExactArgumentParser(
-        prog="gradlab play",
-        description=(
-            "Browse repository goals and control-plane runs, then inspect a public "
-            "checkpoint in the interactive web player"
-        ),
-    )
-    add_play_source_args(parser)
-    parser.add_argument(
-        "--episodes", type=int, default=0, help="Number of episodes; use 0 to run forever"
-    )
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=DEFAULT_EVAL_SEED,
-        help=(
-            "Base playback seed. The default lives in the eval/play-reserved seed "
-            f"range >= {EVAL_SEED_START}; overrides must stay in that range."
-        ),
-    )
-    parser.add_argument("--device", default="auto", choices=["auto", "cpu", "cuda", "mps"])
-    parser.add_argument(
-        "--env-provider",
-        help=(
-            "Run the artifact's unchanged evaluation contract through an equivalent provider. "
-            "The provider must support the recorded game and constructor arguments."
-        ),
-    )
-    parser.add_argument("--fps", type=float, default=0.0)
-    parser.add_argument(
-        "--port",
-        type=nonnegative_int_arg,
-        default=0,
-        help="Loopback dashboard port; use 0 to select an available port automatically.",
-    )
-    parser.add_argument(
-        "--no-open",
-        action="store_true",
-        help="Print the play and stats dashboard URLs without opening the default browser.",
-    )
-    parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Start paused for interactive transition debugging.",
-    )
-    parser.add_argument(
-        "--continuous-play",
-        action="store_true",
-        help=(
-            "Ignore the recipe's task success, failure, stall, and step-limit boundaries. "
-            "This is a semantic deviation intended only for continuous interactive play."
-        ),
-    )
-    parser.add_argument(
-        "--resume-cell",
-        help=(
-            "Resume a cell-graph representative by node ID. The model must have "
-            "been exported with state_archive.export.snapshots=retained."
-        ),
-    )
-    parser.add_argument(
-        "--no-progress",
-        action="store_true",
-        help="Disable model-download and player-startup progress bars.",
-    )
-    return parser
-
-
 def resolved_play_launch_lines(
     args: argparse.Namespace,
     *,
@@ -499,6 +357,38 @@ def playback_model_observation(
         return np.asarray(policy_obs)
 
 
+def _truncation_bootstrap_value(
+    *,
+    policy_runtime: PolicyRuntime | None,
+    model: object,
+    final_policy_obs: object | None,
+    config: object,
+    active_task_state: str | None,
+    active_info_value: tuple[int | str, ...] | None,
+) -> tuple[float | None, str | None]:
+    if policy_runtime is None or "state_value" not in policy_runtime.capabilities.introspection:
+        return None, None
+    if final_policy_obs is None:
+        return None, "exact final policy observation is unavailable"
+    try:
+        final_model_obs = playback_model_observation(
+            model,
+            final_policy_obs,
+            config,
+            active_task_state=active_task_state,
+            active_info_value=active_info_value,
+        )
+        values = np.asarray(policy_runtime.state_values(final_model_obs)).reshape(-1)
+    except (AttributeError, RuntimeError, TypeError, ValueError) as exc:
+        return None, f"terminal-state critic bootstrap failed: {exc}"
+    if values.size != 1:
+        return None, "terminal-state critic bootstrap did not return exactly one value"
+    value = float(values[0])
+    if not np.isfinite(value):
+        return None, "terminal-state critic bootstrap is non-finite"
+    return value, None
+
+
 def _observation_shape(value) -> str:
     if isinstance(value, Mapping):
         return (
@@ -537,6 +427,8 @@ class _PlaybackTransition:
     completed: bool
     boundary: bool
     after_frame_role: str = "after_action_observation"
+    return_bootstrap_value: float | None = None
+    return_bootstrap_reason: str | None = None
     attribution_status: str = "off"
     attribution_mode: str = "none"
     attribution_generation: int = 0
@@ -546,6 +438,7 @@ class _PlaybackTransition:
     cnn_layer_id: str | None = None
     cnn_generation: int = 0
     cnn_reason: str | None = "disabled"
+    next_model_obs: object = None
 
     @property
     def events(self) -> tuple[str, ...]:
@@ -1097,6 +990,7 @@ class _PlaybackSession:
         *,
         deterministic: bool = False,
         action_selection_mode: str | None = None,
+        sampling_temperature: float = 1.0,
     ) -> _PlaybackTransition:
         if self.policy_runtime is None:
             raise RuntimeError(f"policy runtime is unavailable: {self._policy_runtime_error}")
@@ -1106,7 +1000,12 @@ class _PlaybackSession:
         batch = self.policy_runtime.decide(
             self.model_obs,
             action_selection_mode=requested_mode,
-            include_diagnostics=bool(self.processing_features & {"policy", "raw"}),
+            sampling_temperature=sampling_temperature,
+            include_diagnostics=(
+                bool(getattr(self, "trajectory_recording", False))
+                or bool(getattr(self, "trajectory_seeking", False))
+                or bool(self.processing_features & {"policy", "raw"})
+            ),
             execution_context=(
                 self.env.policy_execution_context(self.model)
                 if callable(getattr(self.env, "policy_execution_context", None))
@@ -1169,14 +1068,19 @@ class _PlaybackSession:
         action_source: str,
     ) -> _PlaybackTransition:
         processing = self.processing_features
-        needs_raw = "raw" in processing
-        needs_observation = bool(processing & {"observation", "attribution", "cnn-inspection"})
-        model_obs = self.model_obs
-        model_obs_snapshot = (
-            deepcopy(model_obs)
-            if needs_raw or "attribution" in processing or "cnn-inspection" in processing
-            else None
+        recording = bool(getattr(self, "trajectory_recording", False))
+        seeking = bool(getattr(self, "trajectory_seeking", False))
+        needs_raw = recording or "raw" in processing
+        needs_observation = recording or seeking or bool(
+            processing & {"observation", "attribution", "cnn-inspection"}
         )
+        needs_policy_input = recording or seeking or bool(
+            processing & {"observation", "raw", "attribution", "cnn-inspection"}
+        )
+        model_obs = self.model_obs
+        terminal_task_state = getattr(self, "active_task_state", None)
+        terminal_info_value = getattr(self, "active_info_value", None)
+        model_obs_snapshot = deepcopy(model_obs) if needs_policy_input else None
         pre_task = deepcopy(self.active_task) if needs_raw else None
         before_frame = (
             None if not needs_raw or self.current_frame is None else self.current_frame.copy()
@@ -1228,6 +1132,18 @@ class _PlaybackSession:
             completed = is_level_complete(final_info)
         boundary = playback_should_end_episode(terminated, truncated, completed)
 
+        return_bootstrap_value = None
+        return_bootstrap_reason = None
+        if truncated and (recording or "critic-calibration" in processing):
+            return_bootstrap_value, return_bootstrap_reason = _truncation_bootstrap_value(
+                policy_runtime=self.policy_runtime,
+                model=self.model,
+                final_policy_obs=info.get("terminal_observation"),
+                config=self.config,
+                active_task_state=terminal_task_state,
+                active_info_value=terminal_info_value,
+            )
+
         next_conditioning_info = dict(info.get("reset_info", {})) if boundary else info
         self._update_conditioning(next_conditioning_info)
         next_task = deepcopy(self.active_task) if needs_raw else None
@@ -1249,6 +1165,23 @@ class _PlaybackSession:
             after_frame_role = "after_action_observation"
             after_policy_obs = policy_obs
         after_frames = optional_fast_env_frames(after_policy_obs)
+        next_model_obs = None
+        if recording:
+            exact_next = info.get("terminal_observation") if boundary else policy_obs
+            if exact_next is not None:
+                next_model_obs = deepcopy(
+                    playback_model_observation(
+                        self.model,
+                        exact_next,
+                        self.config,
+                        active_task_state=terminal_task_state
+                        if boundary
+                        else self.active_task_state,
+                        active_info_value=terminal_info_value
+                        if boundary
+                        else self.active_info_value,
+                    )
+                )
         self.sequence += 1
         transition = _PlaybackTransition(
             sequence=self.sequence,
@@ -1277,6 +1210,9 @@ class _PlaybackSession:
             completed=completed,
             boundary=boundary,
             after_frame_role=after_frame_role,
+            next_model_obs=next_model_obs,
+            return_bootstrap_value=return_bootstrap_value,
+            return_bootstrap_reason=return_bootstrap_reason,
             attribution_status=(
                 "off"
                 if self.attribution_mode == "none"

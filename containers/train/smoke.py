@@ -42,7 +42,7 @@ def smoke_lunar_lander() -> None:
 def smoke_breakout_render() -> None:
     import numpy as np
 
-    from breakout_turbo_env import BreakoutVecEnv
+    from env_breakoutatari2600_turbo_native import BreakoutVecEnv
 
     env = BreakoutVecEnv(
         "Breakout-Atari2600-v0",
@@ -89,8 +89,13 @@ def main() -> None:
         "stable-baselines3",
         "torch",
         "wandb",
+        "mlflow-skinny",
     ):
         print(f"package/{package}={package_version(package)}")
+
+    import gradlab.run_supervisor  # noqa: F401
+
+    print("supervisor_import=ok")
 
     lock_path = root / "uv.lock"
     if lock_path.is_file():
@@ -110,7 +115,7 @@ def main() -> None:
 
     game = os.environ.get("RETRO_GAME")
     if game:
-        import stable_retro as retro
+        import env_stableretro_turbo as retro
 
         states = list(retro.data.list_states(game))[:12]
         print(f"retro_game={game}")

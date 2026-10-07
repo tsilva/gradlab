@@ -4,14 +4,7 @@ import importlib.util
 from pathlib import Path
 
 
-SCRIPT = (
-    Path(__file__).resolve().parents[1]
-    / ".codex"
-    / "skills"
-    / "build-release"
-    / "scripts"
-    / "release_build.py"
-)
+SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "release_build.py"
 SPEC = importlib.util.spec_from_file_location("gradlab_release_build", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 release_build = importlib.util.module_from_spec(SPEC)

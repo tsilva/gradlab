@@ -351,12 +351,12 @@ def test_rom_import_uses_environment_without_loading_dotenv(
 
     with (
         patch("gradlab.rom_cli.load_env_file") as load_dotenv,
-        patch("stable_retro.scripts.import_path.main", side_effect=fake_import),
+        patch("env_stableretro_turbo.scripts.import_path.main", side_effect=fake_import),
     ):
         assert rom_main(["import"]) == 0
 
     load_dotenv.assert_not_called()
-    assert observed_argv == [["stable_retro.import", str(tmp_path)]]
+    assert observed_argv == [["env_stableretro_turbo.import", str(tmp_path)]]
     assert f"ROM import finished from {tmp_path}" in capsys.readouterr().out
 
 

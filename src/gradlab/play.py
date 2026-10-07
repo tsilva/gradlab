@@ -4,41 +4,83 @@ import sys
 from pathlib import Path
 
 from gradlab.cli_args import explicit_arg_dests
-from gradlab.play_session import build_parser
+from gradlab.play_args import build_parser
 
 
 def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    argv_list = list(sys.argv[1:] if argv is None else argv)
+    args = parser.parse_args(argv_list)
+
+    from concurrent.futures import ThreadPoolExecutor
+    from gradlab.catalog_errors import CatalogError, CatalogIntegrityError, CatalogUnavailable
+    from gradlab.play_catalog_authority import (
+        scrub_protected_environment,
+        start_catalog_authority_helper,
+    )
+    from gradlab.play_dev_assets import source_checkout_root
+    from gradlab.recipe_catalog import experiments_root
+
+    if args.hotreload and source_checkout_root() is None:
+        parser.error("--hotreload requires a source checkout")
+    args.hot_reload = args.hotreload
+    selected_sources = sum(
+        bool(value)
+        for value in (
+            args.latest,
+            args.artifact_ref,
+            args.model,
+            args.recipe,
+            args.run,
+            args.recording,
+        )
+    )
+    if selected_sources > 1:
+        parser.error(
+            "pass exactly one of --latest, --run, --recipe, a positional remote source, --model, or --recording"
+        )
+    if args.recording and not args.recording.expanduser().is_file():
+        parser.error(f"recording file does not exist: {args.recording}")
+    repo_root = experiments_root().parent
+    catalog_executor = (
+        ThreadPoolExecutor(max_workers=1, thread_name_prefix="gradlab-catalog-start")
+        if selected_sources == 0 or args.latest
+        else None
+    )
+    catalog_future = (
+        catalog_executor.submit(start_catalog_authority_helper, repo_root)
+        if catalog_executor is not None
+        else None
+    )
+
     from gradlab.model_sources import (
+        NoDefaultPublicRunCheckpointError,
         is_huggingface_model_ref,
         is_public_checkpoint_manifest_ref,
         public_checkpoint_manifest,
+        public_run_checkpoint_manifest_url,
     )
     from gradlab.play_catalog import PlayCatalog, parse_wandb_location
     from gradlab.play_runtime import PlaySourceSpec
     from gradlab.playback_worker import IsolatedPlaybackHost
     from gradlab.play_web import run_web_player_application
     from gradlab.recipe_catalog import (
-        experiments_root,
         latest_local_recipe_model,
         recipe_identity,
         resolve_recipe_source,
     )
     from gradlab.recipe_documents import compose_train_document
 
-    parser = build_parser()
-    argv_list = list(sys.argv[1:] if argv is None else argv)
-    args = parser.parse_args(argv_list)
-    selected_sources = sum(
-        bool(value)
-        for value in (
-            args.artifact_ref,
-            args.model,
-            args.recipe,
-            args.run,
-        )
-    )
-    if selected_sources > 1:
-        parser.error("pass exactly one of --run, --recipe, a positional remote source, or --model")
+    catalog_authority = None
+    catalog_control_error = ""
+    if catalog_future is not None:
+        try:
+            catalog_authority = catalog_future.result()
+        except CatalogError as exc:
+            catalog_control_error = str(exc)
+    if catalog_executor is not None:
+        catalog_executor.shutdown(wait=True)
+
     wandb_location = parse_wandb_location(args.artifact_ref)
     if args.recipe:
         recipe_source = resolve_recipe_source(args.recipe)
@@ -57,15 +99,6 @@ def main(argv: list[str] | None = None) -> int:
     args.respect_task_termination = not args.continuous_play
     explicit_dests = explicit_arg_dests(parser, argv_list)
 
-    repo_root = experiments_root().parent
-    catalog_authority = None
-    catalog_control_error = ""
-    from gradlab.catalog_errors import CatalogError, CatalogIntegrityError, CatalogUnavailable
-    from gradlab.play_catalog_authority import (
-        scrub_protected_environment,
-        start_catalog_authority_helper,
-    )
-
     def start_private_catalog() -> None:
         nonlocal catalog_authority, catalog_control_error
         try:
@@ -73,8 +106,6 @@ def main(argv: list[str] | None = None) -> int:
         except CatalogError as exc:
             catalog_control_error = str(exc)
 
-    if selected_sources == 0:
-        start_private_catalog()
     catalog = PlayCatalog(
         public_models_base_url=args.public_models_base_url,
         repo_root=repo_root,
@@ -84,7 +115,32 @@ def main(argv: list[str] | None = None) -> int:
     )
     initial_route: dict[str, object] = {"level": "environments"}
     initial_source: PlaySourceSpec | None = None
-    if args.run:
+    if args.latest:
+        try:
+            for initial_route in catalog.latest_run_routes():
+                run_id = str(initial_route["run_id"])
+                try:
+                    manifest_url = public_run_checkpoint_manifest_url(
+                        run_id, public_base_url=args.public_models_base_url, latest=True,
+                    )
+                except NoDefaultPublicRunCheckpointError:
+                    continue
+                break
+            else:
+                raise ValueError("No runs in the player catalog have a published checkpoint yet")
+            checkpoint = public_checkpoint_manifest(manifest_url)
+            initial_route["checkpoint_id"] = checkpoint.checkpoint_id
+            initial_source = PlaySourceSpec(
+                "public_run", manifest_url,
+                run_id=run_id, checkpoint_id=checkpoint.checkpoint_id,
+            )
+            print(f"Latest checkpoint: {run_id} · step {checkpoint.step} · {checkpoint.checkpoint_id}", flush=True)
+        except (CatalogError, ValueError, OSError) as exc:
+            if catalog_authority is not None:
+                catalog_authority.close()
+            scrub_protected_environment()
+            parser.error(str(exc))
+    elif args.run:
         run_ref = str(args.run)
         exact_checkpoint = (
             public_checkpoint_manifest(run_ref)
@@ -166,8 +222,11 @@ def main(argv: list[str] | None = None) -> int:
         initial_source=initial_source,
     )
     try:
+        if args.recording:
+            host.import_trajectory(str(args.recording.expanduser().resolve()))
         return run_web_player_application(host, args, catalog=catalog, repo_root=repo_root)
     finally:
+        host.stop()
         if catalog_authority is not None:
             catalog_authority.close()
 

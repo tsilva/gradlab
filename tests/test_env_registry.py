@@ -15,6 +15,7 @@ from gradlab.env_registry import (
     resolve_env_id,
     resolve_native_episode_horizon,
     resolve_env_provider,
+    supports_evaluation_video,
 )
 
 
@@ -29,6 +30,11 @@ def test_environment_spec_owns_identity_defaults_task_and_eval_semantics() -> No
     assert stable.default_state == "Level1-1"
     assert stable.default_obs_crop == (32, 0, 0, 0)
     assert stable.eval_semantics.completion_reason == "level_change"
+
+
+def test_checkpoint_video_capability_is_registered_per_environment() -> None:
+    assert supports_evaluation_video("env-stableretro-turbo", "SuperMarioBros-Nes-v0")
+    assert not supports_evaluation_video("gradlab", "Bandit-v0")
 
 
 def test_resolves_registered_stable_retro_turbo_env_id() -> None:
@@ -68,7 +74,7 @@ def test_resolves_registered_stable_retro_turbo_atari_env_ids() -> None:
         assert env_supports_states("env-stableretro-turbo", game)
 
 
-def test_resolves_registered_breakout_turbo_env_id() -> None:
+def test_resolves_registered_breakout_turbo_native_env_id() -> None:
     env_id = "env-breakoutatari2600-turbo-native:Breakout-Atari2600-v0"
 
     resolved = resolve_env_id(env_id)
@@ -77,7 +83,7 @@ def test_resolves_registered_breakout_turbo_env_id() -> None:
     assert resolved.qualified_id == env_id
     assert resolved.provider_id == "env-breakoutatari2600-turbo-native"
     assert resolved.provider_env_id == "Breakout-Atari2600-v0"
-    assert resolved.import_name == "breakout_turbo_env"
+    assert resolved.import_name == "env_breakoutatari2600_turbo_native"
     assert env_supports_states("env-breakoutatari2600-turbo-native", "Breakout-Atari2600-v0")
 
     with pytest.raises(ValueError, match="does not register environment"):
@@ -269,7 +275,6 @@ def test_gymnasium_provider_registers_only_certified_discrete_environments() -> 
         "FrozenLake-v1",
         "FrozenLake8x8-v1",
         "CliffWalking-v1",
-        "CliffWalkingSlippery-v1",
         "Taxi-v3",
         "Blackjack-v1",
     )

@@ -8,7 +8,8 @@ from unittest import mock
 
 import gymnasium as gym
 import numpy as np
-import stable_retro as retro
+import env_stableretro_turbo as retro
+from env_breakoutatari2600_turbo_native import FIXED_POINT_ONE, POLICY_INFO_KEYS, RAW_WIDTH
 
 from gradlab.action_contract import MARIO_ACTION_TABLES
 from gradlab.env import EnvConfig, _bound_task_kernel, make_vec_envs
@@ -456,7 +457,154 @@ class BreakoutTurboProviderTests(unittest.TestCase):
 
     def test_runtime_matches_turbo_api_v2_release(self) -> None:
         installed = Version(importlib.metadata.version("env-breakoutatari2600-turbo-native"))
-        self.assertEqual(installed, Version("0.5.7"))
+        self.assertEqual(installed, Version("0.5.15"))
+
+    def test_string_all_info_filter_selects_every_configured_task_signal(self) -> None:
+        task = self.config().task
+        task["signals"].update(
+            {
+                "bricks_destroyed": "bricks_destroyed",
+                "bricks_destroyed_normalized": "bricks_destroyed_normalized",
+            }
+        )
+        config = self.config(task=task)
+
+        kwargs = provider_native_vec_kwargs(
+            config,
+            n_envs=2,
+            native_obs_crop=lambda value: value.obs_crop,
+            state_weight_mapping=lambda _config: {},
+        )
+
+        self.assertEqual(kwargs["info_filter"]["mode"], "all")
+        self.assertEqual(
+            kwargs["info_filter"]["keys"],
+            (
+                "bricks_remaining",
+                "lives",
+                "bricks_destroyed",
+                "bricks_destroyed_normalized",
+            ),
+        )
+
+    def test_explicit_info_filter_keeps_existing_keys_and_adds_task_signals(self) -> None:
+        config = self.config(
+            env_args={
+                **self.config().env_args,
+                "info_filter": {"mode": "all", "keys": ["ball_x"]},
+            }
+        )
+
+        kwargs = provider_native_vec_kwargs(
+            config,
+            n_envs=2,
+            native_obs_crop=lambda value: value.obs_crop,
+            state_weight_mapping=lambda _config: {},
+        )
+
+        self.assertEqual(
+            kwargs["info_filter"]["keys"],
+            ("ball_x", "bricks_remaining", "lives"),
+        )
+
+    def test_policy_info_keys_expose_typed_normalized_state_on_every_boundary(self) -> None:
+        raw_keys = (
+            "ball_x",
+            "ball_y",
+            "ball_vx",
+            "ball_vy",
+            "paddle_x",
+            "bricks_destroyed",
+        )
+        normalized_keys = tuple(f"{key}_normalized" for key in raw_keys)
+        self.assertTrue(set(raw_keys + normalized_keys).issubset(POLICY_INFO_KEYS))
+
+        config = self.config(
+            env_args={
+                **self.config().env_args,
+                "info_filter": {"mode": "all", "keys": list(raw_keys + normalized_keys)},
+                "use_restricted_actions": BREAKOUT_NO_NOOP_ACTIONS,
+            },
+            task={
+                "id": "identity",
+                "action": {"set": "native"},
+                "signals": {key: key for key in raw_keys + normalized_keys},
+                "events": {},
+                "termination": {},
+                "reward": {"reward_mode": "native"},
+            },
+        )
+        kwargs = provider_native_vec_kwargs(
+            config,
+            n_envs=2,
+            native_obs_crop=lambda value: value.obs_crop,
+            state_weight_mapping=lambda _config: {},
+        )
+        env = make_provider_vec_env(config, native_kwargs=kwargs)
+        try:
+            descriptor = provider_descriptor(
+                config,
+                env,
+                state_weight_mapping=lambda _config: {},
+            )
+            expected_ranges = {
+                "ball_x_normalized": (0.0, 1.0),
+                "ball_y_normalized": (0.0, 1.0),
+                "ball_vx_normalized": (-1.0, 1.0),
+                "ball_vy_normalized": (-1.0, 1.0),
+                "paddle_x_normalized": (0.0, 1.0),
+                "bricks_destroyed_normalized": (0.0, 1.0),
+            }
+            for key in normalized_keys:
+                with self.subTest(key=key):
+                    spec = descriptor.signal_schema[key]
+                    self.assertEqual(spec.dtype, np.dtype(np.float32))
+                    self.assertTrue(spec.available_on_reset)
+                    self.assertTrue(spec.available_on_step)
+                    self.assertEqual(env.signal_metadata[key]["units"], "ratio")
+                    self.assertEqual(
+                        env.signal_metadata[key]["nominal_range"],
+                        expected_ranges[key],
+                    )
+                    self.assertIn("not clipped", env.signal_metadata[key]["normalization"])
+
+            _observations, reset_infos = env.reset(seed=[1, 2])
+            _observations, _rewards, _terminated, _truncated, step_infos = env.step(
+                np.zeros(2, dtype=np.int64)
+            )
+            for infos in (reset_infos, step_infos):
+                for key in normalized_keys:
+                    with self.subTest(boundary="reset" if infos is reset_infos else "step", key=key):
+                        self.assertEqual(infos[key].dtype, np.float32)
+                        self.assertEqual(infos[f"_{key}"].dtype, np.bool_)
+                        self.assertTrue(infos[f"_{key}"].all())
+
+            np.testing.assert_allclose(
+                reset_infos["ball_x_normalized"],
+                reset_infos["ball_x"] / (RAW_WIDTH * FIXED_POINT_ONE),
+            )
+            np.testing.assert_allclose(
+                reset_infos["ball_y_normalized"],
+                reset_infos["ball_y"] / 255,
+            )
+            np.testing.assert_allclose(
+                reset_infos["ball_vx_normalized"],
+                reset_infos["ball_vx"] / (2 * FIXED_POINT_ONE),
+            )
+            np.testing.assert_allclose(
+                reset_infos["ball_vy_normalized"],
+                reset_infos["ball_vy"] / (27 * FIXED_POINT_ONE / 8),
+            )
+            np.testing.assert_allclose(
+                reset_infos["paddle_x_normalized"],
+                reset_infos["paddle_x"] / (RAW_WIDTH * FIXED_POINT_ONE),
+            )
+            np.testing.assert_allclose(
+                reset_infos["bricks_destroyed_normalized"],
+                reset_infos["bricks_destroyed"] / 216,
+            )
+        finally:
+            env.close()
 
     def test_player_boundary_renders_canonical_stella_rgb(self) -> None:
         env = make_vec_envs(self.config(), 1, 17)
@@ -699,8 +847,8 @@ class MarioNativeProviderTests(unittest.TestCase):
 
     def test_runtime_matches_turbo_api_v2_releases(self) -> None:
         installed = Version(importlib.metadata.version("env-supermariobrosnes-turbo-emu"))
-        self.assertEqual(installed, Version("0.7.0"))
-        self.assertEqual(Version(retro.__version__), Version("1.0.1.post44"))
+        self.assertEqual(installed, Version("0.7.3"))
+        self.assertEqual(Version(retro.__version__), Version("1.0.1.post48"))
         env_type = super_mario_bros_nes_turbo_vec_env_type()
         self.assertIs(env_type.supports_live_snapshots, True)
         self.assertTrue(callable(getattr(env_type, "capture_snapshots", None)))
@@ -1469,7 +1617,7 @@ class VizdoomTurboProviderTests(unittest.TestCase):
             },
         )
         with (
-            mock.patch("vizdoom_turbo.VizdoomTurboVecEnv", InvalidVizdoomEnv),
+            mock.patch("env_vizdoom_turbo.EnvViZDoomTurboVecEnv", InvalidVizdoomEnv),
             mock.patch(
                 "gradlab.env_providers.validate_turbo_vector_env",
                 side_effect=RuntimeError("strict contract mismatch"),

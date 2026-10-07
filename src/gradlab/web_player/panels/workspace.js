@@ -1,11 +1,10 @@
 import {
   BUILTIN_PANEL_PRESETS,
   PANEL_TYPES,
-  WORKSPACE_PRESETS,
   defaultPanelInstances,
 } from "./catalog.js";
 
-export const WORKSPACE_VERSION = 7;
+export const WORKSPACE_VERSION = 8;
 export const CUSTOM_PANEL_ID = /^panel-[0-9a-f]{8}-[0-9a-f-]{27}$/;
 const BLOCK_KINDS = new Set([
   "stats",
@@ -14,7 +13,12 @@ const BLOCK_KINDS = new Set([
   "distribution",
   "namespace-explorer",
   "reward-breakdown",
+  "reward-table",
 ]);
+const LEGACY_BUILTIN_TITLES = Object.freeze({
+  observation: "Observation",
+  policy: "Policy decision",
+});
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -60,8 +64,8 @@ function normalizeBlock(value) {
     if (!["signal", "reward-component"].includes(namespace)) return null;
     block.namespace = namespace;
     block.metric = cleanMetric(value.metric) || "";
-  } else {
-    block.scope = value.scope === "episode" ? "episode" : "step";
+  } else if (value.kind === "reward-breakdown") {
+    block.scope = value.scope === "step" ? "step" : "episode";
   }
   return block;
 }
@@ -107,9 +111,12 @@ function normalizePanel(id, value, fallback) {
     visible: true,
     window: "main",
   };
+  const requestedTitle = cleanTitle(value.title, fallback?.title || "Telemetry");
   return {
     type: requestedType,
-    title: cleanTitle(value.title, fallback?.title || "Telemetry"),
+    title: builtin && requestedTitle === LEGACY_BUILTIN_TITLES[id]
+      ? fallback.title
+      : requestedTitle,
     enabled: value.enabled === undefined
       ? fallback?.enabled !== false
       : Boolean(value.enabled),
@@ -121,33 +128,66 @@ function normalizePanel(id, value, fallback) {
   };
 }
 
-function normalizedPreset(value, paired = false) {
-  if (paired) return "debug";
-  return Object.hasOwn(WORKSPACE_PRESETS, value) && value !== "custom"
-    ? value
-    : "watch";
+function migratePanelConfig(id, value, version) {
+  if (version !== 7 || id !== "value") return value;
+  const blocks = value?.config?.blocks;
+  if (!Array.isArray(blocks) || blocks.length !== 1) return value;
+  const [block] = blocks;
+  if (
+    block?.kind !== "line"
+    || !Array.isArray(block.metrics)
+    || block.metrics.length !== 2
+    || block.metrics[0] !== "policy/value"
+    || block.metrics[1] !== "policy/realized-return"
+  ) return value;
+  return {
+    ...value,
+    config: {
+      ...value.config,
+      blocks: [{
+        ...block,
+        metrics: [...block.metrics, "policy/value-error"],
+      }],
+    },
+  };
 }
 
-export function createDefaultWorkspace({ paired = false, preset = "watch", writer = "" } = {}) {
-  const selectedPreset = normalizedPreset(preset, paired);
+export function createDefaultWorkspace({ paired = false, writer = "" } = {}) {
   return {
     version: WORKSPACE_VERSION,
     revision: { counter: 0, writer: String(writer) },
-    name: WORKSPACE_PRESETS[selectedPreset].label,
-    preset: selectedPreset,
-    panels: defaultPanelInstances({ paired, preset: selectedPreset }),
+    name: "All panels",
+    preset: "all",
+    panels: defaultPanelInstances({ paired }),
   };
 }
 
 export function normalizeWorkspace(value, { paired = false, writer = "" } = {}) {
   const fallback = createDefaultWorkspace({ paired, writer });
-  if (!value || typeof value !== "object" || value.version !== WORKSPACE_VERSION) {
+  if (
+    !value
+    || typeof value !== "object"
+    || ![7, WORKSPACE_VERSION].includes(value.version)
+  ) {
     return fallback;
   }
   const panels = {};
+  const legacyFixedView = ["watch", "explain", "debug"].includes(value.preset);
   Object.entries(fallback.panels).forEach(([id, panel]) => {
-    panels[id] = normalizePanel(id, value.panels?.[id], panel);
-    if (["reward-analysis", "attribution", "cnn"].includes(id) && value.panels?.[id] === undefined) {
+    const saved = legacyFixedView && id !== "controls"
+      ? { ...value.panels?.[id], placement: panel.placement }
+      : value.panels?.[id];
+    const source = migratePanelConfig(id, saved, value.version);
+    panels[id] = normalizePanel(
+      id,
+      source,
+      panel,
+    );
+    if (
+      !legacyFixedView
+      && ["reward-analysis", "attribution", "cnn"].includes(id)
+      && value.panels?.[id] === undefined
+    ) {
       panels[id].placement.visible = false;
     }
   });
@@ -156,30 +196,26 @@ export function normalizeWorkspace(value, { paired = false, writer = "" } = {}) 
     const normalized = normalizePanel(id, panel, null);
     if (normalized) panels[id] = normalized;
   });
+  if (!legacyFixedView && !value.panels?.["reward-table"] && value.panels?.["step-reward"]) {
+    const chart = panels["step-reward"].placement;
+    const table = panels["reward-table"].placement;
+    Object.assign(table, { x: 0, y: chart.y + chart.h, w: 12,
+      window: chart.window, visible: chart.visible });
+    Object.entries(panels).forEach(([id, panel]) => {
+      if (table.visible && id !== "reward-table" && panel.placement.window === table.window
+          && panel.placement.y >= table.y) panel.placement.y += table.h;
+    });
+  }
   return {
     version: WORKSPACE_VERSION,
     revision: {
       counter: Math.max(0, Number(value.revision?.counter) || 0),
       writer: String(value.revision?.writer || writer).slice(0, 80),
     },
-    name: cleanTitle(value.name, fallback.name).slice(0, 48),
-    preset: Object.hasOwn(WORKSPACE_PRESETS, value.preset)
-      ? value.preset
-      : "custom",
+    name: legacyFixedView ? fallback.name : cleanTitle(value.name, fallback.name).slice(0, 48),
+    preset: "all",
     panels,
   };
-}
-
-export function applyWorkspacePreset(workspace, preset, { paired = false } = {}) {
-  const selectedPreset = normalizedPreset(preset, paired);
-  const placements = defaultPanelInstances({ paired, preset: selectedPreset });
-  Object.entries(workspace.panels || {}).forEach(([id, panel]) => {
-    if (placements[id]) panel.placement = clone(placements[id].placement);
-    else if (panel?.placement) panel.placement.visible = false;
-  });
-  workspace.preset = selectedPreset;
-  workspace.name = WORKSPACE_PRESETS[selectedPreset].label;
-  return workspace;
 }
 
 export function compareWorkspaceRevisions(left, right) {

@@ -8,10 +8,15 @@ tags:
 - "env_id:{{ env_id }}"
 title: Baseline stable-retro Atari Ms. Pac-Man PPO training
 objective:
+  # Clipped training return: 100 net rewarded transitions, not raw Atari score.
+  training_success:
+    metric: train/return/mean
+    operator: '>='
+    threshold: 100
   rank:
-  - max(eval/full/episode/return/shaped/mean)
-  - max(eval/full/episode/return/shaped/max)
-  - min(leader/checkpoint/step)
+  - max(eval/return/mean)
+  - max(eval/return/max)
+  - min(leader/step)
 train:
   checkpoint_freq: 500000
   environment:

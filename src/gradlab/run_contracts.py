@@ -12,7 +12,7 @@ from gradlab.json_utils import canonical_json_sha256 as document_sha256
 
 
 SCHEMA_VERSION = 2
-RUN_MANIFEST_SCHEMA_VERSION = 5
+RUN_MANIFEST_SCHEMA_VERSION = 6
 COORDINATOR_BINDING_SCHEMA_VERSION = 1
 CANCEL_REQUEST_SCHEMA_VERSION = 1
 DSTACK_STOP_DURATION_SECONDS = 10 * 60
@@ -202,6 +202,7 @@ class RunManifest(_CurrentContract):
     storage: Mapping[str, Any]
     goal_variant: Mapping[str, Any] | None = None
     liveness: Mapping[str, Any] | None = None
+    tracking: Mapping[str, Any] | None = None
     schema_version: int = RUN_MANIFEST_SCHEMA_VERSION
 
     def validate(self) -> None:
@@ -216,8 +217,18 @@ class RunManifest(_CurrentContract):
         source_sha = _require_text(self.source_sha, "source_sha")
         if re.fullmatch(r"[0-9a-f]{40}", source_sha) is None:
             raise ValueError("source_sha must be a full lowercase Git SHA")
+        local_process = (
+            isinstance(self.compute, Mapping)
+            and self.compute.get("execution_backend") == "local-process"
+        )
         image = _require_text(self.image_digest, "image_digest")
-        if re.fullmatch(r"docker:[^\s]+@sha256:[0-9a-f]{64}", image) is None:
+        if local_process:
+            runtime = self.compute.get("runtime")
+            if not isinstance(runtime, Mapping) or not runtime.get("packages"):
+                raise ValueError("local-process compute requires recorded runtime packages")
+            if image != f"local:sha256:{document_sha256(runtime)}":
+                raise ValueError("local-process runtime digest mismatch")
+        elif re.fullmatch(r"docker:[^\s]+@sha256:[0-9a-f]{64}", image) is None:
             raise ValueError("image_digest must be a docker: immutable image reference")
         _require_text(self.goal_slug, "goal_slug")
         _require_sha256(self.goal_sha256, "goal_sha256")
@@ -251,6 +262,40 @@ class RunManifest(_CurrentContract):
         ):
             if not isinstance(value, Mapping):
                 raise ValueError(f"{label} must be a mapping")
+        from gradlab.tracking_config import validate_tracking
+
+        selected_tracking = validate_tracking(
+            (
+                {key: self.tracking[key] for key in ("backend", "delivery") if key in self.tracking}
+                if self.tracking is not None
+                else {"backend": "wandb", "delivery": "online"}
+            ),
+            label="run manifest tracking",
+        )
+        if set(selected_tracking) != {"backend", "delivery"}:
+            raise ValueError("run manifest must freeze tracking backend and delivery")
+        if self.tracking is not None:
+            auth_mode = self.tracking.get("auth_mode")
+            if auth_mode is not None and (
+                selected_tracking != {"backend": "mlflow", "delivery": "online"}
+                or auth_mode not in ("basic", "network")
+            ):
+                raise ValueError("run manifest tracking auth_mode is invalid")
+            private_tls_ca = self.tracking.get("private_tls_ca", False)
+            if not isinstance(private_tls_ca, bool) or (
+                private_tls_ca
+                and selected_tracking != {"backend": "mlflow", "delivery": "online"}
+            ):
+                raise ValueError("run manifest tracking private_tls_ca is invalid")
+            sources = self.tracking.get("sources")
+            if not isinstance(sources, Mapping) or set(sources) != {"backend", "delivery"}:
+                raise ValueError("run manifest tracking sources are incomplete")
+            profile = self.tracking.get("operator_profile")
+            if profile is not None and (
+                not isinstance(profile, str)
+                or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", profile) is None
+            ):
+                raise ValueError("run manifest tracking operator_profile is invalid")
         request = self.compute.get("request")
         selected = self.compute.get("selected")
         if not isinstance(request, Mapping) or not isinstance(selected, Mapping):
@@ -263,39 +308,72 @@ class RunManifest(_CurrentContract):
                 "on-demand",
             }:
                 raise ValueError(f"compute.{label}.kind is invalid")
+            if local_process:
+                steps = value.get("max_steps")
+                if (
+                    value.get("kind") != "local"
+                    or isinstance(steps, bool)
+                    or not isinstance(steps, int)
+                    or steps <= 0
+                ):
+                    raise ValueError(
+                        f"local-process compute.{label} requires local kind and positive max_steps"
+                    )
+                continue
             duration = value.get("max_duration_seconds")
             if isinstance(duration, bool) or not isinstance(duration, int) or duration <= 0:
                 raise ValueError(f"compute.{label}.max_duration_seconds must be positive")
-        validate_liveness_policy(
-            self.liveness,
-            max_duration_seconds=int(selected["max_duration_seconds"]),
-        )
-        _require_text(self.compute.get("dstack_task"), "compute.dstack_task")
-        _require_text(
-            self.compute.get("runtime_workflow_run_id"),
-            "compute.runtime_workflow_run_id",
-        )
-        _require_sha256(
-            self.compute.get("runtime_input_sha256"),
-            "compute.runtime_input_sha256",
-        )
-        runtime_build_source_sha = _require_text(
-            self.compute.get("runtime_build_source_sha"),
-            "compute.runtime_build_source_sha",
-        )
-        if re.fullmatch(r"[0-9a-f]{40,64}", runtime_build_source_sha) is None:
-            raise ValueError("compute.runtime_build_source_sha must be a full lowercase Git SHA")
-        if str(self.wandb.get("run_id") or "") != self.run_id:
-            raise ValueError("wandb.run_id must equal run_id")
-        _require_text(self.wandb.get("entity"), "wandb.entity")
-        _require_text(self.wandb.get("project"), "wandb.project")
-        _require_text(self.wandb.get("url"), "wandb.url")
-        for field in ("display_name", "group"):
-            if field in self.wandb:
-                _require_text(self.wandb.get(field), f"wandb.{field}")
+        resume_checkpoint = self.compute.get("resume_checkpoint")
+        if resume_checkpoint is not None:
+            CheckpointManifest.from_dict(resume_checkpoint)
+        if local_process:
+            if self.liveness is not None or self.modal.get("enabled") is not False:
+                raise ValueError(
+                    "local-process runs cannot declare remote liveness or Modal evaluation"
+                )
+        else:
+            validate_liveness_policy(
+                self.liveness,
+                max_duration_seconds=int(selected["max_duration_seconds"]),
+            )
+            _require_text(self.compute.get("dstack_task"), "compute.dstack_task")
+            _require_text(
+                self.compute.get("runtime_workflow_run_id"),
+                "compute.runtime_workflow_run_id",
+            )
+            _require_sha256(
+                self.compute.get("runtime_input_sha256"),
+                "compute.runtime_input_sha256",
+            )
+            runtime_build_source_sha = _require_text(
+                self.compute.get("runtime_build_source_sha"),
+                "compute.runtime_build_source_sha",
+            )
+            if re.fullmatch(r"[0-9a-f]{40,64}", runtime_build_source_sha) is None:
+                raise ValueError(
+                    "compute.runtime_build_source_sha must be a full lowercase Git SHA"
+                )
+        if selected_tracking == {"backend": "wandb", "delivery": "online"}:
+            if str(self.wandb.get("run_id") or "") != self.run_id:
+                raise ValueError("wandb.run_id must equal run_id")
+            _require_text(self.wandb.get("entity"), "wandb.entity")
+            _require_text(self.wandb.get("project"), "wandb.project")
+            _require_text(self.wandb.get("url"), "wandb.url")
+            for field in ("display_name", "group"):
+                if field in self.wandb:
+                    _require_text(self.wandb.get(field), f"wandb.{field}")
+        elif self.wandb:
+            raise ValueError("non-W&B online Runs must not declare a W&B service binding")
         modal_enabled = self.modal.get("enabled")
         if not isinstance(modal_enabled, bool):
             raise ValueError("modal.enabled must be a boolean")
+        evaluation_backend = run_checkpoint_eval_backend(self)
+        if evaluation_backend == "modal" and not modal_enabled:
+            raise ValueError("Modal checkpoint evaluation requires modal.enabled")
+        if evaluation_backend != "modal" and modal_enabled:
+            raise ValueError("modal.enabled requires the Modal checkpoint evaluation backend")
+        if local_process and evaluation_backend != "none":
+            raise ValueError("local-process runs cannot enable checkpoint evaluation")
         if modal_enabled:
             _require_text(self.modal.get("environment_name"), "modal.environment_name")
             _require_text(self.modal.get("app_name"), "modal.app_name")
@@ -328,6 +406,17 @@ class RunManifest(_CurrentContract):
     def to_dict(self) -> dict[str, Any]:
         self.validate()
         return asdict(self)
+
+
+def run_checkpoint_eval_backend(manifest: RunManifest) -> str:
+    """Resolve the frozen backend, including manifests created before this field existed."""
+
+    value = manifest.compute.get("checkpoint_eval_backend")
+    if value is None:
+        return "modal" if manifest.modal.get("enabled") is True else "none"
+    if not isinstance(value, str) or value not in {"modal", "training-container", "none"}:
+        raise ValueError("compute.checkpoint_eval_backend is invalid")
+    return value
 
 
 @dataclass(frozen=True)
@@ -501,6 +590,7 @@ class EvalResult(_CurrentContract):
     evidence_sha256: Sequence[str]
     completed_at: str
     error: str | None = None
+    video: Mapping[str, Any] | None = None
     schema_version: int = SCHEMA_VERSION
 
     def validate(self) -> None:
@@ -519,11 +609,16 @@ class EvalResult(_CurrentContract):
             raise ValueError("accepted evaluation must contain episode results")
         for index, digest in enumerate(self.evidence_sha256):
             _require_sha256(digest, f"evidence_sha256[{index}]")
+        if self.video is not None and not isinstance(self.video, Mapping):
+            raise ValueError("evaluation video must be an object or null")
         _require_text(self.completed_at, "completed_at")
 
     def to_dict(self) -> dict[str, Any]:
         self.validate()
-        return asdict(self)
+        document = asdict(self)
+        if self.video is None:
+            document.pop("video")
+        return document
 
 
 @dataclass(frozen=True)
@@ -632,6 +727,7 @@ class TerminalReceipt(_CurrentContract):
         "canceled",
         "interrupted",
         "resumable_failure",
+        "complete_local",
     ]
     acceptance_required: bool
     stop_reason: str
@@ -642,10 +738,17 @@ class TerminalReceipt(_CurrentContract):
     drain: Mapping[str, Any]
     completed_at: str
     early_stop: Mapping[str, Any] | None = None
+    training_success: Mapping[str, Any] | None = None
     state_archive: Mapping[str, Any] | None = None
+    tracking: Mapping[str, Any] | None = None
+    service_high_water_mark: int | None = None
     schema_version: int = SCHEMA_VERSION
 
     def validate(self) -> None:
+        if self.training_success is not None:
+            from gradlab.training_success import validate_training_success_evidence
+
+            validate_training_success_evidence(self.training_success)
         _require_current_schema(
             self.schema_version,
             expected=SCHEMA_VERSION,
@@ -660,6 +763,7 @@ class TerminalReceipt(_CurrentContract):
             "canceled",
             "interrupted",
             "resumable_failure",
+            "complete_local",
         }:
             raise ValueError(f"invalid terminal state: {self.state}")
         if not isinstance(self.acceptance_required, bool):
@@ -669,6 +773,32 @@ class TerminalReceipt(_CurrentContract):
             raise ValueError("final_step must be non-negative")
         if int(self.wandb_high_water_mark) < 0:
             raise ValueError("wandb_high_water_mark must be non-negative")
+        if self.tracking is not None:
+            from gradlab.tracking_config import validate_tracking
+
+            validate_tracking(
+                {key: self.tracking[key] for key in ("backend", "delivery")},
+                label="terminal tracking",
+            )
+            if self.service_high_water_mark is None or self.service_high_water_mark < 0:
+                raise ValueError("selected service high-water mark must be non-negative")
+            if self.tracking["delivery"] == "local_only":
+                if self.service_high_water_mark != 0 or self.wandb_high_water_mark != 0:
+                    raise ValueError("local-only receipt cannot claim service delivery")
+                if self.state == "succeeded":
+                    raise ValueError("local-only completion must use complete_local state")
+                if self.state == "complete_local" and (
+                    self.drain.get("complete") is not True
+                    or int(self.drain.get("metric_segment_high_water") or 0) < 1
+                ):
+                    raise ValueError("complete_local requires a complete retained journal")
+            elif self.state in {"succeeded", "stopped"}:
+                if int(self.service_high_water_mark) < 1:
+                    raise ValueError("online completion requires service delivery")
+                if int(self.drain.get("metric_segment_high_water") or 0) != int(self.service_high_water_mark):
+                    raise ValueError("journal and service high-water marks do not match")
+                if int(self.drain.get("service_remote_high_water_mark") or 0) < int(self.service_high_water_mark):
+                    raise ValueError("selected service delivery is not remotely visible")
         if not isinstance(self.drain, Mapping):
             raise ValueError("terminal receipt drain must be an object")
         learner_log = self.drain.get("learner_log")
@@ -726,6 +856,13 @@ class TerminalReceipt(_CurrentContract):
             status = str(row.get("status") or "")
             if status not in EVAL_INVENTORY_SETTLED_STATUSES:
                 raise ValueError(f"eval inventory contains unsettled status: {status}")
+            if (
+                isinstance(self.drain, Mapping)
+                and self.drain.get("record_checkpoint_episode") is True
+                and status in {"accepted", "rejected"}
+                and not isinstance(row.get("video"), Mapping)
+            ):
+                raise ValueError("completed checkpoint evaluation lacks its required video")
         if self.state == "canceled":
             drain = self.drain
             if not isinstance(drain, Mapping) or drain.get("complete") is not True:
@@ -774,11 +911,11 @@ class TerminalReceipt(_CurrentContract):
             drain = self.drain
             if not isinstance(drain, Mapping) or drain.get("complete") is not True:
                 raise ValueError("stopped terminal requires a complete drain")
-            if int(self.wandb_high_water_mark) <= 0:
+            if self.tracking is None and int(self.wandb_high_water_mark) <= 0:
                 raise ValueError("stopped terminal requires W&B metric delivery")
-            if int(drain.get("metric_segment_high_water") or 0) != int(self.wandb_high_water_mark):
+            if self.tracking is None and int(drain.get("metric_segment_high_water") or 0) != int(self.wandb_high_water_mark):
                 raise ValueError("stopped terminal R2 and W&B high-water marks do not match")
-            if int(drain.get("wandb_remote_high_water_mark") or 0) < int(
+            if self.tracking is None and int(drain.get("wandb_remote_high_water_mark") or 0) < int(
                 self.wandb_high_water_mark
             ):
                 raise ValueError("stopped terminal W&B delivery is not remotely visible")

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import io
 import inspect
+import io
 import json
 import os
 import tempfile
@@ -13,18 +13,24 @@ from unittest.mock import patch
 from gradlab import experiment_contracts
 from gradlab.config_validation import (
     main as validate_main,
+)
+from gradlab.config_validation import (
     validate_experiment_tree,
 )
-from gradlab.experiment_contracts import validate_goal_contract_document
 from gradlab.env_registry import resolve_env_provider, validate_provider_constructor_args
-from gradlab.env_providers import _stable_retro_packaged_data_path
+from gradlab.experiment_contracts import validate_goal_contract_document
 from gradlab.main import COMMANDS
-from gradlab.recipe_documents import compose_train_document, load_goal_contract
+from gradlab.recipe_documents import (
+    _load_rendered_goal_composition,
+    compose_train_document,
+    load_goal_contract,
+)
 from gradlab.recipe_schema import validate_materialized_train_recipe
+from gradlab.resolved_training import ResolvedTrainConfig
 
 
 class ConfigValidationTests(unittest.TestCase):
-    BREAKOUT_GOAL = Path("experiments/goals/Breakout-Atari2600-v0/_goal.yaml")
+    BREAKOUT_GOAL = Path("experiments/goals/Breakout-Atari2600-v0/FirstWall/_goal.yaml")
     BREAKOUT_RECIPE = BREAKOUT_GOAL.parent / "recipes/ppo.yaml"
     MARIO_L11_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml")
     MARIO_L12_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-2/_goal.yaml")
@@ -33,6 +39,16 @@ class ConfigValidationTests(unittest.TestCase):
     MARIO_SINGLE_RECIPES = MARIO_L11_GOAL.parent / "recipes"
     VIZDOOM_BASIC_GOAL = Path("experiments/goals/VizdoomBasic-v1/_goal.yaml")
     VIZDOOM_BASIC_RECIPE = VIZDOOM_BASIC_GOAL.parent / "recipes/ppo.yaml"
+
+    def test_resolved_execution_choices_preserve_and_isolate_wire_document(self) -> None:
+        document = compose_train_document(self.BREAKOUT_GOAL, self.BREAKOUT_RECIPE)["train_config"]
+        resolved = ResolvedTrainConfig.from_validated(document)
+        self.assertEqual(resolved.to_document(), document)
+        self.assertEqual(dict(resolved), document)
+        resolved.to_document()["env_args"]["test_only"] = True
+        resolved["env_args"]["test_only"] = True
+        document["env_args"]["test_only"] = True
+        self.assertNotIn("test_only", resolved["env_args"])
 
     def test_provider_reward_transforms_are_rejected_in_favor_of_task_reward(self) -> None:
         for key in (
@@ -84,6 +100,44 @@ class ConfigValidationTests(unittest.TestCase):
                 recipe_overrides=("train.environment.task.reward.reward_scale=100",),
             )
 
+    def test_flat_preprocessing_override_is_rejected_before_normalization(self) -> None:
+        with self.assertRaisesRegex(
+            ValueError,
+            r"unsupported flat field\(s\): preprocessing.*"
+            r"train\.environment\.preprocessing\.frame_skip",
+        ):
+            compose_train_document(
+                self.BREAKOUT_GOAL,
+                self.BREAKOUT_RECIPE,
+                recipe_overrides=("train.preprocessing.frame_skip=1",),
+            )
+
+    def test_environment_preprocessing_override_is_resolved_and_recorded(self) -> None:
+        override = "train.environment.preprocessing.frame_skip=1"
+
+        document = compose_train_document(
+            self.BREAKOUT_GOAL,
+            self.BREAKOUT_RECIPE,
+            recipe_overrides=(override,),
+        )
+
+        self.assertEqual(document["train_config"]["frame_skip"], 1)
+        self.assertEqual(document["environment"]["preprocessing"]["frame_skip"], 1)
+        self.assertEqual(document["recipe_overrides"], [override])
+        self.assertEqual(document["effective_recipe_overrides"], [override])
+
+    def test_supported_goal_train_override_remains_available(self) -> None:
+        override = "train.checkpoint_freq=0"
+
+        document = compose_train_document(
+            self.BREAKOUT_GOAL,
+            self.BREAKOUT_RECIPE,
+            recipe_overrides=(override,),
+        )
+
+        self.assertEqual(document["train_config"]["checkpoint_freq"], 0)
+        self.assertEqual(document["recipe_overrides"], [override])
+
     def test_vizdoom_policy_can_select_independent_sb3_feature_extractors(self) -> None:
         document = compose_train_document(
             self.VIZDOOM_BASIC_GOAL,
@@ -108,11 +162,12 @@ class ConfigValidationTests(unittest.TestCase):
 
     def test_explicit_goal_arg_contract_covers_provider_signatures(self) -> None:
         from ale_py.vector_env import AtariVectorEnv
-        from breakout_turbo_env import BreakoutVecEnv
+        from env_breakoutatari2600_turbo_native import BreakoutVecEnv
+        from env_stableretro_turbo import RetroVecEnv
+        from env_supermariobrosnes_turbo_emu import EnvSuperMarioBrosNesTurboEmuVecEnv
+        from env_vizdoom_turbo import EnvViZDoomTurboVecEnv
+
         from gradlab.bandit_env import BanditVectorEnv
-        from stable_retro import RetroVecEnv
-        from supermariobrosnes_turbo import SuperMarioBrosNesTurboVecEnv
-        from vizdoom_turbo import VizdoomTurboVecEnv
         from gradlab.reward_transform import PROVIDER_REWARD_TRANSFORM_KEYS
 
         constructors = {
@@ -120,8 +175,8 @@ class ConfigValidationTests(unittest.TestCase):
             "env-breakoutatari2600-turbo-native": BreakoutVecEnv,
             "gradlab": BanditVectorEnv,
             "env-stableretro-turbo": RetroVecEnv,
-            "env-supermariobrosnes-turbo-emu": SuperMarioBrosNesTurboVecEnv,
-            "env-vizdoom-turbo": VizdoomTurboVecEnv,
+            "env-supermariobrosnes-turbo-emu": EnvSuperMarioBrosNesTurboEmuVecEnv,
+            "env-vizdoom-turbo": EnvViZDoomTurboVecEnv,
         }
         for provider_id, constructor in constructors.items():
             with self.subTest(provider_id=provider_id):
@@ -144,94 +199,24 @@ class ConfigValidationTests(unittest.TestCase):
                 public_signature_args = signature_args - PROVIDER_REWARD_TRANSFORM_KEYS
                 self.assertEqual(covered_args, public_signature_args)
 
-    def test_breakout_goal_hotswaps_provider_without_changing_semantics(self) -> None:
-        document = compose_train_document(
-            self.BREAKOUT_GOAL,
-            self.BREAKOUT_RECIPE,
+    def test_breakout_default_keeps_its_native_contract_when_goal_provider_is_overridden(self) -> None:
+        document = compose_train_document(self.BREAKOUT_GOAL, self.BREAKOUT_RECIPE)
+        overridden = compose_train_document(
+            self.BREAKOUT_GOAL, self.BREAKOUT_RECIPE,
+            env_provider="env-stableretro-turbo",
         )
-
-        train_config = document["train_config"]
-        self.assertEqual(document["recipe_id"], "ppo")
-        self.assertEqual(train_config["timesteps"], 500_000_000)
-        self.assertEqual(train_config["training_backend"]["id"], "sb3.ppo")
-        backend_config = train_config["training_backend"]["config"]
-        self.assertEqual(backend_config["n_steps"], 64)
-        self.assertEqual(backend_config["batch_size"], 256)
-        self.assertEqual(backend_config["n_epochs"], 4)
-        self.assertEqual(backend_config["learning_rate"], 2.5e-4)
-        self.assertEqual(backend_config["learning_rate_final"], 5.0e-5)
-        self.assertEqual(backend_config["learning_rate_schedule_timesteps"], 40_001_536)
-        self.assertEqual(backend_config["ent_coef"], 0.01)
-        self.assertEqual(backend_config["ent_coef_final"], 0.002)
-        self.assertEqual(backend_config["ent_coef_schedule_timesteps"], 40_001_536)
-        self.assertEqual(backend_config["gamma"], 0.99)
-        self.assertEqual(backend_config["gae_lambda"], 0.95)
-        self.assertEqual(backend_config["clip_range"], 0.1)
-        self.assertEqual(backend_config["vf_coef"], 0.5)
-        self.assertIsNone(backend_config.get("target_kl"))
-        self.assertEqual(train_config["env_provider"], "env-breakoutatari2600-turbo-native")
-        self.assertEqual(train_config["game"], "Breakout-Atari2600-v0")
-        self.assertEqual(train_config["state"], "Start")
-        self.assertEqual(train_config["task"]["action"]["set"], "native")
-        self.assertFalse(train_config["max_pool_frames"])
-
-        self.assertEqual(train_config["sticky_action_prob"], 0.0)
-        self.assertEqual(train_config["env_args"]["noop_reset_max"], 30)
-        self.assertEqual(train_config["obs_crop"], [17, 0, 0, 0])
-        self.assertEqual(train_config["obs_crop_mode"], "mask")
-        self.assertEqual(
-            train_config["task"]["signals"],
-            {
-                "ball_vx": "ball_vx",
-                "ball_vy": "ball_vy",
-                "ball_x": "ball_x",
-                "ball_y": "ball_y",
-                "bricks_remaining": "bricks_remaining",
-                "paddle_x": "paddle_x",
-                "score": "score",
-                "walls_cleared": "walls_cleared",
-            },
-        )
-        self.assertEqual(
-            train_config["task"]["events"],
-            {
-                "serve_stall": {
-                    "signal": "ball_y",
-                    "operation": "equals_for",
-                    "value": 0,
-                    "steps": 256,
-                }
-            },
-        )
-        self.assertEqual(
-            train_config["task"]["termination"],
-            {"timeout": ["serve_stall"], "max_episode_steps": 54000},
-        )
-        self.assertEqual(train_config["checkpoint_eval_backend"], "none")
-        self.assertNotIn("stop_on_acceptance", train_config)
-        self.assertIsNone(train_config.get("early_stop"))
+        train = document["train_config"]
+        self.assertEqual(train["env_provider"], "env-breakoutatari2600-turbo-native")
+        for key in ("env_provider", "game", "state", "env_args", "task", "selection_rank"):
+            self.assertEqual(train[key], overridden["train_config"][key])
+        self.assertEqual(train["checkpoint_eval_backend"], "none")
         self.assertNotIn("eval", document["goal"])
         self.assertNotIn("release", document["goal"])
         self.assertEqual(
-            train_config["selection_rank"],
-            [
-                "max(train/episode/return/shaped/origin/target/rolling/mean)",
-                "min(train/global_step)",
-            ],
+            train["task"]["termination"]["success"],
+            [{"event": "wall_cleared", "count": 1}],
         )
-
-        stable_retro = compose_train_document(
-            self.BREAKOUT_GOAL,
-            self.BREAKOUT_RECIPE,
-            env_provider="env-stableretro-turbo",
-        )
-        stable_train = stable_retro["train_config"]
-        self.assertEqual(stable_train["env_provider"], "env-stableretro-turbo")
-        self.assertNotIn("checkpoint_eval_environment", stable_train)
-        for key in ("game", "state", "env_args", "task", "selection_rank"):
-            self.assertEqual(train_config[key], stable_train[key])
-        self.assertEqual(document["goal"]["objective"], stable_retro["goal"]["objective"])
-        self.assertNotIn("eval", stable_retro["goal"])
+        self.assertEqual(train["task"]["termination"]["timeout"], ["serve_stall"])
 
     def test_vizdoom_basic_ppo_recipe_has_evaluated_first_shot_contract(self) -> None:
         document = compose_train_document(
@@ -299,7 +284,7 @@ class ConfigValidationTests(unittest.TestCase):
             document["goal"]["eval"]["acceptance"],
             [
                 {
-                    "metric": "eval/full/outcome/success/starts/rate/min",
+                    "metric": "eval/success/min",
                     "operator": ">=",
                     "threshold": 1.0,
                 }
@@ -417,7 +402,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(
             train_config["early_stop"]["conditions"]["clear_100"],
             {
-                "metric": "train/outcome/success/starts/all/rolling/rate/min",
+                "metric": "train/success/min",
                 "trigger": "threshold",
                 "outcome": "success",
                 "action": "stop",
@@ -452,8 +437,10 @@ class ConfigValidationTests(unittest.TestCase):
                 )
         self.assertEqual(ppo["train_config"]["timesteps"], 50000000)
         self.assertEqual(a2c["train_config"]["timesteps"], 50000000)
-        self.assertEqual(ppo["train_config"]["wandb_mode"], "online")
-        self.assertEqual(a2c["train_config"]["wandb_mode"], "online")
+        self.assertEqual(ppo["train_config"]["tracking"]["backend"], "mlflow")
+        self.assertEqual(ppo["train_config"]["tracking"]["delivery"], "online")
+        self.assertEqual(a2c["train_config"]["tracking"]["backend"], "mlflow")
+        self.assertEqual(a2c["train_config"]["tracking"]["delivery"], "online")
 
     def test_every_actor_critic_recipe_declares_explicit_policy_model(self) -> None:
         recipes = sorted(Path("experiments/goals").glob("**/recipes/*.yaml"))
@@ -480,7 +467,7 @@ class ConfigValidationTests(unittest.TestCase):
                     },
                 )
 
-        self.assertEqual(actor_critic_recipes, 54)
+        self.assertEqual(actor_critic_recipes, 53)
 
     def test_every_mario_recipe_disables_eval_and_stops_at_perfect_clear_window(self) -> None:
         mario_root = Path("experiments/goals/SuperMarioBros-Nes-v0")
@@ -499,7 +486,7 @@ class ConfigValidationTests(unittest.TestCase):
                 self.assertEqual(
                     conditions["clear_100"],
                     {
-                        "metric": "train/outcome/success/starts/all/rolling/rate/min",
+                        "metric": "train/success/min",
                         "trigger": "threshold",
                         "outcome": "success",
                         "action": "stop",
@@ -545,7 +532,7 @@ class ConfigValidationTests(unittest.TestCase):
 
                 self.assertEqual(
                     plateau["metric"],
-                    "train/episode/return/shaped/origin/target/rolling/mean",
+                    "train/return/mean",
                 )
                 self.assertEqual(plateau["trigger"], "no_improvement")
                 self.assertEqual(plateau["direction"], "maximize")
@@ -562,15 +549,28 @@ class ConfigValidationTests(unittest.TestCase):
                 )
                 self.assertEqual(plateau["action"], expected_action)
 
-    def test_every_vizdoom_recipe_uses_one_million_step_checkpoint_cadence(self) -> None:
-        recipes = sorted(Path("experiments/goals").glob("Vizdoom*/recipes/*.yaml"))
+    def test_vizdoom_recipe_checkpoint_plans_match_their_training_budgets(self) -> None:
+        from gradlab.checkpoint_schedule import checkpoint_plan
 
+        recipes = sorted(Path("experiments/goals").glob("Vizdoom*/recipes/*.yaml"))
+        counts = {
+            "VizdoomBasic-v1": 8, "VizdoomBasic-Plus-v1": 8,
+            "VizdoomDeadlyCorridor-v1": 12, "VizdoomHealthGatheringSupreme-v1": 10,
+            "VizdoomPredictPosition-v1": 5,
+        }
         self.assertGreaterEqual(len(recipes), 11)
         for recipe_path in recipes:
             with self.subTest(recipe=recipe_path):
                 goal_path = recipe_path.parent.parent / "_goal.yaml"
                 document = compose_train_document(goal_path, recipe_path)
-                self.assertEqual(document["train_config"]["checkpoint_freq"], 1_000_000)
+                config = document["train_config"]
+                steps, candidates = checkpoint_plan(config)
+                expected = counts.get(goal_path.parent.name, 10)
+                if goal_path.parent.name == "VizdoomDeathmatch-v1":
+                    expected = 12 if recipe_path.name == "gradoom-ppo.yaml" else 19
+                self.assertEqual(len(steps), expected)
+                self.assertLessEqual(candidates, 3)
+                self.assertEqual(steps[-1], config["timesteps"])
 
     def test_removed_provider_lifecycle_args_are_rejected(self) -> None:
         for provider_id in ("env-stableretro-turbo", "env-supermariobrosnes-turbo-emu"):
@@ -589,140 +589,25 @@ class ConfigValidationTests(unittest.TestCase):
                 label="goal",
             )
 
-    def test_checked_in_experiment_tree_validates(self) -> None:
+    def test_checked_in_experiment_tree_has_complete_goal_contracts(self) -> None:
         report = validate_experiment_tree(Path("."))
 
         self.assertEqual(report.issues, ())
         self.assertEqual(report.counts["json_files"], 0)
         self.assertGreaterEqual(report.counts["yaml_files"], 15)
         self.assertGreaterEqual(report.counts["goals"], 1)
-        self.assertEqual(report.counts["train_recipes"], 57)
+        self.assertEqual(report.counts["train_recipes"], 56)
         self.assertGreaterEqual(report.counts["env_configs"], 0)
-        self.assertEqual(report.counts["benchmark_profiles"], 5)
+        self.assertEqual(report.counts["benchmark_profiles"], 4)
         self.assertEqual(report.counts["workspace_manifests"], 1)
-        self.assertEqual(report.counts["workspace_projects"], 26)
+        self.assertEqual(report.counts["workspace_projects"], 25)
 
     def test_recipe_cannot_be_launched_for_a_different_goal(self) -> None:
         with self.assertRaisesRegex(ValueError, "does not belong to goal"):
             compose_train_document(self.MARIO_L11_GOAL, self.BREAKOUT_RECIPE)
 
-    def test_breakout_recipe_loads_with_stable_retro_start_state(self) -> None:
-        document = compose_train_document(
-            self.BREAKOUT_GOAL,
-            self.BREAKOUT_RECIPE,
-            env_provider="env-stableretro-turbo",
-        )
-
-        train_config = document["train_config"]
-        self.assertEqual(train_config["env_provider"], "env-stableretro-turbo")
-        self.assertEqual(train_config["game"], "Breakout-Atari2600-v0")
-        self.assertEqual(train_config["checkpoint_eval_backend"], "none")
-        self.assertNotIn("stop_on_acceptance", train_config)
-        self.assertEqual(
-            train_config["selection_rank"],
-            [
-                "max(train/episode/return/shaped/origin/target/rolling/mean)",
-                "min(train/global_step)",
-            ],
-        )
-        self.assertEqual(
-            train_config["env_args"],
-            {
-                "scenario": "scenario",
-                "info": "data",
-                "use_restricted_actions": "simple",
-                "record": False,
-                "players": 1,
-                "inttype": "stable",
-                "obs_type": "image",
-                "render_mode": "rgb_array",
-                "info_filter": "all",
-                "num_threads": 6,
-                "rom_path": None,
-                "obs_copy": "safe_view",
-                "obs_grayscale": True,
-                "obs_layout": "chw",
-                "frame_stack": 4,
-                "noop_reset_max": 30,
-                "use_fire_reset": False,
-            },
-        )
-        self.assertEqual(train_config["state"], "Start")
-        self.assertNotIn("states", train_config)
-        self.assertEqual(train_config["n_envs"], 128)
-        self.assertNotIn("checkpoint_eval_n_envs", train_config)
-        self.assertNotIn("checkpoint_eval_environment", train_config)
-        self.assertEqual(
-            train_config["task"]["reward"],
-            {
-                "reward_mode": "native",
-                "reward_scale": 1.0,
-                "reward_clip": False,
-            },
-        )
-        self.assertNotIn("env_threads", train_config)
-        self.assertEqual(train_config["frame_skip"], 4)
-        self.assertFalse(train_config["max_pool_frames"])
-        self.assertEqual(train_config["sticky_action_prob"], 0.0)
-        self.assertEqual(train_config["obs_resize"], [84, 84])
-        self.assertNotIn("max_episode_steps", train_config)
-        self.assertEqual(train_config["task"]["termination"]["max_episode_steps"], 54000)
-        self.assertEqual(
-            train_config["task"]["action"],
-            {"set": "native"},
-        )
-        self.assertEqual(
-            train_config["task"]["signals"],
-            {
-                "ball_vx": "ball_vx",
-                "ball_vy": "ball_vy",
-                "ball_x": "ball_x",
-                "ball_y": "ball_y",
-                "bricks_remaining": "bricks_remaining",
-                "paddle_x": "paddle_x",
-                "score": "score",
-                "walls_cleared": "walls_cleared",
-            },
-        )
-
-        info_path = _stable_retro_packaged_data_path(
-            train_config["game"],
-            "data.json",
-        )
-        self.assertEqual(
-            json.loads(info_path.read_text(encoding="utf-8"))["info"]["ball_y"],
-            {"address": 229, "type": "|u1"},
-        )
-        self.assertEqual(
-            train_config["task"]["events"],
-            {
-                "serve_stall": {
-                    "signal": "ball_y",
-                    "operation": "equals_for",
-                    "value": 0,
-                    "steps": 256,
-                }
-            },
-        )
-        self.assertEqual(
-            train_config["task"]["termination"],
-            {"timeout": ["serve_stall"], "max_episode_steps": 54000},
-        )
-        self.assertNotIn("reward_clip", train_config["env_args"])
-        self.assertEqual(train_config["obs_crop"], [17, 0, 0, 0])
-        self.assertEqual(train_config["obs_crop_mode"], "mask")
-        self.assertEqual(train_config["obs_crop_fill"], 0)
-        self.assertEqual(document["environment"]["preprocessing"]["obs_crop"], [17, 0, 0, 0])
-        self.assertNotIn("eval", document["goal"])
-        self.assertEqual(train_config["obs_resize_algorithm"], "area")
-        self.assertEqual(
-            document["environment"]["env_id"],
-            "env-stableretro-turbo:Breakout-Atari2600-v0",
-        )
-        self.assertEqual(document["environment"]["preprocessing"]["frame_skip"], 4)
-
     def test_all_breakout_recipes_use_30_reset_noops(self) -> None:
-        recipe_root = self.BREAKOUT_GOAL.parent
+        recipe_root = self.BREAKOUT_GOAL.parent.parent
         recipes = sorted(recipe_root.glob("**/recipes/*.yaml"))
         self.assertTrue(recipes)
         for recipe in recipes:
@@ -734,11 +619,43 @@ class ConfigValidationTests(unittest.TestCase):
                 str(recipe),
             )
 
-    def test_breakout_archive_curriculum_is_fully_opt_in(self) -> None:
-        recipe = self.BREAKOUT_GOAL.parent / "recipes" / "ppo-archive-curriculum.yaml"
-        document = compose_train_document(self.BREAKOUT_GOAL, recipe)
+    def test_breakout_a2c_is_limited_to_monitoring_validation(self) -> None:
+        recipes = sorted((self.BREAKOUT_GOAL.parent / "recipes").glob("*.yaml"))
+        self.assertTrue(recipes)
+        reference = compose_train_document(self.BREAKOUT_GOAL, self.BREAKOUT_RECIPE)
+        for recipe in recipes:
+            document = compose_train_document(self.BREAKOUT_GOAL, recipe)
+            if recipe.name == "a2c-monitoring-validation.yaml":
+                config = document["train_config"]
+                self.assertEqual(config["training_backend"]["id"], "sb3.a2c")
+                self.assertEqual(config["timesteps"], 1310720)
+                self.assertFalse(config.get("checkpoint_monitoring"))
+                self.assertEqual(document["environment_hash"], reference["environment_hash"])
+                self.assertEqual(config["policy_model"], reference["train_config"]["policy_model"])
+                continue
+            self.assertNotEqual(
+                document["train_config"]["training_backend"]["id"],
+                "sb3.a2c",
+                str(recipe),
+            )
 
-        self.assertEqual(document["recipe_id"], "ppo-archive-curriculum")
+    def test_breakout_archive_curriculum_is_fully_opt_in(self) -> None:
+        archive_config = {
+            "semantic_id": "state-archive-v1",
+            "persistence": "durable",
+            "restore_semantics": "continuation",
+            "recorder": {
+                "mode": "cell_transition",
+                "cell": {"dimensions": [{"signal": "score", "bucket_size": 50}]},
+            },
+            "curriculum": {
+                "archive_share": 0.20, "priority_metric": "value_error", "restore_entries": True,
+            },
+        }
+        document = compose_train_document(
+            self.BREAKOUT_GOAL, self.BREAKOUT_RECIPE,
+            recipe_overrides=["train.state_archive=" + json.dumps(archive_config)],
+        )
         archive = document["train_config"]["state_archive"]
         self.assertEqual(archive["semantic_id"], "state-archive-v1")
         self.assertEqual(archive["persistence"], "durable")
@@ -821,15 +738,20 @@ class ConfigValidationTests(unittest.TestCase):
             {"snapshots": "none"},
         )
 
-    def test_breakout_stable_updates_recipe_adds_late_update_guards(self) -> None:
+    def test_breakout_can_override_linear_schedule_and_update_guards(self) -> None:
         document = compose_train_document(
             self.BREAKOUT_GOAL,
-            self.BREAKOUT_GOAL.parent / "recipes/ppo-stable-updates.yaml",
-            env_provider="env-stableretro-turbo",
+            self.BREAKOUT_RECIPE,
+            recipe_overrides=[
+                "train.backend.config.learning_rate_milestones=null",
+                "train.backend.config.learning_rate_final=2.5e-5",
+                "train.backend.config.learning_rate_schedule_timesteps=100000000",
+                "train.backend.config.target_kl=0.03",
+            ],
         )
 
         train_config = document["train_config"]
-        self.assertEqual(document["recipe_id"], "ppo-stable-updates")
+        self.assertEqual(document["recipe_id"], "ppo")
         backend_config = train_config["training_backend"]["config"]
         self.assertEqual(backend_config["learning_rate"], 2.5e-4)
         self.assertEqual(backend_config["learning_rate_final"], 2.5e-5)
@@ -838,62 +760,20 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertIs(train_config["task"]["reward"]["reward_clip"], False)
         self.assertNotIn("checkpoint_eval_environment", train_config)
 
-    def test_mspacman_recipe_loads_with_breakout_base_config_and_hud_mask(self) -> None:
-        breakout = compose_train_document(
-            self.BREAKOUT_GOAL,
-            self.BREAKOUT_RECIPE,
-        )
-        document = compose_train_document(
-            Path("experiments/goals/alepy__mspacman/_goal.yaml"),
-            Path("experiments/goals/alepy__mspacman/recipes/ppo.yaml"),
-        )
-
-        train_config = document["train_config"]
-        self.assertEqual(train_config["env_provider"], "env-stableretro-turbo")
-        self.assertEqual(train_config["game"], "MsPacman-Atari2600-v0")
-        self.assertEqual(train_config["n_envs"], 16)
-        self.assertEqual(train_config["env_args"]["num_threads"], 4)
-        self.assertEqual(train_config["task"]["reward"]["reward_clip"], [-1.0, 1.0])
-        self.assertIs(train_config["env_args"]["use_fire_reset"], False)
-        self.assertIs(
-            train_config["checkpoint_eval_environment"]["env_args"]["use_fire_reset"],
-            False,
-        )
-        self.assertEqual(train_config["state"], "Start")
-        self.assertNotIn("states", train_config)
-        self.assertEqual(train_config["obs_crop"], [0, 0, 37, 0])
-        self.assertEqual(train_config["obs_crop_mode"], "mask")
-        self.assertEqual(train_config["obs_crop_fill"], 0)
-        self.assertEqual(train_config["task"]["action"], {"set": "native"})
-        self.assertEqual(train_config["task"]["action"], breakout["train_config"]["task"]["action"])
-        self.assertEqual(
-            {key: train_config["task"]["reward"][key] for key in ("reward_mode", "reward_scale")},
-            {
-                key: breakout["train_config"]["task"]["reward"][key]
-                for key in ("reward_mode", "reward_scale")
-            },
-        )
-        self.assertIs(breakout["train_config"]["task"]["reward"]["reward_clip"], False)
-        for key in ("env_threads",):
-            self.assertNotIn(key, train_config)
-        self.assertEqual(train_config["frame_skip"], 4)
-        self.assertTrue(train_config["max_pool_frames"])
-        self.assertEqual(train_config["sticky_action_prob"], 0.25)
-        self.assertEqual(train_config["obs_resize"], [84, 84])
-        self.assertEqual(train_config["task"]["termination"]["max_episode_steps"], 54000)
-        self.assertEqual(train_config["obs_resize_algorithm"], "area")
-        self.assertEqual(
-            document["environment"]["env_id"],
-            "env-stableretro-turbo:MsPacman-Atari2600-v0",
-        )
-        self.assertEqual(document["environment"]["preprocessing"]["frame_skip"], 4)
+    def test_mspacman_recipe_requires_training_success(self) -> None:
+        path = Path("experiments/goals/alepy__mspacman/_goal.yaml").resolve()
+        document = load_goal_contract(path)
+        self.assertEqual(document["objective"]["training_success"]["threshold"], 100)
+        del document["objective"]["training_success"]
+        with self.assertRaisesRegex(ValueError, "objective.training_success is required"):
+            validate_goal_contract_document(document, path, Path.cwd())
 
     def test_goal_validator_rejects_noncurrent_eval_driven_early_stop(self) -> None:
         path = self.MARIO_L11_GOAL.resolve()
         document = load_goal_contract(path)
         document["train"]["early_stop"] = [
             {
-                "metric": "train/outcome/success/starts/all/rolling/rate/min",
+                "metric": "train/success/min",
                 "operator": ">",
                 "threshold": 0.99,
             }
@@ -905,7 +785,7 @@ class ConfigValidationTests(unittest.TestCase):
         path = self.MARIO_L11_GOAL.resolve()
         document = load_goal_contract(path)
         document["train"]["early_stop"]["conditions"]["return_plateau"] = {
-            "metric": "train/episode/return/shaped/origin/target/rolling/mean",
+            "metric": "train/return/mean",
             "trigger": "no_improvement",
             "direction": "maximize",
             "min_delta": 0.01,
@@ -930,7 +810,7 @@ class ConfigValidationTests(unittest.TestCase):
     def test_goal_validator_rejects_rank_forms_the_runtime_cannot_parse(self) -> None:
         with self.assertRaisesRegex(ValueError, "max\\(metric\\) or min\\(metric\\)"):
             experiment_contracts._validate_rank_order(
-                [{"metric": "eval/full/episode/return/shaped/mean", "direction": "maximize"}],
+                [{"metric": "eval/return/mean", "direction": "maximize"}],
                 label="objective.rank",
             )
 
@@ -942,12 +822,13 @@ class ConfigValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown field.*hypotesis"):
             validate_goal_contract_document(document, path, Path(".").resolve())
 
-    def test_goal_validator_requires_explicit_evaluation_mode(self) -> None:
+    def test_goal_validator_defaults_to_evaluated_mode(self) -> None:
         path = self.MARIO_L11_GOAL.resolve()
         document = load_goal_contract(path)
         document.pop("evaluation_mode")
-
-        with self.assertRaisesRegex(ValueError, "evaluation_mode must be one of"):
+        validate_goal_contract_document(document, path, Path(".").resolve())
+        document.pop("eval")
+        with self.assertRaisesRegex(ValueError, "eval"):
             validate_goal_contract_document(document, path, Path(".").resolve())
 
     def test_training_only_goal_rejects_eval_owned_contract_fields(self) -> None:
@@ -957,7 +838,7 @@ class ConfigValidationTests(unittest.TestCase):
         invalid_documents = []
 
         eval_rank = deepcopy(base)
-        eval_rank["objective"]["rank"] = ["max(eval/full/episode/return/shaped/mean)"]
+        eval_rank["objective"]["rank"] = ["max(eval/return/mean)"]
         invalid_documents.append((eval_rank, "may use only training metrics"))
 
         eval_config = deepcopy(base)
@@ -993,13 +874,48 @@ class ConfigValidationTests(unittest.TestCase):
         path = self.MARIO_L11_GOAL.resolve()
         document = load_goal_contract(path)
         document["objective"]["success"] = {
-            "metric": "train/outcome/success/starts/all/rolling/rate/min",
+            "metric": "train/success/min",
             "operator": ">",
             "threshold": 0.99,
         }
 
         with self.assertRaisesRegex(ValueError, "objective has unknown field\\(s\\): success"):
             validate_goal_contract_document(document, path, Path(".").resolve())
+
+    def test_firstwall_declares_training_success_without_stopping(self) -> None:
+        document = load_goal_contract(self.BREAKOUT_GOAL)
+        criterion = document["objective"]["training_success"]
+        self.assertEqual(criterion, {
+            "metric": "train/progress/bricks_destroyed_normalized/mean",
+            "operator": ">=",
+            "threshold": 0.5,
+        })
+        self.assertNotIn("early_stop", document["train"])
+
+    def test_twowalls_declares_full_clear_training_success(self) -> None:
+        goal = self.BREAKOUT_GOAL.parent.parent / "TwoWalls/_goal.yaml"
+        document = load_goal_contract(goal)
+        self.assertEqual(document["objective"]["training_success"], {
+            "metric": "train/progress/bricks_destroyed_normalized/mean",
+            "operator": ">=",
+            "threshold": 1.0,
+        })
+
+    def test_goal_without_success_criterion_cannot_launch(self) -> None:
+        path = self.BREAKOUT_GOAL.resolve()
+        document = load_goal_contract(path)
+        del document["objective"]["training_success"]
+        with self.assertRaisesRegex(ValueError, "objective.training_success is required"):
+            validate_goal_contract_document(document, path, Path(".").resolve())
+
+        composition = _load_rendered_goal_composition(path)
+        del composition.document["objective"]["training_success"]
+        with patch(
+            "gradlab.recipe_documents._load_rendered_goal_composition",
+            return_value=composition,
+        ):
+            with self.assertRaisesRegex(ValueError, "objective.training_success is required"):
+                compose_train_document(self.BREAKOUT_GOAL, self.BREAKOUT_RECIPE)
 
     def test_goal_validator_rejects_environment_hash(self) -> None:
         path = self.MARIO_L11_GOAL.resolve()
@@ -1068,7 +984,7 @@ class ConfigValidationTests(unittest.TestCase):
             document["eval"]["acceptance"],
             [
                 {
-                    "metric": "eval/full/outcome/success/starts/rate/min",
+                    "metric": "eval/success/min",
                     "operator": ">=",
                     "threshold": 1.0,
                 }
@@ -1077,8 +993,8 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(
             document["objective"]["rank"],
             [
-                "min(leader/checkpoint/step)",
-                "max(eval/full/episode/return/shaped/mean)",
+                "min(leader/step)",
+                "max(eval/return/mean)",
             ],
         )
         stalled_event = {"signal": "x", "operation": "unchanged_for", "steps": 300}
@@ -1201,23 +1117,17 @@ class ConfigValidationTests(unittest.TestCase):
     def test_all_smb_and_breakout_recipes_classify_stalls_as_timeouts(self) -> None:
         recipe_roots = (
             self.MARIO_L11_GOAL.parent.parent,
-            self.BREAKOUT_GOAL.parent,
+            self.BREAKOUT_GOAL.parent.parent,
         )
         recipes = sorted(
-            recipe
-            for root in recipe_roots
-            for recipe in root.glob("**/recipes/*.yaml")
+            recipe for root in recipe_roots for recipe in root.glob("**/recipes/*.yaml")
         )
         self.assertTrue(recipes)
 
         for recipe in recipes:
             goal = recipe.parent.parent / "_goal.yaml"
             document = compose_train_document(goal, recipe)
-            event = (
-                "serve_stall"
-                if goal.parent.name == "Breakout-Atari2600-v0"
-                else "stalled"
-            )
+            event = "serve_stall" if "Breakout-Atari2600-v0" in goal.parts else "stalled"
             tasks = [("train", document["train_config"]["task"])]
             evaluation = document["goal"].get("eval")
             if evaluation is not None:
@@ -1233,7 +1143,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertIn("env", COMMANDS)
 
     def test_noncurrent_commands_are_not_registered_on_unified_cli(self) -> None:
-        self.assertTrue({"monitor", "promote", "release"}.isdisjoint(COMMANDS))
+        self.assertTrue({"promote", "release"}.isdisjoint(COMMANDS))
 
     def test_goal_validator_accepts_huggingface_release_target(self) -> None:
         document = load_goal_contract(
@@ -1250,13 +1160,13 @@ class ConfigValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "marker-only"):
             validate_goal_contract_document(document, path, Path(".").resolve())
 
-    def test_validate_cli_success(self) -> None:
-        stdout = io.StringIO()
-        with patch("sys.stdout", stdout):
+    def test_validate_cli_accepts_complete_checked_in_goals(self) -> None:
+        stderr = io.StringIO()
+        with patch("sys.stderr", stderr):
             exit_code = validate_main([])
 
         self.assertEqual(exit_code, 0)
-        self.assertIn("YAML config validation passed", stdout.getvalue())
+        self.assertEqual(stderr.getvalue(), "")
 
     def test_validate_cli_load_goal_emits_composed_json(self) -> None:
         stdout = io.StringIO()

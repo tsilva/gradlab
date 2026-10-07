@@ -8,10 +8,10 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import stable_retro as retro
+import env_stableretro_turbo as retro
 
 from gymnasium.vector import AutoresetMode
-from stable_retro import RetroVecEnv as DEFAULT_RETRO_VEC_ENV
+from env_stableretro_turbo import RetroVecEnv as DEFAULT_RETRO_VEC_ENV
 
 from gradlab.bandit_env import BanditVectorEnv
 from gradlab.action_contract import (
@@ -283,12 +283,12 @@ class _StartInfoAdapter:
 
 def super_mario_bros_nes_turbo_vec_env_type():
     try:
-        from supermariobrosnes_turbo import SuperMarioBrosNesTurboVecEnv
+        from env_supermariobrosnes_turbo_emu import EnvSuperMarioBrosNesTurboEmuVecEnv
     except ImportError as exc:
         raise ImportError(
             "env-supermariobrosnes-turbo-emu provider requires env-supermariobrosnes-turbo-emu",
         ) from exc
-    return SuperMarioBrosNesTurboVecEnv
+    return EnvSuperMarioBrosNesTurboEmuVecEnv
 
 
 def ale_py_atari_vector_env_type():
@@ -303,7 +303,7 @@ def ale_py_atari_vector_env_type():
 
 def breakout_turbo_vec_env_type():
     try:
-        from breakout_turbo_env import BreakoutVecEnv
+        from env_breakoutatari2600_turbo_native import BreakoutVecEnv
     except ImportError as exc:
         raise ImportError(
             "env-breakoutatari2600-turbo-native provider requires env-breakoutatari2600-turbo-native",
@@ -313,12 +313,12 @@ def breakout_turbo_vec_env_type():
 
 def vizdoom_turbo_vec_env_type():
     try:
-        from vizdoom_turbo import VizdoomTurboVecEnv
+        from env_vizdoom_turbo import EnvViZDoomTurboVecEnv
     except ImportError as exc:
         raise ImportError(
             "env-vizdoom-turbo provider requires env-vizdoom-turbo",
         ) from exc
-    return VizdoomTurboVecEnv
+    return EnvViZDoomTurboVecEnv
 
 
 def gradoom_vec_env_type():
@@ -666,6 +666,40 @@ def _breakout_native_vec_kwargs(
         "info_filter": "all",
     }
     defaults.update(native_kwargs)
+    task = config.task if isinstance(getattr(config, "task", None), Mapping) else {}
+    configured_signals = task.get("signals", {}) if isinstance(task, Mapping) else {}
+    required_info_keys: list[str] = []
+    if isinstance(configured_signals, Mapping):
+        for source in configured_signals.values():
+            names = (source,) if isinstance(source, str) else source
+            for name in names:
+                key = str(name)
+                if key not in RUNTIME_BOUNDARY_SIGNALS and key not in required_info_keys:
+                    required_info_keys.append(key)
+    if required_info_keys:
+        configured_filter = defaults.get("info_filter")
+        if isinstance(configured_filter, Mapping):
+            mode = str(configured_filter.get("mode", "all"))
+            if mode != "all":
+                raise ValueError("Breakout task signals require info_filter mode='all'")
+            raw_keys = configured_filter.get("keys", ())
+            if not isinstance(raw_keys, Sequence) or isinstance(raw_keys, str | bytes):
+                raise ValueError("Breakout info_filter.keys must be a sequence")
+            selected_keys = [str(key) for key in raw_keys]
+            filter_config = dict(configured_filter)
+        elif configured_filter is None or str(configured_filter) == "all":
+            selected_keys = []
+            filter_config = {}
+        else:
+            raise ValueError("Breakout task signals require info_filter='all'")
+        for key in required_info_keys:
+            if key not in selected_keys:
+                selected_keys.append(key)
+        defaults["info_filter"] = {
+            **filter_config,
+            "mode": "all",
+            "keys": tuple(selected_keys),
+        }
     defaults["reward_clip"] = False
     return defaults
 

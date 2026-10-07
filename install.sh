@@ -10,6 +10,10 @@ if ! command -v uv >/dev/null 2>&1; then
     echo "uv is required. Install it from https://docs.astral.sh/uv/ first." >&2
     exit 1
 fi
+if ! command -v pnpm >/dev/null 2>&1; then
+    echo "pnpm is required to build the player from this checkout." >&2
+    exit 1
+fi
 
 EXTRA_NAME=""
 if (( $# > 0 )); then
@@ -32,6 +36,9 @@ PACKAGE_TARGET="."
 if [[ -n "$EXTRA_NAME" ]]; then
     PACKAGE_TARGET=".[$EXTRA_NAME]"
 fi
+
+pnpm install --frozen-lockfile
+pnpm build:web
 
 CONSTRAINTS="$(mktemp "${TMPDIR:-/tmp}/gradlab-lock.XXXXXX.txt")"
 trap 'rm -f "$CONSTRAINTS"' EXIT

@@ -35,8 +35,8 @@ from gradlab.checkpoint_acceptance import build_checkpoint_eval_contract
 
 
 MARIO_RANK = [
-    "min(leader/checkpoint/step)",
-    "max(eval/full/episode/return/shaped/mean)",
+    "min(leader/step)",
+    "max(eval/return/mean)",
 ]
 
 
@@ -232,7 +232,7 @@ class EvalMetricTests(unittest.TestCase):
         )
 
         self.assertEqual(
-            training["train/outcome/failure/reason/terminated/rolling/rate"],
+            training["train/unsuccessful/terminated/fraction"],
             1.0,
         )
         self.assertEqual(episode_reasons(result), {"terminated"})
@@ -264,8 +264,42 @@ class EvalMetricTests(unittest.TestCase):
             deterministic=False,
             semantics=semantics,
         )
-        self.assertEqual(summary["eval/full/progress/kills/mean"], 10.0)
-        self.assertEqual(summary["eval/full/progress/kills/max"], 12)
+        self.assertEqual(summary["eval/progress/kills/mean"], 10.0)
+        self.assertEqual(summary["eval/progress/kills/max"], 12)
+
+    def test_breakout_preserves_fractional_brick_progress_and_requires_evidence(self) -> None:
+        semantics = environment_spec(
+            "env-breakoutatari2600-turbo-native",
+            "Breakout-Atari2600-v0",
+        ).eval_semantics
+        record = EpisodeRecord(
+            lane=0,
+            episode_index=0,
+            start_id="Start",
+            episode_return=10.0,
+            episode_length=200,
+            terminated=False,
+            truncated=True,
+            outcome=Outcome.TIMEOUT,
+            events=(),
+            metrics={},
+        )
+
+        with self.assertRaisesRegex(ValueError, "required evaluation progress is missing"):
+            episode_result_from_record(record, semantics=semantics)
+
+        result = episode_result_from_record(
+            record,
+            semantics=semantics,
+            terminal_info={"bricks_destroyed_normalized": 0.5},
+        )
+        summary = summarize_episode_results(
+            [result],
+            deterministic=False,
+            semantics=semantics,
+        )
+        self.assertEqual(result["bricks_destroyed_normalized"], 0.5)
+        self.assertEqual(summary["eval/progress/bricks_destroyed_normalized/max"], 0.5)
 
     def test_model_eval_rejects_deterministic_sampling(self) -> None:
         with self.assertRaisesRegex(ValueError, "deterministic policy evaluation is unsupported"):
@@ -353,10 +387,10 @@ class EvalMetricTests(unittest.TestCase):
 
     def test_checkpoint_score_uses_explicit_v2_rank(self) -> None:
         metrics = {
-            "eval/full/outcome/success/starts/rate/min": 0.80,
-            "eval/full/outcome/success/starts/rate/mean": 0.90,
+            "eval/success/min": 0.80,
+            "eval/success/mean": 0.90,
             "checkpoint_step": 5000000,
-            "eval/full/episode/return/shaped/mean": 1200.0,
+            "eval/return/mean": 1200.0,
         }
 
         self.assertEqual(
@@ -368,7 +402,7 @@ class EvalMetricTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "objective.rank"):
             eval_checkpoint_score({}, ())
         with self.assertRaisesRegex(ValueError, "objective.rank"):
-            eval_checkpoint_score({}, ["max(eval/full/reward/mean)"])
+            eval_checkpoint_score({}, ["max(eval/reward/mean)"])
 
     def test_eval_separates_terminal_level_change_from_clean_completion(self) -> None:
         success = episode_result_from_record(
@@ -408,26 +442,26 @@ class EvalMetricTests(unittest.TestCase):
         )
 
         self.assertFalse(any("/outcome/reason/" in key for key in metrics))
-        self.assertNotIn("eval/full/outcome/success/from/Level1-1/rate", metrics)
-        self.assertEqual(metrics["eval/full/outcome/success/starts/rate/min"], 0.5)
+        self.assertNotIn("eval/outcome/success/from/Level1-1/rate", metrics)
+        self.assertEqual(metrics["eval/success/min"], 0.5)
 
     def test_checkpoint_score_uses_reward_when_completion_is_absent(self) -> None:
         metrics = {
-            "eval/full/episode/return/shaped/mean": 34.0,
-            "eval/full/episode/return/shaped/max": 55.0,
+            "eval/return/mean": 34.0,
+            "eval/return/max": 55.0,
             "checkpoint_step": 5000000,
         }
 
         rank = [
-            "max(eval/full/episode/return/shaped/mean)",
-            "max(eval/full/episode/return/shaped/max)",
-            "min(leader/checkpoint/step)",
+            "max(eval/return/mean)",
+            "max(eval/return/max)",
+            "min(leader/step)",
         ]
         self.assertEqual(eval_checkpoint_score(metrics, rank), (34.0, 55.0, -5000000.0))
 
     def test_checkpoint_score_executes_explicit_goal_rank(self) -> None:
         metrics = {
-            "eval/full/episode/return/shaped/mean": 34.0,
+            "eval/return/mean": 34.0,
             "checkpoint_step": 5000000,
         }
 
@@ -435,8 +469,8 @@ class EvalMetricTests(unittest.TestCase):
             eval_checkpoint_score(
                 metrics,
                 [
-                    "min(leader/checkpoint/step)",
-                    "max(eval/full/episode/return/shaped/mean)",
+                    "min(leader/step)",
+                    "max(eval/return/mean)",
                 ],
             ),
             (-5000000.0, 34.0),
@@ -467,12 +501,12 @@ class EvalMetricTests(unittest.TestCase):
         )
 
         self.assertEqual(summary["return_mean"], 7.0)
-        self.assertNotIn("eval/full/episode/completed/count", summary)
-        self.assertNotIn("eval/full/outcome/reason/terminated/count", summary)
+        self.assertNotIn("eval/episode/completed/count", summary)
+        self.assertNotIn("eval/outcome/reason/terminated/count", summary)
         self.assertFalse(any("/outcome/reason/" in key for key in summary))
-        self.assertNotIn("eval/full/outcome/reason/max_steps/count", summary)
+        self.assertNotIn("eval/outcome/reason/max_steps/count", summary)
         self.assertNotIn("success_count", summary)
-        self.assertNotIn("eval/full/outcome/reason/level_change/count", summary)
+        self.assertNotIn("eval/outcome/reason/level_change/count", summary)
         self.assertNotIn("max_x_mean", summary)
         self.assertNotIn("death_count", summary)
 
@@ -495,9 +529,9 @@ class EvalMetricTests(unittest.TestCase):
             semantics=environment_spec("gymnasium", "CartPole-v1").eval_semantics,
         )
 
-        self.assertNotIn("eval/full/outcome/success/from/Start/rate", summary)
-        self.assertEqual(summary["eval/full/outcome/success/starts/rate/min"], 0.0)
-        self.assertEqual(summary["eval/full/outcome/success/starts/rate/mean"], 0.0)
+        self.assertNotIn("eval/outcome/success/from/Start/rate", summary)
+        self.assertEqual(summary["eval/success/min"], 0.0)
+        self.assertEqual(summary["eval/success/mean"], 0.0)
 
     def test_non_mario_goal_reached_uses_generic_success_outcome(self) -> None:
         summary = summarize_episode_results(
@@ -518,8 +552,8 @@ class EvalMetricTests(unittest.TestCase):
             semantics=environment_spec("gymnasium", "CartPole-v1").eval_semantics,
         )
 
-        self.assertNotIn("eval/full/outcome/success/from/Start/rate", summary)
-        self.assertNotIn("eval/full/outcome/reason/goal_reached/count", summary)
+        self.assertNotIn("eval/outcome/success/from/Start/rate", summary)
+        self.assertNotIn("eval/outcome/reason/goal_reached/count", summary)
 
     def test_canonical_summary_contains_best_return_before_ranking(self) -> None:
         summary = summarize_episode_results(
@@ -546,9 +580,9 @@ class EvalMetricTests(unittest.TestCase):
         )
 
         rank = [
-            "max(eval/full/episode/return/shaped/mean)",
-            "max(eval/full/episode/return/shaped/max)",
-            "min(leader/checkpoint/step)",
+            "max(eval/return/mean)",
+            "max(eval/return/max)",
+            "min(leader/step)",
         ]
         summary["checkpoint_step"] = 123
         self.assertEqual(eval_checkpoint_score(summary, rank), (7.0, 9.0, -123.0))
@@ -579,9 +613,9 @@ class EvalMetricTests(unittest.TestCase):
             semantics=environment_spec("gymnasium", "CartPole-v1").eval_semantics,
         )
 
-        self.assertNotIn("eval/full/outcome/reason/serve_stall/count", summary)
+        self.assertNotIn("eval/outcome/reason/serve_stall/count", summary)
         self.assertFalse(any("/outcome/reason/" in key for key in summary))
-        self.assertNotIn("eval/full/outcome/reason/max_steps/count", summary)
+        self.assertNotIn("eval/outcome/reason/max_steps/count", summary)
         self.assertFalse(any("/from/Start" in name and "/reason/" in name for name in summary))
 
     def test_evaluation_passes_the_exact_task_contract_to_the_runtime(self) -> None:
@@ -632,16 +666,16 @@ class EvalMetricTests(unittest.TestCase):
 
     def test_checkpoint_score_prefers_fewer_timesteps_after_completion_goal(self) -> None:
         slower_higher_reward = {
-            "eval/full/outcome/success/starts/rate/min": 1.0,
-            "eval/full/outcome/success/starts/rate/mean": 1.0,
+            "eval/success/min": 1.0,
+            "eval/success/mean": 1.0,
             "checkpoint_step": 5000000,
-            "eval/full/episode/return/shaped/mean": 1200.0,
+            "eval/return/mean": 1200.0,
         }
         faster_lower_reward = {
-            "eval/full/outcome/success/starts/rate/min": 1.0,
-            "eval/full/outcome/success/starts/rate/mean": 1.0,
+            "eval/success/min": 1.0,
+            "eval/success/mean": 1.0,
             "checkpoint_step": 3500000,
-            "eval/full/episode/return/shaped/mean": 900.0,
+            "eval/return/mean": 900.0,
         }
 
         self.assertGreater(
@@ -786,7 +820,7 @@ class EvalMetricTests(unittest.TestCase):
             seed_protocol=SEED_PROTOCOL,
             acceptance=[
                 {
-                    "metric": "eval/full/outcome/success/starts/rate/min",
+                    "metric": "eval/success/min",
                     "operator": ">=",
                     "threshold": 1.0,
                 }
@@ -842,7 +876,7 @@ class EvalMetricTests(unittest.TestCase):
             seed_protocol=SEED_PROTOCOL,
             acceptance=[
                 {
-                    "metric": "eval/full/episode/return/shaped/mean",
+                    "metric": "eval/return/mean",
                     "operator": ">=",
                     "threshold": 2.0,
                 }
@@ -881,7 +915,7 @@ class EvalMetricTests(unittest.TestCase):
         self.assertIsNone(video_path)
         self.assertEqual(run_episode.call_count, 3)
         self.assertEqual(len(metrics["episode_results"]), 3)
-        self.assertEqual(metrics["eval/full/episode/return/shaped/mean"], 2.0)
+        self.assertEqual(metrics["eval/return/mean"], 2.0)
         self.assertEqual(metrics["acceptance_verdict"], "accepted")
         self.assertEqual(metrics["acceptance_aggregates"]["failure_count"], 1)
 
@@ -1004,12 +1038,12 @@ class EvalMetricTests(unittest.TestCase):
         self.assertEqual(metrics["return_mean"], 3.0)
         self.assertEqual(metrics["success_count"], 1)
         self.assertEqual(metrics["death_count"], 1)
-        self.assertNotIn("eval/full/outcome/reason/level_change/count", metrics)
-        self.assertNotIn("eval/full/outcome/reason/max_steps/count", metrics)
+        self.assertNotIn("eval/outcome/reason/level_change/count", metrics)
+        self.assertNotIn("eval/outcome/reason/max_steps/count", metrics)
         self.assertFalse(any("/outcome/reason/" in key for key in metrics))
         self.assertFalse(any("/outcome/success/from/" in key for key in metrics))
-        self.assertEqual(metrics["eval/full/outcome/success/starts/rate/min"], 0.0)
-        self.assertEqual(metrics["eval/full/outcome/success/starts/rate/mean"], 0.5)
+        self.assertEqual(metrics["eval/success/min"], 0.0)
+        self.assertEqual(metrics["eval/success/mean"], 0.5)
         self.assertEqual(metrics["episode_results"][0]["env_index"], 1)
         self.assertEqual(metrics["episode_results"][0]["seed"], 7)
         self.assertEqual(metrics["episode_results"][0]["seed_protocol"], SEED_PROTOCOL)
@@ -1022,6 +1056,91 @@ class EvalMetricTests(unittest.TestCase):
         self.assertEqual(metrics["episode_results"][1]["seed_episode_ordinal"], 0)
         self.assertEqual(metrics["episode_results"][1]["start_state"], "Level1-1")
         self.assertEqual(metrics["episode_results"][1]["return"], 4.0)
+
+    def test_vector_fail_fast_video_does_not_extend_acceptance_evidence(self) -> None:
+        class FakeModel:
+            def predict(self, obs, deterministic):
+                return np.zeros(obs.shape[0], dtype=np.int64), None
+
+        class Recorder:
+            complete = False
+            runtime = None
+
+        class FakeVecEnv:
+            def __init__(self) -> None:
+                self.step_count = 0
+                self.records = []
+                self.runtime = type("Runtime", (), {"recording": None})()
+
+            def reset(self):
+                return np.zeros((2, 4, 84, 84), dtype=np.uint8)
+
+            def step(self, action):
+                self.step_count += 1
+                lanes = (1,) if self.step_count == 1 else (0, 1)
+                self.records = [
+                    EpisodeRecord(
+                        lane=lane,
+                        episode_index=self.step_count - 1,
+                        start_id="Level1-1",
+                        episode_return=-1.0,
+                        episode_length=self.step_count,
+                        terminated=True,
+                        truncated=False,
+                        outcome=Outcome.FAILURE,
+                        events=("life_loss",),
+                        metrics={"max_x_pos": 20, "died": True},
+                    )
+                    for lane in lanes
+                ]
+                if self.step_count == 2:
+                    self.runtime.recording.complete = True
+                return (
+                    np.zeros((2, 4, 84, 84), dtype=np.uint8),
+                    np.zeros(2, dtype=np.float32),
+                    np.array([0 in lanes, 1 in lanes]),
+                    [{"died": True}, {"died": True}],
+                )
+
+            def drain_records(self):
+                records, self.records = self.records, []
+                return records
+
+            def close(self) -> None:
+                pass
+
+        contract = build_checkpoint_eval_contract(
+            environment={"game": "SuperMarioBros-Nes-v0", "state": "Level1-1"},
+            episodes=2,
+            n_envs=2,
+            watchdog_steps=10,
+            seed=7,
+            seed_protocol=SEED_PROTOCOL,
+            acceptance=[{"metric": "eval/success/min", "operator": ">=", "threshold": 1.0}],
+        )
+        self.assertEqual(contract["evidence_policy"]["fail_fast"], "first_failed_episode")
+        fake_env = FakeVecEnv()
+        recorder = Recorder()
+        with patch("gradlab.eval_runner.make_eval_vec_env", return_value=fake_env):
+            metrics, _ = evaluate_model_episodes(
+                model=FakeModel(),
+                config=EnvConfig(
+                    game="SuperMarioBros-Nes-v0", task=default_task_document("mario")
+                ),
+                episodes=2,
+                seed=7,
+                watchdog_steps=10,
+                deterministic=False,
+                n_envs=2,
+                episode_video_capture=recorder,
+                acceptance_contract=contract,
+            )
+
+        self.assertEqual(fake_env.step_count, 2)
+        self.assertTrue(recorder.complete)
+        self.assertEqual(metrics["acceptance_verdict"], "rejected")
+        self.assertEqual(len(metrics["episode_results"]), 1)
+        self.assertEqual(metrics["episode_results"][0]["seed_lane"], 1)
 
     def test_vector_eval_uses_canonical_episode_records(self) -> None:
         class FakeModel:
@@ -1258,8 +1377,8 @@ class EvalMetricTests(unittest.TestCase):
         self.assertEqual(fake_env.step_count, 2)
         self.assertEqual(metrics["episodes"], 1)
         self.assertEqual(metrics["success_count"], 1)
-        self.assertNotIn("eval/full/outcome/reason/level_change/count", metrics)
-        self.assertNotIn("eval/full/outcome/reason/max_steps/count", metrics)
+        self.assertNotIn("eval/outcome/reason/level_change/count", metrics)
+        self.assertNotIn("eval/outcome/reason/max_steps/count", metrics)
         self.assertEqual(metrics["episode_results"][0]["steps"], 2)
         self.assertEqual(metrics["episode_results"][0]["return"], 3.0)
         self.assertEqual(metrics["episode_results"][0]["max_x_pos"], 250)

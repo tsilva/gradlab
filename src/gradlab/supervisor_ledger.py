@@ -212,6 +212,16 @@ class SupervisorLedger(MetricStore):
             **json.loads(str(row["manifest_json"])),
         }
 
+    def unpublished_checkpoints(self) -> list[dict[str, Any]]:
+        """Find outstanding publication work without N individual ledger reads."""
+        with self.connection() as connection:
+            rows = connection.execute(
+                "SELECT c.* FROM checkpoints c "
+                "LEFT JOIN checkpoint_publications p ON p.checkpoint_ledger_id = c.id "
+                "WHERE p.checkpoint_ledger_id IS NULL ORDER BY c.id"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def checkpoint_publications(self) -> list[dict[str, Any]]:
         with self.connection() as connection:
             rows = connection.execute(

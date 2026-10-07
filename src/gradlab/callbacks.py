@@ -22,8 +22,6 @@ from gradlab.early_stop import (
 from gradlab.env import EnvConfig
 from gradlab.file_utils import atomic_write_json
 from gradlab.metric_names import (
-    canonical_training_scalars,
-    TRAIN_ARTIFACT_SAVE_SECONDS,
     TRAIN_ARCHIVE_ADMISSION_ACCEPTED_COUNT,
     TRAIN_ARCHIVE_ADMISSION_CANDIDATE_COUNT,
     TRAIN_ARCHIVE_CAPTURE_CALL_COUNT,
@@ -38,15 +36,15 @@ from gradlab.metric_names import (
     TRAIN_ARCHIVE_SAMPLING_EFFECTIVE_CELL_COUNT,
     TRAIN_ARCHIVE_SAMPLING_PROBABILITY_MAX,
     TRAIN_ARCHIVE_TRANSITION_SHARE,
-    TRAIN_REWARD_ROOT,
+    TRAIN_ARTIFACT_SAVE_SECONDS,
+    canonical_training_scalars,
     stat_metric,
     train_algorithm_metric,
     train_early_stop_metric,
-    train_reward_component_metric,
-    validate_metric_name,
 )
-from gradlab.policy_execution import compile_policy_execution_contract
 from gradlab.metric_store import MetricStore
+from gradlab.policy_execution import compile_policy_execution_contract
+from gradlab.reward_metrics import RewardStatsAccumulator
 from gradlab.state_archive import state_archive_artifact_summary
 from gradlab.train_config import wandb_publication_enabled
 from gradlab.training_lifecycle import LoggerMetricFrameSink
@@ -387,13 +385,9 @@ class MetricEarlyStopHelper(CallbackHelper):
             values = {
                 train_early_stop_metric(
                     condition_id,
-                    "patience/progress",
+                    "fraction",
                 ): observation.patience_progress,
             }
-            if observation.target_progress is not None:
-                values[train_early_stop_metric(condition_id, "target/progress")] = (
-                    observation.target_progress
-                )
             for name, value in values.items():
                 self.logger.record(name, value)
         if update.stop_decision is None:
@@ -556,17 +550,17 @@ class RolloutDiagnosticsHelper(CallbackHelper):
             getattr(self.model, "action_space", None),
         )
         self._record_stats(
-            train_algorithm_metric(self.algorithm_id, "rollout/value/prediction"),
+            train_algorithm_metric(self.algorithm_id, "rollout_value"),
             value_predictions,
         )
         self._record_stats(
-            train_algorithm_metric(self.algorithm_id, "rollout/advantage"),
+            train_algorithm_metric(self.algorithm_id, "rollout_advantage"),
             advantages,
         )
         if discrete_actions.size > 0:
             _actions, counts = np.unique(discrete_actions, return_counts=True)
             self.logger.record(
-                train_algorithm_metric(self.algorithm_id, "policy/dominant/action/rate"),
+                train_algorithm_metric(self.algorithm_id, "dominant_action_rate"),
                 float(np.max(counts) / discrete_actions.size),
             )
 
@@ -604,6 +598,15 @@ ARCHIVE_CURRICULUM_METRIC_MAP = {
     "capture_seconds": TRAIN_ARCHIVE_CAPTURE_SECONDS,
     "reset_seconds": TRAIN_ARCHIVE_RESTORE_SECONDS,
 }
+
+
+class OccupancyHelper(CallbackHelper):
+    def __init__(self, reporter):
+        super().__init__()
+        self.reporter = reporter
+
+    def _on_rollout_end(self) -> None:
+        self.reporter.flush()
 
 
 class ArchiveCurriculumFeedbackHelper(CallbackHelper):
@@ -688,126 +691,6 @@ class ArchiveCurriculumFeedbackHelper(CallbackHelper):
         self._fragments.clear()
 
 
-class _BufferedStats:
-    """Reusable contiguous storage for one rollout's vector batches."""
-
-    __slots__ = ("buffer", "size")
-
-    def __init__(self) -> None:
-        self.buffer = np.empty(0, dtype=np.float64)
-        self.size = 0
-
-    def reset(self) -> None:
-        self.size = 0
-
-    def update(self, value: Any, *, reserve: int) -> None:
-        values = np.asarray(value).reshape(-1)
-        if values.size == 0:
-            return
-        end = self.size + values.size
-        if end > self.buffer.size:
-            capacity = max(end, reserve, max(64, self.buffer.size * 2))
-            grown = np.empty(capacity, dtype=np.float64)
-            grown[: self.size] = self.buffer[: self.size]
-            self.buffer = grown
-        self.buffer[self.size : end] = values
-        self.size = end
-
-    def flush(self) -> np.ndarray:
-        values = self.buffer[: self.size]
-        values = values[np.isfinite(values)]
-        self.reset()
-        return values
-
-
-class RewardStatsAccumulator:
-    component_info_keys = {
-        "native": "native_reward_component",
-        "cell_novelty": "cell_novelty_reward_component",
-        "progress": "progress_reward_component",
-        "score": "score_reward_component",
-        "completion": "completion_reward_component",
-        "death": "death_penalty_component",
-        "time": "time_penalty_component",
-        "kill": "kill_reward_component",
-        "hit": "hit_reward_component",
-        "damage": "damage_reward_component",
-        "health": "health_reward_component",
-        "armor": "armor_reward_component",
-        "weapon": "weapon_reward_component",
-        "ammo": "ammo_reward_component",
-        "weapon_hold": "weapon_hold_reward_component",
-    }
-
-    def __init__(
-        self,
-        *,
-        active_components: Sequence[str] = (),
-    ) -> None:
-        self.shaped = _BufferedStats()
-        self.raw = _BufferedStats()
-        self.active_components = tuple(
-            component for component in active_components if component in self.component_info_keys
-        )
-        self.components = {component: _BufferedStats() for component in self.active_components}
-
-    def consume(self, metrics: Mapping[str, Any], *, reserve: int) -> None:
-        if (value := metrics.get("shaped_reward")) is not None:
-            self.shaped.update(value, reserve=reserve)
-        if (value := metrics.get("raw_reward")) is not None:
-            self.raw.update(value, reserve=reserve)
-        for component, accumulator in self.components.items():
-            info_key = self.component_info_keys[component]
-            value = metrics.get(info_key)
-            if value is not None:
-                accumulator.update(value, reserve=reserve)
-
-    @staticmethod
-    def _distribution(prefix: str, values: np.ndarray, stats: Sequence[str]) -> dict[str, float]:
-        if values.size == 0:
-            return {}
-        calculations = {
-            "mean": lambda: float(np.mean(values)),
-            "std": lambda: float(np.std(values)),
-            "nonzero_rate": lambda: float(np.mean(values != 0.0)),
-        }
-        return {
-            (
-                validate_metric_name(f"{prefix}/nonzero/rate")
-                if stat == "nonzero_rate"
-                else stat_metric(prefix, stat)
-            ): calculations[stat]()
-            for stat in stats
-        }
-
-    def flush(self) -> dict[str, float]:
-        shaped = self.shaped.flush()
-        raw = self.raw.flush()
-        payload = self._distribution(
-            f"{TRAIN_REWARD_ROOT}/shaped",
-            shaped,
-            ("mean", "std", "nonzero_rate"),
-        )
-        if raw.size > 0 and (shaped.size != raw.size or not np.array_equal(shaped, raw)):
-            payload.update(self._distribution(f"{TRAIN_REWARD_ROOT}/raw", raw, ("mean", "std")))
-        abs_sums: dict[str, float] = {}
-        for component, accumulator in self.components.items():
-            values = accumulator.flush()
-            if values.size == 0:
-                continue
-            payload[train_reward_component_metric(component, "mean")] = float(np.mean(values))
-            payload[train_reward_component_metric(component, "nonzero_rate")] = float(
-                np.mean(values != 0.0)
-            )
-            abs_sums[component] = float(np.sum(np.abs(values)))
-        total_abs_sum = sum(abs_sums.values())
-        for component, abs_sum in abs_sums.items():
-            payload[train_reward_component_metric(component, "share")] = (
-                abs_sum / total_abs_sum if total_abs_sum > 0.0 else 0.0
-            )
-        return payload
-
-
 class RuntimeMetricsHelper(CallbackHelper):
     """Reduce runtime records and publish one scalar payload per rollout."""
 
@@ -820,17 +703,22 @@ class RuntimeMetricsHelper(CallbackHelper):
         progress_fields: Sequence[str] = (),
         track_success: bool = False,
         session: Any | None = None,
+        task: Mapping[str, Any] | None = None,
+        required_metrics: Sequence[str] = (),
     ) -> None:
         super().__init__()
         self.session = session
         self.reward_stats = RewardStatsAccumulator(
             active_components=active_reward_components,
+            task=task,
+            required_metrics=required_metrics,
         )
         self.episode_metrics = EpisodeMetricsReducer(
             event_names=event_names,
             configured_starts=configured_starts,
             progress_fields=progress_fields,
             track_success=track_success,
+            required_metrics=required_metrics,
         )
         self.pending_metrics: dict[str, int | float] = {}
 

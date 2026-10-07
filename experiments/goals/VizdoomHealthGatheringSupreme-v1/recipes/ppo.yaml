@@ -4,6 +4,15 @@ defaults:
 recipe_id: ppo
 description: Training-only pixel PPO for gathering health in {{ goal_id }}.
 train:
+  checkpoint_freq: 2000000
+  checkpoint_candidates:
+    metric: train/return/mean
+    direction: maximize
+    min_delta: 0.05
+    delta_mode: relative
+    start_after_steps: 2000000
+    min_interval_steps: 2000000
+    max_checkpoints: 3
   checkpoint_eval_backend: none
   timesteps: 20000000
   # Fuse health and remaining time through one nonlinear actor-critic trunk.

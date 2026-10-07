@@ -14,10 +14,11 @@ from gradlab.action_contract import (
     runtime_action_contract,
 )
 from gradlab.artifacts import install_model_bundle
-from gradlab.batch_runtime import EpisodeRecord
+from gradlab.batch_runtime import BatchMetricRecord, EpisodeRecord
 from gradlab.env import make_training_batch_runtime, preflight_state_archive_provider
 from gradlab.file_utils import file_sha256
 from gradlab.go_explore import GoExploreSearch
+from gradlab.metric_inventory import active_reward_components, required_metric_names
 from gradlab.metric_names import (
     TRAIN_GO_EXPLORE_ARCHIVE_BLOB_BYTES,
     TRAIN_GO_EXPLORE_ARCHIVE_CELL_COUNT,
@@ -28,8 +29,9 @@ from gradlab.metric_names import (
     TRAIN_GO_EXPLORE_BEST_RETURN,
 )
 from gradlab.policy_bundle import write_canonical_json
+from gradlab.reward_metrics import RewardStatsAccumulator
 from gradlab.state_archive import state_archive_artifact_summary
-from gradlab.training_backend import BackendContext, CHECKPOINT_EVAL_ACCEPTANCE
+from gradlab.training_backend import CHECKPOINT_EVAL_ACCEPTANCE, BackendContext
 from gradlab.training_lifecycle import (
     ProgressField,
     ProgressValueFormat,
@@ -37,7 +39,6 @@ from gradlab.training_lifecycle import (
     TrainingResult,
 )
 from gradlab.training_metrics import DeltaThroughputTracker
-
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "explore_steps": 128,
@@ -48,6 +49,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "success_guided_restore_probability": 0.5,
     "log_interval_steps": 10_000,
     "compaction_interval_steps": 250_000,
+    "improvement_checkpoints": 3,
 }
 _CONFIG_KEYS = frozenset({*DEFAULT_CONFIG, "progress_signal"})
 GO_EXPLORE_PROGRESS_FIELDS = (
@@ -101,6 +103,9 @@ def normalize_config(
     if unexpected:
         raise ValueError(f"{label} has unexpected fields: {unexpected}")
     normalized = {**DEFAULT_CONFIG, **dict(config)}
+    if (type(normalized["improvement_checkpoints"]) is not int
+            or not 0 <= normalized["improvement_checkpoints"] <= 16):
+        raise ValueError(f"{label}.improvement_checkpoints must be an integer between 0 and 16")
     for key in (
         "explore_steps",
         "run_duration_max",
@@ -279,7 +284,9 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
         rom_binding=context.rom_binding,
         state_archive=common_config["state_archive"],
         state_archive_root=context.run_dir / "state-archive",
+        occupancy=common_config.get("occupancy"),
     )
+    occupancy_reporter = None
     try:
         runtime.validate_archive_signal(str(backend_config["progress_signal"]))
         if not isinstance(runtime.action_space, spaces.Discrete):
@@ -324,7 +331,18 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
             step_quantum=n_envs,
             progress_fields=GO_EXPLORE_PROGRESS_FIELDS,
         )
+        if common_config.get("occupancy") is not None:
+            from gradlab.occupancy import OccupancyReporter
+
+            occupancy_reporter = OccupancyReporter(
+                runtime, context, initial_step=search.global_step
+            )
         context.mark_ready()
+        reward_stats = RewardStatsAccumulator(
+            task=config.task,
+            active_components=active_reward_components(config.task),
+            required_metrics=required_metric_names(common_config),
+        )
         throughput = DeltaThroughputTracker(runtime, initial_step=search.global_step)
         log_interval_steps = int(backend_config["log_interval_steps"])
         compaction_interval_steps = int(backend_config["compaction_interval_steps"])
@@ -333,17 +351,20 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
         next_compaction = (
             (search.global_step // compaction_interval_steps) + 1
         ) * compaction_interval_steps
-        next_checkpoint = (
-            ((search.global_step // checkpoint_freq) + 1) * checkpoint_freq
-            if checkpoint_freq > 0
-            else None
-        )
+        from gradlab.checkpoint_schedule import CheckpointSchedule
+
+        checkpoint_schedule = CheckpointSchedule(common_config, initial_step=search.global_step)
+        improvement_count = 0
+        last_improvement_checkpoint = search.global_step
         saved_checkpoint_steps: set[int] = set()
         early_stopped = False
         stopped_on_completion = False
         while search.global_step < budget.execution_total and not context.stop_flag.requested:
             batch = runtime.step(search.next_actions())
             records = runtime.drain_records()
+            for record in records:
+                if isinstance(record, BatchMetricRecord):
+                    reward_stats.consume(record.metrics, reserve=n_envs)
             records_by_lane = {
                 int(record.lane): record for record in records if isinstance(record, EpisodeRecord)
             }
@@ -387,7 +408,11 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
             )
             if np.any(observation.restart_mask) and not stop_for_completion:
                 entry_ids = search.restart(observation.restart_mask)
-                runtime.restore_archive_entries(observation.restart_mask, entry_ids)
+                runtime.restore_archive_entries(
+                    observation.restart_mask, entry_ids, origin="search"
+                )
+            if occupancy_reporter is not None and runtime.occupancy.completed:
+                occupancy_reporter.flush()
             step = search.global_step
             context.session.advance(
                 step,
@@ -402,7 +427,9 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
                 break
             if context.stop_flag.requested:
                 break
-            if improved and step < budget.execution_total:
+            if (improved and step < budget.requested_limit
+                    and improvement_count < backend_config["improvement_checkpoints"]
+                    and step - last_improvement_checkpoint >= max(checkpoint_freq, n_envs)):
                 _save_policy(
                     search,
                     runtime,
@@ -413,6 +440,8 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
                     step=step,
                 )
                 saved_checkpoint_steps.add(step)
+                improvement_count += 1
+                last_improvement_checkpoint = step
             while step >= next_compaction:
                 retained_entry_ids = {cell.entry_id for cell in search.archive.values()}
                 archive_config = common_config.get("state_archive")
@@ -440,11 +469,12 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
                             archive_blob_bytes=archive_blob_bytes,
                         ),
                         **throughput.snapshot(step),
+                        **reward_stats.flush(),
                     },
                 )
                 next_log += log_interval_steps
-            while next_checkpoint is not None and step >= next_checkpoint:
-                if step < budget.execution_total and step not in saved_checkpoint_steps:
+            if checkpoint_schedule.due(step):
+                if step not in saved_checkpoint_steps:
                     _save_policy(
                         search,
                         runtime,
@@ -455,7 +485,6 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
                         step=step,
                     )
                     saved_checkpoint_steps.add(step)
-                next_checkpoint += checkpoint_freq
             if early_stopped:
                 break
         if stopped_on_completion:
@@ -470,10 +499,11 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
                     archive_blob_bytes=archive_blob_bytes,
                 ),
                 **throughput.snapshot(search.global_step),
+                **reward_stats.flush(),
             },
         )
         reason = context.session.terminal_reason(TerminalReason.RESOURCE_EXHAUSTION)
-        if context.session.should_persist_interrupted_checkpoint(reason) and checkpoint_freq > 0:
+        if context.session.should_persist_interrupted_checkpoint(reason) and checkpoint_schedule.enabled:
             _save_policy(
                 search,
                 runtime,
@@ -504,7 +534,11 @@ def run_go_explore(context: BackendContext) -> TrainingResult:
             model_kind=terminal_kind,
         )
     finally:
-        runtime.close()
+        try:
+            if occupancy_reporter is not None:
+                occupancy_reporter.flush(final=True)
+        finally:
+            runtime.close()
 
 
 class GoExploreBackend:

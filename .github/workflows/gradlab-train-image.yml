@@ -7,11 +7,22 @@ on:
         description: Exact pushed Git revision to build; defaults to the selected ref HEAD
         required: false
         type: string
+      protected_modal_apps_json:
+        description: Nonterminal Run evaluator apps that lifecycle cleanup must preserve
+        required: false
+        default: "[]"
+        type: string
+      cleanup_authorized:
+        description: Allow lifecycle-safe retirement of idle GradLab evaluator apps
+        required: false
+        default: false
+        type: boolean
   push:
     branches: [main]
   pull_request:
     paths:
       - .dockerignore
+      - .npmrc
       - .github/workflows/gradlab-train-dependencies.yml
       - .github/workflows/gradlab-train-foundations.yml
       - .github/workflows/gradlab-train-image.yml
@@ -20,6 +31,15 @@ on:
       - ops/dstack/**
       - experiments/modal_eval.yaml
       - experiments/recipes/**
+      - frontend/**
+      - hatch_build.py
+      - package.json
+      - pnpm-lock.yaml
+      - pnpm-workspace.yaml
+      - svelte.config.js
+      - tsconfig.json
+      - vite.config.ts
+      - TRAJECTORIES.md
       - scripts/**
       - src/**
       - pyproject.toml
@@ -94,6 +114,14 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: type=raw,value=runtime-${{ steps.runtime_meta.outputs.runtime_input_sha256 }}
+
+      - name: Build locked player assets
+        if: github.event_name == 'pull_request' || steps.existing_image.outputs.digest == ''
+        run: |
+          npm install --global pnpm@10.33.0 --ignore-scripts --min-release-age=10080
+          pnpm install --frozen-lockfile
+          pnpm check:web
+          pnpm build:web
 
       - name: Build image
         id: build
@@ -288,7 +316,7 @@ jobs:
           path: gradlab-train-image.json
 
   deploy-modal-evaluator:
-    if: github.event_name != 'pull_request'
+    if: github.event_name == 'workflow_dispatch'
     needs: build
     uses: ./.github/workflows/gradlab-modal-eval.yml
     with:
@@ -297,4 +325,6 @@ jobs:
       runtime_input_sha256: ${{ needs.build.outputs.runtime_input_sha256 }}
       runtime_build_source_sha: ${{ needs.build.outputs.runtime_build_source_sha }}
       deploy_required: ${{ needs.build.outputs.deploy_required == 'true' }}
+      protected_modal_apps_json: ${{ inputs.protected_modal_apps_json || '[]' }}
+      cleanup_authorized: ${{ inputs.cleanup_authorized == true }}
     secrets: inherit
