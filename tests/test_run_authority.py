@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 from gradlab.goal_catalog import GOAL_CATALOG_SCHEMA_VERSION
 from gradlab.goal_variants import build_goal_variant_descriptor
@@ -323,7 +324,7 @@ class RunAuthorityTests(unittest.TestCase):
         )
         self.authority.create_attempt_terminal(
             receipt,
-            metrics={"train/global_step": 100.0},
+            metrics={"train/step": 100.0},
         )
         terminal_generation = self.authority.catalog_generation(manifest.goal_slug)
         assert terminal_generation is not None
@@ -331,10 +332,10 @@ class RunAuthorityTests(unittest.TestCase):
         self.assertEqual(updated["state"], "failed")
         self.assertEqual(updated["stop_reason"], "training_cap_without_acceptance")
         self.assertEqual(updated["final_step"], 100)
-        self.assertEqual(updated["metrics"], {"train/global_step": 100.0})
+        self.assertEqual(updated["metrics"], {"train/step": 100.0})
         terminal_run = terminal_generation["terminal_runs"][0]
         self.assertEqual(terminal_run["state"], "failed")
-        self.assertEqual(terminal_run["metrics"], {"train/global_step": 100.0})
+        self.assertEqual(terminal_run["metrics"], {"train/step": 100.0})
 
     def test_same_goal_variant_from_multiple_source_commits_shares_catalog_entry(self) -> None:
         first = self.manifest(new_run_id(), new_attempt_id())
@@ -403,11 +404,13 @@ class RunAuthorityTests(unittest.TestCase):
     ) -> None:
         goal_path = Path("experiments/goals/gradlab__bandit/_goal.yaml")
         recipe_path = goal_path.parent / "recipes/ppo.yaml"
-        resolved = compose_resolved_train_documents(
-            goal_path,
-            recipe_path,
-            source_sha="e" * 40,
-        )
+        # The legacy bandit goal is intentionally nonlaunchable until it has a criterion.
+        with patch("gradlab.recipe_documents.validate_goal_contract_document"):
+            resolved = compose_resolved_train_documents(
+                goal_path,
+                recipe_path,
+                source_sha="e" * 40,
+            )
         recipe = build_recipe_document(
             resolved.effective,
             repo_root=Path.cwd(),
@@ -704,6 +707,43 @@ class RunAuthorityTests(unittest.TestCase):
             source.read_bytes(),
         )
         self.assertRegex(publication["generation_sha256"], r"^[0-9a-f]{64}$")
+
+        # Replaced recovery snapshots do not accumulate remotely. Other artifact
+        # ownership remains outside this Run's recovery prefix.
+        self.authority.models.put_bytes("checkpoint/snapshot", b"checkpoint-owned")
+        source.write_bytes(b"new-provider-state")
+        files[0].update(
+            sha256=hashlib.sha256(source.read_bytes()).hexdigest(), size_bytes=source.stat().st_size
+        )
+        closure = json.loads((archive_root / "closure.json").read_text())
+        closure.update(
+            files=files,
+            step=128,
+            inventory_sha256=hashlib.sha256(
+                json.dumps(files, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest(),
+        )
+        (archive_root / "closure.json").write_text(json.dumps(closure))
+        latest = self.authority.publish_state_archive(
+            run_id=run_id, attempt_id=attempt_id, archive_root=archive_root
+        )
+        lease = self.authority.acquire_lease(
+            run_id=run_id, attempt_id=attempt_id, holder_id="retention-test"
+        )
+        lease = self.authority.prune_state_archive(lease)
+        prefix = f"runs/{run_id}/state-archive"
+        self.assertEqual(len(list(self.authority.control.iter_keys(f"{prefix}/objects"))), 1)
+        self.assertEqual(len(list(self.authority.control.iter_keys(f"{prefix}/generations"))), 1)
+        self.assertEqual(
+            self.authority.models.get_bytes("checkpoint/snapshot"), b"checkpoint-owned"
+        )
+        self.assertEqual(
+            self.authority.restore_state_archive(
+                run_id=run_id, destination=Path(self.temporary.name) / "latest-archive"
+            ),
+            latest,
+        )
+        self.authority.release_lease(lease)
 
     def test_eval_intent_is_deterministic_and_private(self) -> None:
         run_id = new_run_id()

@@ -15,10 +15,16 @@ from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from gradlab.cli_parser import ExactArgumentParser
 from gradlab.clock import parse_utc_datetime
+from gradlab.coordinator_connection import (
+    CoordinatorConnectionError,
+    CoordinatorConnectionReport,
+    close_coordinator_connections,
+    ensure_coordinator_connection,
+)
 from gradlab.dstack_backend import (
     TERMINAL_DSTACK_STATUSES,
     ComputeRequest,
@@ -27,7 +33,7 @@ from gradlab.dstack_backend import (
     TaskRequest,
     DstackTask,
 )
-from gradlab.env_registry import resolve_env_provider
+from gradlab.env_registry import resolve_env_provider, supports_evaluation_video
 from gradlab.file_utils import file_sha256
 from gradlab.goal_variants import (
     GOAL_VARIANT_SCHEMA_VERSION,
@@ -37,8 +43,11 @@ from gradlab.goal_variants import (
 from gradlab.goal_catalog import GOAL_CATALOG_ROOT
 from gradlab.json_utils import canonical_json_text, json_safe
 from gradlab.metric_names import METRICS_SCHEMA_VERSION
+from gradlab.mlflow_access import mlflow_auth_mode, mlflow_service_environment, validate_mlflow_access
+from gradlab.model_sources import public_checkpoint_manifest
 from gradlab.modal_eval_config import load_modal_eval_config
 from gradlab.operator_credentials import (
+    DstackCoordinatorProfile,
     DstackOperatorConfig,
     OperatorConfigurationError,
     OperatorEnvironmentReport,
@@ -68,6 +77,7 @@ from gradlab.run_contracts import (
     default_liveness_policy,
     new_attempt_id,
     new_run_id,
+    run_checkpoint_eval_backend,
     utc_now,
 )
 from gradlab.runtime_refs import (
@@ -78,6 +88,7 @@ from gradlab.runtime_refs import (
     current_git_branch,
     runtime_release_from_args,
 )
+from gradlab.tracking_config import DEFAULT_TRACKING, resolve_tracking
 from gradlab.wandb_utils import (
     canonical_wandb_environment,
     wandb_entity_from_env,
@@ -93,11 +104,12 @@ from gradlab.vizdoom_assets import (
 
 
 DEFAULT_MAX_DURATION_SECONDS = 48 * 60 * 60
+DEFAULT_FOLLOW_TIMEOUT_SECONDS = 12 * 60 * 60
+LAUNCH_FOLLOW_DRAIN_GRACE_SECONDS = 12 * 60 * 60
+DEFAULT_LAUNCH_SEED = 12
 DEFAULT_ROM_MOUNT = "/var/lib/gradlab/rom-cache:/rom-cache"
 QUIESCENCE_SECONDS = 30.0
-COMMON_SECRET_ENV = (
-    "WANDB_API_KEY",
-    "WANDB_ENTITY",
+STORAGE_SECRET_ENV = (
     "GRADLAB_CONTROL_R2_URI",
     "GRADLAB_CONTROL_R2_ENDPOINT_URL",
     "GRADLAB_CONTROL_R2_REGION",
@@ -115,6 +127,41 @@ COMMON_SECRET_ENV = (
     "GRADLAB_MODELS_R2_SECRET_ACCESS_KEY",
     "GRADLAB_MODELS_R2_PUBLIC_BASE_URL",
 )
+WANDB_SERVICE_ENV = ("WANDB_API_KEY", "WANDB_ENTITY")
+MLFLOW_PRIVATE_CA_ENV = "GRADLAB_MLFLOW_TLS_CA_B64"
+
+
+def _preflight_mlflow_compute_route(selected_compute: ComputeRequest) -> str:
+    """Require an operator-declared private fleet route before an MLflow task starts."""
+    profile = str(os.environ.get("MLFLOW_OPERATOR_PROFILE") or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", profile):
+        raise OperatorConfigurationError("MLFLOW_OPERATOR_PROFILE must name one logical profile")
+    fleets = {
+        name.strip()
+        for name in str(os.environ.get("MLFLOW_ALLOWED_FLEETS") or "").split(",")
+        if name.strip()
+    }
+    if not fleets or selected_compute.kind != "local" or selected_compute.target not in fleets:
+        raise OperatorConfigurationError(
+            "selected MLflow service has no approved private route for this compute target"
+        )
+    return profile
+
+
+def _preflight_mlflow_service_uri(uri: str) -> str:
+    parsed = urlparse(str(uri).strip())
+    if (
+        parsed.scheme != "https"
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
+        raise OperatorConfigurationError(
+            "queued MLflow delivery requires a private HTTPS service URI"
+        )
+    return str(uri).strip()
+
+
 OPERATOR_MODAL_ENV = (
     "MODAL_TOKEN_ID",
     "MODAL_TOKEN_SECRET",
@@ -216,11 +263,38 @@ def _storage(root: Path) -> tuple[RunStorageConfig, RunAuthority]:
     return storage, RunAuthority(storage)
 
 
-def _required_operator_environment(checkpoint_eval_backend: str) -> tuple[str, ...]:
+def _required_operator_environment(
+    checkpoint_eval_backend: str,
+    tracking: Mapping[str, Any] | None = None,
+) -> tuple[str, ...]:
+    selected = tracking or DEFAULT_TRACKING
+    service = (
+        WANDB_SERVICE_ENV
+        if selected["backend"] == "wandb"
+        else mlflow_service_environment(selected)
+    ) if selected["delivery"] == "online" else ()
+    private_ca = (
+        (MLFLOW_PRIVATE_CA_ENV,)
+        if selected["backend"] == "mlflow"
+        and selected["delivery"] == "online"
+        and selected.get("private_tls_ca") is True
+        else ()
+    )
     return (
-        *COMMON_SECRET_ENV,
+        *STORAGE_SECRET_ENV,
+        *service,
+        *private_ca,
         *(OPERATOR_MODAL_ENV if str(checkpoint_eval_backend) == "modal" else ()),
     )
+
+
+def _ensure_coordinator_connection(
+    coordinator: DstackCoordinatorProfile,
+) -> CoordinatorConnectionReport:
+    try:
+        return ensure_coordinator_connection(coordinator)
+    except CoordinatorConnectionError as exc:
+        raise OperatorConfigurationError(f"dstack connection failed: {exc}") from exc
 
 
 def _operator_preflight(
@@ -229,6 +303,7 @@ def _operator_preflight(
     checkpoint_eval_backend: str,
     local_target: str | None = None,
     coordinator_id: str | None = None,
+    tracking: Mapping[str, Any] | None = None,
 ) -> tuple[
     RunStorageConfig,
     RunAuthority,
@@ -236,7 +311,11 @@ def _operator_preflight(
     dict[str, Any],
 ]:
     environment_report = _load_environment(root)
-    required = _required_operator_environment(checkpoint_eval_backend)
+    if tracking is None:
+        tracking = resolve_tracking(
+            experiments_root=root / "experiments", goal_sources=(), recipe_sources=(),
+        )
+    required = _required_operator_environment(checkpoint_eval_backend, tracking)
     missing = [name for name in required if not str(os.environ.get(name) or "").strip()]
     if missing:
         raise OperatorConfigurationError(
@@ -251,6 +330,36 @@ def _operator_preflight(
             f"{sorted(truncated)[0]} is visibly truncated; use the exact "
             "machine-readable value, not human-formatted command output"
         )
+    selected_tracking = tracking
+    if selected_tracking["delivery"] == "online":
+        if selected_tracking["backend"] == "mlflow" and os.environ.get(MLFLOW_PRIVATE_CA_ENV):
+            from gradlab.mlflow_tls import validate_private_mlflow_ca_b64
+
+            validate_private_mlflow_ca_b64(os.environ[MLFLOW_PRIVATE_CA_ENV])
+        mlflow_uri = (
+            _preflight_mlflow_service_uri(os.environ["MLFLOW_TRACKING_URI"])
+            if selected_tracking["backend"] == "mlflow"
+            else ""
+        )
+        if selected_tracking["backend"] == "mlflow":
+            validate_mlflow_access(mlflow_uri, selected_tracking)
+        try:
+            if selected_tracking["backend"] == "mlflow":
+                from mlflow.tracking import MlflowClient
+                from gradlab.mlflow_tls import private_mlflow_ca_context
+
+                with private_mlflow_ca_context():
+                    MlflowClient(
+                        tracking_uri=mlflow_uri
+                    ).get_experiment_by_name("gradlab-preflight")
+            else:
+                import wandb
+
+                next(iter(wandb.Api(timeout=10).projects(entity=wandb_entity_from_env(), per_page=1)), None)
+        except Exception as exc:
+            raise OperatorConfigurationError(
+                f"selected {selected_tracking['backend']} service is unreachable or unauthenticated"
+            ) from exc
     try:
         storage = RunStorageConfig.from_env()
     except ValueError as exc:
@@ -271,6 +380,12 @@ def _operator_preflight(
         fleet = dstack_config.fleet()
         selected_coordinator_id = str(coordinator_id or dstack_config.default_coordinator)
     coordinator = dstack_config.coordinator(selected_coordinator_id)
+    if selected_tracking["backend"] == "mlflow" and selected_tracking["delivery"] == "online":
+        _preflight_mlflow_compute_route(ComputeRequest(
+            kind="local", target=fleet.name, max_price=None, max_cost_usd=None,
+            allow_on_demand=False, max_duration_seconds=DEFAULT_MAX_DURATION_SECONDS,
+        ))
+    connection = _ensure_coordinator_connection(coordinator)
     token, token_source = resolve_dstack_token(coordinator)
     dstack_backend = DstackBackend(
         project=coordinator.project,
@@ -313,6 +428,7 @@ def _operator_preflight(
             "server_url": coordinator.server_url,
             "server": "authenticated",
             "token_source": token_source,
+            "connection": connection.as_manifest(),
         },
         "compute": {
             "local_fleet": configured_local_fleet or None,
@@ -320,7 +436,12 @@ def _operator_preflight(
             "resources": local_resources.as_manifest(),
             "resources_source": "operator-config",
         },
-        "wandb": {"entity": wandb_entity_from_env()},
+        "tracking": {
+            **selected_tracking,
+            **({"auth_mode": mlflow_auth_mode(selected_tracking)}
+               if selected_tracking["backend"] == "mlflow" and selected_tracking["delivery"] == "online"
+               else {}),
+        },
         "modal": {
             "credentials": ("resolved" if checkpoint_eval_backend == "modal" else "not-required")
         },
@@ -379,7 +500,7 @@ def _bind_vizdoom_iwad_for_launch(
     env_provider: str,
     rom_path: Path | None,
 ) -> dict[str, Any] | None:
-    if env_provider not in {"gradoom", "vizdoom-turbo"}:
+    if env_provider not in {"env-gradoom-turbo-torch", "env-vizdoom-turbo"}:
         return None
     return required_vizdoom_iwad_binding(rom_path)
 
@@ -476,6 +597,7 @@ def _dstack_backend_for_attempt(
             raise OperatorConfigurationError(
                 "immutable coordinator binding disagrees with configured fleet ownership"
             )
+    _ensure_coordinator_connection(coordinator)
     token, _source = resolve_dstack_token(coordinator)
     return (
         DstackBackend(
@@ -533,14 +655,9 @@ def _task_request(manifest: RunManifest, *, manifest_uri: str) -> TaskRequest:
         resources=DstackResources.from_manifest(manifest.compute.get("resources")),
         plain_env=plain_env,
         secret_env=(
-            *COMMON_SECRET_ENV,
-            *(
-                (
-                    "MODAL_TOKEN_ID",
-                    "MODAL_TOKEN_SECRET",
-                )
-                if bool(manifest.modal["enabled"])
-                else ()
+            *_required_operator_environment(
+                run_checkpoint_eval_backend(manifest),
+                getattr(manifest, "tracking", None),
             ),
         ),
         rom_mount=(
@@ -635,13 +752,104 @@ def _manifest_vizdoom_iwad(modal: Mapping[str, Any]) -> dict[str, Any] | None:
     return validate_vizdoom_iwad_binding(binding)
 
 
+def _goal_path_for_recipe(root: Path, recipe_path: Path) -> Path:
+    goals_root = (root / "experiments" / "goals").resolve()
+    resolved_recipe = recipe_path.resolve()
+    try:
+        relative_recipe = resolved_recipe.relative_to(goals_root)
+    except ValueError as exc:
+        raise ValueError(
+            "launchable recipe must be under experiments/goals/<goal>/recipes/"
+        ) from exc
+    if len(relative_recipe.parts) < 3 or relative_recipe.parts[-2] != "recipes":
+        raise ValueError("launchable recipe must be under experiments/goals/<goal>/recipes/")
+    return resolved_recipe.parent.parent / "_goal.yaml"
+
+
+def _run_description(
+    *,
+    root: Path,
+    goal_path: Path,
+    recipe_path: Path,
+    seed: int,
+    requested: str | None,
+) -> str:
+    explicit = str(requested or "").strip()
+    if explicit:
+        return explicit
+    goal_slug = goal_path.parent.relative_to(root / "experiments" / "goals").as_posix()
+    return f"{goal_slug} {recipe_path.stem} seed {seed}"
+
+
+def _finish_launch_command(
+    *,
+    root: Path,
+    args: argparse.Namespace,
+    output: Mapping[str, Any],
+    human_output: str,
+    follow_timeout: float,
+) -> int:
+    follow = bool(getattr(args, "follow", False))
+    printed_output = {"event": "launch", **output} if args.json and follow else output
+    print(
+        json.dumps(json_safe(printed_output), sort_keys=True) if args.json else human_output,
+        flush=follow,
+    )
+    if not follow:
+        return 0
+    return _follow_run(
+        root,
+        str(output["run_id"]),
+        timeout=follow_timeout,
+        poll_seconds=2.0,
+        json_events=bool(args.json),
+        terminal_exit_status=True,
+    )
+
+
 def cmd_launch(args: argparse.Namespace) -> int:
     root = repository_root()
     source_sha = clean_git_source_sha(root)
     branch = current_git_branch(root)
-    goal_path = _tracked_committed_path(root, args.goal_file, label="goal")
     recipe_path = _tracked_committed_path(root, args.recipe_file, label="recipe")
+    goal_path = _tracked_committed_path(
+        root,
+        _goal_path_for_recipe(root, recipe_path),
+        label="recipe-owned goal",
+    )
+    requested_goal_file = getattr(args, "goal_file", None)
+    if requested_goal_file is not None:
+        requested_goal_path = _tracked_committed_path(
+            root,
+            requested_goal_file,
+            label="goal",
+        )
+        if requested_goal_path != goal_path:
+            raise ValueError(
+                "--goal-file does not match the goal owned by --recipe-file: "
+                f"{goal_path.relative_to(root)}"
+            )
+    seed = int(args.seed)
+    run_description = _run_description(
+        root=root,
+        goal_path=goal_path,
+        recipe_path=recipe_path,
+        seed=seed,
+        requested=args.run_description,
+    )
     recipe_overrides = tuple(str(value) for value in args.recipe_overrides)
+    resume_checkpoint_url = str(getattr(args, "resume_checkpoint", "") or "").strip()
+    resume_checkpoint = (
+        public_checkpoint_manifest(resume_checkpoint_url) if resume_checkpoint_url else None
+    )
+    if resume_checkpoint is not None:
+        expected_manifest_url = (
+            f"{resume_checkpoint.public_url.removesuffix('/model.zip')}/manifest.json"
+        )
+        if resume_checkpoint_url != expected_manifest_url:
+            raise ValueError(
+                "resume checkpoint manifest URL does not match its checkpoint public URL"
+            )
     requested_checkpoint_eval_backend = args.checkpoint_eval_backend
     resolved_documents = compose_resolved_train_documents(
         goal_path,
@@ -665,6 +873,7 @@ def cmd_launch(args: argparse.Namespace) -> int:
         root,
         checkpoint_eval_backend=checkpoint_eval_backend,
         local_target=(args.target if str(args.compute) in {"auto", "local"} else None),
+        tracking=config["tracking"],
     )
     compute = _compute(
         args,
@@ -675,6 +884,16 @@ def cmd_launch(args: argparse.Namespace) -> int:
         compute,
         resources=resources,
     )
+    metrics_profile = (
+        _preflight_mlflow_compute_route(selected_compute)
+        if config["tracking"]["backend"] == "mlflow"
+        and config["tracking"]["delivery"] == "online"
+        else (
+            "wandb-default"
+            if config["tracking"]["backend"] == "wandb"
+            else str(os.environ.get("MLFLOW_OPERATOR_PROFILE") or "mlflow-default").strip()
+        )
+    )
     release = runtime_release_from_args(
         args,
         repo_root=root,
@@ -682,6 +901,12 @@ def cmd_launch(args: argparse.Namespace) -> int:
     )
     if release.source_sha != source_sha:
         raise RuntimeError("runtime release source does not match committed HEAD")
+    from gradlab.monitor_config import validate_monitoring_allocation
+    validate_monitoring_allocation(config.get("checkpoint_monitoring"), source_sha=source_sha,
+        image_digest=release.runtime_image_ref, resources=resources.as_manifest(),
+        duration=selected_compute.bounded_duration_seconds,
+        calibration_campaign=getattr(args, "monitor_calibration_id", None),
+        hardware_allocation={"resources": resources.as_manifest(), "selected": selected_compute.as_manifest(), "offer": selected_offer})
     if vizdoom_iwad is not None:
         vizdoom_iwad = _stage_vizdoom_iwad(authority, vizdoom_iwad)
     asset = (
@@ -705,13 +930,14 @@ def cmd_launch(args: argparse.Namespace) -> int:
         source_sha=source_sha,
         recipe_overrides=recipe_overrides,
     )
-    wandb = _wandb_identity(
-        document,
-        run_id,
-        goal_slug=goal_slug,
-        recipe_slug=recipe_slug,
-        recipe_variant=variant_id,
-        seed=int(args.seed),
+    wandb = (
+        _wandb_identity(
+            document, run_id, goal_slug=goal_slug, recipe_slug=recipe_slug,
+            recipe_variant=variant_id, seed=seed,
+        )
+        if config["tracking"]["backend"] == "wandb"
+        and config["tracking"]["delivery"] == "online"
+        else {}
     )
     modal_app = str(release.modal_app_name or "").strip()
     if checkpoint_eval_backend == "modal" and not modal_app:
@@ -733,8 +959,8 @@ def cmd_launch(args: argparse.Namespace) -> int:
         contract_document,
         repo_root=root,
         source_commit=source_sha,
-        run_description=str(args.run_description),
-        seed=int(args.seed),
+        run_description=run_description,
+        seed=seed,
         runtime_image_ref=release.runtime_image_ref,
         base_materialized_recipe=base_contract_document,
         canonical_goal=resolved_documents.canonical_goal,
@@ -746,6 +972,11 @@ def cmd_launch(args: argparse.Namespace) -> int:
     )
     fault_fixture = str(getattr(args, "supervision_fault_fixture", "") or "").strip()
     manifest_compute = {
+        "checkpoint_eval_backend": checkpoint_eval_backend,
+        "record_checkpoint_episode": (
+            checkpoint_eval_backend != "none"
+            and supports_evaluation_video(env_provider, str(config["game"]))
+        ),
         "request": compute.as_manifest(),
         "selected": selected_compute.as_manifest(),
         "selected_offer": selected_offer,
@@ -761,6 +992,8 @@ def cmd_launch(args: argparse.Namespace) -> int:
         "runtime_build_source_sha": release.runtime_build_source_sha,
         "submission_key": str(args.submission_key or ""),
     }
+    if resume_checkpoint is not None:
+        manifest_compute["resume_checkpoint"] = resume_checkpoint.to_dict()
     liveness = default_liveness_policy()
     if fault_fixture:
         if fault_fixture not in {
@@ -790,10 +1023,23 @@ def cmd_launch(args: argparse.Namespace) -> int:
         recipe_sha256=recipe_sha256,
         recipe_overrides=recipe_overrides,
         environment_sha256=str(document["environment_hash"]).removeprefix("sha256:"),
-        seed=int(args.seed),
-        run_description=str(args.run_description),
+        seed=seed,
+        run_description=run_description,
         compute=manifest_compute,
         wandb=wandb,
+        tracking={
+            **config["tracking"],
+            "operator_profile": metrics_profile,
+            **({"auth_mode": mlflow_auth_mode()}
+               if config["tracking"]["backend"] == "mlflow"
+               and config["tracking"]["delivery"] == "online" else {}),
+            "private_tls_ca": (
+                bool(str(os.environ.get(MLFLOW_PRIVATE_CA_ENV) or "").strip())
+                if config["tracking"]["backend"] == "mlflow"
+                and config["tracking"]["delivery"] == "online"
+                else False
+            ),
+        },
         modal={
             "enabled": checkpoint_eval_backend == "modal",
             "environment_name": modal_config.deployment.environment_name,
@@ -838,31 +1084,74 @@ def cmd_launch(args: argparse.Namespace) -> int:
         "goal_variant_label": goal_variant["label"],
         "recipe_sha256": manifest.recipe_sha256,
         "recipe_overrides": list(recipe_overrides),
-        "seed": int(args.seed),
-        "run_description": str(args.run_description),
+        "seed": seed,
+        "run_description": run_description,
         "submission_key": str(args.submission_key or ""),
+        "resume_checkpoint": (
+            None
+            if resume_checkpoint is None
+            else {
+                "run_id": resume_checkpoint.run_id,
+                "checkpoint_id": resume_checkpoint.checkpoint_id,
+                "step": resume_checkpoint.step,
+                "sha256": resume_checkpoint.sha256,
+                "manifest_url": resume_checkpoint_url,
+            }
+        ),
         "checkpoint_eval_backend": checkpoint_eval_backend,
-        "wandb_url": wandb["url"],
+        "tracking": config["tracking"],
+        "metrics_url": wandb.get("url"),
+        "wandb_url": wandb.get("url"),
         "public_run_index_url": authority.models.public_url(f"runs/{run_id}/index.json"),
     }
-    print(
-        json.dumps(json_safe(output), sort_keys=True)
-        if args.json
-        else (
+    return _finish_launch_command(
+        root=root,
+        args=args,
+        output=output,
+        human_output=(
             f"run={run_id} task={task.name} compute={selected_compute.kind} "
-            f"image={release.runtime_image_ref} wandb={wandb['url']} "
+            f"image={release.runtime_image_ref} "
+            f"tracking={config['tracking']['backend']}/{config['tracking']['delivery']} "
+            f"tracking_sources={config['tracking']['sources']['backend']},"
+            f"{config['tracking']['sources']['delivery']} "
+            f"metrics={wandb.get('url') or 'local-only or pending binding'} "
             f"index={output['public_run_index_url']}"
-        )
+        ),
+        follow_timeout=(
+            float(selected_compute.bounded_duration_seconds) + LAUNCH_FOLLOW_DRAIN_GRACE_SECONDS
+        ),
     )
-    return 0
 
 
 def cmd_operator_preflight(args: argparse.Namespace) -> int:
     root = repository_root()
+    recipe = getattr(args, "recipe_file", None)
+    overrides = tuple(getattr(args, "recipe_overrides", None) or ())
+    if recipe is not None:
+        recipe_path = recipe if recipe.is_absolute() else root / recipe
+        documents = compose_resolved_train_documents(
+            _goal_path_for_recipe(root, recipe_path), recipe_path,
+            recipe_overrides=overrides,
+            prepare_materialized=partial(
+                prepare_checkpoint_eval_mode, checkpoint_eval_backend=args.checkpoint_eval_backend,
+            ),
+            source_sha=_git(root, "rev-parse", "HEAD"),
+        )
+        config = documents.effective["train_config"]
+        tracking = config["tracking"]
+        checkpoint_eval_backend = config["checkpoint_eval_backend"]
+    else:
+        if overrides:
+            raise ValueError("operator-preflight --set requires --recipe-file")
+        tracking = resolve_tracking(
+            experiments_root=root / "experiments", goal_sources=(), recipe_sources=(),
+        )
+        checkpoint_eval_backend = args.checkpoint_eval_backend or "modal"
     _storage_config, _authority, _dstack_backend, report = _operator_preflight(
         root,
-        checkpoint_eval_backend=str(args.checkpoint_eval_backend),
+        checkpoint_eval_backend=str(checkpoint_eval_backend),
         local_target=args.target,
+        tracking=tracking,
     )
     if args.json:
         print(json.dumps(report, sort_keys=True))
@@ -1030,15 +1319,16 @@ def _record_pre_submit_failure(
 ) -> None:
     prefix = f"{authority.run_prefix(manifest.run_id)}/attempts/{manifest.attempt_id}"
     keys = sorted(authority.control.iter_keys(prefix))
-    expected = [f"{prefix}/manifest.json"]
+    expected = [f"{prefix}/coordinator.json", f"{prefix}/manifest.json"]
     if keys != expected:
         raise RuntimeError("not-found dstack task has attempt activity beyond its manifest")
+    authority.coordinator_binding(manifest.run_id, manifest.attempt_id)
     authority.create_attempt_terminal(
         TerminalReceipt(
             run_id=manifest.run_id,
             attempt_id=manifest.attempt_id,
             state="resumable_failure",
-            acceptance_required=bool(manifest.modal["enabled"]),
+            acceptance_required=run_checkpoint_eval_backend(manifest) != "none",
             stop_reason="pre_submit_failure",
             final_step=0,
             checkpoint_inventory=(),
@@ -1079,7 +1369,7 @@ def _record_terminal_task_without_receipt(
         run_id=manifest.run_id,
         attempt_id=manifest.attempt_id,
         state="resumable_failure",
-        acceptance_required=bool(manifest.modal["enabled"]),
+        acceptance_required=run_checkpoint_eval_backend(manifest) != "none",
         stop_reason=stop_reason,
         final_step=int(final_step),
         checkpoint_inventory=tuple(dict(row) for row in checkpoint_inventory),
@@ -1239,25 +1529,66 @@ def _poll_status(
         time.sleep(poll_seconds)
 
 
-def cmd_follow(args: argparse.Namespace) -> int:
-    root = repository_root()
+def _terminal_exit_code(value: Mapping[str, Any]) -> int:
+    attempt_terminal = value.get("attempt_terminal")
+    if not isinstance(attempt_terminal, Mapping):
+        return 1
+    return 0 if str(attempt_terminal.get("state") or "") in {"succeeded", "stopped"} else 1
+
+
+def _follow_run(
+    root: Path,
+    run_id: str,
+    *,
+    timeout: float,
+    poll_seconds: float,
+    json_events: bool = False,
+    terminal_exit_status: bool = False,
+) -> int:
     previous = ""
     for value, timed_out in _poll_status(
         root,
-        args.run_id,
-        timeout=float(args.timeout),
-        poll_seconds=float(args.poll_seconds),
+        run_id,
+        timeout=timeout,
+        poll_seconds=poll_seconds,
     ):
-        encoded = canonical_json_text(json_safe(value), ensure_ascii=True)
         fingerprint = _follow_fingerprint(value)
         if fingerprint != previous:
+            event = (
+                {"event": "terminal" if value["completed"] else "status", **value}
+                if json_events
+                else value
+            )
+            encoded = canonical_json_text(json_safe(event), ensure_ascii=True)
             print(encoded, flush=True)
             previous = fingerprint
         if value["completed"]:
-            return 0
+            return _terminal_exit_code(value) if terminal_exit_status else 0
         if timed_out:
+            if json_events:
+                print(
+                    canonical_json_text(
+                        {
+                            "schema_version": 1,
+                            "event": "follow_timeout",
+                            "run_id": run_id,
+                            "timeout_seconds": timeout,
+                        },
+                        ensure_ascii=True,
+                    ),
+                    flush=True,
+                )
             return 1
     raise AssertionError("status poller ended without completion or timeout")
+
+
+def cmd_follow(args: argparse.Namespace) -> int:
+    return _follow_run(
+        repository_root(),
+        args.run_id,
+        timeout=float(args.timeout),
+        poll_seconds=float(args.poll_seconds),
+    )
 
 
 def cmd_wait(args: argparse.Namespace) -> int:
@@ -1318,6 +1649,11 @@ def _project_reconciled_terminal(
     manifest: RunManifest,
     receipt: TerminalReceipt,
 ) -> None:
+    startup_without_run = (
+        receipt.stop_reason == "supervisor_startup_failure"
+        and receipt.final_step == 0
+        and not receipt.checkpoint_inventory
+    )
     projector = WandbProjector.resume(
         {
             "wandb_run_id": manifest.run_id,
@@ -1328,6 +1664,7 @@ def _project_reconciled_terminal(
             "wandb_group": manifest.wandb.get("group"),
             "metrics_schema_version": METRICS_SCHEMA_VERSION,
         },
+        allow_create=startup_without_run,
         update_finish_state=True,
     )
     try:
@@ -1409,7 +1746,6 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
 
 def cmd_fault_test(args: argparse.Namespace) -> int:
     launch_args = argparse.Namespace(
-        goal_file=Path("experiments/goals/VizdoomBasic-v1/_goal.yaml"),
         recipe_file=Path("experiments/goals/VizdoomBasic-v1/recipes/ppo.yaml"),
         seed=17,
         run_description=(
@@ -1433,6 +1769,7 @@ def cmd_fault_test(args: argparse.Namespace) -> int:
         existing_runtime_only=bool(args.existing_runtime_only),
         runtime_readiness_timeout=args.runtime_readiness_timeout,
         supervision_fault_fixture=str(args.mode),
+        follow=False,
         json=bool(args.json),
     )
     return cmd_launch(launch_args)
@@ -1506,8 +1843,8 @@ def cmd_resume_submit(args: argparse.Namespace) -> int:
     root = repository_root()
     storage, authority = _storage(root)
     manifest = _manifest_only_submission(authority, args.run_id)
-    checkpoint_eval_backend = "modal" if bool(manifest.modal["enabled"]) else "none"
-    required = _required_operator_environment(checkpoint_eval_backend)
+    checkpoint_eval_backend = run_checkpoint_eval_backend(manifest)
+    required = _required_operator_environment(checkpoint_eval_backend, manifest.tracking)
     missing = [name for name in required if not str(os.environ.get(name) or "").strip()]
     if missing:
         raise OperatorConfigurationError(
@@ -1546,7 +1883,9 @@ def cmd_resume_submit(args: argparse.Namespace) -> int:
         "image_digest": manifest.image_digest,
         "runtime_input_sha256": manifest.compute["runtime_input_sha256"],
         "runtime_build_source_sha": manifest.compute["runtime_build_source_sha"],
-        "wandb_url": manifest.wandb["url"],
+        "tracking": manifest.tracking,
+        "metrics_url": manifest.wandb.get("url"),
+        "wandb_url": manifest.wandb.get("url"),
         "public_run_index_url": authority.models.public_url(f"runs/{manifest.run_id}/index.json"),
         "resumed_submission": True,
     }
@@ -1556,7 +1895,11 @@ def cmd_resume_submit(args: argparse.Namespace) -> int:
         else (
             f"run={manifest.run_id} task={task.name} "
             f"compute={manifest.compute['selected']['kind']} "
-            f"image={manifest.image_digest} wandb={manifest.wandb['url']} "
+            f"image={manifest.image_digest} "
+            f"tracking={(manifest.tracking or {}).get('backend', 'wandb')}/"
+            f"{(manifest.tracking or {}).get('delivery', 'online')} "
+            f"tracking_sources={((manifest.tracking or {}).get('sources') or {}).get('backend', 'legacy')},"
+            f"{((manifest.tracking or {}).get('sources') or {}).get('delivery', 'legacy')} "
             f"index={output['public_run_index_url']}"
         )
     )
@@ -1660,7 +2003,7 @@ def cmd_retry(args: argparse.Namespace) -> int:
         compute=compute,
     )
     if bool(getattr(args, "repair_runtime", False)):
-        checkpoint_eval_backend = "modal" if bool(previous_manifest.modal["enabled"]) else "none"
+        checkpoint_eval_backend = run_checkpoint_eval_backend(previous_manifest)
         source_sha = clean_git_source_sha(root)
         branch = current_git_branch(root)
         release = runtime_release_from_args(
@@ -1859,15 +2202,24 @@ def build_parser() -> argparse.ArgumentParser:
         "launch",
         help="Launch a checked-in goal and recipe with an exact-source runtime image.",
         description=(
-            "Launch one checked-in goal and recipe through dstack. The command requires "
-            "a clean committed source revision and resolves its exact-source immutable "
-            "runtime image before scheduling compute; it never falls back to an older image."
+            "Launch one checked-in goal-owned recipe through dstack. The recipe path "
+            "resolves its owning goal. The command requires a clean committed source "
+            "revision and resolves its exact-source immutable runtime image before "
+            "scheduling compute; it never falls back to an older image."
         ),
     )
-    launch.add_argument("--goal-file", type=Path, required=True)
     launch.add_argument("--recipe-file", type=Path, required=True)
-    launch.add_argument("--seed", type=int, required=True)
-    launch.add_argument("--run-description", required=True)
+    launch.add_argument(
+        "--goal-file",
+        type=Path,
+        help=argparse.SUPPRESS,
+    )
+    launch.add_argument("--seed", type=int, default=DEFAULT_LAUNCH_SEED)
+    launch.add_argument("--monitor-calibration-id", help=argparse.SUPPRESS)
+    launch.add_argument(
+        "--run-description",
+        help="Optional description; defaults to '<goal> <recipe> seed <seed>'.",
+    )
     launch.add_argument(
         "--set",
         dest="recipe_overrides",
@@ -1878,17 +2230,25 @@ def build_parser() -> argparse.ArgumentParser:
     )
     launch.add_argument(
         "--checkpoint-eval-backend",
-        choices=("modal", "none"),
+        choices=("modal", "training-container", "none"),
         default=None,
         help=(
             "Override the recipe's checkpoint-evaluation mode. Modal establishes "
-            "acceptance; none publishes training-only evidence without promotion or "
-            "goal acceptance."
+            "acceptance; training-container evaluates in the training task; none "
+            "publishes training-only evidence without promotion or goal acceptance."
         ),
     )
     launch.add_argument(
         "--submission-key",
         help="Optional research-wave identity recorded in launch output.",
+    )
+    launch.add_argument(
+        "--resume-checkpoint",
+        metavar="MANIFEST_URL",
+        help=(
+            "Warm-start this new run from an immutable public checkpoint manifest; "
+            "the source is bound as operational provenance, not a recipe override."
+        ),
     )
     launch.add_argument(
         "--compute",
@@ -1919,6 +2279,14 @@ def build_parser() -> argparse.ArgumentParser:
         type=_parse_duration,
         default=DEFAULT_RUNTIME_READINESS_TIMEOUT_SECONDS,
     )
+    launch.add_argument(
+        "--follow",
+        action="store_true",
+        help=(
+            "Stream authoritative run-state changes after submission and exit when the "
+            "run is terminal. Interrupting the client does not cancel the run."
+        ),
+    )
     launch.add_argument("--json", action="store_true")
     launch.set_defaults(func=cmd_launch)
 
@@ -1932,9 +2300,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     operator_preflight.add_argument(
         "--checkpoint-eval-backend",
-        choices=("modal", "none"),
-        default="modal",
+        choices=("modal", "training-container", "none"),
+        default=None,
     )
+    operator_preflight.add_argument("--recipe-file", type=Path)
+    operator_preflight.add_argument("--set", dest="recipe_overrides", action="append", default=[])
     operator_preflight.add_argument(
         "--target",
         help="Optional local fleet to report instead of the configured default.",
@@ -1962,7 +2332,7 @@ def build_parser() -> argparse.ArgumentParser:
     follow = commands.add_parser("follow", help="Stream changes in semantic run state.")
     follow.add_argument("--run", dest="run_id", type=_require_run_id, required=True)
     follow.add_argument("--poll-seconds", type=float, default=2.0)
-    follow.add_argument("--timeout", type=_parse_duration, default=12 * 60 * 60)
+    follow.add_argument("--timeout", type=_parse_duration, default=DEFAULT_FOLLOW_TIMEOUT_SECONDS)
     follow.set_defaults(func=cmd_follow)
 
     wait = commands.add_parser("wait", help="Wait for one run state.")
@@ -2118,6 +2488,8 @@ def main(argv: list[str] | None = None) -> int:
     except OperatorConfigurationError as exc:
         print(f"gradlab experiment: operator configuration error: {exc}", file=sys.stderr)
         return 2
+    finally:
+        close_coordinator_connections()
 
 
 if __name__ == "__main__":

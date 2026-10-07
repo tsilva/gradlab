@@ -9,11 +9,21 @@ import re
 import sys
 import tempfile
 from collections.abc import Mapping
-from dataclasses import dataclass
-from datetime import timedelta
 from functools import partial
 from pathlib import Path
+from threading import RLock
 from typing import Any
+
+from gradlab.supervisor_lifecycle import (
+    LearnerOperationalFailure,
+    LearnerStateContractError,
+    LearnerTeardownTimeout,
+    LearnerStopAcknowledgementTimeout,
+    LearnerState,
+    LearnerLifecycle,
+    AutomaticEvaluationAdmission,
+    DeliverySchedule,
+)
 
 from gradlab.checkpoint_contract import checkpoint_manifest_contract_sha256
 from gradlab.cli_parser import ExactArgumentParser
@@ -21,7 +31,6 @@ from gradlab.clock import parse_utc_datetime, utc_timestamp
 from gradlab.dstack_backend import DSTACK_VERSION
 from gradlab.early_stop import validate_metric_early_stop_decision
 from gradlab.env import resolve_env_config
-from gradlab.env_config import env_config_from_mapping
 from gradlab.eval_backend import EvalBackend, EvalHandle
 from gradlab.evaluation_attempts import (
     build_modal_eval_payload,
@@ -38,12 +47,10 @@ from gradlab.metric_names import (
     ORCHESTRATION_CHECKPOINT_PENDING_COUNT,
     ORCHESTRATION_DRAIN_GPU_IDLE_SECONDS,
     ORCHESTRATION_EVAL_PENDING_COUNT,
-    ORCHESTRATION_EVENT_SEQUENCE,
     ORCHESTRATION_OUTBOX_OLDEST_AGE_SECONDS,
     ORCHESTRATION_OUTBOX_PENDING_COUNT,
     ORCHESTRATION_OUTBOX_REMOTE_VISIBILITY_LAG_SECONDS,
     ORCHESTRATION_SCRATCH_USED_FRACTION,
-    summary_value,
 )
 from gradlab.metric_store import metric_store_path
 from gradlab.model_sources import download_public_checkpoint_manifest_source
@@ -85,7 +92,9 @@ from gradlab.run_contracts import (
     RunManifest,
     TerminalReceipt,
     document_sha256,
+    run_checkpoint_eval_backend,
 )
+from gradlab.training_container_eval import TrainingContainerEvalBackend
 from gradlab.supervisor_ledger import SupervisorLedger
 from gradlab.supervisor_runtime import (
     LearnerProcess,
@@ -99,13 +108,16 @@ from gradlab.train_config import (
 )
 from gradlab.training_lifecycle import (
     LEARNER_READY_FILENAME,
-    LEARNER_STATE_FORMAT_VERSION,
     TRAINING_RESULT_FILENAME,
     TerminalReason,
-    TrainingExecutionMode,
 )
 from gradlab.trusted_inputs import stage_model_input
-from gradlab.wandb_publisher import WandbProjector, promotion_summary_matches
+from gradlab.wandb_publisher import (
+    WandbProjector,
+    promotion_summary_matches,
+    wandb_delivery_high_water,
+)
+from gradlab.mlflow_delivery import MlflowDelivery
 from gradlab.vizdoom_assets import (
     bind_vizdoom_iwad_to_document,
     install_vizdoom_iwad_file,
@@ -122,7 +134,10 @@ AUTOMATIC_EVAL_PROTOCOL = "modal-acceptance-v3"
 WANDB_WARNING_SECONDS = 45.0
 WANDB_UNHEALTHY_SECONDS = 60.0
 WANDB_DRAIN_TIMEOUT_SECONDS = 300.0
-SCRATCH_STOP_FRACTION = 0.80
+WANDB_FINISH_TIMEOUT_SECONDS = 1_200.0
+WANDB_SERVICE_SECONDS = 2.0
+WANDB_BATCH_SECONDS = 1.0
+SCRATCH_STOP_FRACTION = 0.95
 METRIC_JOURNAL_RETENTION_DAYS = 7
 HEALTH_SAMPLE_SECONDS = 15.0
 WANDB_REMOTE_PROBE_SECONDS = 30.0
@@ -134,51 +149,20 @@ class IncompleteEvaluationEvidence(RuntimeError):
     """Evaluation did not produce enough valid evidence for scientific rejection."""
 
 
-class LearnerOperationalFailure(RuntimeError):
-    stop_reason = "learner_failure"
 
 
-class LearnerFailure(LearnerOperationalFailure):
-    """The learner emitted an authoritative failed terminal result."""
 
 
-class LearnerStartupTimeout(LearnerOperationalFailure):
-    """The learner did not emit readiness or a terminal result before its deadline."""
-
-    stop_reason = "startup_timeout"
 
 
-class LearnerStateContractError(LearnerOperationalFailure):
-    """The learner emitted malformed, stale, or identity-mismatched state."""
-
-    stop_reason = "invalid_result"
 
 
-class LearnerExitContractMismatch(LearnerOperationalFailure):
-    """The learner process exit disagreed with its terminal document."""
-
-    stop_reason = "exit_contract_mismatch"
 
 
-class LearnerTeardownTimeout(LearnerOperationalFailure):
-    """The learner process group remained alive after bounded escalation."""
-
-    stop_reason = "teardown_timeout"
 
 
-class LearnerStopAcknowledgementTimeout(LearnerOperationalFailure):
-    """The learner ignored bounded cooperative-stop requests."""
-
-    stop_reason = "stop_acknowledgement_timeout"
 
 
-@dataclass(frozen=True)
-class LearnerState:
-    kind: str
-    status: str
-    terminal_reason: str | None
-    final_step: int | None
-    document: Mapping[str, Any]
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -300,43 +284,44 @@ class RunSupervisor:
         self.lease_lost = False
         self.stop_reason = ""
         self.learner: LearnerProcess | None = None
-        self.projector: WandbProjector | None = None
+        self.projector: WandbProjector | MlflowDelivery | None = None
         self.wandb_run_path = ""
         self.lease: Lease | None = None
         self.last_lease_renewal = 0.0
         self.lease_misses = 0
+        self._lease_lock = RLock()
+        self._lease_events: list[tuple[str, dict[str, Any]]] = []
+        self.learner_state = LearnerLifecycle()
+        self.automatic_evaluation = AutomaticEvaluationAdmission()
+        self.delivery_schedule = DeliverySchedule()
         self.last_segment = 0.0
+        self._drain_deadline: float | None = None
+        self.phase_timings: dict[str, dict[str, float | int]] = {}
         self.last_eval_poll = 0.0
         self.last_health_sample = 0.0
         self.last_remote_probe = 0.0
-        self.wandb_remote_high_water = 0
-        self.wandb_remote_visible_lag_seconds = 0.0
-        self.learner_started_at: float | None = None
-        self.expected_learner_pid: int | None = None
-        self.learner_result_observed_at: float | None = None
-        self.learner_stop_requested_at: float | None = None
-        self.last_learner_stop_signal_at: float | None = None
-        self.learner_stop_signal_attempts = 0
-        self.learner_stop_acknowledged = False
-        self.learner_final_step: int | None = None
-        self.learner_terminal_document: dict[str, Any] | None = None
-        self.learner_teardown_evidence: dict[str, Any] = {}
-        self.accepted_observed_at: float | None = None
-        self.eval_admission_closed = False
         self.recovered_early_stop: EarlyStopReceipt | None = None
+        self.monitor_backend = None
+        self.monitoring = None
         self.state_archive_publication: dict[str, Any] | None = None
         self.state_archive_closure_sha256 = ""
         self.recovery_mode = str(self.manifest.compute.get("recovery_mode") or "resume-training")
         if self.recovery_mode not in {"resume-training", "drain-only"}:
             raise ValueError(f"unsupported recovery mode: {self.recovery_mode}")
-        self.evaluation_required = bool(self.manifest.modal["enabled"])
+        self.checkpoint_eval_backend = run_checkpoint_eval_backend(self.manifest)
+        self.evaluation_required = self.checkpoint_eval_backend != "none"
         self.eval_backend = eval_backend
         if self.eval_backend is None and self.evaluation_required:
-            self.eval_backend = ModalEvalBackend(
-                app_name=str(self.manifest.modal["app_name"]),
-                function_name=str(self.manifest.modal["function_name"]),
-                environment_name=str(self.manifest.modal["environment_name"]),
-            )
+            if self.checkpoint_eval_backend == "modal":
+                self.eval_backend = ModalEvalBackend(
+                    app_name=str(self.manifest.modal["app_name"]),
+                    function_name=str(self.manifest.modal["function_name"]),
+                    environment_name=str(self.manifest.modal["environment_name"]),
+                )
+            else:
+                self.eval_backend = TrainingContainerEvalBackend(
+                    self.output_root / ".checkpoint-eval"
+                )
         self.store = SupervisorLedger(metric_store_path(self.run_dir), clock=self.clock)
         self.train_config: dict[str, Any] = {}
         self.recipe_document: dict[str, Any] = {}
@@ -486,109 +471,6 @@ class RunSupervisor:
             raise RuntimeError(f"run manifest has no valid liveness.{key}")
         return float(value)
 
-    def _parse_learner_state(
-        self,
-        document: Mapping[str, Any],
-        *,
-        kind: str,
-        live: bool,
-    ) -> LearnerState:
-        expected_type = "gradlab.learner-ready" if kind == "ready" else "gradlab.training-result"
-        if document.get("document_type") != expected_type:
-            raise LearnerStateContractError(
-                f"learner {kind} document_type is not {expected_type!r}"
-            )
-        version = document.get("format_version")
-        if version != LEARNER_STATE_FORMAT_VERSION:
-            raise LearnerStateContractError(
-                f"learner {kind} document has unsupported format_version {version!r}"
-            )
-        if document.get("run_id") != self.manifest.run_id:
-            raise LearnerStateContractError(f"learner {kind} run_id does not match manifest")
-        if document.get("attempt_id") != self.manifest.attempt_id:
-            raise LearnerStateContractError(f"learner {kind} attempt_id does not match manifest")
-        learner_pid = document.get("learner_pid")
-        if isinstance(learner_pid, bool) or not isinstance(learner_pid, int) or learner_pid <= 0:
-            raise LearnerStateContractError(f"learner {kind} has an invalid learner_pid")
-        if live and learner_pid != self.expected_learner_pid:
-            raise LearnerStateContractError(
-                f"learner {kind} pid {learner_pid} does not match "
-                f"spawned pid {self.expected_learner_pid}"
-            )
-        if document.get("execution_mode") != TrainingExecutionMode.SUPERVISED.value:
-            raise LearnerStateContractError(f"learner {kind} is not supervised")
-        expected_backend = str(
-            dict(self.train_config.get("training_backend") or {}).get("id") or ""
-        )
-        if not expected_backend or document.get("training_backend_id") != expected_backend:
-            raise LearnerStateContractError(
-                f"learner {kind} training_backend_id does not match materialized config"
-            )
-        timestamp_field = "ready_at" if kind == "ready" else "terminal_at"
-        timestamp = document.get(timestamp_field)
-        if not isinstance(timestamp, str):
-            raise LearnerStateContractError(f"learner {kind} has no valid {timestamp_field}")
-        try:
-            parse_utc_datetime(timestamp)
-        except (TypeError, ValueError) as exc:
-            raise LearnerStateContractError(
-                f"learner {kind} has an invalid {timestamp_field}"
-            ) from exc
-        if kind == "ready":
-            if document.get("status") != "ready":
-                raise LearnerStateContractError("learner readiness status is not 'ready'")
-            return LearnerState(
-                kind="ready",
-                status="ready",
-                terminal_reason=None,
-                final_step=None,
-                document=dict(document),
-            )
-
-        status = str(document.get("status") or "")
-        if status not in {"completed", "interrupted", "failed"}:
-            raise LearnerStateContractError("learner result has an invalid status")
-        try:
-            reason = TerminalReason(str(document.get("terminal_reason") or ""))
-        except ValueError as exc:
-            raise LearnerStateContractError(
-                "learner result has an invalid terminal_reason"
-            ) from exc
-        if (status == "failed") != (reason == TerminalReason.FAILED):
-            raise LearnerStateContractError("learner result status and terminal_reason disagree")
-        interruption_reasons = {
-            TerminalReason.LOCAL_INTERRUPTION,
-            TerminalReason.EXTERNAL_SIGNAL,
-        }
-        if (status == "interrupted") != (reason in interruption_reasons):
-            raise LearnerStateContractError(
-                "learner result interrupted status and terminal_reason disagree"
-            )
-        final_step = document.get("final_step")
-        if isinstance(final_step, bool) or not isinstance(final_step, int) or final_step < 0:
-            raise LearnerStateContractError("learner result has an invalid final_step")
-        if not isinstance(document.get("execution_policy"), Mapping):
-            raise LearnerStateContractError("learner result has no execution_policy")
-        if status == "failed":
-            error_type = document.get("error_type")
-            error_message = document.get("error_message")
-            if (
-                not isinstance(error_type, str)
-                or not error_type
-                or len(error_type) > 200
-                or not isinstance(error_message, str)
-                or len(error_message) > 2_000
-            ):
-                raise LearnerStateContractError(
-                    "failed learner result has invalid bounded error evidence"
-                )
-        return LearnerState(
-            kind="result",
-            status=status,
-            terminal_reason=reason.value,
-            final_step=final_step,
-            document=dict(document),
-        )
 
     def _learner_state_file(
         self,
@@ -604,65 +486,25 @@ class RunSupervisor:
             document = _read_json(path)
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             raise LearnerStateContractError(f"learner {kind} document is unreadable") from exc
-        return self._parse_learner_state(document, kind=kind, live=live)
+        return self.learner_state.parse(
+            document, kind=kind, live=live, run_id=self.manifest.run_id,
+            attempt_id=self.manifest.attempt_id,
+            backend_id=str(dict(self.train_config.get("training_backend") or {}).get("id") or ""),
+        )
 
     def _observe_live_learner_state(self, now: float) -> LearnerState | None:
         result = self._learner_state_file(kind="result", live=True)
-        if result is not None:
-            self.learner_final_step = result.final_step
-            self.learner_terminal_document = dict(result.document)
-            if self.learner_result_observed_at is None:
-                self.learner_result_observed_at = now
-                self._emit(
-                    "learner_terminal_result_observed",
-                    status=result.status,
-                    terminal_reason=result.terminal_reason,
-                    final_step=result.final_step,
-                )
-            if result.status == "failed":
-                error_type = str(result.document.get("error_type") or "LearnerError")
-                error_message = str(result.document.get("error_message") or "")
-                raise LearnerFailure(f"{error_type}: {error_message}")
-            elapsed = max(0.0, now - self.learner_result_observed_at)
-            grace = self._liveness_seconds("result_exit_grace_seconds")
-            if elapsed >= grace:
-                raise LearnerTeardownTimeout(
-                    "learner wrote terminal result "
-                    f"{result.terminal_reason!r} but remained alive for {elapsed:.1f}s"
-                )
-            return result
-
-        ready = self._learner_state_file(kind="ready", live=True)
-        if ready is not None:
-            return ready
-        if self.learner_started_at is None:
-            raise LearnerStateContractError("learner startup time was not recorded")
-        elapsed = max(0.0, now - self.learner_started_at)
-        timeout = self._liveness_seconds("startup_timeout_seconds")
-        if elapsed >= timeout:
-            raise LearnerStartupTimeout(
-                f"learner emitted no readiness or terminal result within {timeout:.1f}s"
-            )
-        return None
+        ready = self._learner_state_file(kind="ready", live=True) if result is None else None
+        return self.learner_state.observe(
+            result, ready, now=now,
+            startup_timeout=self._liveness_seconds("startup_timeout_seconds"),
+            exit_grace=self._liveness_seconds("result_exit_grace_seconds"), emit=self._emit,
+        )
 
     def _validate_learner_exit(self, returncode: int) -> LearnerState:
-        terminal_state = self._learner_state_file(kind="result", live=True)
-        if terminal_state is None:
-            raise LearnerStateContractError(
-                f"learner exited with code {returncode} without a terminal result"
-            )
-        self.learner_final_step = terminal_state.final_step
-        self.learner_terminal_document = dict(terminal_state.document)
-        if terminal_state.status == "failed":
-            raise LearnerFailure(
-                f"{terminal_state.document.get('error_type')}: "
-                f"{terminal_state.document.get('error_message')}"
-            )
-        if returncode != 0:
-            raise LearnerExitContractMismatch(
-                f"learner emitted {terminal_state.status!r} but exited with code {returncode}"
-            )
-        return terminal_state
+        return self.learner_state.validate_exit(
+            self._learner_state_file(kind="result", live=True), returncode,
+        )
 
     def _observe_learner_after_active_iteration(self) -> bool:
         """Recheck liveness after potentially blocking supervisor work."""
@@ -688,21 +530,38 @@ class RunSupervisor:
         checkpoints = [
             dict(row) for row in (index or {}).get("checkpoints") or [] if isinstance(row, Mapping)
         ]
-        if not checkpoints:
+        bound_resume_document = self.manifest.compute.get("resume_checkpoint")
+        bound_resume = (
+            CheckpointManifest.from_dict(bound_resume_document)
+            if bound_resume_document is not None
+            else None
+        )
+        if not checkpoints and bound_resume is None:
             return
         if self.recovery_mode == "drain-only" and any(
             str(row.get("purpose") or "") == "final" for row in checkpoints
         ):
             return
-        checkpoint = max(
-            checkpoints,
-            key=lambda row: (int(row["step"]), str(row["sha256"])),
-        )
+        if checkpoints:
+            checkpoint = max(
+                checkpoints,
+                key=lambda row: (int(row["step"]), str(row["sha256"])),
+            )
+        else:
+            assert bound_resume is not None
+            checkpoint = bound_resume.to_dict()
         manifest_url = self._checkpoint_manifest_url(checkpoint)
         resolved = download_public_checkpoint_manifest_source(
             manifest_url,
             root=self.output_root / ".resume-source",
         )
+        if not checkpoints:
+            assert bound_resume is not None
+            observed_manifest = resolved.run_config.get("checkpoint_manifest")
+            if observed_manifest != bound_resume.to_dict():
+                raise ValueError(
+                    "downloaded resume checkpoint does not match the run-bound manifest"
+                )
         staged = stage_model_input(
             resolved.model_path,
             source_identity=manifest_url,
@@ -748,7 +607,7 @@ class RunSupervisor:
             recipe_overrides=self.manifest.recipe_overrides,
             prepare_materialized=partial(
                 prepare_checkpoint_eval_mode,
-                checkpoint_eval_backend=("modal" if self.evaluation_required else "none"),
+                checkpoint_eval_backend=self.checkpoint_eval_backend,
             ),
             source_sha=self.manifest.source_sha,
         )
@@ -838,6 +697,13 @@ class RunSupervisor:
         )
         if canonical_json_sha256(self.recipe_document) != self.manifest.recipe_sha256:
             raise RuntimeError("portable recipe hash does not match the run manifest")
+        if self.manifest.tracking is not None:
+            selected = dict(config.get("tracking") or {})
+            if any(
+                selected.get(key) != self.manifest.tracking.get(key)
+                for key in ("backend", "delivery", "sources")
+            ):
+                raise RuntimeError("attempt tracking selection differs from the frozen Run")
         variant_id = recipe_variant_id(
             recipe_slug=self.manifest.recipe_slug,
             source_sha=self.manifest.source_sha,
@@ -875,7 +741,8 @@ class RunSupervisor:
                 "dstack_project": str(self.manifest.compute.get("dstack_project") or ""),
                 "attempt_id": self.manifest.attempt_id,
                 "dstack_task": str(self.manifest.compute.get("dstack_task") or ""),
-                "wandb_mode": "online",
+                "tracking": dict(self.manifest.tracking or {"backend": "wandb", "delivery": "online"}),
+                "tracking_created_at": self.manifest.created_at,
                 "wandb_run_id": str(self.manifest.wandb.get("run_id") or self.manifest.run_id),
                 "wandb_entity": str(self.manifest.wandb.get("entity") or ""),
                 "wandb_project": str(self.manifest.wandb.get("project") or ""),
@@ -897,10 +764,15 @@ class RunSupervisor:
                         "orchestrator:dstack",
                     ]
                 ),
-                "checkpoint_eval_backend": ("modal" if self.evaluation_required else "none"),
+                "checkpoint_eval_backend": self.checkpoint_eval_backend,
                 "metrics_schema_version": METRICS_SCHEMA_VERSION,
             }
         )
+        from gradlab.wandb_utils import canonical_wandb_environment
+
+        config["game_family"] = canonical_wandb_environment(
+            config.get("env_provider"), config.get("game")
+        )[1]
         materialized["train_config"] = config
         write_canonical_json(self.recipe_path, self.recipe_document)
         self.eval_contract = _bind_evaluation_contract(
@@ -920,10 +792,42 @@ class RunSupervisor:
         write_canonical_json(self.config_path, self.train_config)
 
     def _start_wandb(self) -> None:
-        train_config = load_materialized_train_config(self.config_path)
-        config = resolve_env_config(env_config_from_mapping(train_config))
+        resolved = load_materialized_train_config(self.config_path)
+        train_config = resolved.to_document()
+        tracking = self.manifest.tracking or {"backend": "wandb", "delivery": "online"}
+        if tracking["delivery"] == "local_only":
+            self.projector = None
+            self.wandb_run_path = ""
+            return
+        if tracking["backend"] == "mlflow":
+            receipt_key = f"runs/{self.manifest.run_id}/metrics-binding.json"
+            existing = self.authority.control.get_json_optional(receipt_key)
+            self._lease_heartbeat()
+            projector = self.runtime.start_mlflow(
+                train_config, created_at=self.manifest.created_at
+            )
+            self.projector = projector
+            if existing is None:
+                self.authority.control.put_json(
+                    receipt_key,
+                    {
+                        "schema_version": 1,
+                        "run_id": self.manifest.run_id,
+                        "backend": "mlflow",
+                        "service_run_id": projector.run_id,
+                        "service_url": projector.service_url,
+                        "created_at": self.clock.utc_now(),
+                    },
+                    create_only=True,
+                )
+            elif existing.get("service_run_id") != projector.run_id:
+                raise RuntimeError("MLflow binding changed during Attempt recovery")
+            self.wandb_run_path = f"mlflow:{projector.run_id}"
+            return
+        config = resolve_env_config(resolved.environment)
         receipt_key = f"runs/{self.manifest.run_id}/wandb.json"
         existing = self.authority.control.get_json_optional(receipt_key)
+        self._lease_heartbeat()
         if existing is None:
             self.projector = self.runtime.start_wandb(
                 train_config,
@@ -931,6 +835,7 @@ class RunSupervisor:
                 config=config,
                 goal_variant=self.manifest.goal_variant,
             )
+            self._lease_heartbeat()
             run = self.projector.run
             receipt = {
                 "schema_version": 1,
@@ -959,6 +864,7 @@ class RunSupervisor:
             )
 
     def _start_learner(self) -> None:
+        self._lease_heartbeat()
         self._archive_pre_spawn_learner_state()
         environment = os.environ.copy()
         for name in tuple(environment):
@@ -1002,8 +908,8 @@ class RunSupervisor:
         learner_pid = getattr(self.learner, "pid", None)
         if isinstance(learner_pid, bool) or not isinstance(learner_pid, int) or learner_pid <= 0:
             raise RuntimeError("spawned learner has no valid pid")
-        self.expected_learner_pid = learner_pid
-        self.learner_started_at = self.clock.monotonic()
+        self.learner_state.pid = learner_pid
+        self.learner_state.started_at = self.clock.monotonic()
         print(
             f"learner started pid={learner_pid} log={self.learner_log_path}",
             flush=True,
@@ -1164,7 +1070,7 @@ class RunSupervisor:
         ]
         checkpoints.sort(key=lambda row: (int(row["step"]), str(row["sha256"])))
         if self.evaluation_required and self.authority.has_accepted_eval(self.manifest.run_id):
-            self.eval_admission_closed = True
+            self.automatic_evaluation.closed = True
             self.stop_reason = "eval_acceptance"
             self.store.set_state(
                 "automatic_eval_admission",
@@ -1183,7 +1089,7 @@ class RunSupervisor:
                 manifest=checkpoint.to_dict(),
             )
             if self.evaluation_required:
-                if self.eval_admission_closed:
+                if self.automatic_evaluation.closed:
                     self._ensure_eval(
                         ledger_id,
                         checkpoint,
@@ -1277,7 +1183,7 @@ class RunSupervisor:
         if not path.is_file():
             return False
         document = _read_json(path)
-        if int(document.get("pid") or 0) != int(self.expected_learner_pid or 0):
+        if int(document.get("pid") or 0) != int(self.learner_state.pid or 0):
             raise LearnerStateContractError(
                 "learner stop acknowledgement PID does not match the active learner"
             )
@@ -1285,11 +1191,11 @@ class RunSupervisor:
             raise LearnerStateContractError(
                 "learner stop acknowledgement has an invalid safe boundary"
             )
-        if not self.learner_stop_acknowledged:
-            self.learner_stop_acknowledged = True
+        if not self.learner_state.stop_acknowledged:
+            self.learner_state.stop_acknowledged = True
             self._emit(
                 "learner_stop_acknowledged",
-                signal_attempts=self.learner_stop_signal_attempts,
+                signal_attempts=self.learner_state.stop_signal_attempts,
                 num_timesteps=int(document.get("num_timesteps") or 0),
             )
         return True
@@ -1301,21 +1207,21 @@ class RunSupervisor:
         if self.learner is not None and self.learner.poll() is None:
             now = self.clock.monotonic()
             if self._expects_learner_stop_acknowledgement():
-                if self.learner_stop_requested_at is None:
-                    self.learner_stop_requested_at = now
-                self.last_learner_stop_signal_at = now
-                self.learner_stop_signal_attempts += 1
+                if self.learner_state.stop_requested_at is None:
+                    self.learner_state.stop_requested_at = now
+                self.learner_state.last_stop_signal_at = now
+                self.learner_state.stop_signal_attempts += 1
             self.runtime.request_learner_stop(self.learner)
             print(f"learner stop requested: reason={reason}", flush=True)
 
     def _maintain_learner_stop(self, now: float) -> None:
         learner = self.learner
-        requested_at = self.learner_stop_requested_at
+        requested_at = self.learner_state.stop_requested_at
         if (
             learner is None
             or learner.poll() is not None
             or requested_at is None
-            or self.learner_stop_acknowledged
+            or self.learner_state.stop_acknowledged
         ):
             return
         if self._learner_stop_acknowledgement_exists():
@@ -1325,7 +1231,7 @@ class RunSupervisor:
             raise LearnerStopAcknowledgementTimeout(
                 "learner did not acknowledge a cooperative stop before the bounded deadline"
             )
-        last_signal_at = self.last_learner_stop_signal_at
+        last_signal_at = self.learner_state.last_stop_signal_at
         if last_signal_at is None or float(now) - last_signal_at >= LEARNER_STOP_RETRY_SECONDS:
             self._request_learner_stop(self.stop_reason or "cooperative_stop")
 
@@ -1357,26 +1263,12 @@ class RunSupervisor:
         print(f"learner finalize-only stop requested: reason={reason}", flush=True)
 
     def _close_eval_admission(self, result: EvalResult) -> None:
-        if self.eval_admission_closed:
-            return
-        self.eval_admission_closed = True
-        closed_at = self.clock.utc_now()
-        self.store.set_state(
-            "automatic_eval_admission",
-            {
-                "closed": True,
-                "reason": "eval_acceptance",
-                "checkpoint_id": result.checkpoint_id,
-                "idempotency_key": result.idempotency_key,
-                "closed_at": closed_at,
-            },
-        )
-        self._emit(
-            "automatic_eval_admission_closed",
-            checkpoint_id=result.checkpoint_id,
-            idempotency_key=result.idempotency_key,
-            reason="eval_acceptance",
-        )
+        if self.automatic_evaluation.close(
+            self.store, reason="eval_acceptance", closed_at=self.clock.utc_now(),
+            checkpoint_id=result.checkpoint_id, idempotency_key=result.idempotency_key,
+        ):
+            self._emit("automatic_eval_admission_closed", checkpoint_id=result.checkpoint_id,
+                       idempotency_key=result.idempotency_key, reason="eval_acceptance")
 
     def _reconcile_verified_eval_result(
         self,
@@ -1388,6 +1280,7 @@ class RunSupervisor:
         if document is None:
             return False
         result = EvalResult.from_dict(document)
+        self._enqueue_eval_video(row, result)
         self.store.mark_eval_terminal(
             idempotency_key=result.idempotency_key,
             status=result.status,
@@ -1403,9 +1296,9 @@ class RunSupervisor:
             if call_id:
                 try:
                     assert self.eval_backend is not None
-                    self.eval_backend.cancel(EvalHandle(provider="modal", call_id=call_id))
+                    self.eval_backend.cancel(EvalHandle(provider=self.checkpoint_eval_backend, call_id=call_id))
                 except Exception as exc:
-                    print(f"Modal cancel failed call={call_id}: {exc}", flush=True)
+                    print(f"{self.checkpoint_eval_backend} cancel failed call={call_id}: {exc}", flush=True)
             result = EvalResult(
                 run_id=self.manifest.run_id,
                 checkpoint_id=str(row["checkpoint_id"]),
@@ -1431,27 +1324,49 @@ class RunSupervisor:
                 result=result.to_dict(),
             )
 
-    def _renew_lease(self, now: float) -> None:
-        if now - self.last_lease_renewal < LEASE_RENEW_SECONDS:
-            return
-        assert self.lease is not None
-        try:
-            self.lease = self.authority.renew_lease(self.lease)
-        except Exception as exc:
-            self.lease_misses += 1
-            print(
-                f"writer lease renewal failed ({self.lease_misses}/"
-                f"{LEASE_MISSES_BEFORE_STOP}): {exc}",
-                flush=True,
-            )
-            if self.lease_misses >= LEASE_MISSES_BEFORE_STOP:
-                self.lease_lost = True
-                self._emit("writer_lease_lost", misses=self.lease_misses)
-                self._request_learner_stop("writer_lease_lost")
-        else:
-            self.lease_misses = 0
-            self.last_lease_renewal = now
-            self._emit("writer_lease_renewed", holder_id=self.lease.holder_id)
+    def _renew_lease(self, now: float, *, background: bool = False) -> None:
+        # Only this lock's owner may advance the lease's CAS token. The background
+        # worker touches neither the ledger, the observer, nor learner stop state.
+        with self._lease_lock:
+            lease = self.lease
+            if lease is not None and not self.lease_lost:
+                expired = parse_utc_datetime(lease.expires_at) <= self.clock.utc_datetime()
+                if expired or now - self.last_lease_renewal >= LEASE_RENEW_SECONDS:
+                    try:
+                        self.lease = self.authority.renew_lease(lease)
+                        if parse_utc_datetime(self.lease.expires_at) <= self.clock.utc_datetime():
+                            raise LeaseUnavailable("writer lease expired during renewal")
+                    except Exception as exc:
+                        self.lease_misses += 1
+                        print(
+                            f"writer lease renewal failed ({self.lease_misses}/"
+                            f"{LEASE_MISSES_BEFORE_STOP}): {exc}",
+                            flush=True,
+                        )
+                        # Expiry or a CAS conflict is definitive loss, not a
+                        # transient request failure that permits another iteration.
+                        self.lease_lost = (
+                            isinstance(exc, LeaseUnavailable)
+                            or self.lease_misses >= LEASE_MISSES_BEFORE_STOP
+                            or parse_utc_datetime(lease.expires_at) <= self.clock.utc_datetime()
+                        )
+                        if self.lease_lost:
+                            self._lease_events.append(
+                                ("writer_lease_lost", {"misses": self.lease_misses})
+                            )
+                    else:
+                        self.lease_misses = 0
+                        self._lease_events.append(
+                            ("writer_lease_renewed", {"holder_id": self.lease.holder_id})
+                        )
+                    self.last_lease_renewal = now
+            events = [] if background else self._lease_events[:]
+            if not background:
+                self._lease_events.clear()
+        for kind, payload in events:
+            self._emit(kind, **payload)
+        if not background and self.lease_lost:
+            self._request_learner_stop("writer_lease_lost")
 
     def _lease_heartbeat(self) -> None:
         self._renew_lease(self.clock.monotonic())
@@ -1490,13 +1405,50 @@ class RunSupervisor:
         return len(events)
 
     def _publish_wandb(self) -> int:
+        self._lease_heartbeat()
+        if (self.manifest.tracking or {}).get("delivery") == "local_only":
+            return self.store.mark_pending_frames_local_only()
         if self.projector is None:
             return 0
-        return self.runtime.publish_frames(
+        started = self.clock.monotonic()
+        published = self.runtime.publish_frames(
             self.store,
             self.projector,
             limit=250,
+            heartbeat=self._lease_heartbeat,
+            should_continue=lambda: self.clock.monotonic() - started < WANDB_BATCH_SECONDS,
         )
+        if not published and self.store.metric_outbox_stats()["frames"]:
+            self.delivery_schedule.retry_after = self.clock.monotonic() + WANDB_SERVICE_SECONDS
+        self._record_phase("wandb", started)
+        self._emit("wandb_batch_published", frames=published,
+                   seconds=self.clock.monotonic() - started)
+        return published
+
+    def _record_phase(self, name: str, started: float) -> None:
+        seconds = self.clock.monotonic() - started
+        row = self.phase_timings.setdefault(name, {"count": 0, "seconds": 0.0, "max_seconds": 0.0})
+        row["count"] += 1
+        row["seconds"] += seconds
+        row["max_seconds"] = max(row["max_seconds"], seconds)
+
+    def _service_delivery(self, *, force: bool = False) -> int:
+        """Cooperatively service the sole writer between bounded units of work.
+
+        Never run on the background lease thread or recurse from publication.
+        A blocking SDK call remains bounded by its transport timeout.
+        """
+        if self._drain_deadline is not None and self.clock.time() >= self._drain_deadline:
+            raise TimeoutError("whole-task deadline exhausted during delivery drain")
+        self._lease_heartbeat()
+        now = self.clock.monotonic()
+        if not self.delivery_schedule.begin(now, force=force, interval=WANDB_SERVICE_SECONDS):
+            return 0
+        try:
+            activity = self._seal_metrics(now, force=force)
+            return activity + self._publish_wandb()
+        finally:
+            self.delivery_schedule.servicing = False
 
     def _publish_checkpoints(self) -> int:
         published = 0
@@ -1506,10 +1458,9 @@ class RunSupervisor:
             "environment_sha256": self.manifest.environment_sha256,
             "evaluation_contract_sha256": checkpoint_manifest_contract_sha256(self.recipe_document),
         }
-        for checkpoint in self.store.checkpoints():
+        for checkpoint in self.store.unpublished_checkpoints():
+            self._service_delivery()
             ledger_id = int(checkpoint["id"])
-            if self.store.checkpoint_publication(ledger_id) is not None:
-                continue
             path = Path(str(checkpoint["path"]))
             if not path.is_file():
                 continue
@@ -1531,7 +1482,10 @@ class RunSupervisor:
                         "local_path": str(path),
                     },
                     created_at=utc_timestamp(float(checkpoint["created_at"])),
+                    heartbeat=self._service_delivery,
                 )
+            except LeaseUnavailable:
+                raise
             except Exception as exc:
                 self.store.mark_checkpoint_upload_failed(ledger_id, repr(exc))
                 print(f"checkpoint publication failed id={ledger_id}: {exc}", flush=True)
@@ -1557,7 +1511,7 @@ class RunSupervisor:
                 checkpoint_step=manifest.step,
                 public_url=manifest.public_url,
             )
-            if bool(checkpoint["eval_required"]) and not self.eval_admission_closed:
+            if bool(checkpoint["eval_required"]) and not self.automatic_evaluation.closed:
                 self._ensure_eval(ledger_id, manifest)
             print(
                 f"checkpoint published id={manifest.checkpoint_id} "
@@ -1574,6 +1528,11 @@ class RunSupervisor:
             checkpoint=checkpoint,
             recipe_format_version=int(self.recipe_document["format_version"]),
             evaluation_contract_sha256=checkpoint.evaluation_contract_sha256,
+            transform=(
+                (lambda contract: {**contract, "record_episode": True})
+                if self.manifest.compute.get("record_checkpoint_episode") is True
+                else None
+            ),
         )
 
     def _ensure_eval(
@@ -1590,7 +1549,11 @@ class RunSupervisor:
             checkpoint=checkpoint,
             execution_contract=contract,
             evaluation_contract_sha256=checkpoint.evaluation_contract_sha256,
-            protocol=AUTOMATIC_EVAL_PROTOCOL,
+            protocol=(
+                AUTOMATIC_EVAL_PROTOCOL
+                if self.checkpoint_eval_backend == "modal"
+                else "training-container-acceptance-v1"
+            ),
             timeout_seconds=timeout,
             created_at=parse_utc_datetime(checkpoint.created_at),
         )
@@ -1645,7 +1608,7 @@ class RunSupervisor:
         )
 
     def _submit_pending_evals(self) -> int:
-        if self.eval_admission_closed:
+        if self.automatic_evaluation.closed:
             return 0
         submitted = 0
         for row in self.store.evals(statuses=("pending",)):
@@ -1698,7 +1661,7 @@ class RunSupervisor:
                     error=f"ambiguous submit: {exc!r}",
                 )
                 print(
-                    f"Modal spawn ambiguous key={row['idempotency_key']}: {exc}",
+                    f"{self.checkpoint_eval_backend} dispatch ambiguous key={row['idempotency_key']}: {exc}",
                     flush=True,
                 )
                 continue
@@ -1722,7 +1685,7 @@ class RunSupervisor:
                 call_id=handle.call_id,
             )
             print(
-                f"Modal eval submitted checkpoint={row['checkpoint_id']} "
+                f"{self.checkpoint_eval_backend} eval submitted checkpoint={row['checkpoint_id']} "
                 f"call={handle.call_id} attempt={attempt}",
                 flush=True,
             )
@@ -1730,7 +1693,7 @@ class RunSupervisor:
         return submitted
 
     def _settle_closed_eval_admission(self) -> int:
-        if not self.eval_admission_closed:
+        if not self.automatic_evaluation.closed:
             return 0
         admission = self.store.state("automatic_eval_admission") or {}
         admission_reason = str(admission.get("reason") or "closed")
@@ -1789,7 +1752,7 @@ class RunSupervisor:
         intent_document = dict(row["intent"])
         intent_document.pop("checkpoint")
         intent_document.pop("checkpoint_step")
-        return verify_eval_result(
+        result = verify_eval_result(
             run_id=self.manifest.run_id,
             checkpoint_id=str(row["checkpoint_id"]),
             intent=EvalIntent.from_dict(intent_document),
@@ -1797,6 +1760,42 @@ class RunSupervisor:
             attempt=int(row["attempt"]),
             modal_call_id=str(row["modal_call_id"] or "not-recorded"),
             clock=self.clock,
+        )
+        if result.video is not None:
+            video = result.video
+            key = self.authority.evaluation.key_from_uri(str(video["object_uri"]))
+            expected_prefix = f"runs/{self.manifest.run_id}/evals/{intent_document['idempotency_key']}/video/"
+            if not key.startswith(expected_prefix):
+                raise ValueError("evaluation video object is outside its frozen evaluation")
+            with tempfile.TemporaryDirectory(prefix="gradlab-eval-video-", dir=self.output_root) as temporary:
+                self.authority.evaluation.download_verified(
+                    key,
+                    Path(temporary) / "episode.mp4",
+                    size=int(video["bytes"]),
+                    sha256=str(video["sha256"]),
+                )
+        return result
+
+    def _enqueue_eval_video(self, row: Mapping[str, Any], result: EvalResult) -> None:
+        if result.video is None:
+            return
+        video = result.video
+        key = self.authority.evaluation.key_from_uri(str(video["object_uri"]))
+        self.store.enqueue_event(
+            kind="evaluation_video",
+            payload={
+                "bucket_uri": self.authority.evaluation.config.uri,
+                "checkpoint_id": str(row["checkpoint_id"]),
+                "key": key,
+                "bytes": int(video["bytes"]),
+                "sha256": str(video["sha256"]),
+                "episode_id": str(video["episode_id"]),
+                "media_spool_bytes": 512 * 1024**2,
+                "scratch_headroom_bytes": 1024**3,
+            },
+            step=int(row["checkpoint_step"]),
+            source=f"eval:{result.idempotency_key}:video",
+            event_id=f"eval-video:{result.idempotency_key}",
         )
 
     def _record_eval_metrics(
@@ -1810,6 +1809,9 @@ class RunSupervisor:
             schema_version=METRICS_SCHEMA_VERSION,
             checkpoint_step=int(row["checkpoint_step"]),
             episodes_planned=episodes_planned,
+            required_metrics=frozenset(
+                rule["metric"] for rule in row["intent"]["execution_contract"]["acceptance"]
+            ),
         )
         self.store.append_metrics(
             metrics,
@@ -1838,9 +1840,10 @@ class RunSupervisor:
                 idempotency_key=str(row["idempotency_key"]),
                 error=f"invalid result: {exc!r}",
             )
-            print(f"invalid Modal result ignored key={row['idempotency_key']}: {exc}", flush=True)
+            print(f"invalid {self.checkpoint_eval_backend} result ignored key={row['idempotency_key']}: {exc}", flush=True)
             return False
         self.authority.put_verified_eval_result(result)
+        self._enqueue_eval_video(row, result)
         self.store.mark_eval_terminal(
             idempotency_key=result.idempotency_key,
             status=result.status,
@@ -1854,7 +1857,7 @@ class RunSupervisor:
         )
         if result.status == "accepted":
             observed = self.clock.time()
-            self.accepted_observed_at = self.accepted_observed_at or observed
+            self.automatic_evaluation.accepted_observed_at = self.automatic_evaluation.accepted_observed_at or observed
             self._close_eval_admission(result)
             self._request_learner_stop("eval_acceptance")
             signal_sent = self.clock.time()
@@ -1864,7 +1867,7 @@ class RunSupervisor:
                 raise RuntimeError("accepted eval did not issue stop within ten seconds")
         self._record_eval_metrics(row, result)
         print(
-            f"Modal eval terminal checkpoint={result.checkpoint_id} status={result.status}",
+            f"{self.checkpoint_eval_backend} eval terminal checkpoint={result.checkpoint_id} status={result.status}",
             flush=True,
         )
         return True
@@ -1902,7 +1905,7 @@ class RunSupervisor:
                 continue
             call_id = str(row["modal_call_id"] or "")
             if call_id:
-                handle = EvalHandle(provider="modal", call_id=call_id)
+                handle = EvalHandle(provider=self.checkpoint_eval_backend, call_id=call_id)
                 assert self.eval_backend is not None
                 poll = self.eval_backend.poll(handle)
                 if poll.status == "failed" and poll.error:
@@ -1913,7 +1916,7 @@ class RunSupervisor:
             expires_at = float(row.get("attempt_expires_at") or 0)
             if expires_at > wall_now:
                 continue
-            if not self.eval_admission_closed and int(row["attempt"] or 0) < int(
+            if not self.automatic_evaluation.closed and int(row["attempt"] or 0) < int(
                 self.modal_config.protocol.max_attempts
             ):
                 self.store.reset_expired_eval(
@@ -1925,7 +1928,7 @@ class RunSupervisor:
                     row,
                     error=(
                         "eval expired after automatic admission closed"
-                        if self.eval_admission_closed
+                        if self.automatic_evaluation.closed
                         else "eval expired twice without a valid result"
                     ),
                 )
@@ -1936,8 +1939,8 @@ class RunSupervisor:
     def _scratch_guard(self) -> None:
         usage = self.runtime.disk_usage(self.output_root)
         fraction = usage.used / max(usage.total, 1)
-        if fraction >= SCRATCH_STOP_FRACTION:
-            self._request_learner_stop("scratch_storage_above_80_percent")
+        if fraction > SCRATCH_STOP_FRACTION:
+            self._request_learner_stop("scratch_storage_above_95_percent")
             raise RuntimeError(
                 f"scratch storage is {fraction:.1%} full; stopped before evidence loss"
             )
@@ -1966,23 +1969,21 @@ class RunSupervisor:
             return
         self.last_remote_probe = now
         try:
-            remote_value = self.runtime.remote_summary(self.wandb_run_path).get(
-                ORCHESTRATION_EVENT_SEQUENCE
-            )
-            remote_high_water = int(summary_value(remote_value) or 0)
-            self.wandb_remote_high_water = max(
-                self.wandb_remote_high_water,
+            remote_summary = self.runtime.remote_summary(self.wandb_run_path)
+            remote_high_water = wandb_delivery_high_water(remote_summary)
+            self.delivery_schedule.remote_high_water = max(
+                self.delivery_schedule.remote_high_water,
                 remote_high_water,
             )
             with self.store.connection() as connection:
                 unseen = connection.execute(
                     "SELECT MIN(created_at) FROM metric_frames WHERE id > ?",
-                    (self.wandb_remote_high_water,),
+                    (self.delivery_schedule.remote_high_water,),
                 ).fetchone()
             oldest_unseen = unseen[0] if unseen is not None else None
-            self.wandb_remote_visible_lag_seconds = (
+            self.delivery_schedule.remote_visible_lag_seconds = (
                 0.0
-                if oldest_unseen is None or self.wandb_remote_high_water >= local_high_water
+                if oldest_unseen is None or self.delivery_schedule.remote_high_water >= local_high_water
                 else max(0.0, self.clock.time() - float(oldest_unseen))
             )
         except Exception as exc:
@@ -2001,7 +2002,7 @@ class RunSupervisor:
             ORCHESTRATION_OUTBOX_PENDING_COUNT: float(self.store.metric_outbox_stats()["frames"]),
             ORCHESTRATION_OUTBOX_OLDEST_AGE_SECONDS: self._oldest_unpublished_age(),
             ORCHESTRATION_OUTBOX_REMOTE_VISIBILITY_LAG_SECONDS: (
-                self.wandb_remote_visible_lag_seconds
+                self.delivery_schedule.remote_visible_lag_seconds
             ),
             ORCHESTRATION_CHECKPOINT_PENDING_COUNT: float(
                 len(self.store.checkpoints()) - len(self.store.checkpoint_publications())
@@ -2028,10 +2029,11 @@ class RunSupervisor:
                 "local_high_water": local_high_water,
                 "r2_high_water": self.store.metric_segment_high_water(),
                 "wandb_high_water": wandb_high_water,
-                "wandb_remote_high_water": self.wandb_remote_high_water,
+                "wandb_remote_high_water": self.delivery_schedule.remote_high_water,
                 "sampled_at": self.clock.utc_now(),
             },
         )
+        self.store.set_state("supervisor_phase_timings", self.phase_timings)
         self.last_health_sample = now
 
     def _oldest_unpublished_age(self) -> float:
@@ -2040,10 +2042,7 @@ class RunSupervisor:
         return 0.0 if oldest is None else max(0.0, self.clock.time() - float(oldest))
 
     def _all_ready_checkpoints_published(self) -> bool:
-        for checkpoint in self.store.checkpoints():
-            ledger_id = int(checkpoint["id"])
-            if self.store.checkpoint_publication(ledger_id) is not None:
-                continue
+        for checkpoint in self.store.unpublished_checkpoints():
             digest = str(checkpoint.get("sha256") or "")
             if not digest:
                 path = Path(str(checkpoint["path"]))
@@ -2067,35 +2066,88 @@ class RunSupervisor:
     def _publish_state_archive(self, *, require_closed: bool = False) -> int:
         if not self._durable_state_archive_enabled():
             return 0
+        if self.lease is None:
+            raise RuntimeError("state archive publication requires the Run writer lease")
+
+        def heartbeat() -> None:
+            self._service_delivery()
+            # The active loop tolerates transient renewal failures to stop the
+            # learner gracefully. Publication must not continue on that grace.
+            if self.lease_misses:
+                raise LeaseUnavailable("state archive writer lease could not be renewed")
+
+        heartbeat()
         archive_root = self.run_dir / "state-archive"
-        closure_path = archive_root / "closure.json"
-        if not closure_path.is_file():
-            if require_closed:
-                raise RuntimeError("state archive is enabled but has no local closure")
-            return 0
-        closure_sha256 = file_sha256(closure_path)
-        if closure_sha256 == self.state_archive_closure_sha256:
-            publication = self.state_archive_publication
-            if require_closed and (publication is None or publication.get("status") != "closed"):
-                raise RuntimeError("state archive has no closed publication")
-            return 0
-        publication = self.authority.publish_state_archive(
-            run_id=self.manifest.run_id,
-            attempt_id=self.manifest.attempt_id,
-            archive_root=archive_root,
-        )
-        if require_closed and publication.get("status") != "closed":
-            raise RuntimeError("state archive final closure is not closed")
-        self.state_archive_publication = publication
-        self.state_archive_closure_sha256 = closure_sha256
-        self._emit(
-            "state_archive_published",
-            step=int(publication["step"]),
-            status=str(publication["status"]),
-            generation_sha256=str(publication["generation_sha256"]),
-            file_count=int(publication["file_count"]),
-        )
-        return 1
+        from gradlab.state_archive import archive_lock
+
+        with archive_lock(archive_root, exclusive=False):
+            heartbeat()
+            closure_path = archive_root / "closure.json"
+            if not closure_path.is_file():
+                if require_closed:
+                    raise RuntimeError("state archive is enabled but has no local closure")
+                return 0
+            closure_sha256 = file_sha256(closure_path)
+            if closure_sha256 == self.state_archive_closure_sha256:
+                publication = self.state_archive_publication
+                if require_closed and (
+                    publication is None or publication.get("status") != "closed"
+                ):
+                    raise RuntimeError("state archive has no closed publication")
+                return 0
+            publication = self.authority.publish_state_archive(
+                run_id=self.manifest.run_id,
+                attempt_id=self.manifest.attempt_id,
+                archive_root=archive_root,
+                heartbeat=heartbeat,
+            )
+            self.authority.prune_state_archive(self.lease, heartbeat=heartbeat)
+            if require_closed and publication.get("status") != "closed":
+                raise RuntimeError("state archive final closure is not closed")
+            self.state_archive_publication = publication
+            self.state_archive_closure_sha256 = closure_sha256
+            self._emit(
+                "state_archive_published",
+                step=int(publication["step"]),
+                status=str(publication["status"]),
+                generation_sha256=str(publication["generation_sha256"]),
+                file_count=int(publication["file_count"]),
+            )
+            return 1
+
+    def _advance_monitoring(self, *, final: bool = False) -> bool:
+        settings = self.train_config.get("checkpoint_monitoring") or {}
+        if not settings.get("enabled"):
+            return True
+        if self.monitoring is None:
+            from gradlab.monitor_supervisor import MonitoringQueue
+            if self.monitor_backend is None:
+                from gradlab.monitor_backend import SameHostEvalBackend
+                self.monitor_backend = SameHostEvalBackend(
+                    self.output_root / "monitoring", self.authority.models.config,
+                )
+            self.monitoring = MonitoringQueue(self, self.monitor_backend)
+        started = self.clock.monotonic()
+        try:
+            return self.monitoring.advance(final=final, canceled=self.cancel_requested)
+        except LeaseUnavailable:
+            raise
+        except Exception as exc:
+            self.store.set_state("monitoring_operational_failure", {"error": repr(exc)[:1000]})
+            if final:
+                raise
+            return False
+        finally:
+            self._record_phase("monitoring", started)
+
+    def _advance_evaluation_queue(self, now: float, *, force: bool) -> int:
+        activity = 0
+        if self.cancel_requested:
+            self._cancel_outstanding_evals()
+        else:
+            activity += self._reconcile_evals_before_submission()
+            activity += self._submit_pending_evals()
+        return activity + self._poll_evals(now, force=force)
 
     def active_iteration(self, *, now: float | None = None) -> int:
         """Advance active supervision once without sleeping."""
@@ -2105,19 +2157,27 @@ class RunSupervisor:
         self._renew_lease(instant)
         if self.lease_lost:
             return 0
+        monitoring_settings = self.train_config.get("checkpoint_monitoring") or {}
+        if (monitoring_settings.get("calibration") or {}).get("status") == "measuring":
+            sampled = self.store.state("calibration_host_load") or {"count": 0, "sum": 0.0, "max": 0.0, "at": -60.0}
+            if instant - sampled["at"] >= 60:
+                load = os.getloadavg()[0]
+                sampled = dict(count=sampled["count"] + 1, sum=sampled["sum"] + load,
+                               max=max(sampled["max"], load), at=instant)
+                self.store.set_state("calibration_host_load", sampled)
         self._observe_cancel_request()
         self._maintain_learner_stop(instant)
         activity += self._seal_metrics(instant)
+        self._service_delivery()
         activity += self._publish_checkpoints()
+        self._service_delivery()
         activity += self._publish_state_archive()
-        if self.cancel_requested:
-            self._cancel_outstanding_evals()
-        else:
-            activity += self._reconcile_evals_before_submission()
-            activity += self._submit_pending_evals()
-        activity += self._poll_evals(instant)
-        activity += self._publish_wandb()
+        self._advance_monitoring()
+        self._service_delivery()
+        activity += self._advance_evaluation_queue(instant, force=False)
+        activity += self._service_delivery(force=True)
         self._emit_health(instant)
+        self._lease_heartbeat()
         self._scratch_guard()
         unpublished_age = self._oldest_unpublished_age()
         if unpublished_age >= WANDB_WARNING_SECONDS:
@@ -2145,61 +2205,79 @@ class RunSupervisor:
             raise LeaseUnavailable("writer lease was lost while draining")
         self._observe_cancel_request()
         activity += self._seal_metrics(instant, force=True)
+        self._service_delivery()
         activity += self._publish_checkpoints()
+        self._service_delivery()
         activity += self._publish_state_archive()
-        if self.cancel_requested:
-            self._cancel_outstanding_evals()
-        else:
-            activity += self._reconcile_evals_before_submission()
-            activity += self._submit_pending_evals()
-        activity += self._poll_evals(instant, force=True)
-        activity += self._publish_wandb()
+        self._service_delivery()
+        activity += self._advance_evaluation_queue(instant, force=True)
+        activity += self._service_delivery()
+        monitoring_complete = self._advance_monitoring(final=True)
+        self._emit_health(instant)
+        activity += self._service_delivery(force=True)
         pending_frames = self.store.metric_outbox_stats()["frames"]
         converged = (
-            self._all_ready_checkpoints_published()
+            monitoring_complete
+            and self._all_ready_checkpoints_published()
             and self.store.all_evals_settled()
             and pending_frames == 0
+            and not self.store.next_metric_events(limit=1)
         )
         return activity, converged
 
     def _drain(self) -> None:
-        delivery_deadline: float | None = None
+        task_deadline = (
+            parse_utc_datetime(self.manifest.created_at).timestamp()
+            + int(self.manifest.compute["selected"]["max_duration_seconds"])
+        )
+        self._drain_deadline = task_deadline
+        try:
+            self._drain_until(task_deadline)
+        finally:
+            self._drain_deadline = None
+
+    def _drain_until(self, task_deadline: float) -> None:
+        stalled_since: float | None = None
+        progress: tuple[int, int] | None = None
         while True:
+            if self.clock.time() >= task_deadline:
+                raise TimeoutError("whole-task deadline exhausted during delivery drain")
+            activity, converged = self.drain_iteration()
             now = self.clock.monotonic()
-            activity, converged = self.drain_iteration(now=now)
-            if self.store.all_evals_settled():
-                if delivery_deadline is None:
-                    delivery_deadline = now + WANDB_DRAIN_TIMEOUT_SECONDS
-            else:
-                delivery_deadline = None
+            if self.clock.time() >= task_deadline:
+                raise TimeoutError("whole-task deadline exhausted during delivery drain")
             if converged:
                 return
-            if delivery_deadline is not None and now >= delivery_deadline:
-                raise TimeoutError(
-                    "post-evaluation delivery drain exceeded 300 seconds before "
-                    "checkpoints and local W&B delivery converged"
-                )
+            current_progress = (
+                self._wandb_high_water(), len(self.store.checkpoint_publications())
+            )
+            # Verified monitoring results can still await W&B. Do not wait for
+            # complete=True here: that would disable the delivery watchdog.
+            monitoring_work = self.monitoring is not None and any(
+                row["status"] in {"pending", "submitting", "running"}
+                for row in self.monitoring.receipt["inventory"]
+            )
+            delivery_pending = (
+                not self._all_ready_checkpoints_published()
+                or self.store.metric_outbox_stats()["frames"] != 0
+            )
+            if self.store.all_evals_settled() and not monitoring_work and delivery_pending:
+                if stalled_since is None or current_progress != progress:
+                    stalled_since = now
+                elif now - stalled_since >= WANDB_DRAIN_TIMEOUT_SECONDS:
+                    raise TimeoutError(
+                        "delivery drain made no checkpoint or local W&B progress for 300 seconds"
+                    )
+            else:
+                stalled_since = None
+            progress = current_progress
             if activity == 0:
                 self.clock.sleep(0.5)
 
     def _close_eval_admission_for_failure(self, failure: BaseException) -> None:
-        if self.eval_admission_closed:
-            return
-        reason = (
-            failure.stop_reason
-            if isinstance(failure, LearnerOperationalFailure)
-            else "supervisor_failure"
-        )
-        self.eval_admission_closed = True
-        self.store.set_state(
-            "automatic_eval_admission",
-            {
-                "closed": True,
-                "reason": reason,
-                "closed_at": self.clock.utc_now(),
-            },
-        )
-        self._emit("automatic_eval_admission_closed", reason=reason)
+        reason = failure.stop_reason if isinstance(failure, LearnerOperationalFailure) else "supervisor_failure"
+        if self.automatic_evaluation.close(self.store, reason=reason, closed_at=self.clock.utc_now()):
+            self._emit("automatic_eval_admission_closed", reason=reason)
 
     def _defer_unsettled_evals_after_failure(self) -> int:
         deferred = 0
@@ -2317,6 +2395,8 @@ class RunSupervisor:
         if checkpoint is None:
             raise RuntimeError("promoted checkpoint is absent from the public inventory")
         metrics = dict(verified_result.aggregates)
+        if (self.manifest.tracking or {}).get("delivery") == "local_only":
+            return
         assert self.projector is not None
         self.runtime.publish_promotion(
             self.projector,
@@ -2330,6 +2410,8 @@ class RunSupervisor:
         )
 
     def _wait_for_remote_promotion(self, receipt: PromotionReceipt) -> None:
+        if (self.manifest.tracking or {}).get("delivery") == "local_only":
+            return
         if not self.wandb_run_path:
             raise RuntimeError("W&B run path is unavailable")
         checkpoint = self.store.checkpoint_publication_by_id(receipt.checkpoint_id)
@@ -2361,6 +2443,8 @@ class RunSupervisor:
             self.clock.sleep(WANDB_DRAIN_REMOTE_PROBE_SECONDS)
 
     def _wait_for_remote_delivery(self, local_high_water: int) -> None:
+        if (self.manifest.tracking or {}).get("delivery") == "local_only":
+            return
         deadline = self.clock.monotonic() + WANDB_DRAIN_TIMEOUT_SECONDS
         while True:
             self._lease_heartbeat()
@@ -2369,7 +2453,7 @@ class RunSupervisor:
                 local_high_water=local_high_water,
                 force=True,
             )
-            if self.wandb_remote_high_water >= local_high_water:
+            if self.delivery_schedule.remote_high_water >= local_high_water:
                 return
             if self.clock.monotonic() >= deadline:
                 raise TimeoutError(
@@ -2390,11 +2474,32 @@ class RunSupervisor:
         projector = self.projector
         self.projector = None
         if projector is not None:
+            task_deadline = (
+                parse_utc_datetime(self.manifest.created_at).timestamp()
+                + int(self.manifest.compute["selected"]["max_duration_seconds"])
+            )
             self.runtime.close_wandb(
                 projector,
-                timeout_seconds=WANDB_DRAIN_TIMEOUT_SECONDS,
+                timeout_seconds=min(
+                    WANDB_FINISH_TIMEOUT_SECONDS,
+                    max(1.0, task_deadline - self.clock.time()),
+                ),
             )
         return high_water
+
+    def _training_success_evidence(self) -> dict[str, Any] | None:
+        from gradlab.training_success import training_success_evidence
+
+        recipe = self.recipe_document.get("recipe") or {}
+        goal = recipe.get("goal") or {}
+        objective = goal.get("objective") or {}
+        criterion = objective.get("training_success")
+        if criterion is None:
+            return None
+        return training_success_evidence(
+            criterion,
+            self.store.metric_history(str(criterion["metric"])),
+        )
 
     def _terminal_inventory(self) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
         checkpoints = self.store.checkpoint_publications()
@@ -2412,6 +2517,7 @@ class RunSupervisor:
                     "modal_call_id": str(row.get("modal_call_id") or ""),
                     "attempt": int(row.get("attempt") or 0),
                     "episode_count": len(result.get("episode_results") or []),
+                    "video": dict(result["video"]) if isinstance(result.get("video"), Mapping) else None,
                     "result_sha256": document_sha256(result) if result else None,
                     "reason": (
                         str(row.get("last_error") or "")
@@ -2470,7 +2576,7 @@ class RunSupervisor:
         if self._wait_for_learner_group_exit_with_lease(result_grace):
             evidence["group_gone"] = True
             evidence["completed_phase"] = "graceful"
-            self.learner_teardown_evidence = evidence
+            self.learner_state.teardown_evidence = evidence
             return None
         self.runtime.terminate_learner_group(learner)
         evidence["term_sent"] = True
@@ -2479,7 +2585,7 @@ class RunSupervisor:
         ):
             evidence["group_gone"] = True
             evidence["completed_phase"] = "term"
-            self.learner_teardown_evidence = evidence
+            self.learner_state.teardown_evidence = evidence
             return None
         self.runtime.kill_learner_group(learner)
         evidence["kill_sent"] = True
@@ -2488,10 +2594,9 @@ class RunSupervisor:
         ):
             evidence["group_gone"] = True
             evidence["completed_phase"] = "kill"
-            self.learner_teardown_evidence = evidence
+            self.learner_state.teardown_evidence = evidence
             return None
         evidence["completed_phase"] = "timeout"
-        self.learner_teardown_evidence = evidence
         return LearnerTeardownTimeout(
             "learner process group survived the cooperative stop request, "
             "SIGTERM, and SIGKILL deadlines"
@@ -2503,6 +2608,9 @@ class RunSupervisor:
         *,
         phase: str = "startup",
     ) -> int:
+        if self.lease_lost:
+            print(f"startup stopped after writer lease loss: {failure!r}", flush=True)
+            return 1
         receipt = TerminalReceipt(
             run_id=self.manifest.run_id,
             attempt_id=self.manifest.attempt_id,
@@ -2539,6 +2647,21 @@ class RunSupervisor:
         return 1
 
     def run(self) -> int:
+        with self.runtime.maintain_lease(
+            lambda: self._renew_lease(self.clock.monotonic(), background=True)
+        ):
+            try:
+                return self._run()
+            except LeaseUnavailable:
+                if not self.lease_lost:
+                    raise
+                print("run stopped after writer lease loss; publication is fenced", flush=True)
+                return 1
+            finally:
+                if self.monitoring is not None:
+                    self.monitoring.close()
+
+    def _run(self) -> int:
         try:
             self.validate_runtime()
             self.materialize()
@@ -2556,13 +2679,15 @@ class RunSupervisor:
             self.store.init()
             self.store.reset_interrupted_metric_frames()
             self._recover_durable_state()
+            self._lease_heartbeat()
             self.recovered_early_stop = (
                 self._authoritative_early_stop_receipt(attempt_id=self.manifest.attempt_id)
                 or self._prior_early_stop_receipt()
             )
             self._start_wandb()
+            self._lease_heartbeat()
             self._observe_cancel_request()
-            provisional_stop = self.eval_admission_closed or self.recovered_early_stop is not None
+            provisional_stop = self.automatic_evaluation.closed or self.recovered_early_stop is not None
             final_checkpoint_published = self._has_public_final_checkpoint()
             if self.recovery_mode == "drain-only" and not (
                 final_checkpoint_published or provisional_stop
@@ -2587,13 +2712,13 @@ class RunSupervisor:
                 if provisional_stop:
                     self._request_finalize_only_stop(
                         "eval_acceptance"
-                        if self.eval_admission_closed
+                        if self.automatic_evaluation.closed
                         else "provisional_training_early_stop"
                     )
         except BaseException as failure:
             projector = self.projector
             self.projector = None
-            if projector is not None:
+            if projector is not None and not self.lease_lost:
                 try:
                     self.runtime.close_wandb(
                         projector,
@@ -2643,7 +2768,7 @@ class RunSupervisor:
             if self.cancel_requested:
                 self._cancel_outstanding_evals()
             self._publish_state_archive(
-                require_closed=(not self.cancel_requested or self.learner_started_at is not None)
+                require_closed=(not self.cancel_requested or self.learner_state.started_at is not None)
             )
             self._publish_checkpoints()
             self.store.set_state(
@@ -2703,38 +2828,43 @@ class RunSupervisor:
             self.projector = None
             print("run stopped after writer lease loss; no further state was mutated", flush=True)
             return 1
+        tracking = dict(self.manifest.tracking or {"backend": "wandb", "delivery": "online"})
+        media_drain_started = self.clock.monotonic()
+        wandb_close_failed = False
         try:
-            wandb_high_water = self._finish_wandb()
+            service_high_water = self._finish_wandb() if tracking["delivery"] == "online" else 0
         except Exception as exc:
+            wandb_close_failed = True
             failure = failure or exc
-            wandb_high_water = self._wandb_high_water()
+            service_high_water = self._wandb_high_water()
+        wandb_high_water = (
+            service_high_water
+            if tracking["backend"] == "wandb" and tracking["delivery"] == "online"
+            else 0
+        )
         if failure is None:
             try:
-                self._wait_for_remote_delivery(wandb_high_water)
+                self._wait_for_remote_delivery(service_high_water)
                 if promotion is not None:
                     self._wait_for_remote_promotion(promotion)
+                self.store.set_state("wandb_final_drain_seconds", self.clock.monotonic() - media_drain_started)
             except Exception as exc:
                 failure = exc
         journal_archive: dict[str, Any] | None = None
         journal_expires_at: str | None = None
         if failure is None:
             try:
-                journal_archive = self.authority.archive_metric_journals(
+                journal_archive = self.authority.retain_metric_journals(
                     run_id=self.manifest.run_id,
                     heartbeat=self._lease_heartbeat,
-                )
-                journal_expires_at = (
-                    (self.clock.utc_datetime() + timedelta(days=METRIC_JOURNAL_RETENTION_DAYS))
-                    .isoformat()
-                    .replace("+00:00", "Z")
                 )
             except Exception as exc:
                 failure = exc
         checkpoints, evals = self._terminal_inventory()
         durable_checkpoint_step = max((int(row["step"]) for row in checkpoints), default=0)
         final_step = (
-            int(self.learner_final_step)
-            if self.learner_final_step is not None
+            int(self.learner_state.final_step)
+            if self.learner_state.final_step is not None
             else durable_checkpoint_step
         )
         state, default_stop_reason = _terminal_outcome(
@@ -2744,6 +2874,8 @@ class RunSupervisor:
             promotion=promotion,
             early_stop=early_stop,
         )
+        if tracking["delivery"] == "local_only" and state == "succeeded":
+            state = "complete_local"
         stop_reason = (
             default_stop_reason
             if failure is not None or self.cancel_requested
@@ -2764,23 +2896,34 @@ class RunSupervisor:
             checkpoint_inventory=checkpoints,
             eval_inventory=evals,
             wandb_high_water_mark=wandb_high_water,
+            tracking=tracking,
+            service_high_water_mark=service_high_water,
             drain={
                 "complete": failure is None,
+                "record_checkpoint_episode": self.manifest.compute.get("record_checkpoint_episode") is True,
                 "metric_segment_high_water": self.store.metric_segment_high_water(),
                 "eval_terminal_count": self.store.terminal_eval_count(),
                 "eval_deferred_count": self.store.deferred_eval_count(),
                 "journal_archive": journal_archive,
                 "journal_expires_at": journal_expires_at,
-                "wandb_remote_high_water_mark": self.wandb_remote_high_water,
+                "wandb_remote_high_water_mark": self.delivery_schedule.remote_high_water,
+                "service_remote_high_water_mark": (
+                    self.delivery_schedule.remote_high_water if tracking["delivery"] == "online" else 0
+                ),
                 "failure": (_bounded_exception_document(failure) if failure is not None else None),
-                "learner_terminal": self.learner_terminal_document,
-                "learner_teardown": self.learner_teardown_evidence or None,
+                "learner_terminal": self.learner_state.terminal_document,
+                "learner_teardown": self.learner_state.teardown_evidence or None,
                 "learner_log": self._learner_log_evidence(),
+                "checkpoint_monitoring": (self.monitoring.receipt if self.monitoring is not None else {"enabled": False}),
+                "calibration_host_load": self.store.state("calibration_host_load"),
+                "wandb_final_drain_seconds": self.store.state("wandb_final_drain_seconds"),
             },
             completed_at=self.clock.utc_now(),
             early_stop=(early_stop.to_dict() if early_stop is not None else None),
+            training_success=self._training_success_evidence(),
             state_archive=self.state_archive_publication,
         )
+        self._lease_heartbeat()
         self.authority.create_attempt_terminal(
             receipt,
             metrics=self.store.latest_metrics(),
@@ -2791,18 +2934,28 @@ class RunSupervisor:
             stop_reason=receipt.stop_reason,
             final_step=receipt.final_step,
         )
-        try:
-            self.runtime.publish_terminal(
-                self.train_config,
-                receipt,
-                timeout_seconds=WANDB_DRAIN_TIMEOUT_SECONDS,
+        if wandb_close_failed:
+            print(
+                "W&B terminal summary projection deferred because the prior "
+                "W&B session did not close",
+                flush=True,
             )
-        except Exception as exc:
-            print(f"W&B terminal summary projection failed: {exc!r}", flush=True)
+        else:
+            try:
+                self._lease_heartbeat()
+                if tracking["delivery"] == "online":
+                    self.runtime.publish_terminal(
+                        self.train_config,
+                        receipt,
+                        timeout_seconds=WANDB_DRAIN_TIMEOUT_SECONDS,
+                    )
+            except Exception as exc:
+                print(f"W&B terminal summary projection failed: {exc!r}", flush=True)
         if failure is not None:
             print(f"run failed: {failure!r}", flush=True)
             return 1
-        if self.evaluation_required and state == "succeeded":
+        if self.evaluation_required and state in {"succeeded", "complete_local"}:
+            self._lease_heartbeat()
             self.authority.create_terminal(receipt)
         if state == "failed":
             print(
@@ -2842,6 +2995,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    from gradlab.mlflow_tls import configure_private_mlflow_ca
+
+    configure_private_mlflow_ca()
     return RunSupervisor(manifest_uri=args.manifest_uri).run()
 
 

@@ -4,6 +4,7 @@ defaults:
 reward_shape: speedrun-v1
 recipe_id: ppo
 train:
+  checkpoint_steps: [500000, 1000000, 2000000, 4000000, 8000000, 12000000, 20000000, 25000000, 28000000]
   # The last accepted baseline cleared 100/100 by 28.6M transitions. Treat
   # failure to recover by 30M as a failed trajectory instead of spending 50M.
   timesteps: 30000000

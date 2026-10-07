@@ -5,6 +5,9 @@ reward_shape: speedrun-v1
 recipe_id: dstack-smoke
 description: Bounded dstack and durable-result smoke test for {{ goal_id }}.
 train:
+  checkpoint_freq: 0
+  checkpoint_steps: []
+  checkpoint_candidates: null
   timesteps: 512
   backend:
     config:

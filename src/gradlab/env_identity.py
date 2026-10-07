@@ -6,6 +6,10 @@ from copy import deepcopy
 from typing import Any
 
 from gradlab.action_codecs import validate_task_action_codec
+from gradlab.action_overrides import (
+    CONDITIONAL_ACTION_OVERRIDE_KEY,
+    normalize_conditional_action_overrides,
+)
 from gradlab.env_registry import environment_spec, policy_environment_compatibility_id
 from gradlab.environment_fields import (
     PREPROCESSING_FIELD_NAMES as PREPROCESSING_KEYS,
@@ -28,8 +32,11 @@ from gradlab.reward_transform import (
 from gradlab.rom_assets import manifest_from_train_config, portable_rom_asset_identity
 from gradlab.task_kernels import (
     CELL_NOVELTY_REWARD_KEY,
+    EVENT_DELTA_REWARDS_KEY,
+    EVENT_REWARDS_KEY,
     default_task_document,
     normalize_cell_novelty_config,
+    normalize_event_rewards,
     normalize_identity_outcome_precedence,
 )
 
@@ -37,7 +44,10 @@ from gradlab.task_kernels import (
 ENVIRONMENT_HASH_ALGORITHM = "gradlab.environment.v5"
 ENVIRONMENT_SCHEMA_VERSION = 5
 
-IDENTITY_REWARD_KEYS = frozenset({"reward_mode", CELL_NOVELTY_REWARD_KEY}) | COMMON_REWARD_KEYS
+IDENTITY_REWARD_KEYS = (
+    frozenset({"reward_mode", CELL_NOVELTY_REWARD_KEY, EVENT_REWARDS_KEY, EVENT_DELTA_REWARDS_KEY})
+    | COMMON_REWARD_KEYS
+)
 
 
 def _normalize_preprocessing(identity: dict[str, Any]) -> None:
@@ -89,6 +99,16 @@ def task_config_from_train_config(
     if isinstance(task, Mapping) and task:
         canonical = deepcopy(dict(task))
     validate_task_config(canonical)
+    action = dict(canonical["action"])
+    conditional_overrides = normalize_conditional_action_overrides(
+        action,
+        canonical["signals"],
+    )
+    if conditional_overrides:
+        action[CONDITIONAL_ACTION_OVERRIDE_KEY] = conditional_overrides
+    else:
+        action.pop(CONDITIONAL_ACTION_OVERRIDE_KEY, None)
+    canonical["action"] = action
     from gradlab.model_inputs import normalize_task_model_inputs
 
     canonical = normalize_task_model_inputs(canonical)
@@ -98,6 +118,17 @@ def task_config_from_train_config(
         normalized["reward"][CELL_NOVELTY_REWARD_KEY] = normalize_cell_novelty_config(
             cell_novelty,
             label=f"task.reward.{CELL_NOVELTY_REWARD_KEY}",
+        )
+    event_rewards = normalized["reward"].get(EVENT_REWARDS_KEY)
+    if event_rewards is not None:
+        normalized["reward"][EVENT_REWARDS_KEY] = normalize_event_rewards(
+            event_rewards,
+            label=f"task.reward.{EVENT_REWARDS_KEY}",
+        )
+    if EVENT_DELTA_REWARDS_KEY in normalized["reward"]:
+        normalized["reward"][EVENT_DELTA_REWARDS_KEY] = normalize_event_rewards(
+            normalized["reward"][EVENT_DELTA_REWARDS_KEY],
+            label=f"task.reward.{EVENT_DELTA_REWARDS_KEY}",
         )
     return normalized
 
@@ -131,7 +162,7 @@ def validate_task_config(task: Mapping[str, Any], *, label: str = "task") -> Non
         raise ValueError(f"{label}.action.set must be a non-empty string")
     if task_id == "mario" and action_set != "native":
         raise ValueError(f"{label}.action.set must be 'native'")
-    extra_action_keys = sorted(set(action) - {"set", "codec"})
+    extra_action_keys = sorted(set(action) - {"set", "codec", CONDITIONAL_ACTION_OVERRIDE_KEY})
     if extra_action_keys:
         raise ValueError(f"{label}.action has unexpected keys: {extra_action_keys}")
     codec = action.get("codec")
@@ -155,6 +186,7 @@ def validate_task_config(task: Mapping[str, Any], *, label: str = "task") -> Non
         ):
             continue
         raise ValueError(f"{label}.signals.{name} must be a signal name or non-empty list")
+    normalize_conditional_action_overrides(action, signals, label=f"{label}.action")
     events = task["events"]
     if len(events) > 64:
         raise ValueError(f"{label}.events supports at most 64 events")
@@ -173,18 +205,25 @@ def validate_task_config(task: Mapping[str, Any], *, label: str = "task") -> Non
             "unchanged_for",
             "equals_for",
             "equals",
+            "previous_equals",
         }:
             raise ValueError(f"{label}.events.{name}.operation is unsupported: {operation!r}")
         if operation in {"unchanged_for", "equals_for"}:
             steps = raw_rule.get("steps")
             if not isinstance(steps, int) or isinstance(steps, bool) or steps <= 0:
                 raise ValueError(f"{label}.events.{name}.steps must be a positive integer")
-        if operation in {"equals", "equals_for"}:
+        if operation in {"equals", "equals_for", "previous_equals"}:
             value = raw_rule.get("value")
             if not isinstance(value, int | float) or isinstance(value, bool):
                 raise ValueError(f"{label}.events.{name}.value must be a number")
     if task_id == "identity":
-        supported_operations = {"decrease", "increase", "equals_for"}
+        supported_operations = {
+            "decrease",
+            "increase",
+            "equals",
+            "equals_for",
+            "previous_equals",
+        }
         unsupported_events = sorted(
             name
             for name, rule in events.items()
@@ -193,7 +232,8 @@ def validate_task_config(task: Mapping[str, Any], *, label: str = "task") -> Non
         if unsupported_events:
             raise ValueError(
                 f"{label} identity events support only operations "
-                "'decrease', 'increase', and 'equals_for': " + ", ".join(unsupported_events)
+                "'decrease', 'increase', 'equals', 'equals_for', and 'previous_equals': "
+                + ", ".join(unsupported_events)
             )
     if task_id == "mario":
         expected_events = {
@@ -257,13 +297,36 @@ def validate_task_config(task: Mapping[str, Any], *, label: str = "task") -> Non
         names = termination[outcome]
         if not isinstance(names, list | tuple):
             raise ValueError(f"{label}.termination.{outcome} must be a list")
-        missing = sorted({str(name) for name in names} - set(events))
+        event_names: list[str] = []
+        for condition in names:
+            if isinstance(condition, Mapping):
+                if task_id != "identity" or set(condition) != {"event", "count"}:
+                    raise ValueError(
+                        f"{label}.termination.{outcome} counted conditions require "
+                        "identity task, event, and count"
+                    )
+                count = condition["count"]
+                if not isinstance(count, int) or isinstance(count, bool) or count < 1:
+                    raise ValueError(
+                        f"{label}.termination.{outcome} count must be a positive integer"
+                    )
+                event_name = str(condition["event"])
+                if count > 1 and events.get(event_name, {}).get("operation") not in {
+                    "increase", "decrease", "equals_for",
+                }:
+                    raise ValueError(
+                        f"{label}.termination.{outcome} counted event {event_name!r} "
+                        "must fire on a transition"
+                    )
+            else:
+                event_name = str(condition)
+            event_names.append(event_name)
+        missing = sorted(set(event_names) - set(events))
         if missing:
             raise ValueError(
                 f"{label}.termination.{outcome} references unknown events: {', '.join(missing)}"
             )
-        for name in names:
-            event_name = str(name)
+        for event_name in event_names:
             previous = event_outcomes.get(event_name)
             if previous is not None:
                 raise ValueError(
@@ -297,9 +360,9 @@ def validate_task_config(task: Mapping[str, Any], *, label: str = "task") -> Non
     if extra_reward_keys:
         raise ValueError(f"{label}.reward has unexpected keys: {extra_reward_keys}")
     reward_transform_from_reward(reward, label=f"{label}.reward")
-    if task_id == "identity" and reward_mode not in {None, "native", "sample-factory-v0"}:
+    if task_id == "identity" and reward_mode not in {None, "native", "events", "sample-factory-v0"}:
         raise ValueError(
-            f"{label}.reward.reward_mode must be 'native' or 'sample-factory-v0' "
+            f"{label}.reward.reward_mode must be 'native', 'events', or 'sample-factory-v0' "
             "for the identity task"
         )
     if task_id == "identity" and reward_mode == "sample-factory-v0":
@@ -326,6 +389,36 @@ def validate_task_config(task: Mapping[str, Any], *, label: str = "task") -> Non
             raise ValueError(
                 f"{label}.reward.reward_mode='sample-factory-v0' requires declared task "
                 f"signal(s): {', '.join(missing_signals)}"
+            )
+    if reward_mode == "events" and CELL_NOVELTY_REWARD_KEY in reward:
+        raise ValueError(f"{label}.reward events mode does not support cell_novelty")
+    if reward_mode == "events" and not any(
+        reward.get(key) for key in (EVENT_REWARDS_KEY, EVENT_DELTA_REWARDS_KEY)
+    ):
+        raise ValueError(f"{label}.reward events mode requires event rewards")
+    delta_rewards = reward.get(EVENT_DELTA_REWARDS_KEY)
+    if delta_rewards is not None:
+        normalized_delta = normalize_event_rewards(
+            delta_rewards, label=f"{label}.reward.{EVENT_DELTA_REWARDS_KEY}"
+        )
+        for name in normalized_delta:
+            if name not in events or events[name].get("operation") not in {"increase", "decrease"}:
+                raise ValueError(
+                    f"{label}.reward delta event {name!r} requires an increase or decrease event"
+                )
+        if set(normalized_delta) & set(reward.get(EVENT_REWARDS_KEY) or {}):
+            raise ValueError(f"{label}.reward fixed and delta event rewards overlap")
+    event_rewards = reward.get(EVENT_REWARDS_KEY)
+    if event_rewards is not None:
+        normalized_event_rewards = normalize_event_rewards(
+            event_rewards,
+            label=f"{label}.reward.{EVENT_REWARDS_KEY}",
+        )
+        missing_events = sorted(set(normalized_event_rewards) - set(events))
+        if missing_events:
+            raise ValueError(
+                f"{label}.reward.{EVENT_REWARDS_KEY} references unknown events: "
+                + ", ".join(missing_events)
             )
     cell_novelty = reward.get(CELL_NOVELTY_REWARD_KEY)
     if cell_novelty is not None:

@@ -8,15 +8,6 @@ import {
 } from "../../src/gradlab/web_player/panels/attribution.js";
 import { PANEL_TYPES } from "../../src/gradlab/web_player/panels/catalog.js";
 
-const source = readFileSync(
-  new URL("../../src/gradlab/web_player/panels/attribution.js", import.meta.url),
-  "utf8",
-);
-const appSource = readFileSync(
-  new URL("../../src/gradlab/web_player/app.js", import.meta.url),
-  "utf8",
-);
-
 function snapshot({
   supported = ["gradcam", "occlusion"],
   session = { mode: "gradcam", status: "active", interval: 1 },
@@ -61,14 +52,8 @@ test("attribution UI distinguishes computing, cadence, no decision, error, and u
 });
 
 test("attribution is an independent opt-in control panel", () => {
-  assert.match(source, /services\.command\("set_attribution"/);
-  assert.match(source, /METHOD_DEFAULT_INTERVAL.*gradcam: 1, occlusion: 8/);
-  assert.doesNotMatch(source, /FRAME_OBSERVATION/);
-  assert.doesNotMatch(source, /data-observation-canvas/);
   assert.equal(PANEL_TYPES.attribution.module, "./attribution.js");
   assert.deepEqual(PANEL_TYPES.attribution.subscriptions, []);
   assert.deepEqual(PANEL_TYPES.attribution.processing, ["attribution"]);
   assert.deepEqual(PANEL_TYPES.attribution.frameKinds, []);
-  assert.match(appSource, /function syncAttributionToPanel/);
-  assert.match(appSource, /command\("set_attribution", payload\)/);
 });

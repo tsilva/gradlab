@@ -75,7 +75,7 @@ match the resolved image stack.
 
 ## Shared ViZDoom action head
 
-Every checked-in `vizdoom-turbo` goal can opt into the same policy head without changing
+Every checked-in `env-vizdoom-turbo` goal can opt into the same policy head without changing
 its default recipe:
 
 ```yaml

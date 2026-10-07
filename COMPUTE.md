@@ -10,8 +10,8 @@ host-specific capacity belong in the operator-local inventory at
 Copy `ops/operator.example.toml` to
 `~/.config/gradlab/operator.toml`. Its schema-v3 `[dstack]` section names the
 default coordinator and fleet. Each coordinator records an immutable ID,
-project, private endpoint, and Keychain token reference; each fleet records its
-owning coordinator and task resources.
+project, private endpoint, Keychain token reference, and optional SSH tunnel
+metadata; each fleet records its owning coordinator and task resources.
 
 The file may contain non-sensitive metadata and Keychain references only.
 Secrets remain in the referenced credential store or an explicit process
@@ -21,6 +21,11 @@ before launching:
 ```bash
 gradlab experiment operator-preflight --json
 ```
+
+Preflight resolves the checked-in project metrics default. To check a launch's
+recipe, inherited evaluation mode, and overrides, use `--recipe-file <recipe>`
+and repeat the launch's `--set <key=value>` arguments. It never selects another
+metrics backend when the selected service is unavailable.
 
 An explicit `--target` overrides `dstack.default_fleet`. Local or automatic
 compute fails closed when the selected fleet is not configured.
@@ -41,20 +46,43 @@ compute fails closed when the selected fleet is not configured.
 total-cost bounds. On-demand remains opt-in even with a budget. Every task has a
 finite `max_duration`.
 
-GradLab v1 schedules one training container per single-GPU host. The generic
-workload floor remains 12 CPU, 40 GiB memory, one GPU, and 50 GiB disk; local
+GradLab schedules one training container per single-GPU host or explicitly
+configured CPU-only local worker. The generic GPU workload floor remains
+12 CPU, 40 GiB memory, one GPU, and 50 GiB disk; local
 inventory records whether a particular host satisfies it. An explicitly
 authorized host-specific exception may declare a different task request under
 `[dstack.fleets.<fleet>]` in private `operator.toml`; the resolved CPU, memory,
 GPU, and disk request is frozen into the run manifest and applies only to that
 fleet.
 
+CPU-only local workers declare `gpu = "0"` and explicit CPU, memory, and disk
+requests in private fleet configuration. They use the same exact-source image
+receipt, supervisor, storage, evaluation policy, and terminal drain as GPU
+workers. Select a CPU-compatible recipe or record an explicit device override;
+target selection does not rewrite learning parameters.
+
+The current training image is `linux/amd64`. An Apple silicon worker using that
+exact image needs verified x86-64 emulation inside a Linux worker with Docker,
+SSH, and systemd. Installing Docker Desktop alone does not enroll such a
+worker. Verify image import, a CPU learning update, and provider compatibility
+before enrollment is recorded as ready. Capacity must account for the expanded
+image, VM storage, checkpoints, and space left for the operator workstation.
+
 ## dstack control plane
 
 GradLab pins dstack CLI and server `0.20.28`. A deployment must keep its API
 private, its state host-owned, and its secrets outside source control. Operators
-normally reach the endpoint through an SSH tunnel described in their private
-inventory.
+normally reach the endpoint through SSH destinations recorded under the
+coordinator's `ssh_tunnel` entry in private `operator.toml`.
+
+Every dstack-backed lifecycle command reuses a reachable loopback endpoint when
+one already exists. Otherwise, GradLab opens a process-scoped SSH tunnel,
+trying that coordinator's destinations in order, and keeps it alive through
+submission and `--follow`. Command exit or interruption closes only a tunnel
+started by that GradLab process; an existing operator-owned tunnel is left
+alone. Destination fallback is transport fallback to the same coordinator,
+never coordinator or fleet failover. GradLab does not upgrade dstack or install
+a persistent tunnel service.
 
 `gradlab experiment launch` refreshes encrypted project-scoped dstack secrets
 from the operator's private environment. Submitted tasks contain secret
@@ -81,12 +109,27 @@ Portable examples live under `ops/dstack/`. Copy and specialize them outside
 the repository, for example beneath `~/.config/gradlab/dstack/`. Never check in
 real hostnames, SSH users, identity paths, or fleet names.
 
+Online MLflow Runs require an operator-declared private HTTPS route and an exact
+`MLFLOW_ALLOWED_FLEETS` allowlist. The selected fleet must be enrolled in the
+operator-local inventory and must pass service authentication preflight before
+runtime preparation or dstack submission. The private-service pilot procedure is in
+`ops/mlflow/README.md`.
+
+`MLFLOW_AUTH_MODE=basic` is the default and requires writer credentials.
+Explicit `network` mode requires private HTTPS and operator-enforced private
+network access controls, with no basic credentials. Its resolved authentication
+mode is frozen in the Run and required on retries. Private CA configuration is
+used for both operator preflight and the training task.
+
 ## Modal evaluation
 
-Modal is the v1 evaluation backend for short CPU acceptance jobs. It receives
-no W&B or control-private credentials and writes only evaluation-private
-results/evidence. The lease-holding training supervisor projects accepted
-evaluation metrics into W&B.
+Modal is the default evaluation backend for short CPU acceptance jobs. An
+explicit training-container option runs the same frozen evaluation contract
+in bounded CPU work alongside training; evaluation may also be disabled.
+Modal receives
+no metrics-service or control-private credentials and writes only evaluation-private
+results/evidence. The lease-holding training supervisor projects evaluation
+metrics into the Run's selected online service and retains them in its journal.
 
 A native Modal hard budget must be configured before a final acceptance launch.
 Per-run forecasts or alerts are not distributed reservations.
@@ -130,3 +173,44 @@ Before launch:
 After terminal state, verify the private R2 terminal receipt, dstack resource
 release, public checkpoint/index access, and credential-free playback. A
 successful dstack task without the terminal receipt is an operational failure.
+
+## Checkpoint Monitoring
+
+Opt-in monitoring uses a separate CPU process on the training host. Freeze the
+scientific episode contract, episode count and checkpoint cadence before launch.
+Bound inference, provider, encoding and delivery concurrency together while the
+learner is active; preserve training memory and scratch headroom. After learner
+exit, use the task's full allocated CPU capacity for multiple Checkpoints within
+shared finite RAM, local-spool, cumulative R2 contribution and whole-task time
+limits. Local reclamation never replenishes the retained-data allowance.
+
+After learning, spare process slots also evaluate independent episodes from the
+same Checkpoint. Atomic Attempt-local claims assign immutable manifest ordinals;
+each process loads the saved Policy and owns its episode RNG. Main and helper
+processes share the task CPU count and each reserves one worker memory/spool
+allowance. Recovery reuses verified R2 episodes, and cancellation joins every
+owned process before reporting quiescence.
+
+Each episode process keeps Policy inference sequential and overlaps at most
+two R2 operations, with at most three pending delivery jobs. Pending chunk bytes
+remain within the worker's existing memory and spool limits. An episode manifest
+is published only after every chunk and reconstruction reference is remotely
+verified. Integrity checks also use two bounded I/O slots; size accounting uses
+paginated object listings. These bounds are part of the source-bound calibration.
+
+An explicit calibration must measure representative early, intermediate and
+stronger compatible Policies, including long episodes, capture, encoding, upload,
+video delivery and concurrent learner throughput. Bind reuse to recipe/Policy
+architecture, provider, source/runtime, episode contract, schema/encoder, hardware
+allocation and worker settings. Reject infeasible 400-episode budgets; never
+silently lower the count, change scientific conditions, raise limits or allocate
+remote compute. Missing representative inputs mean incomplete calibration.
+
+Calibrated enablement of the FirstWall PPO recipe requires repeated matched
+monitoring-off/on measurements at the same cadence supporting at most 2%
+training-throughput loss. An explicit Run override may admit uncalibrated
+monitoring while preserving compatibility, resource and deadline checks; it
+does not establish throughput support.
+Report uncertainty, resources, retained bytes, upload backlog, total completion
+time and GPU idle finalization separately. Uncertain evidence leaves support
+unproven. Calibration and live campaigns need separate compute authorization.

@@ -98,6 +98,20 @@ class PolicyRuntime:
     def reset(self, lanes: Any | None = None) -> None:
         reset_policy_state(self.model, lanes)
 
+    @property
+    def supports_sampling_temperature(self) -> bool:
+        from stable_baselines3.common.distributions import (
+            BernoulliDistribution, CategoricalDistribution,
+            DiagGaussianDistribution, MultiCategoricalDistribution,
+        )
+        from gradlab.action_distributions import LegalTupleCategoricalDistribution
+
+        return isinstance(
+            getattr(getattr(self.model, "policy", None), "action_dist", None),
+            (BernoulliDistribution, CategoricalDistribution, DiagGaussianDistribution,
+             MultiCategoricalDistribution, LegalTupleCategoricalDistribution),
+        )
+
     def decide(
         self,
         observation: Any,
@@ -105,7 +119,12 @@ class PolicyRuntime:
         action_selection_mode: str | None = None,
         execution_context: Any | None = None,
         include_diagnostics: bool = True,
+        sampling_temperature: float = 1.0,
     ) -> PolicyBatchDecision:
+        if not np.isfinite(sampling_temperature) or sampling_temperature <= 0:
+            raise ValueError("sampling temperature must be finite and greater than zero")
+        if sampling_temperature != 1.0 and not self.supports_sampling_temperature:
+            raise ValueError("this policy does not support sampling temperature")
         requested, effective = normalize_action_selection_mode(
             self.capabilities,
             action_selection_mode,
@@ -122,7 +141,10 @@ class PolicyRuntime:
                 else actor_critic_policy_actions
             )
             decisions = decision_function(
-                self.model, observation, deterministic=effective == "deterministic"
+                self.model,
+                observation,
+                deterministic=effective == "deterministic",
+                sampling_temperature=sampling_temperature,
             )
         else:
             custom = getattr(self.model, "policy_decisions", None)
@@ -144,6 +166,7 @@ class PolicyRuntime:
         decisions = tuple(
             replace(
                 decision,
+                sampling_temperature=sampling_temperature if effective == "stochastic" else 1.0,
                 requested_action_selection_mode=requested,
                 action_selection_mode=effective,
             )
@@ -190,6 +213,18 @@ class PolicyRuntime:
             action_selection_mode=mode,
             execution_context=execution_context,
         )
+
+    def state_values(self, observation: Any) -> np.ndarray:
+        if STATE_VALUE not in self.capabilities.introspection:
+            raise RuntimeError(
+                f"{self.capabilities.algorithm_id} does not expose a state-value critic"
+            )
+        from gradlab.play_debug import actor_critic_state_values
+
+        values = actor_critic_state_values(self.model, observation)
+        if not np.isfinite(values).all():
+            raise RuntimeError("policy runtime produced a non-finite state value")
+        return values
 
 
 def bind_policy_action_space(

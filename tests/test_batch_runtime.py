@@ -379,6 +379,36 @@ class BatchRuntimeTests(unittest.TestCase):
         ):
             runtime.step(np.zeros((runtime.num_envs, 3), dtype=np.int8))
 
+    def test_policy_reset_cells_preserve_provider_signal_dtype(self):
+        provider = DeterministicNativeVectorProvider()
+        provider._x = np.zeros(provider.num_envs, dtype=np.int16)
+        descriptor = descriptor_for(provider)
+        descriptor = ProviderDescriptor(
+            provider_id=descriptor.provider_id,
+            native_observation_space=descriptor.native_observation_space,
+            native_action_space=descriptor.native_action_space,
+            signal_schema={
+                **descriptor.signal_schema,
+                "x": SignalSpec("x", np.int16),
+            },
+            start_catalog=descriptor.start_catalog,
+            render_support=descriptor.render_support,
+            observation_ownership=descriptor.observation_ownership,
+            observation_buffer_depth=descriptor.observation_buffer_depth,
+        )
+        kernel = IdentityTaskDefinition(signals={"cell": "x"}).bind(
+            descriptor,
+            provider.num_envs,
+        )
+        runtime = BatchRuntime(provider, descriptor, kernel, run_seed=17)
+        runtime.reset()
+
+        keys = runtime.policy_reset_cell_keys(
+            {"dimensions": [{"signal": "cell", "bucket_size": 1}]}
+        )
+
+        self.assertEqual(len(keys), provider.num_envs)
+
     def test_reset_start_identity_rejects_noncurrent_aliases(self):
         _provider, runtime = self.make_identity_runtime()
 
@@ -541,11 +571,14 @@ class BatchRuntimeTests(unittest.TestCase):
         self.assertEqual(len(provider.reset_calls), 2)
 
         records = runtime.drain_records()
-        self.assertEqual(len(records), 1)
-        self.assertEqual(records[0].lane, 0)
-        self.assertEqual(records[0].episode_return, 2.5)
-        self.assertEqual(records[0].episode_length, 1)
-        self.assertEqual(records[0].outcome, Outcome.NEUTRAL)
+        self.assertEqual(len(records), 2)
+        metrics = next(record for record in records if isinstance(record, BatchMetricRecord))
+        np.testing.assert_array_equal(metrics.metrics["shaped_reward"], [2.5, 1.0])
+        episode = next(record for record in records if isinstance(record, EpisodeRecord))
+        self.assertEqual(episode.lane, 0)
+        self.assertEqual(episode.episode_return, 2.5)
+        self.assertEqual(episode.episode_length, 1)
+        self.assertEqual(episode.outcome, Outcome.NEUTRAL)
         self.assertEqual(runtime.drain_records(), [])
 
     def test_identity_runtime_bootstraps_success_at_a_provider_truncation(self):
@@ -1079,9 +1112,7 @@ class MarioKernelTests(unittest.TestCase):
         provider.queue_step(level_hi=[7, 6], level_lo=[3, 3], game_mode=[2, 1], x=[100, 100])
         final = runtime.step(np.asarray([0, 0]))
         records = runtime.drain_records()
-        metric_record = next(
-            record for record in records if isinstance(record, BatchMetricRecord)
-        )
+        metric_record = next(record for record in records if isinstance(record, BatchMetricRecord))
         episodes = [record for record in records if isinstance(record, EpisodeRecord)]
         final_events = [record for record in records if isinstance(record, TaskEventRecord)]
 
@@ -1186,6 +1217,7 @@ class MarioKernelTests(unittest.TestCase):
                     "score": "custom_score",
                     "lives": "custom_lives",
                     "level": ["world", "stage"],
+                    "cell": "flag",
                 },
                 "events": {
                     "stalled": {
@@ -1216,11 +1248,19 @@ class MarioKernelTests(unittest.TestCase):
             native_observation_space=provider.single_observation_space,
             native_action_space=provider.single_action_space,
             signal_schema={
-                name: SignalSpec(name)
-                for name in ("custom_x", "custom_score", "custom_lives", "world", "stage")
+                name: SignalSpec(name, np.bool_ if name == "flag" else np.float32)
+                for name in (
+                    "custom_x",
+                    "custom_score",
+                    "custom_lives",
+                    "world",
+                    "stage",
+                    "flag",
+                )
             },
         )
         kernel = MarioTaskDefinition(compiled).bind(descriptor, provider.num_envs)
+        kernel.validate_archive_signal("cell")
         actions = np.asarray([[1, 0, 1], [0, 1, 0]], dtype=np.int8)
 
         self.assertIs(kernel.action_space, descriptor.native_action_space)
@@ -1495,7 +1535,10 @@ class GradLabVecEnvTests(unittest.TestCase):
         np.testing.assert_array_equal(dones, [False, True])
         np.testing.assert_array_equal(infos[1]["terminal_observation"]["image"], [8, 8])
         self.assertEqual(provider.reset_calls[0]["seed"], [100, 101])
-        self.assertEqual(len(env.drain_records()), 1)
+        records = env.drain_records()
+        self.assertEqual(len(records), 2)
+        self.assertEqual(sum(isinstance(record, EpisodeRecord) for record in records), 1)
+        self.assertEqual(sum(isinstance(record, BatchMetricRecord) for record in records), 1)
         self.assertEqual(env.drain_records(), [])
         self.assertEqual(len(env.get_images()), 2)
         env.close()

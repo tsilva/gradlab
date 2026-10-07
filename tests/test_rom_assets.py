@@ -264,7 +264,7 @@ def test_rom_identity_changes_environment_hash_but_runtime_path_does_not(tmp_pat
     first = _manifest(_rom(tmp_path / "one.nes", b"one"))
     second = _manifest(_rom(tmp_path / "two.nes", b"two"))
     base = {
-        "env_provider": "stable-retro-turbo",
+        "env_provider": "env-stableretro-turbo",
         "game": GAME,
         "state": "Level1-1",
         "task": {},
@@ -351,12 +351,12 @@ def test_rom_import_uses_environment_without_loading_dotenv(
 
     with (
         patch("gradlab.rom_cli.load_env_file") as load_dotenv,
-        patch("stable_retro.scripts.import_path.main", side_effect=fake_import),
+        patch("env_stableretro_turbo.scripts.import_path.main", side_effect=fake_import),
     ):
         assert rom_main(["import"]) == 0
 
     load_dotenv.assert_not_called()
-    assert observed_argv == [["stable_retro.import", str(tmp_path)]]
+    assert observed_argv == [["env_stableretro_turbo.import", str(tmp_path)]]
     assert f"ROM import finished from {tmp_path}" in capsys.readouterr().out
 
 

@@ -61,8 +61,8 @@ ENVIRONMENT_FIELD_SPECS = (
         "env_provider",
         non_empty=True,
         help=(
-            "Environment provider id. Supported: gradlab, stable-retro-turbo, "
-            "supermariobrosnes-turbo, ale-py, gymnasium."
+            "Environment provider id. Supported: gradlab, env-stableretro-turbo, "
+            "env-supermariobrosnes-turbo-emu, ale-py, gymnasium."
         ),
     ),
     EnvironmentFieldSpec(

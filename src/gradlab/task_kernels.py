@@ -233,6 +233,103 @@ def _identity_apply_event_outcome(
 
 
 @njit(cache=True, nogil=True)
+def _identity_counted_event_outcome_kernel(
+    event_bits,
+    event_bit,
+    event_counts,
+    required_count,
+    event_outcome,
+    event_bootstrap,
+    outcome_priorities,
+    terminated,
+    truncated,
+    outcomes,
+):
+    for lane in range(event_bits.shape[0]):
+        if not event_bits[lane] & event_bit:
+            continue
+        event_counts[lane] += 1
+        if event_counts[lane] == required_count:
+            _identity_apply_event_outcome(
+                event_outcome,
+                event_bootstrap,
+                outcome_priorities,
+                lane,
+                terminated,
+                truncated,
+                outcomes,
+            )
+
+
+@njit(cache=True, nogil=True)
+def _identity_equals_event_kernel(
+    values,
+    expected_value,
+    event_bit,
+    event_outcome,
+    event_bootstrap,
+    outcome_priorities,
+    terminated,
+    truncated,
+    outcomes,
+    event_bits,
+):
+    for lane in range(values.shape[0]):
+        if values[lane] != expected_value:
+            continue
+
+        event_bits[lane] |= event_bit
+        _identity_apply_event_outcome(
+            event_outcome,
+            event_bootstrap,
+            outcome_priorities,
+            lane,
+            terminated,
+            truncated,
+            outcomes,
+        )
+
+
+@njit(cache=True, nogil=True)
+def _identity_previous_equals_event_kernel(
+    values,
+    expected_value,
+    previous_values,
+    previous_valid,
+    transition_sources,
+    transition_targets,
+    event_bit,
+    event_outcome,
+    event_bootstrap,
+    outcome_priorities,
+    terminated,
+    truncated,
+    outcomes,
+    event_bits,
+):
+    for lane in range(values.shape[0]):
+        current_value = values[lane]
+        transition_sources[lane] = previous_values[lane] if previous_valid[lane] else current_value
+        transition_targets[lane] = current_value
+        matched = previous_valid[lane] and previous_values[lane] == expected_value
+        previous_values[lane] = current_value
+        previous_valid[lane] = True
+        if not matched:
+            continue
+
+        event_bits[lane] |= event_bit
+        _identity_apply_event_outcome(
+            event_outcome,
+            event_bootstrap,
+            outcome_priorities,
+            lane,
+            terminated,
+            truncated,
+            outcomes,
+        )
+
+
+@njit(cache=True, nogil=True)
 def _identity_equals_for_event_kernel(
     values,
     expected_value,
@@ -669,6 +766,34 @@ class TaskStep:
 
 
 CELL_NOVELTY_REWARD_KEY = "cell_novelty"
+EVENT_REWARDS_KEY = "event_rewards"
+EVENT_DELTA_REWARDS_KEY = "event_delta_rewards"
+
+
+def normalize_event_rewards(
+    value: Mapping[str, Any],
+    *,
+    label: str = "task.reward.event_rewards",
+) -> dict[str, float]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{label} must be an object")
+    if not value:
+        raise ValueError(f"{label} must not be empty")
+    normalized: dict[str, float] = {}
+    for name, coefficient in value.items():
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError(f"{label} keys must be non-empty event names")
+        if (
+            not isinstance(coefficient, int | float)
+            or isinstance(coefficient, bool)
+            or not math.isfinite(float(coefficient))
+            or float(coefficient) == 0.0
+        ):
+            raise ValueError(f"{label}.{name} must be a finite non-zero number")
+        normalized[name] = float(coefficient)
+    return normalized
+
+
 CELL_NOVELTY_EPISODE_UNIQUE_CELLS = "cell_novelty_episode_unique_cells"
 _CELL_NOVELTY_KEYS = frozenset({"cell", "first_visit_bonus", "episode_bonus_cap"})
 
@@ -777,7 +902,53 @@ class BoundTaskKernel(Protocol):
     ) -> None: ...
 
 
-class RewardTransformTaskKernel:
+class _TaskKernelWrapper:
+    """Delegate unchanged task operations while wrappers implement their own transforms."""
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.kernel, name)
+
+    def map_actions(self, actions: Any) -> Any:
+        return self.kernel.map_actions(actions)
+
+    def encode_observations(self, observations: Any) -> Any:
+        return self.kernel.encode_observations(observations)
+
+    def on_reset(
+        self,
+        reset_observations: Any,
+        reset_signals: Mapping[str, Any],
+        mask: np.ndarray,
+    ) -> Any:
+        return self.kernel.on_reset(reset_observations, reset_signals, mask)
+
+    def validate_archive_signal(self, semantic_name: str) -> None:
+        return self.kernel.validate_archive_signal(semantic_name)
+
+    def archive_signal_values(
+        self,
+        semantic_name: str,
+        signals: Mapping[str, Any],
+        *,
+        mask: np.ndarray,
+    ) -> np.ndarray:
+        return self.kernel.archive_signal_values(semantic_name, signals, mask=mask)
+
+    def capture_lane_states(
+        self,
+        mask: np.ndarray,
+    ) -> tuple[TaskLaneState | None, ...]:
+        return self.kernel.capture_lane_states(mask)
+
+    def restore_lane_states(
+        self,
+        states: Sequence[TaskLaneState | None],
+        mask: np.ndarray,
+    ) -> None:
+        self.kernel.restore_lane_states(states, mask)
+
+
+class RewardTransformTaskKernel(_TaskKernelWrapper):
     """Apply the provider-neutral final reward transform to any bound task."""
 
     def __init__(
@@ -792,15 +963,6 @@ class RewardTransformTaskKernel:
         self._rewards = np.empty(self.num_envs, dtype=np.float32)
         self._metrics: dict[str, np.ndarray] | None = None
         self._task_step: TaskStep | None = None
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self.kernel, name)
-
-    def map_actions(self, actions: Any) -> Any:
-        return self.kernel.map_actions(actions)
-
-    def encode_observations(self, observations: Any) -> Any:
-        return self.kernel.encode_observations(observations)
 
     def process(
         self,
@@ -844,39 +1006,6 @@ class RewardTransformTaskKernel:
         assert self._task_step is not None
         return self._task_step
 
-    def on_reset(
-        self,
-        reset_observations: Any,
-        reset_signals: Mapping[str, Any],
-        mask: np.ndarray,
-    ) -> Any:
-        return self.kernel.on_reset(reset_observations, reset_signals, mask)
-
-    def validate_archive_signal(self, semantic_name: str) -> None:
-        return self.kernel.validate_archive_signal(semantic_name)
-
-    def archive_signal_values(
-        self,
-        semantic_name: str,
-        signals: Mapping[str, Any],
-        *,
-        mask: np.ndarray,
-    ) -> np.ndarray:
-        return self.kernel.archive_signal_values(semantic_name, signals, mask=mask)
-
-    def capture_lane_states(
-        self,
-        mask: np.ndarray,
-    ) -> tuple[TaskLaneState | None, ...]:
-        return self.kernel.capture_lane_states(mask)
-
-    def restore_lane_states(
-        self,
-        states: Sequence[TaskLaneState | None],
-        mask: np.ndarray,
-    ) -> None:
-        self.kernel.restore_lane_states(states, mask)
-
 
 def with_reward_transform(
     kernel: BoundTaskKernel,
@@ -886,7 +1015,7 @@ def with_reward_transform(
     return kernel if not transform.active else RewardTransformTaskKernel(kernel, transform)
 
 
-class CellNoveltyTaskKernel:
+class CellNoveltyTaskKernel(_TaskKernelWrapper):
     """Add a bounded first-visit bonus for semantic cells within each episode."""
 
     def __init__(
@@ -917,12 +1046,6 @@ class CellNoveltyTaskKernel:
         if name == "kernel":
             raise AttributeError(name)
         return getattr(self.kernel, name)
-
-    def map_actions(self, actions: Any) -> Any:
-        return self.kernel.map_actions(actions)
-
-    def encode_observations(self, observations: Any) -> Any:
-        return self.kernel.encode_observations(observations)
 
     def _cell_keys(
         self,
@@ -1020,15 +1143,6 @@ class CellNoveltyTaskKernel:
 
     def validate_archive_signal(self, semantic_name: str) -> None:
         self.kernel.validate_archive_signal(semantic_name)
-
-    def archive_signal_values(
-        self,
-        semantic_name: str,
-        signals: Mapping[str, Any],
-        *,
-        mask: np.ndarray,
-    ) -> np.ndarray:
-        return self.kernel.archive_signal_values(semantic_name, signals, mask=mask)
 
     def capture_lane_states(
         self,
@@ -1299,7 +1413,7 @@ class SignalBindings:
         )
 
 
-class EpisodeProgressTaskKernel:
+class EpisodeProgressTaskKernel(_TaskKernelWrapper):
     """Project declared task signals into reward-independent episode metrics."""
 
     def __init__(
@@ -1332,15 +1446,6 @@ class EpisodeProgressTaskKernel:
             self._values[field_name] = np.empty(self.num_envs, dtype=dtype)
         self._metrics: dict[str, np.ndarray] | None = None
         self._task_step: TaskStep | None = None
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self.kernel, name)
-
-    def map_actions(self, actions: Any) -> Any:
-        return self.kernel.map_actions(actions)
-
-    def encode_observations(self, observations: Any) -> Any:
-        return self.kernel.encode_observations(observations)
 
     def process(
         self,
@@ -1434,7 +1539,7 @@ class DeathmatchRewardConfig:
         )
 
 
-class DeathmatchRewardTaskKernel:
+class DeathmatchRewardTaskKernel(_TaskKernelWrapper):
     """Replace native reward with Sample Factory V0-style Deathmatch shaping."""
 
     _SCALAR_SIGNALS = (
@@ -1579,12 +1684,6 @@ class DeathmatchRewardTaskKernel:
             raise AttributeError(name)
         return getattr(self.kernel, name)
 
-    def map_actions(self, actions: Any) -> Any:
-        return self.kernel.map_actions(actions)
-
-    def encode_observations(self, observations: Any) -> Any:
-        return self.kernel.encode_observations(observations)
-
     def _read_signals(self, signals: Mapping[str, Any]) -> None:
         for name, target in self._current_scalars.items():
             np.copyto(target, self.bindings.scalar(name, signals), casting="unsafe")
@@ -1723,6 +1822,7 @@ class DeathmatchRewardTaskKernel:
         if self._metrics is None:
             self._metrics = dict(task_step.metrics)
             self._metrics.update(self._components)
+            self._metrics.pop("native_reward_component", None)
             self._metrics["kills"] = self._kills_metric
             self._metrics["raw_reward"] = self._rewards
             self._metrics["shaped_reward"] = self._rewards
@@ -1759,15 +1859,6 @@ class DeathmatchRewardTaskKernel:
 
     def validate_archive_signal(self, semantic_name: str) -> None:
         self.kernel.validate_archive_signal(semantic_name)
-
-    def archive_signal_values(
-        self,
-        semantic_name: str,
-        signals: Mapping[str, Any],
-        *,
-        mask: np.ndarray,
-    ) -> np.ndarray:
-        return self.kernel.archive_signal_values(semantic_name, signals, mask=mask)
 
     def capture_lane_states(
         self,
@@ -1902,6 +1993,7 @@ class IdentityEvent:
     bootstrap: bool = False
     value: int | float | None = None
     steps: int = 0
+    outcome_count: int = 1
 
 
 class IdentityTaskDefinition:
@@ -1934,6 +2026,7 @@ class IdentityTaskDefinition:
         if len(raw_events) > 64:
             raise ValueError("identity task supports at most 64 events")
         event_outcomes: dict[str, Outcome] = {}
+        event_outcome_counts: dict[str, int] = {}
         termination = dict(termination or {})
         raw_bootstrap_events = termination.get("bootstrap", ())
         if not isinstance(raw_bootstrap_events, list | tuple):
@@ -1948,21 +2041,29 @@ class IdentityTaskDefinition:
             ("timeout", Outcome.TIMEOUT),
             ("neutral", Outcome.NEUTRAL),
         ):
-            for name in termination.get(outcome_name, ()):
-                event_name = str(name)
+            for condition in termination.get(outcome_name, ()):
+                if isinstance(condition, Mapping):
+                    if set(condition) != {"event", "count"}:
+                        raise ValueError("identity counted termination requires event and count")
+                    event_name = str(condition["event"])
+                    count = condition["count"]
+                    if not isinstance(count, int) or isinstance(count, bool) or count < 1:
+                        raise ValueError("identity termination count must be a positive integer")
+                else:
+                    event_name = str(condition)
+                    count = 1
                 if event_name in event_outcomes:
                     raise ValueError(f"identity event {event_name!r} has multiple outcomes")
                 event_outcomes[event_name] = outcome
+                event_outcome_counts[event_name] = count
         unknown_bootstrap_events = sorted(bootstrap_events - set(raw_events))
         if unknown_bootstrap_events:
             raise ValueError(
                 "identity task termination.bootstrap references unknown events: "
                 + ", ".join(unknown_bootstrap_events)
-        )
+            )
         non_success_bootstrap_events = sorted(
-            name
-            for name in bootstrap_events
-            if event_outcomes.get(name) != Outcome.SUCCESS
+            name for name in bootstrap_events if event_outcomes.get(name) != Outcome.SUCCESS
         )
         if non_success_bootstrap_events:
             raise ValueError(
@@ -1972,18 +2073,33 @@ class IdentityTaskDefinition:
         compiled_events: list[IdentityEvent] = []
         for name, rule in raw_events.items():
             operation = str(rule.get("operation", ""))
-            if operation not in {"decrease", "increase", "equals_for"}:
+            if operation not in {
+                "decrease",
+                "increase",
+                "equals",
+                "equals_for",
+                "previous_equals",
+            }:
                 raise ValueError(
                     f"identity event {name!r} supports only operations "
-                    "'decrease', 'increase', and 'equals_for'"
+                    "'decrease', 'increase', 'equals', 'equals_for', and 'previous_equals'"
                 )
-            if operation == "equals_for":
+            if operation in {"equals", "equals_for", "previous_equals"}:
                 value = rule.get("value")
-                steps = rule.get("steps")
                 if not isinstance(value, int | float) or isinstance(value, bool):
-                    raise ValueError(f"identity equals_for event {name!r} requires a numeric value")
+                    raise ValueError(
+                        f"identity {operation} event {name!r} requires a numeric value"
+                    )
+            if operation == "equals_for":
+                steps = rule.get("steps")
                 if not isinstance(steps, int) or isinstance(steps, bool) or steps <= 0:
                     raise ValueError(f"identity equals_for event {name!r} requires positive steps")
+            if event_outcome_counts.get(str(name), 1) > 1 and operation not in {
+                "increase", "decrease", "equals_for",
+            }:
+                raise ValueError(
+                    f"identity counted event {name!r} must fire on a transition"
+                )
             compiled_events.append(
                 IdentityEvent(
                     name=str(name),
@@ -1993,6 +2109,7 @@ class IdentityTaskDefinition:
                     bootstrap=str(name) in bootstrap_events,
                     value=rule.get("value"),
                     steps=int(rule.get("steps", 0)),
+                    outcome_count=event_outcome_counts.get(str(name), 1),
                 )
             )
         self.events = tuple(compiled_events)
@@ -2119,6 +2236,9 @@ class IdentityTaskKernel:
         self._event_consecutive_steps = tuple(
             np.zeros(self.num_envs, dtype=np.int64) for _event in self._event_configs
         )
+        self._event_firing_counts = tuple(
+            np.zeros(self.num_envs, dtype=np.int64) for _event in self._event_configs
+        )
         event_dtypes = tuple(
             self._signal_bindings.scalar_dtype(event.signal) for event in self._event_configs
         )
@@ -2147,7 +2267,7 @@ class IdentityTaskKernel:
                 self._event_transition_targets[index],
             )
             for index, event in enumerate(self._event_configs)
-            if event.operation in {"decrease", "increase"}
+            if event.operation in {"decrease", "increase", "previous_equals"}
         }
         self._observation_mask = observation_mask
         self._observation_mask_fill = int(observation_mask_fill)
@@ -2230,6 +2350,8 @@ class IdentityTaskKernel:
         )
         if self._event_configs:
             for index, event in enumerate(self._event_configs):
+                event_bit = np.uint64(1 << index)
+                detection_outcome = int(event.outcome) if event.outcome_count == 1 else 0
                 runtime_source = self._event_runtime_sources[index]
                 if runtime_source == PROVIDER_TERMINATED_SIGNAL:
                     values = provider_terminated
@@ -2243,8 +2365,38 @@ class IdentityTaskKernel:
                         event.value,
                         event.steps,
                         self._event_consecutive_steps[index],
-                        np.uint64(1 << index),
-                        int(event.outcome),
+                        event_bit,
+                        detection_outcome,
+                        bool(event.bootstrap),
+                        self._outcome_priorities,
+                        self._terminated,
+                        self._truncated,
+                        self._outcomes,
+                        self._events,
+                    )
+                elif event.operation == "equals":
+                    _identity_equals_event_kernel(
+                        values,
+                        event.value,
+                        event_bit,
+                        detection_outcome,
+                        bool(event.bootstrap),
+                        self._outcome_priorities,
+                        self._terminated,
+                        self._truncated,
+                        self._outcomes,
+                        self._events,
+                    )
+                elif event.operation == "previous_equals":
+                    _identity_previous_equals_event_kernel(
+                        values,
+                        event.value,
+                        self._event_previous_values[index],
+                        self._event_previous_valid[index],
+                        self._event_transition_sources[index],
+                        self._event_transition_targets[index],
+                        event_bit,
+                        detection_outcome,
                         bool(event.bootstrap),
                         self._outcome_priorities,
                         self._terminated,
@@ -2259,8 +2411,8 @@ class IdentityTaskKernel:
                         self._event_previous_valid[index],
                         self._event_transition_sources[index],
                         self._event_transition_targets[index],
-                        np.uint64(1 << index),
-                        int(event.outcome),
+                        event_bit,
+                        detection_outcome,
                         bool(event.bootstrap),
                         self._outcome_priorities,
                         self._terminated,
@@ -2275,8 +2427,8 @@ class IdentityTaskKernel:
                         self._event_previous_valid[index],
                         self._event_transition_sources[index],
                         self._event_transition_targets[index],
-                        np.uint64(1 << index),
-                        int(event.outcome),
+                        event_bit,
+                        detection_outcome,
                         bool(event.bootstrap),
                         self._outcome_priorities,
                         self._terminated,
@@ -2284,13 +2436,27 @@ class IdentityTaskKernel:
                         self._outcomes,
                         self._events,
                     )
+                if event.outcome_count > 1:
+                    _identity_counted_event_outcome_kernel(
+                        self._events,
+                        event_bit,
+                        self._event_firing_counts[index],
+                        event.outcome_count,
+                        int(event.outcome),
+                        bool(event.bootstrap),
+                        self._outcome_priorities,
+                        self._terminated,
+                        self._truncated,
+                        self._outcomes,
+                    )
         return TaskStep(
             self._rewards,
             self._terminated,
             self._truncated,
             self._outcomes,
             self._events,
-            {},
+            {"raw_reward": self._rewards, "shaped_reward": self._rewards,
+             "native_reward_component": self._rewards},
             self._event_transitions,
         )
 
@@ -2317,7 +2483,8 @@ class IdentityTaskKernel:
                     else None
                 )
                 consecutive_steps[mask] = 0
-                if event.operation in {"decrease", "increase"}:
+                self._event_firing_counts[index][mask] = 0
+                if event.operation in {"decrease", "increase", "previous_equals"}:
                     if reset_values is None:
                         self._event_previous_valid[index][mask] = False
                     else:
@@ -2333,7 +2500,7 @@ class IdentityTaskKernel:
         if len(dtypes) != 1:
             raise ValueError(f"archive signal {semantic_name!r} must be scalar")
         dtype = dtypes[0]
-        if not np.issubdtype(dtype, np.number) or np.issubdtype(dtype, np.bool_):
+        if not (np.issubdtype(dtype, np.number) or np.issubdtype(dtype, np.bool_)):
             raise ValueError(f"archive signal {semantic_name!r} must be numeric")
 
     def archive_signal_values(
@@ -2359,11 +2526,14 @@ class IdentityTaskKernel:
                 continue
             states.append(
                 TaskLaneState(
-                    schema_id="gradlab.identity-task-lane-v2",
+                    schema_id="gradlab.identity-task-lane-v3",
                     values={
                         "episode_steps": int(self._episode_steps[lane]),
                         "event_consecutive_steps": [
                             int(values[lane]) for values in self._event_consecutive_steps
+                        ],
+                        "event_firing_counts": [
+                            int(values[lane]) for values in self._event_firing_counts
                         ],
                         "event_previous_values": [
                             values[lane].item()
@@ -2390,9 +2560,17 @@ class IdentityTaskKernel:
         for lane in np.flatnonzero(selected):
             lane_index = int(lane)
             state = states[lane_index]
-            if state is None or state.schema_id != "gradlab.identity-task-lane-v2":
+            if state is None or state.schema_id not in {
+                "gradlab.identity-task-lane-v2", "gradlab.identity-task-lane-v3",
+            }:
                 raise ValueError(f"archive lane {lane_index} has incompatible identity task state")
             values = state.values
+            counts = list(values.get("event_firing_counts", ()))
+            if state.schema_id == "gradlab.identity-task-lane-v3":
+                if len(counts) != len(self._event_configs):
+                    raise ValueError(f"archive lane {lane_index} identity event counts do not match task")
+            elif any(event.outcome_count > 1 for event in self._event_configs):
+                raise ValueError(f"archive lane {lane_index} is missing identity event counts")
             consecutive = list(values.get("event_consecutive_steps", ()))
             previous = list(values.get("event_previous_values", ()))
             valid = list(values.get("event_previous_valid", ()))
@@ -2403,8 +2581,148 @@ class IdentityTaskKernel:
             self._episode_steps[lane_index] = int(values["episode_steps"])
             for index in range(len(self._event_configs)):
                 self._event_consecutive_steps[index][lane_index] = int(consecutive[index])
+                self._event_firing_counts[index][lane_index] = (
+                    int(counts[index]) if counts else 0
+                )
                 self._event_previous_values[index][lane_index] = previous[index]
                 self._event_previous_valid[index][lane_index] = bool(valid[index])
+
+
+class EventRewardTaskKernel(_TaskKernelWrapper):
+    """Pay fixed or absolute-delta rewards when declared task events fire."""
+
+    def __init__(
+        self,
+        kernel: BoundTaskKernel,
+        event_rewards: Mapping[str, Any] | None,
+        *,
+        event_delta_rewards: Mapping[str, Any] | None = None,
+        include_native: bool = True,
+    ) -> None:
+        self.kernel = kernel
+        self.num_envs = int(kernel.num_envs)
+        normalized = normalize_event_rewards(event_rewards) if event_rewards is not None else {}
+        delta_rewards = (
+            normalize_event_rewards(event_delta_rewards, label="task.reward.event_delta_rewards")
+            if event_delta_rewards is not None
+            else {}
+        )
+        overlap = set(normalized) & set(delta_rewards)
+        if overlap:
+            raise ValueError("fixed and delta event rewards overlap: " + ", ".join(sorted(overlap)))
+        self._delta_events = frozenset(delta_rewards)
+        self._include_native = include_native
+        normalized.update(delta_rewards)
+        event_indices = {name: index for index, name in enumerate(kernel.event_names)}
+        missing = sorted(set(normalized) - set(event_indices))
+        if missing:
+            raise ValueError(
+                "task.reward.event_rewards references unknown events: " + ", ".join(missing)
+            )
+        self._configured = tuple(
+            (name, event_indices[name], coefficient) for name, coefficient in normalized.items()
+        )
+        self._event_reward_components = {
+            name: np.zeros(self.num_envs, dtype=np.float32) for name in normalized
+        }
+        self._native_reward_component = np.empty(self.num_envs, dtype=np.float32)
+        self._event_reward_total = np.zeros(self.num_envs, dtype=np.float32)
+        self._rewards = np.empty(self.num_envs, dtype=np.float32)
+        self._metrics: dict[str, np.ndarray] | None = None
+        self._task_step: TaskStep | None = None
+
+    def __getattr__(self, name: str) -> Any:
+        if name == "kernel":
+            raise AttributeError(name)
+        return getattr(self.kernel, name)
+
+    def process(
+        self,
+        native_rewards: np.ndarray,
+        provider_terminated: np.ndarray,
+        provider_truncated: np.ndarray,
+        signals: Mapping[str, Any],
+    ) -> TaskStep:
+        task_step = self.kernel.process(
+            native_rewards,
+            provider_terminated,
+            provider_truncated,
+            signals,
+        )
+        np.copyto(
+            self._native_reward_component,
+            np.asarray(task_step.rewards, dtype=np.float32),
+        )
+        if not self._include_native:
+            self._native_reward_component.fill(0.0)
+        self._event_reward_total.fill(0.0)
+        event_bits = np.asarray(task_step.event_bits, dtype=np.uint64)
+        for name, index, coefficient in self._configured:
+            active = (event_bits & np.uint64(1 << index)) != 0
+            component = self._event_reward_components[name]
+            component.fill(0.0)
+            if name in self._delta_events:
+                if name not in task_step.event_transitions:
+                    raise ValueError(f"delta reward event {name!r} has no numeric transition")
+                before, after = task_step.event_transitions[name]
+                # Convert before subtraction to prevent unsigned/integer overflow.
+                delta = np.abs(
+                    np.asarray(after)[active].astype(np.float64)
+                    - np.asarray(before)[active].astype(np.float64)
+                )
+                values = delta * coefficient
+                if np.any(~np.isfinite(values)) or np.any(
+                    np.abs(values) > np.finfo(np.float32).max
+                ):
+                    raise ValueError(f"delta reward event {name!r} exceeds finite float32 range")
+                component[active] = values
+            else:
+                component[active] = coefficient
+            self._event_reward_total += component
+        np.add(
+            self._native_reward_component,
+            self._event_reward_total,
+            out=self._rewards,
+        )
+
+        if self._metrics is None:
+            self._metrics = dict(task_step.metrics)
+            self._metrics.setdefault(
+                "native_reward_component",
+                self._native_reward_component,
+            )
+            if not self._include_native:
+                self._metrics["native_reward_component"] = self._native_reward_component
+            self._metrics["event_reward_component"] = self._event_reward_total
+            for name, component in self._event_reward_components.items():
+                self._metrics[f"event_reward_component/{name}"] = component
+            self._metrics["raw_reward"] = self._rewards
+            self._metrics["shaped_reward"] = self._rewards
+            self._task_step = TaskStep(
+                self._rewards,
+                task_step.terminated,
+                task_step.truncated,
+                task_step.outcomes,
+                task_step.event_bits,
+                self._metrics,
+                task_step.event_transitions,
+            )
+        assert self._task_step is not None
+        return self._task_step
+
+
+def with_event_rewards(
+    kernel: BoundTaskKernel,
+    value: Mapping[str, Any] | None,
+    *,
+    event_delta_rewards: Mapping[str, Any] | None = None,
+    include_native: bool = True,
+) -> BoundTaskKernel:
+    if value is None and event_delta_rewards is None and include_native:
+        return kernel
+    return EventRewardTaskKernel(
+        kernel, value, event_delta_rewards=event_delta_rewards, include_native=include_native
+    )
 
 
 @dataclass(frozen=True)
@@ -2414,6 +2732,7 @@ class MarioTaskConfig:
     lives: SignalSource = "lives"
     level: SignalSource = ("levelHi", "levelLo")
     game_mode: SignalSource | None = None
+    declared_signals: tuple[tuple[str, SignalSource], ...] = ()
     action_masks: np.ndarray | None = None
     reward_mode: str = "baseline"
     use_native_reward: bool = False
@@ -2544,6 +2863,14 @@ class MarioTaskConfig:
             value = signals.get(name, default)
             return value if isinstance(value, str) else tuple(value)
 
+        declared_signals = tuple(
+            (
+                str(name),
+                source if isinstance(source, str) else tuple(source),
+            )
+            for name, source in signals.items()
+        )
+
         reward_mode = str(reward_value("reward_mode", "baseline"))
         if reward_mode not in {"native", "bounded", "baseline", "score", "additive"}:
             raise ValueError(f"unsupported Mario reward mode {reward_mode!r}")
@@ -2554,6 +2881,7 @@ class MarioTaskConfig:
             lives=signal_value("lives", cls.lives),
             level=signal_value("level", cls.level),
             game_mode=game_mode_source if game_complete_rule else None,
+            declared_signals=declared_signals,
             action_masks=None,
             reward_mode=reward_mode,
             use_native_reward=reward.get("use_native_reward", False),
@@ -2611,12 +2939,15 @@ class MarioTaskKernel:
         self.num_envs = int(num_envs)
         self._native_observation_space = descriptor.native_observation_space
         self.observation_space = _policy_observation_space(self._native_observation_space)
-        signal_sources: dict[str, SignalSource] = {
-            "x": config.x,
-            "score": config.score,
-            "lives": config.lives,
-            "level": config.level,
-        }
+        signal_sources: dict[str, SignalSource] = dict(config.declared_signals)
+        signal_sources.update(
+            {
+                "x": config.x,
+                "score": config.score,
+                "lives": config.lives,
+                "level": config.level,
+            }
+        )
         if config.game_mode is not None:
             signal_sources["game_mode"] = config.game_mode
         self.bindings = SignalBindings(descriptor, signal_sources, self.num_envs)
@@ -2982,7 +3313,7 @@ class MarioTaskKernel:
         elif len(dtypes) != 1:
             raise ValueError(f"archive signal {semantic_name!r} must be scalar")
         if any(
-            not np.issubdtype(dtype, np.number) or np.issubdtype(dtype, np.bool_)
+            not (np.issubdtype(dtype, np.number) or np.issubdtype(dtype, np.bool_))
             for dtype in dtypes
         ):
             raise ValueError(f"archive signal {semantic_name!r} must be numeric")

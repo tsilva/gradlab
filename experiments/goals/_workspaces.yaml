@@ -1,86 +1,278 @@
-schema_version: 1
+schema_version: 4
 view_id: training
 default_profile: training
 
 sections:
+  occupancy_totals:
+    title: Total experience by bucket
+    pinned: false
+    open: true
+    columns: 1
+    panels:
+    - id: occupancy_cumulative
+      kind: occupancy_cumulative
+      x: train/step
+      y:
+      - train/occupancy/table
+      width: 24
+      height: 10
+  occupancy:
+    title: Collected experience
+    pinned: false
+    open: true
+    columns: 1
+    panels:
+    - id: occupancy_recent
+      kind: occupancy_recent
+      x: train/step
+      y:
+      - train/occupancy/table
+      width: 24
+      height: 12
+    - id: occupancy_history
+      kind: occupancy
+      x: train/step
+      y:
+      - train/occupancy/table
+      width: 24
+      height: 12
+  curriculum_inventory:
+    title: Curriculum representatives and starts
+    pinned: false
+    open: true
+    columns: 1
+    panels:
+    - id: curriculum_distribution
+      kind: curriculum
+      x: train/step
+      y:
+      - train/curriculum/distribution
+      width: 24
+      height: 12
   training_essentials:
     title: Training essentials
     pinned: true
     open: true
     columns: 2
     panels:
-    - id: task_success
+    - id: task_success_min
       kind: line
-      title: Task success
-      x: train/global_step
+      x: train/step
       y:
-      - train/outcome/success/starts/all/rolling/rate/min
-      - train/outcome/success/starts/all/rolling/rate/mean
-    - id: target_return
+      - train/success/min
+    - id: task_success_mean
       kind: line
-      title: Target-origin return
-      x: train/global_step
+      x: train/step
       y:
-      - train/episode/return/shaped/origin/target/rolling/mean
-      - train/episode/return/shaped/origin/target/rolling/max
+      - train/success/mean
+    - id: target_return_mean
+      kind: line
+      x: train/step
+      y:
+      - train/return/mean
+    - id: target_return_max
+      kind: line
+      x: train/step
+      y:
+      - train/return/max
+    - id: episode_length
+      kind: line
+      x: train/step
+      y:
+      - train/episode_steps/mean
     - id: completed_episodes
       kind: line
-      title: Completed episodes
-      x: train/global_step
+      x: train/step
       y:
-      - train/episode/completed/count
-    - id: early_stop_progress
+      - train/episodes/count
+    - id: early_stop_patience_progress
       kind: line
-      title: Early-stop progress
-      x: train/global_step
+      x: train/step
       metric_templates:
-      - train/early_stop/{condition}/target/progress
-      - train/early_stop/{condition}/patience/progress
+      - train/patience/{condition}/fraction
     - id: explained_variance
       kind: line
-      title: Explained variance
-      x: train/global_step
+      x: train/step
       y:
-      - train/algorithm/ppo/value/explained_variance
-      - train/algorithm/a2c/value/explained_variance
+      - train/explained_variance
     - id: value_loss
       kind: line
-      title: Value loss
-      x: train/global_step
+      x: train/step
       y:
-      - train/algorithm/ppo/update/value_loss
-      - train/algorithm/a2c/update/value_loss
+      - train/value_loss/mean
     - id: policy_entropy
       kind: line
-      title: Policy entropy
       y_title: nats
-      x: train/global_step
+      x: train/step
       y:
-      - train/algorithm/ppo/policy/entropy
-      - train/algorithm/a2c/policy/entropy
-    - id: ppo_update_constraints
+      - train/entropy/mean
+    - id: ppo_approx_kl
       kind: line
-      title: PPO update constraints
-      x: train/global_step
+      x: train/step
       y:
-      - train/algorithm/ppo/update/approx_kl
-      - train/algorithm/ppo/update/clip_fraction
-    - id: throughput
+      - train/kl/mean
+    - id: ppo_clip_fraction
       kind: line
-      title: Training throughput
-      x: train/global_step
+      x: train/step
       y:
-      - train/throughput/loop/rate
-      - train/throughput/provider/step/rate
+      - train/clip/fraction
+    - id: loop_throughput
+      kind: line
+      x: train/step
+      y:
+      - train/throughput/rate
+    - id: provider_step_throughput
+      kind: line
+      x: train/step
+      y:
+      - train/provider/rate
+  breakout_primary:
+    title: Primary metrics
+    pinned: true
+    open: true
+    columns: 2
+    panels:
+    - id: primary_0
+      kind: train_eval
+      y_title: mean normalized bricks destroyed
+      x: train/step
+      y:
+      - train/progress/bricks_destroyed_normalized/mean
+      - eval/progress/bricks_destroyed_normalized/mean
+    - id: primary_mean
+      kind: line
+      y_title: fraction (last 100 episodes)
+      x: train/step
+      y:
+      - train/progress/bricks_destroyed_normalized/mean
+    - id: primary_1
+      kind: line
+      y_title: fraction (last 100 episodes)
+      x: train/step
+      y:
+      - train/progress/bricks_destroyed_normalized/max
+    - id: primary_2
+      kind: line
+      y_title: fraction (last 100 episodes)
+      x: train/step
+      y:
+      - train/progress/bricks_destroyed_normalized/min
+    - id: primary_3
+      kind: line
+      y_title: steps (last 100 episodes)
+      x: train/step
+      y:
+      - train/episode_steps/mean
+  breakout_secondary:
+    title: Breakout diagnostics
+    pinned: false
+    open: true
+    columns: 2
+    panels:
+    - id: target_bricks_destroyed_mean
+      kind: line
+      y_title: bricks (last 100 episodes)
+      x: train/step
+      y:
+      - train/progress/bricks_destroyed/mean
+    - id: top_target_return_mean
+      kind: line
+      y_title: return (last 100 episodes)
+      x: train/step
+      y:
+      - train/return/mean
+    - id: target_score_mean
+      kind: line
+      y_title: score (last 100 episodes)
+      x: train/step
+      y:
+      - train/progress/score/mean
+    - id: target_score_max
+      kind: line
+      y_title: score max (last 100 episodes)
+      x: train/step
+      y:
+      - train/progress/score/max
+    - id: serve_stall_count
+      kind: line
+      y_title: fraction (last 100 episodes)
+      x: train/step
+      y:
+      - train/unsuccessful/serve_stall/fraction
+    - id: serve_wait_rate
+      kind: line
+      y_title: fraction of transitions
+      x: train/step
+      y:
+      - train/reward/event/serve_wait/fraction
+
+  checkpoint_monitoring:
+    title: Checkpoint monitoring
+    pinned: false
+    open: true
+    columns: 2
+    panels:
+    - id: monitor_success
+      kind: line
+      x: eval/step
+      y: [eval/success/mean, eval/monitor/success/ci95/lower, eval/monitor/success/ci95/upper]
+    - id: monitor_progress
+      kind: line
+      x: eval/step
+      y: [eval/monitor/progress/median]
+    - id: monitor_score
+      kind: line
+      x: eval/step
+      y: [eval/progress/score/mean]
+    - id: monitor_return
+      kind: line
+      x: eval/step
+      y: [eval/return/mean]
+    - id: monitor_length
+      kind: line
+      x: eval/step
+      y: [eval/episode_steps/mean]
+    - id: monitor_count
+      kind: line
+      x: eval/step
+      y: [eval/episodes/count]
+    - id: monitor_video
+      kind: media
+      x: eval/step
+      y: [eval/video, eval/monitor/video]
 
 profiles:
   training:
     display_name: GradLab Training
+    primary_metrics: goal_rank
     run_scope: current_metrics_schema
     max_runs: 25
     sections:
     - training_essentials
+    - occupancy
+    - curriculum_inventory
+  breakout_training:
+    display_name: GradLab Training
+    primary_metrics: none
+    run_scope: current_metrics_schema
+    max_runs: 25
+    sections:
+    - breakout_primary
+    - breakout_secondary
+    - checkpoint_monitoring
+    - training_essentials
+    - occupancy_totals
+    - occupancy
+    - curriculum_inventory
 
 # Every W&B project resolved from a checked-in active goal inherits the default profile.
-# Assign a project to another complete profile here if its workspace later needs to differ.
-projects: {}
+# Project overrides may select another complete profile or omit panels whose metrics do not apply.
+projects:
+  Breakout-Atari2600-v0:
+    profile: breakout_training
+    exclude_panels:
+    - task_success_min
+    - task_success_mean
+    - target_return_mean
+    - episode_length
+    - early_stop_patience_progress

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from contextlib import nullcontext
 import queue
 import time
 from types import SimpleNamespace
@@ -17,7 +16,7 @@ from gradlab.play_runtime import (
     apply_vizdoom_playback_iwad_override,
     _implicit_playback_seed,
 )
-from gradlab.play_web import PlaybackCommand
+from gradlab.play_engine import PlaybackCommand
 
 
 class FakeEncoder:
@@ -200,7 +199,7 @@ def test_vizdoom_playback_iwad_override_is_counterfactual_only_when_bytes_change
     iwad = tmp_path / "doom2.wad"
     iwad.write_bytes(b"IWADdoom")
     environment = {
-        "env_provider": "vizdoom-turbo",
+        "env_provider": "env-vizdoom-turbo",
         "env_args": {"rom_path": None},
     }
 
@@ -209,14 +208,14 @@ def test_vizdoom_playback_iwad_override_is_counterfactual_only_when_bytes_change
     assert apply_vizdoom_playback_iwad_override(environment, rom_path=iwad) is False
 
 
-def test_playback_loader_passes_bundle_algorithm_to_model_loader(monkeypatch) -> None:
+def test_playback_loader_enforces_cpu_and_passes_bundle_algorithm(monkeypatch) -> None:
     class ActivationComplete(Exception):
         pass
 
     verified = object()
     model_loader = MagicMock(return_value=object())
     candidate = SimpleNamespace(
-        args=SimpleNamespace(device="cpu"),
+        args=SimpleNamespace(device="mps"),
         source=SimpleNamespace(
             bundle=SimpleNamespace(
                 model={
@@ -232,9 +231,8 @@ def test_playback_loader_passes_bundle_algorithm_to_model_loader(monkeypatch) ->
     )
     monkeypatch.setattr(
         "gradlab.play_runtime.verify_staged_model",
-        lambda _staged: nullcontext(verified),
+        lambda _staged: verified,
     )
-    monkeypatch.setattr("gradlab.play_runtime.resolve_sb3_device", lambda _device: "cpu")
     monkeypatch.setattr("gradlab.policy_models.load_policy_model", model_loader)
     monkeypatch.setattr(
         "gradlab.policy_runtime.PolicyRuntime",

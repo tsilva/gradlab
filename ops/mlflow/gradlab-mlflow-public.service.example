@@ -1,0 +1,22 @@
+[Unit]
+Description=Public MLflow inspection gateway
+After=network-online.target gradlab-mlflow-pilot.service
+Requires=gradlab-mlflow-pilot.service
+
+[Service]
+User=gradlab-mlflow
+Group=gradlab-mlflow
+WorkingDirectory=/opt/gradlab/mlflow/public
+EnvironmentFile=/etc/gradlab/mlflow/reader.env
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/opt/gradlab/mlflow/.venv/bin/gunicorn --bind 127.0.0.1:5003 --workers 2 --timeout 45 public_gateway:application()
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import stable_retro
-import yaml
+import env_stableretro_turbo
+from gradlab.recipe_documents import load_goal_contract
 
 from gradlab.env import EnvConfig
 from gradlab.env_providers import (
@@ -13,12 +13,12 @@ from gradlab.env_providers import (
 )
 
 
-GOAL_PATH = Path("experiments/goals/Breakout-Atari2600-v0/_goal.yaml")
+GOAL_PATH = Path("experiments/goals/Breakout-Atari2600-v0/FirstWall/_goal.yaml")
 GAME = "Breakout-Atari2600-v0"
 
 
 def test_breakout_goal_uses_pinned_stable_retro_data() -> None:
-    goal = yaml.safe_load(GOAL_PATH.read_text(encoding="utf-8"))
+    goal = load_goal_contract(GOAL_PATH)
     train_info = goal["train"]["environment"]["env_config"]["env_args"]["info"]
     assert train_info == "data"
     assert "eval" not in goal
@@ -38,7 +38,7 @@ def test_breakout_goal_uses_pinned_stable_retro_data() -> None:
 
     kwargs = provider_native_vec_kwargs(
         EnvConfig(
-            env_provider="stable-retro-turbo",
+            env_provider="env-stableretro-turbo",
             game=GAME,
             state="Start",
             env_args={"info": train_info},
@@ -49,5 +49,5 @@ def test_breakout_goal_uses_pinned_stable_retro_data() -> None:
     )
     assert Path(kwargs["info"]) == data_path
     assert Path(kwargs["scenario"]).is_relative_to(
-        Path(stable_retro.__file__).resolve().parent
+        Path(env_stableretro_turbo.__file__).resolve().parent
     )

@@ -1,7 +1,7 @@
 const STATIC_DESCRIPTORS = Object.freeze({
   "reward/provider": {
     label: "Provider output reward",
-    shortLabel: "Provider r",
+    shortLabel: "Native R",
     type: "scalar",
     unit: "step-reward",
     phase: "post-action",
@@ -12,7 +12,7 @@ const STATIC_DESCRIPTORS = Object.freeze({
   },
   "reward/shaped": {
     label: "Policy-facing reward",
-    shortLabel: "Policy r",
+    shortLabel: "Shaped R",
     type: "scalar",
     unit: "step-reward",
     phase: "post-action",
@@ -58,7 +58,7 @@ const STATIC_DESCRIPTORS = Object.freeze({
   },
   "policy/value-error": {
     label: "Value error V(s) − G(s)",
-    shortLabel: "V − G",
+    shortLabel: "V(s) − G(s)",
     type: "scalar",
     unit: "value",
     phase: "post-episode",
@@ -139,7 +139,7 @@ const STATIC_DESCRIPTORS = Object.freeze({
   },
   "action/policy": {
     label: "Policy-selected action",
-    shortLabel: "Policy action",
+    shortLabel: "Action",
     type: "categorical",
     unit: "action",
     phase: "pre-action",
@@ -268,8 +268,11 @@ export function descriptorAvailability(
     if (reasons.length) {
       return {
         status: "contract-incomparable",
-        message: `Contract-incomparable: ${reasons.join("; ")}.`,
+        message: `${reasons.join("; ")}.`,
       };
+    }
+    if (snapshot?.mode === "trajectory") {
+      return { status: "not-recorded", message: "Realized-return diagnostics were not recorded." };
     }
   }
   const value = descriptorValue(descriptor, { snapshot, point });
@@ -278,6 +281,9 @@ export function descriptorAvailability(
   }
   if (!snapshot?.transition) {
     return { status: "not-yet-observed", message: "N/A" };
+  }
+  if (snapshot?.mode === "trajectory") {
+    return { status: "not-recorded", message: "Not recorded for this transition." };
   }
   if (descriptor.key === "policy/entropy") {
     return {

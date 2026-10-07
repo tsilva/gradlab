@@ -9,11 +9,16 @@ from pathlib import Path
 from typing import Any, Literal
 
 from gradlab.action_contract import assert_action_contract_compatible
-from gradlab.device import resolve_sb3_device
-from gradlab.env import assert_provider_runtime_available, make_eval_vec_env, resolve_env_config
+from gradlab.env import (
+    assert_provider_runtime_available,
+    make_eval_vec_env,
+    resolve_env_config,
+)
 from gradlab.env_metadata import env_config_from_config_dict, env_config_metadata
 from gradlab.env_metadata import runtime_versions_metadata
+from gradlab.env_registry import GRADOOM_PROVIDER
 from gradlab.env_registry import resolve_env_provider
+from gradlab.environment_fields import EnvConfig
 from gradlab.model_sources import (
     ModelSourceKind,
     ResolvedModelSource,
@@ -22,10 +27,12 @@ from gradlab.model_sources import (
 from gradlab.policy_bundle import (
     STATE_ARCHIVE_SUMMARY_FIELDS,
     critic_value_contract,
+    load_policy_bundle_from_checkpoint,
     playback_contract,
     playback_contract_audit,
 )
 from gradlab.play_session import (
+    PLAYBACK_DEVICE,
     _PlaybackSession,
     resolved_play_launch_lines,
 )
@@ -33,7 +40,7 @@ from gradlab.play_termination import (
     configured_termination_ids,
     with_enabled_termination_conditions,
 )
-from gradlab.play_web import WebPlaybackRunner
+from gradlab.play_engine import WebPlaybackRunner
 from gradlab.play_capture import player_source_provenance
 from gradlab.file_utils import file_sha256
 from gradlab.run_contracts import checkpoint_id
@@ -55,6 +62,28 @@ from gradlab.vizdoom_assets import portable_vizdoom_iwad_identity, vizdoom_iwad_
 
 ProgressCallback = Callable[[str, str], None]
 PlaybackContractMode = Literal["training", "evaluation", "counterfactual"]
+
+
+def _with_playback_device_override(config: EnvConfig) -> dict[str, Any]:
+    if config.env_provider != GRADOOM_PROVIDER.provider_id:
+        return {}
+    return {"device": PLAYBACK_DEVICE}
+
+
+def _environment_action_note(config: EnvConfig) -> str | None:
+    """Explain action effects from the active artifact, never today's goal recipe."""
+    if config.env_provider != "gymnasium" or config.game not in {
+        "FrozenLake-v1", "FrozenLake8x8-v1",
+    }:
+        return None
+    # Omission preserves Gymnasium's default in historical checkpoints, just as
+    # GymnasiumTurboVecEnv does when constructing their scalar environments.
+    if config.env_args.get("is_slippery", True):
+        return (
+            "Slippery ice: a command moves in the chosen direction or either "
+            "perpendicular direction with equal probability. Walls block movement."
+        )
+    return None
 
 
 @dataclass(frozen=True)
@@ -142,7 +171,7 @@ def apply_vizdoom_playback_iwad_override(
     rom_path: Path | None,
 ) -> bool:
     """Bind a local IWAD and report whether it changes the recorded environment."""
-    if rom_path is None or str(environment.get("env_provider") or "") != "vizdoom-turbo":
+    if rom_path is None or str(environment.get("env_provider") or "") != "env-vizdoom-turbo":
         return False
     env_args = environment.get("env_args")
     if not isinstance(env_args, MutableMapping):
@@ -281,7 +310,12 @@ class PlaybackLoader:
         if requested_mode not in {"training", "evaluation", "counterfactual"}:
             raise ValueError(f"unsupported playback contract mode {requested_mode!r}")
         base_mode = "evaluation" if requested_mode == "evaluation" else "training"
-        contract = playback_contract(source.bundle.recipe, mode=base_mode)
+        training_contract = playback_contract(source.bundle.recipe, mode="training")
+        contract = (
+            training_contract
+            if base_mode == "training"
+            else playback_contract(source.bundle.recipe, mode=base_mode)
+        )
         recipe = source.bundle.recipe.get("recipe", {})
         value_contract = critic_value_contract(source.bundle.recipe)
         contract_audit = playback_contract_audit(source.bundle.recipe)
@@ -306,6 +340,12 @@ class PlaybackLoader:
         if artifact_config is None:
             raise ValueError("policy bundle recipe has no playback environment")
         artifact_config = resolve_env_config(artifact_config)
+        training_config = env_config_from_config_dict(
+            deepcopy(dict(training_contract["environment"]))
+        )
+        if training_config is None:
+            raise ValueError("policy bundle recipe has no training environment")
+        training_config = resolve_env_config(training_config)
         from gradlab.env_identity import policy_environment_hash
 
         active_hash = policy_environment_hash(env_config_metadata(artifact_config))
@@ -344,6 +384,10 @@ class PlaybackLoader:
             "evaluation_matches_training": evaluation_matches_training,
             "mismatch_paths": list(contract_audit["mismatch_paths"]),
             "requested_policy_override_paths": requested_override_paths,
+            "frame_skip": {
+                "training": int(training_config.frame_skip),
+                "playback": int(artifact_config.frame_skip),
+            },
         }
         termination_source = effective_mode
         if not self.explicit_seed:
@@ -391,6 +435,7 @@ class PlaybackLoader:
         progress("verifying", "Hashing executable model closure")
         source_identity = str(source.artifact_name or artifact_ref or source.model_path)
         staged = stage_model_input(source.model_path, source_identity=source_identity)
+        contract_details["environment_action_note"] = _environment_action_note(artifact_config)
         return PlaybackCandidate(
             spec=spec,
             args=args,
@@ -418,14 +463,18 @@ class PlaybackLoader:
         from gradlab.policy_runtime import PolicyRuntime
 
         args = candidate.args
+        args.device = PLAYBACK_DEVICE
         progress("loading", "Loading policy runtime")
+        playback_device = args.device
         algorithm_id = resolve_policy_algorithm(candidate.source.bundle.model["policy"])
-        with verify_staged_model(candidate.staged) as verified:
-            model = load_policy_model(
-                verified,
-                device=resolve_sb3_device(args.device),
-                algorithm_id=algorithm_id,
-            )
+        # PlaybackHost owns candidate cleanup after activation. Keep these exact
+        # bytes alive until the runner has pinned its trajectory Checkpoint.
+        verified = verify_staged_model(candidate.staged)
+        model = load_policy_model(
+            verified,
+            device=playback_device,
+            algorithm_id=algorithm_id,
+        )
         resume_cell = str(getattr(args, "resume_cell", None) or "").strip()
         archive_resource = None
         snapshot_record: tuple[Mapping[str, Any], bytes] | None = None
@@ -484,6 +533,7 @@ class PlaybackLoader:
                 rom_binding=candidate.rom_binding,
                 state_archive=playback_archive_config,
                 state_archive_root=(None if archive_resource is None else archive_resource.name),
+                native_kwargs_overrides=_with_playback_device_override(config),
             )
 
         policy_env = make_policy_env(candidate.config, args.seed)
@@ -647,6 +697,7 @@ class PlaybackLoader:
                 contract_details=candidate.contract_details,
                 value_contract=candidate.value_contract,
                 capture_context=capture_context,
+                trajectory_bundle=load_policy_bundle_from_checkpoint(candidate.staged.model_path),
             )
             return ActivePlayback(
                 runner=runner,
