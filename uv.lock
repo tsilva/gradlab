@@ -680,16 +680,16 @@ wheels = [
 
 [[package]]
 name = "env-supermariobrosnes-turbo-emu"
-version = "0.7.3"
+version = "0.7.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "gymnasium" },
     { name = "numpy" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/e5/89/aa7eb96caf4db45aeec39784c133695fdb682c16b402ca75769e55bcb9c8/env_supermariobrosnes_turbo_emu-0.7.3.tar.gz", hash = "sha256:f3b8f34d97a9fe3e3c121c95dadec590ee5f709fe119c2587bb0e7867e07c59d", size = 20968559, upload-time = "2026-08-31T20:08:05.58Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/18/3e/5de3a14eb45ca13b5dff6f0514a852e5992ef43151eb06ff1541bb49f720/env_supermariobrosnes_turbo_emu-0.7.4.tar.gz", hash = "sha256:24065f5540778a55b1fcbace5fc3c638edbecbc552f1a3a04d55896b24be8e09", size = 17508073, upload-time = "2026-10-03T18:35:04.441Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c6/6c/b87f7563646523248cccde53fc244cb5199aea1c2f19be382cbfdd556776/env_supermariobrosnes_turbo_emu-0.7.3-cp39-abi3-macosx_14_0_arm64.whl", hash = "sha256:d0e26ad8d04c8318119e834db4bf39f8219a3df201562bdd0f898a84ce0b60c5", size = 489955, upload-time = "2026-08-31T20:08:01.232Z" },
-    { url = "https://files.pythonhosted.org/packages/38/ee/372c40753a0a85243cc74c9282b4289996c3cfe4e0fbe3552dc232733796/env_supermariobrosnes_turbo_emu-0.7.3-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:67424dce6eb74529e0f8b9bd813fd0625130c05a9f0a1e30c5985c982960113d", size = 534647, upload-time = "2026-08-31T20:08:03.127Z" },
+    { url = "https://files.pythonhosted.org/packages/0e/0e/b894b7908b3571ab0811cc173a6539a48db2fbd9b7102d7b5f7ce9fc77e2/env_supermariobrosnes_turbo_emu-0.7.4-cp39-abi3-macosx_14_0_arm64.whl", hash = "sha256:bd0702f789b5ff1af5484b6e4a7bb918165e77a4ddc9c4ea2080e00b582504ac", size = 488402, upload-time = "2026-10-03T18:35:00.598Z" },
+    { url = "https://files.pythonhosted.org/packages/29/e2/12d9b30688c3e58edac92a02ff68b94fd09aef3694a56f904956f14a912c/env_supermariobrosnes_turbo_emu-0.7.4-cp39-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:8619113b2533d05a06deec1db1a36c0447032d9358982dc241f2a2002fc43ef6", size = 532182, upload-time = "2026-10-03T18:35:02.487Z" },
 ]
 
 [[package]]
@@ -1018,8 +1018,8 @@ requires-dist = [
     { name = "env-gradoom-turbo-torch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==0.2.1" },
     { name = "env-stableretro-turbo", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = "==1.0.1.post48" },
     { name = "env-stableretro-turbo", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==1.0.1.post48" },
-    { name = "env-supermariobrosnes-turbo-emu", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = "==0.7.3" },
-    { name = "env-supermariobrosnes-turbo-emu", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==0.7.3" },
+    { name = "env-supermariobrosnes-turbo-emu", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = "==0.7.4" },
+    { name = "env-supermariobrosnes-turbo-emu", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==0.7.4" },
     { name = "env-vizdoom-turbo", marker = "platform_machine == 'arm64' and sys_platform == 'darwin'", specifier = "==1.3.0.post30" },
     { name = "env-vizdoom-turbo", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==1.3.0.post30" },
     { name = "gymnasium", specifier = ">=1.2,<1.3" },
@@ -1077,7 +1077,7 @@ train-runtime = [
     { name = "env-breakoutatari2600-turbo-native", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==0.5.15" },
     { name = "env-gradoom-turbo-torch", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==0.2.1" },
     { name = "env-stableretro-turbo", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==1.0.1.post48" },
-    { name = "env-supermariobrosnes-turbo-emu", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==0.7.3" },
+    { name = "env-supermariobrosnes-turbo-emu", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==0.7.4" },
     { name = "env-vizdoom-turbo", marker = "platform_machine == 'x86_64' and sys_platform == 'linux'", specifier = "==1.3.0.post30" },
     { name = "gymnasium", specifier = ">=1.2,<1.3" },
     { name = "huggingface-hub", specifier = ">=1.0,<2" },
