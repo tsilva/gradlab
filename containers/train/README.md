@@ -7,9 +7,11 @@ checkpoints, W&B data, or run outputs.
 The learner writes structured events and checkpoint notifications to local
 SQLite. The supervisor is the only networked process: it owns the R2 writer
 lease, uploads immutable checkpoints, dispatches Modal evaluations, and is the
-sole W&B writer. A task is successful only after the terminal drain proves that
-all ready checkpoints have terminal evaluations and W&B reached its durable
-high-water mark.
+sole W&B writer. A task is successful only after the terminal drain proves the
+complete checkpoint inventory, the terminal status of every automatically
+submitted evaluation, and W&B's durable high-water mark. Checkpoints not
+admitted for evaluation before Acceptance can remain unevaluated for later
+explicit action.
 
 ## Image contract
 
@@ -21,7 +23,15 @@ The Dockerfile preserves three independently cacheable layers:
 
 `uv.lock` is the dependency source of truth. The checked-in Linux lock
 projections must remain disjoint and reconstruct the complete training
-environment:
+environment. After changing `uv.lock`, regenerate the projections and commit
+them with the dependency update:
+
+```bash
+uv run --frozen --only-group train-image-build \
+  python containers/train/lock_projection.py
+```
+
+CI checks the generated files against the locked graph:
 
 ```bash
 uv run --frozen --only-group train-image-build \
@@ -31,6 +41,8 @@ uv run --frozen --only-group train-image-build \
 Build and smoke locally:
 
 ```bash
+pnpm install --frozen-lockfile
+pnpm build:web
 docker buildx build \
   --platform linux/amd64 \
   -f containers/train/Dockerfile \
@@ -40,6 +52,11 @@ docker buildx build \
 
 docker run --rm gradlab-train:local
 ```
+
+The image workflow performs the same locked frontend build before Docker. The
+Python package stage verifies its source and output hashes without Node; stale or
+missing assets fail the build. Frontend sources, build configuration and the pnpm
+lockfile participate in the runtime identity. Generated assets stay untracked.
 
 Published runs use only a verified immutable reference of the form
 `docker:ghcr.io/tsilva/gradlab/gradlab-train@sha256:<digest>`. The image workflow
@@ -73,10 +90,7 @@ on one single-GPU host.
 
 ```bash
 gradlab experiment launch \
-  --goal SuperMarioBros-Nes-v0/Level1-1 \
-  --recipe ppo.yaml \
-  --seed 123 \
-  --run-description "Mario Level1-1 dstack run" \
+  --recipe-file experiments/goals/SuperMarioBros-Nes-v0/Level1-1/recipes/ppo.yaml \
   --compute local
 
 gradlab experiment status --run <gradlab-run-id> --json

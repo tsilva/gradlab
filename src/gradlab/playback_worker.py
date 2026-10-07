@@ -5,13 +5,19 @@ import os
 import signal
 import threading
 import traceback
+import time
+import uuid
+import shutil
+from concurrent.futures import ThreadPoolExecutor
 from collections.abc import Iterable, Mapping, Sequence
 from multiprocessing.connection import Connection
+from multiprocessing.process import BaseProcess
 from typing import Any
 
+from gradlab.play_diagnostics import DiagnosticRead
 from gradlab.operator_credentials import PROTECTED_ENV_NAMES
 from gradlab.play_runtime import PlaySourceSpec
-from gradlab.play_web import idle_playback_snapshot
+from gradlab.play_engine import idle_playback_snapshot
 
 
 PLAYBACK_RPC_TIMEOUT_SECONDS = 30.0
@@ -27,6 +33,10 @@ def _worker_main(
     initial_source: PlaySourceSpec | None,
 ) -> None:
     host = None
+    transfers = ThreadPoolExecutor(max_workers=2, thread_name_prefix="gradlab-trajectory-transfer")
+    jobs = {}
+    reads = ThreadPoolExecutor(max_workers=4, thread_name_prefix="gradlab-diagnostic-read")
+    read_jobs = {}
     try:
         signal.signal(signal.SIGINT, signal.SIG_IGN)
         leaked = sorted(name for name in PROTECTED_ENV_NAMES if os.environ.get(name))
@@ -54,10 +64,72 @@ def _worker_main(
                 host.stop()
                 connection.send({"ok": True, "value": None})
                 return
+            if operation in {"begin_read", "poll_read"}:
+                try:
+                    if operation == "begin_read":
+                        if len(read_jobs) >= 8:
+                            raise ValueError("too many pending diagnostic reads")
+                        kind = request["kind"]
+                        if kind not in {"diagnostics", "inspect_recorded_step"}:
+                            raise ValueError("unsupported diagnostic read")
+                        value = uuid.uuid4().hex
+                        if kind == "inspect_recorded_step":
+                            future = reads.submit(
+                                host.inspect_recorded_step, request["epoch"],
+                                request["episode_id"], request["step"],
+                            )
+                        else:
+                            query = DiagnosticRead(**request["query"])
+                            future = reads.submit(host.read_diagnostics, request["epoch"], query)
+                        read_jobs[value] = future
+                    else:
+                        future = read_jobs[request["job_id"]]
+                        value = {"done": future.done()}
+                        if future.done():
+                            del read_jobs[request["job_id"]]
+                            value["result"] = future.result()
+                    connection.send({"ok": True, "value": value})
+                except Exception as exc:
+                    connection.send(
+                        {"ok": False, "error_type": type(exc).__name__, "error": str(exc)}
+                    )
+                continue
+            if operation in {"begin_trajectory", "poll_trajectory"}:
+                try:
+                    if operation == "begin_trajectory":
+                        if len(jobs) >= 2:
+                            raise ValueError("finish the current trajectory transfers first")
+                        kind = request["kind"]
+                        if kind == "freeze":
+                            future = transfers.submit(host.freeze_trajectory)
+                        elif kind == "import":
+                            future = transfers.submit(host.import_trajectory, str(request["path"]))
+                        else:
+                            raise ValueError("unsupported trajectory transfer")
+                        value = uuid.uuid4().hex
+                        jobs[value] = (kind, future)
+                    else:
+                        job_id = request["job_id"]
+                        _, future = jobs[job_id]
+                        value = {"done": future.done()}
+                        if future.done():
+                            del jobs[job_id]
+                            value["result"] = future.result()
+                    connection.send({"ok": True, "value": value})
+                except Exception as exc:
+                    connection.send(
+                        {"ok": False, "error_type": type(exc).__name__, "error": str(exc)}
+                    )
+                continue
             if operation == "start":
                 value = host.start()
+            elif operation == "playback_updates":
+                from gradlab.play_engine import playback_updates
+                value = playback_updates(host)
             elif operation == "snapshot":
                 value = host.snapshot()
+            elif operation == "drain_snapshot_updates":
+                value = host.drain_snapshot_updates()
             elif operation == "history_payload":
                 value = host.history_payload()
             elif operation == "episode_start_payload":
@@ -123,6 +195,13 @@ def _worker_main(
                 host.stop()
             except Exception:
                 pass
+        reads.shutdown(wait=True, cancel_futures=True)
+        transfers.shutdown(wait=True, cancel_futures=True)
+        for kind, future in jobs.values():
+            if kind == "freeze" and not future.cancelled() and future.exception() is None:
+                result = future.result()
+                if result is not None:
+                    shutil.rmtree(result, ignore_errors=True)
         connection.close()
 
 
@@ -175,7 +254,7 @@ class IsolatedPlaybackHost:
         self._initial_source = initial_source
         self._context = multiprocessing.get_context("spawn")
         self._connection: Connection | None = None
-        self._process: multiprocessing.Process | None = None
+        self._process: BaseProcess | None = None
         self._lock = threading.RLock()
         self._closed = False
         self.encoder = _RemoteEncoder(self)
@@ -244,9 +323,7 @@ class IsolatedPlaybackHost:
                 raise RuntimeError("playback worker is not running")
             try:
                 connection.send({"operation": operation, **payload})
-                return self._unwrap(
-                    self._receive(timeout_seconds=timeout_seconds)
-                )
+                return self._unwrap(self._receive(timeout_seconds=timeout_seconds))
             except (BrokenPipeError, EOFError, OSError) as exc:
                 raise RuntimeError("playback worker connection failed") from exc
 
@@ -266,7 +343,7 @@ class IsolatedPlaybackHost:
                 connection.send({"operation": "close"})
                 if connection.poll(15.0):
                     connection.recv()
-            except (BrokenPipeError, EOFError, OSError):
+            except BrokenPipeError, EOFError, OSError:
                 pass
             finally:
                 connection.close()
@@ -292,16 +369,41 @@ class IsolatedPlaybackHost:
                     "route": dict(self._initial_route),
                     "has_active_runner": False,
                     "source": (
-                        self._initial_source.to_dict()
-                        if self._initial_source is not None
-                        else None
+                        self._initial_source.to_dict() if self._initial_source is not None else None
                     ),
                 },
             }
         return dict(self._rpc("snapshot"))
 
+    def drain_snapshot_updates(self) -> list[dict[str, Any]]:
+        if self._process is None:
+            return []
+        return [dict(snapshot) for snapshot in self._rpc("drain_snapshot_updates")]
+
     def history_payload(self) -> dict[str, Any]:
         return dict(self._rpc("history_payload"))
+
+    def playback_updates(self):
+        return self._rpc("playback_updates")
+
+    def _read(self, kind, *, poll_interval=0.01, **payload):
+        job = self._rpc("begin_read", kind=kind, **payload)
+        while True:
+            result = self._rpc("poll_read", job_id=job)
+            if result["done"]:
+                return result["result"]
+            time.sleep(poll_interval)
+
+    def read_diagnostics(self, epoch, request: DiagnosticRead):
+        from dataclasses import asdict
+
+        return dict(self._read("diagnostics", epoch=epoch, query=asdict(request)))
+
+    def inspect_recorded_step(self, epoch: int, episode_id: str, step: int) -> dict[str, Any]:
+        return dict(
+            self._read("inspect_recorded_step", epoch=epoch, episode_id=episode_id,
+                       step=step, poll_interval=0.001)
+        )
 
     def episode_start_payload(
         self,
@@ -314,6 +416,21 @@ class IsolatedPlaybackHost:
 
     def active_recipe_document(self) -> Any:
         return self._rpc("active_recipe_document")
+
+    def freeze_trajectory(self) -> str:
+        return str(self._trajectory_transfer("freeze"))
+
+    def import_trajectory(self, path: str) -> None:
+        self._trajectory_transfer("import", path=path)
+
+    def _trajectory_transfer(self, kind: str, **payload: Any) -> Any:
+        job_id = self._rpc("begin_trajectory", kind=kind, **payload)
+        while True:
+            response = self._rpc("poll_trajectory", job_id=job_id)
+            if response["done"]:
+                return response["result"]
+            # Release the RPC lock between polls so frames and commands keep flowing.
+            time.sleep(0.02)
 
     def active_publication_context(self) -> Any:
         return self._rpc("active_publication_context")

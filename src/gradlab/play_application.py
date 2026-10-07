@@ -6,6 +6,7 @@ import uuid
 from collections.abc import Iterable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 from gradlab.play_runtime import (
@@ -18,7 +19,7 @@ from gradlab.model_sources import (
     NoDefaultPublicRunCheckpointError,
     is_public_checkpoint_manifest_ref,
 )
-from gradlab.play_web import idle_playback_snapshot
+from gradlab.play_engine import idle_playback_snapshot
 from gradlab.play_processing import (
     PLAYER_PROCESSING_FEATURES,
     normalize_player_processing,
@@ -169,6 +170,8 @@ class PlaybackHost:
         with self._lock:
             if self._active is None or self._phase != "active":
                 return None
+            if self._active.runner.snapshot().get("mode") == "trajectory":
+                return None
             capture = getattr(self._active.runner, "capture", None)
             status = (
                 capture.status()
@@ -204,6 +207,55 @@ class PlaybackHost:
             source = self._last_source
         if source is not None:
             self._begin_prepare(source)
+
+    def freeze_trajectory(self) -> str:
+        with self._lock:
+            active = self._active if self._phase == "active" else None
+        if active is None or not hasattr(active.runner, "freeze_trajectory"):
+            raise ValueError("no recorded live episode is available")
+        return active.runner.freeze_trajectory()
+
+    def import_trajectory(self, path: str) -> None:
+        from gradlab.model_sources import ResolvedModelSource
+        from gradlab.play_trajectory_runner import TrajectoryPlaybackRunner
+
+        with self._lock:
+            if self._stopped:
+                raise ValueError("Player has stopped")
+            generation = self._generation
+        runner = TrajectoryPlaybackRunner(Path(path), self.loader.base_args)
+        try:
+            with self._lock:
+                if self._stopped or generation != self._generation:
+                    raise ValueError("Playback source changed while the recording was importing")
+                previous = self._active
+                self._generation += 1
+                self._session_epoch += 1
+                runner.encoder.set_epoch(self._session_epoch)
+                runner.set_processing(self._processing_features)
+                runner.start()
+                bundle = runner.recording.bundle
+                self._active = ActivePlayback(
+                    runner=runner,
+                    policy_env=None,
+                    spec=PlaySourceSpec(kind="local", value="Imported episode"),
+                    source=ResolvedModelSource(model_path=bundle.checkpoint_path, bundle=bundle),
+                )
+                self._candidate = None
+                self._last_source = None
+                self._phase = "active"
+                self._message = self._error = ""
+                self._route = {
+                    "level": "goals",
+                    "environment_id": runner.snapshot()["session"]["env_id"],
+                }
+                self._revision += 1
+                self._session_change += 1
+            if previous is not None:
+                previous.close()
+        except BaseException:
+            runner.stop()
+            raise
 
     def stop(self) -> None:
         with self._lock:
@@ -270,6 +322,22 @@ class PlaybackHost:
                 "app": self._app_payload(),
             }
 
+    def drain_snapshot_updates(self) -> list[dict[str, Any]]:
+        with self._lock:
+            if self._active is None or self._phase != "active":
+                return []
+            updates = self._active.runner.drain_snapshot_updates()
+            session_epoch = self._session_epoch
+            app = self._app_payload()
+        return [
+            {
+                **snapshot,
+                "session_epoch": session_epoch,
+                "app": app,
+            }
+            for snapshot in updates
+        ]
+
     def history_payload(self) -> dict[str, Any]:
         with self._lock:
             if self._active is None or self._phase != "active":
@@ -298,6 +366,33 @@ class PlaybackHost:
                 frames,
             )
 
+    def read_diagnostics(self, epoch, request):
+        with self._lock:
+            if epoch != self._session_epoch or self._active is None or self._phase != "active":
+                raise ValueError("the Playback Session has been replaced")
+            diagnostics = getattr(self._active.runner, "diagnostics", None)
+            if diagnostics is None:
+                raise ValueError(f"episode {request.kind} history is unavailable")
+        result = diagnostics.read(request)
+        with self._lock:
+            if epoch != self._session_epoch or self._phase != "active":
+                raise ValueError("the Playback Session has been replaced")
+        return result
+
+    def inspect_recorded_step(self, epoch: int, episode_id: str, step: int) -> dict[str, Any]:
+        with self._lock:
+            if epoch != self._session_epoch or self._active is None or self._phase != "active":
+                raise ValueError("the Playback Session has been replaced")
+            inspect = getattr(self._active.runner, "inspect_recorded_step", None)
+            if inspect is None:
+                raise ValueError("this Playback source does not support recorded inspection")
+        result = inspect(episode_id, step)
+        with self._lock:
+            if epoch != self._session_epoch or self._active is None or self._phase != "active":
+                raise ValueError("the Playback Session has been replaced")
+            result["snapshot"].update(session_epoch=epoch, app=self._app_payload())
+            return result
+
     def poll_response(self):
         try:
             return self._responses.get_nowait()
@@ -313,7 +408,7 @@ class PlaybackHost:
             return None
 
     def _response(self, command, *, ok: bool, **extra: Any) -> None:
-        from gradlab.play_web import PlaybackResponse
+        from gradlab.play_engine import PlaybackResponse
 
         self._responses.put(
             PlaybackResponse(
@@ -455,7 +550,7 @@ class PlaybackHost:
             active = self._active
         if active is not None:
             try:
-                from gradlab.play_web import PlaybackCommand
+                from gradlab.play_engine import PlaybackCommand
 
                 active.runner.submit(
                     PlaybackCommand(uuid.uuid4().hex, "application", "pause", {}, None)

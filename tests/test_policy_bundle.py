@@ -4,6 +4,7 @@ import json
 from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -35,17 +36,20 @@ from gradlab.eval_runner import normalized_evaluation_request
 from gradlab.recipe_documents import (
     compose_resolved_train_documents,
     compose_train_document,
+    prepare_checkpoint_eval_mode,
 )
 from gradlab.train_config import validate_and_normalize_train_config
 from gradlab.training_backend import training_backend_config, training_backend_config_hash
+from gradlab.state_archive import StateArchive, state_archive_artifact_summary
 
 
 GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml")
 RECIPE = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/recipes/ppo.yaml")
+GO_EXPLORE_RECIPE = GOAL.parent / "recipes/go-explore-20m.yaml"
 LEVEL1_3_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-3/_goal.yaml")
 LEVEL1_3_TRAIN_CLEAR_RECIPE = LEVEL1_3_GOAL.parent / "recipes/ppo-train-clear-100.yaml"
 RUNTIME = "docker:ghcr.io/tsilva/gradlab/gradlab-train@sha256:" + "b" * 64
-BREAKOUT_GOAL = Path("experiments/goals/Breakout-Atari2600-v0/_goal.yaml")
+BREAKOUT_GOAL = Path("experiments/goals/Breakout-Atari2600-v0/FirstWall/_goal.yaml")
 BREAKOUT_RECIPES = tuple(sorted((BREAKOUT_GOAL.parent / "recipes").glob("*.yaml")))
 BANDIT_GOAL = Path("experiments/goals/gradlab__bandit/_goal.yaml")
 BANDIT_RECIPE = BANDIT_GOAL.parent / "recipes/ppo.yaml"
@@ -106,8 +110,8 @@ def test_recipe_v4_embeds_verified_goal_and_recipe_bases() -> None:
     )
 
     assert document["format_version"] == 4
-    assert document["recipe"]["train_config"]["metrics_schema_version"] == 19
-    assert document["resolution"]["recipe"]["base"]["train_config"]["metrics_schema_version"] == 19
+    assert document["recipe"]["train_config"]["metrics_schema_version"] == 24
+    assert document["resolution"]["recipe"]["base"]["train_config"]["metrics_schema_version"] == 24
     assert document["resolution"]["goal"]["base"] == resolved.canonical_goal
     assert document["resolution"]["recipe"]["variant_id"].startswith("v-")
     assert (
@@ -149,7 +153,7 @@ def test_portable_recipe_reader_preserves_historical_failure_plateau() -> None:
 
     for recipe in (document["recipe"], base_recipe):
         recipe["train_config"]["early_stop"]["conditions"]["return_plateau"] = {
-            "metric": "train/episode/return/shaped/origin/target/rolling/mean",
+            "metric": "train/return/mean",
             "trigger": "no_improvement",
             "direction": "maximize",
             "min_delta": 0.01,
@@ -174,7 +178,7 @@ def test_portable_recipe_reader_preserves_source_bound_metrics_schema() -> None:
         recipe["train_config"]["metrics_schema_version"] = 18
         conditions = recipe["train_config"]["early_stop"]["conditions"]
         conditions["clear_100"]["metric"] = (
-            "train/outcome/success/across_starts/window_100/rate/min"
+            "train/target/success/across_starts/window_100/rate/min"
         )
         conditions["return_plateau"] = {
             "metric": "train/episode/return/shaped/from/target/rolling_up_to_100/mean",
@@ -334,7 +338,7 @@ def test_level1_3_training_clear_bundle_omits_eval_and_preserves_early_stop() ->
         "clear_100",
     }
     assert recipe["train_config"]["early_stop"]["conditions"]["clear_100"] == {
-        "metric": "train/outcome/success/starts/all/rolling/rate/min",
+        "metric": "train/success/min",
         "trigger": "threshold",
         "outcome": "success",
         "action": "stop",
@@ -593,6 +597,36 @@ def test_evaluated_goal_preserves_manual_eval_when_automatic_eval_is_disabled() 
     assert contract["acceptance"] == resolved.effective["goal"]["eval"]["acceptance"]
 
 
+def test_evaluated_go_explore_goal_preserves_route_eval_when_automatic_eval_is_disabled() -> None:
+    resolved = compose_resolved_train_documents(
+        GOAL,
+        GO_EXPLORE_RECIPE,
+        prepare_materialized=lambda document: prepare_checkpoint_eval_mode(
+            document,
+            checkpoint_eval_backend="none",
+        ),
+        source_sha="a" * 40,
+    )
+    bind_mario_asset(resolved)
+
+    document = build_recipe_document(
+        resolved.effective,
+        repo_root=Path.cwd(),
+        source_commit="a" * 40,
+        run_description="local Go-Explore regression",
+        seed=123,
+        runtime_image_ref=RUNTIME,
+        base_materialized_recipe=resolved.base,
+        canonical_goal=resolved.canonical_goal,
+    )
+
+    recipe = document["recipe"]
+    assert recipe["train_config"]["checkpoint_eval_backend"] == "none"
+    assert "eval" not in recipe
+    assert "playback" in recipe
+    assert evaluation_contract(document)["action_sampling"] == "route"
+
+
 def test_recipe_materializes_the_backend_config_executed_by_the_learner() -> None:
     resolved = compose_resolved_train_documents(GOAL, RECIPE, source_sha="a" * 40)
     bind_mario_asset(resolved)
@@ -700,7 +734,7 @@ def test_recipe_keeps_eval_asset_identity_but_removes_private_locations() -> Non
 
 
 def test_recipe_provider_is_exact_and_never_falls_back() -> None:
-    provider = "supermariobrosnes-turbo"
+    provider = "env-supermariobrosnes-turbo-emu"
     resolved = compose_resolved_train_documents(
         GOAL,
         RECIPE,
@@ -782,6 +816,14 @@ def test_model_v3_records_durable_state_archive_summary(tmp_path: Path) -> None:
     checkpoint.write_bytes(b"checkpoint bytes")
     recipe_document = level1_1_recipe_document()
     recipe_path = write_canonical_json(tmp_path / "recipe.json", recipe_document)
+    archive = StateArchive(
+        tmp_path / "archive",
+        provider_id="env-supermariobrosnes-turbo-emu",
+        codec_id="supermariobrosnes-turbo.portable-v2",
+        compatibility_id="sha256:" + "d" * 64,
+        persistence="durable",
+    )
+    runtime = SimpleNamespace(state_archive_summary=archive.summary)
     metadata = {
         "kind": "checkpoint",
         "checkpoint_step": 500_000,
@@ -792,18 +834,7 @@ def test_model_v3_records_durable_state_archive_summary(tmp_path: Path) -> None:
             recipe_document["recipe"]["train_config"]
         ),
         "state_archive_preflight_sha256": "c" * 64,
-        "state_archive_summary": {
-            "semantic_id": "state-archive-v1",
-            "schema_version": 1,
-            "persistence": "durable",
-            "provider_id": "supermariobrosnes-turbo",
-            "codec_id": "supermariobrosnes-turbo.portable-v2",
-            "compatibility_id": "sha256:" + "d" * 64,
-            "entry_count": 61,
-            "blob_count": 17,
-            "blob_bytes": 123456,
-            "view_ids": ["go-explore"],
-        },
+        "state_archive_summary": state_archive_artifact_summary(runtime),
     }
     model = build_model_document(checkpoint, recipe_path, metadata)
     write_canonical_json(tmp_path / "model.json", model)
@@ -812,6 +843,9 @@ def test_model_v3_records_durable_state_archive_summary(tmp_path: Path) -> None:
 
     assert bundle.model["format_version"] == 3
     assert bundle.model["provenance"]["state_archive_summary"] == metadata["state_archive_summary"]
+    assert "physical_bytes" in archive.summary()
+    assert "physical_bytes" not in bundle.model["provenance"]["state_archive_summary"]
+    archive.close()
 
 
 def test_noncurrent_model_schema_is_rejected(tmp_path: Path) -> None:

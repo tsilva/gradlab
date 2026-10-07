@@ -44,8 +44,8 @@ def _resolved_table(
     label: str,
 ) -> tuple[list[list[str]], str]:
     config = train_config_from_source_environment(environment)
-    if config.get("env_provider") != "vizdoom-turbo":
-        raise ValueError(f"{label} requires env_provider='vizdoom-turbo'")
+    if config.get("env_provider") != "env-vizdoom-turbo":
+        raise ValueError(f"{label} requires env_provider='env-vizdoom-turbo'")
     contract = declared_action_contract(config)
     if not isinstance(contract, Mapping) or contract.get("mode") != "custom_discrete":
         raise ValueError(f"{label} requires an exact provider-resolved discrete action table")

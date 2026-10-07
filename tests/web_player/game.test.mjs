@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 import {
+  gameFrameBoundaryKind,
   gameFramePhase,
   gameFrameTerminationDetail,
   gameFrameTerminationTone,
@@ -23,6 +25,36 @@ test("game frame phase distinguishes initial, after-action, and terminal frames"
     }),
     "Next episode initial observation",
   );
+});
+
+test("episode boundaries identify termination and truncation independently", () => {
+  const terminal = (flags) => ({
+    transition: {
+      after: { frame_role: "terminal_observation" },
+      boundary: true,
+      ...flags,
+    },
+  });
+
+  assert.equal(gameFrameBoundaryKind(terminal({ terminated: true })), "Terminated");
+  assert.equal(gameFrameBoundaryKind(terminal({ truncated: true })), "Truncated");
+  assert.equal(
+    gameFrameBoundaryKind(terminal({ terminated: true, truncated: true })),
+    "Terminated · Truncated",
+  );
+  assert.equal(gameFrameBoundaryKind({
+    transition: {
+      after: { frame_role: "after_action_observation" },
+      terminated: true,
+    },
+  }), "");
+  assert.equal(gameFrameBoundaryKind({
+    transition: {
+      after: { frame_role: "next_episode_initial_observation" },
+      boundary: true,
+      truncated: true,
+    },
+  }), "Truncated");
 });
 
 test("terminal observations show the most specific termination fact", () => {

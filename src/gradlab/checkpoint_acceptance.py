@@ -16,6 +16,7 @@ from gradlab.eval_metrics import episode_is_complete, episode_start_state, progr
 from gradlab.env_registry import ENVIRONMENT_SPECS, environment_spec, resolve_env_provider
 from gradlab.metric_names import (
     EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
+    EVAL_FULL_EPISODE_RETURN_SHAPED_MAX,
     EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MEAN,
     EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MIN,
     eval_full_progress_metric,
@@ -330,7 +331,7 @@ def build_checkpoint_eval_contract(
     if str(seed_protocol) != SEED_PROTOCOL:
         raise ValueError(f"unsupported checkpoint eval seed protocol: {seed_protocol!r}")
     action_sampling = str(action_sampling).strip()
-    if action_sampling not in {"stochastic", "epsilon_greedy", "program"}:
+    if action_sampling not in {"stochastic", "epsilon_greedy", "program", "route"}:
         raise ValueError(f"unsupported checkpoint eval action selection: {action_sampling!r}")
     rules = normalize_metric_threshold_rules(acceptance, label="goal.eval.acceptance")
     if not rules:
@@ -371,7 +372,7 @@ def build_checkpoint_eval_contract(
         "evidence_policy": {
             "version": EVIDENCE_POLICY_VERSION,
             "fail_fast": fail_fast,
-            "complete_metrics_prefix": "eval/full",
+            "complete_metrics_prefix": "eval",
             "partial_rejection_metrics": False,
             "aggregate_validation": "supervisor-recomputed-v1",
         },
@@ -438,14 +439,24 @@ def acceptance_aggregates(
     if len(rows) == int(contract["episodes"]):
         if rates:
             result[EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MIN] = min(rates.values())
-            result[EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MEAN] = sum(rates.values()) / len(
-                rates
-            )
+            result[EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MEAN] = sum(rates.values()) / len(rates)
         returns = [float(row["return"]) for row in rows if row.get("return") is not None]
         if len(returns) == len(rows) and returns:
             if not all(math.isfinite(value) for value in returns):
                 raise ValueError("acceptance episode returns must be finite")
             result[EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN] = sum(returns) / len(returns)
+            result[EVAL_FULL_EPISODE_RETURN_SHAPED_MAX] = max(returns)
+        steps = [row.get("steps") for row in rows]
+        if any(value is not None for value in steps):
+            if any(
+                isinstance(value, bool)
+                or not isinstance(value, int | float)
+                or not math.isfinite(float(value))
+                or float(value) < 0
+                for value in steps
+            ):
+                raise ValueError("acceptance episode lengths must be finite and non-negative")
+            result["eval/episode_steps/mean"] = sum(float(value) for value in steps) / len(steps)
         environment = contract.get("environment")
         if isinstance(environment, Mapping):
             provider_id = environment.get("env_provider")

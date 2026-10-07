@@ -122,10 +122,23 @@ Each JSON line is a combined snapshot of dstack state and authoritative R2
 semantic state. Send compact progress updates at most every two minutes unless
 state requires attention.
 
-The monitor is complete only when `semantic.terminal` exists. A successful
-dstack exit without that receipt is an operational failure, not a scientific
-success. Keep monitoring while any checkpoint evaluation or W&B drain remains
-pending.
+Use the combined snapshot's `completed` flag to determine when monitoring can
+finish, and inspect the receipts to distinguish success from failure:
+
+- **Training-only runs:** require `completed=true`, terminal dstack state, and
+  the current attempt's authoritative R2 `attempt_terminal` receipt. Successful
+  completion requires a succeeded attempt, successful dstack exit, and complete
+  checkpoint publication and W&B drain. `semantic.terminal=null` is expected;
+  these runs remain `scientific_success=false` and cannot establish Acceptance
+  or Promotion.
+- **Acceptance-backed success:** additionally require `semantic.terminal`, the
+  canonical R2 receipt proving accepted scientific success. An attempt receipt
+  alone does not establish Acceptance.
+
+A dstack exit alone is never sufficient evidence of completion. Keep monitoring
+while any required checkpoint evaluation or W&B drain remains pending. Report
+failed terminal attempts as failures; do not wait for an acceptance receipt they
+cannot produce or retry a healthy training-only run because that receipt is absent.
 
 Use these read-only commands only when the follow process fails or a snapshot
 shows an operational anomaly:
@@ -165,7 +178,13 @@ runtime, then retry or launch fresh as the durable state requires.
 ## Training completion
 
 Launching, seeing W&B, observing an accepted eval, or seeing dstack exit is not
-completion. A successful accepted run requires all of:
+completion. A successful training-only run requires the training-only monitor
+gate above, its complete periodic/final checkpoint inventory, W&B delivery
+through the receipt's high-water mark, and successful dstack termination with
+the host released. Report its training stop reason and final step without
+claiming Acceptance, Promotion, or a solved goal.
+
+A successful accepted run requires all of:
 
 - authoritative terminal receipt with accepted stop reason;
 - accepted 100/100 evidence for the immutable episode manifest;

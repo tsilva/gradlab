@@ -1,0 +1,454 @@
+from __future__ import annotations
+
+from collections import deque
+from pathlib import Path
+
+import gymnasium as gym
+import numpy as np
+import pytest
+from stable_baselines3 import PPO
+
+from gradlab.batch_runtime import ProviderDescriptor
+from gradlab.env import make_vec_envs, resolve_env_config
+from gradlab.env_config import env_config_from_mapping
+from gradlab.env_registry import environment_spec
+from gradlab.gymnasium_vec_env import GYMNASIUM_ENV_CONTRACTS
+from gradlab.play_catalog import PlayCatalog
+from gradlab.recipe_documents import compose_train_document, compose_resolved_train_documents
+from gradlab.recipe_schema import validate_materialized_train_recipe
+from gradlab.task_kernels import IdentityTaskDefinition, Outcome
+
+
+GOALS = Path("experiments/goals")
+EXPECTED = {
+    "CartPole-v1": {
+        "threshold": 475.0,
+        "timesteps": 100_000,
+        "n_envs": 8,
+        "n_steps": 32,
+        "batch_size": 256,
+        "n_epochs": 20,
+        "gamma": 0.98,
+        "gae_lambda": 0.8,
+        "checkpoint_freq": 10_000,
+        "plateau": 25_000,
+        "ent_coef": 0.0,
+    },
+    "MountainCar-v0": {
+        "threshold": -110.0,
+        "timesteps": 1_000_000,
+        "n_envs": 16,
+        "n_steps": 16,
+        "batch_size": 64,
+        "n_epochs": 4,
+        "gamma": 0.99,
+        "gae_lambda": 0.98,
+        "checkpoint_freq": 100_000,
+        "plateau": 250_000,
+        "ent_coef": 0.0,
+    },
+    "Acrobot-v1": {
+        "threshold": -100.0,
+        "timesteps": 1_000_000,
+        "n_envs": 16,
+        "n_steps": 256,
+        "batch_size": 64,
+        "n_epochs": 4,
+        "gamma": 0.99,
+        "gae_lambda": 0.94,
+        "checkpoint_freq": 100_000,
+        "plateau": 250_000,
+        "ent_coef": 0.0,
+    },
+    "LunarLander-v3": {
+        "threshold": 200.0,
+        "timesteps": 1_000_000,
+        "n_envs": 16,
+        "n_steps": 1024,
+        "batch_size": 256,
+        "n_epochs": 4,
+        "gamma": 0.999,
+        "gae_lambda": 0.98,
+        "checkpoint_freq": 100_000,
+        "plateau": 250_000,
+        "ent_coef": 0.01,
+    },
+    "FrozenLake-v1/Maze": {
+        "threshold": 0.7,
+        "timesteps": 500_000,
+        "n_envs": 32,
+        "n_steps": 128,
+        "batch_size": 256,
+        "n_epochs": 10,
+        "gamma": 0.99,
+        "gae_lambda": 0.95,
+        "checkpoint_freq": 50_000,
+        "plateau": 125_000,
+        "ent_coef": 0.01,
+        "min_delta": 0.01,
+    },
+    "FrozenLake-v1/Default": {
+        "threshold": 0.7,
+        "timesteps": 500_000,
+        "n_envs": 32,
+        "n_steps": 128,
+        "batch_size": 256,
+        "n_epochs": 10,
+        "gamma": 0.99,
+        "gae_lambda": 0.95,
+        "checkpoint_freq": 50_000,
+        "plateau": 125_000,
+        "ent_coef": 0.01,
+        "min_delta": 0.01,
+    },
+    "CliffWalking-v1/Default": {
+        "threshold": -13.0,
+        "timesteps": 500_000,
+        "n_envs": 32,
+        "n_steps": 128,
+        "batch_size": 256,
+        "n_epochs": 10,
+        "gamma": 0.99,
+        "gae_lambda": 0.95,
+        "checkpoint_freq": 50_000,
+        "plateau": 125_000,
+        "ent_coef": 0.01,
+    },
+    "CliffWalking-v1/Slippery": {
+        "threshold": -75.0,
+        "timesteps": 1_000_000,
+        "n_envs": 32,
+        "n_steps": 256,
+        "batch_size": 512,
+        "n_epochs": 10,
+        "gamma": 0.999,
+        "gae_lambda": 0.95,
+        "checkpoint_freq": 100_000,
+        "plateau": 250_000,
+        "ent_coef": 0.02,
+    },
+    "Taxi-v3": {
+        "threshold": 8.0,
+        "timesteps": 2_000_000,
+        "n_envs": 32,
+        "n_steps": 128,
+        "batch_size": 512,
+        "n_epochs": 10,
+        "gamma": 0.99,
+        "gae_lambda": 0.95,
+        "checkpoint_freq": 200_000,
+        "plateau": 500_000,
+        "ent_coef": 0.01,
+    },
+    "Blackjack-v1": {
+        "threshold": -0.05,
+        "timesteps": 1_000_000,
+        "n_envs": 32,
+        "n_steps": 64,
+        "batch_size": 512,
+        "n_epochs": 10,
+        "gamma": 1.0,
+        "gae_lambda": 1.0,
+        "checkpoint_freq": 100_000,
+        "plateau": 250_000,
+        "ent_coef": 0.01,
+        "min_delta": 0.01,
+    },
+}
+
+
+def _document(game: str) -> dict:
+    root = GOALS / game
+    return compose_train_document(root / "_goal.yaml", root / "recipes/ppo.yaml")
+
+
+def test_slippery_frozenlake_override_changes_environment_identity() -> None:
+    root = GOALS / "FrozenLake-v1/Maze"
+    documents = compose_resolved_train_documents(
+        root / "_goal.yaml",
+        root / "recipes/ppo.yaml",
+        recipe_overrides=["train.environment.env_config.env_args.is_slippery=true"],
+    )
+    assert documents.effective["train_config"]["env_args"]["is_slippery"] is True
+    assert documents.effective["environment_hash"] != documents.base["environment_hash"]
+
+
+@pytest.mark.parametrize(
+    "game,value", [("CartPole-v1", False), ("FrozenLake-v1", "false"), ("FrozenLake-v1", None)]
+)
+def test_invalid_slippery_options_fail_recipe_validation(game, value) -> None:
+    document = _document("FrozenLake-v1/Maze" if game.startswith("FrozenLake") else game)
+    document["train_config"]["game"] = game
+    document["train_config"]["env_args"].pop("desc", None)
+    document["train_config"]["env_args"]["is_slippery"] = value
+    with pytest.raises(ValueError, match="is_slippery"):
+        validate_materialized_train_recipe(document)
+
+
+@pytest.mark.parametrize(
+    "game,desc",
+    [
+        ("CartPole-v1", ["SFFF", "FFFF", "FFFF", "FFFG"]),
+        ("FrozenLake-v1", None),
+        ("FrozenLake-v1", "SFFFFFFFFFFFFFFG"),
+        ("FrozenLake-v1", ["SFFF", "FFFF", "FFFF"]),
+        ("FrozenLake-v1", ["SFFF", "FFFF", "FFFF", "FFFFG"]),
+        ("FrozenLake-v1", ["SFFF", "FXFF", "FFFF", "FFFG"]),
+        ("FrozenLake-v1", ["SSFF", "FFFF", "FFFF", "FFFG"]),
+        ("FrozenLake-v1", ["SFFF", "FFFF", "FFFF", "FFFF"]),
+        ("FrozenLake-v1", ["SHHH", "HHHH", "HHHH", "HHHG"]),
+        ("FrozenLake8x8-v1", ["SFFF", "FFFF", "FFFF", "FFFG"]),
+    ],
+)
+def test_invalid_frozenlake_layouts_fail_before_environment_creation(game, desc) -> None:
+    document = _document("FrozenLake-v1/Maze" if game.startswith("FrozenLake") else game)
+    document["train_config"]["game"] = game
+    document["train_config"]["env_args"]["desc"] = desc
+    with pytest.raises(ValueError, match="desc"):
+        validate_materialized_train_recipe(document)
+
+
+def test_maze_layout_changes_environment_and_goal_identity() -> None:
+    root = GOALS / "FrozenLake-v1/Maze"
+    documents = compose_resolved_train_documents(
+        root / "_goal.yaml",
+        root / "recipes/ppo.yaml",
+        recipe_overrides=[
+            'train.environment.env_config.env_args.desc=["SFFFFFFF","FFFFFFFF",'
+            '"FFFFFFFF","FFFFFFFF","FFFFFFFF","FFFFFFFF","FFFFFFFF","FFFFFFFG"]'
+        ],
+    )
+    assert documents.effective["environment_hash"] != documents.base["environment_hash"]
+    assert documents.effective["goal"] != documents.base["goal"]
+
+
+def test_maze_is_reachable_through_the_training_environment() -> None:
+    document = _document("FrozenLake-v1/Maze")
+    config = document["train_config"]
+    assert config["env_args"]["is_slippery"] is False
+    rows = config["env_args"]["desc"]
+    frontier = deque([(0, [])])
+    visited = {0}
+    route = None
+    while frontier:
+        state, actions = frontier.popleft()
+        if state == 63:
+            route = actions
+            break
+        row, col = divmod(state, 8)
+        for action, (dr, dc) in enumerate(((0, -1), (1, 0), (0, 1), (-1, 0))):
+            nr, nc = row + dr, col + dc
+            target = nr * 8 + nc
+            if 0 <= nr < 8 and 0 <= nc < 8 and rows[nr][nc] != "H" and target not in visited:
+                visited.add(target)
+                frontier.append((target, [*actions, action]))
+    assert route is not None and len(route) == 26
+    env = make_vec_envs(resolve_env_config(env_config_from_mapping(config)), n_envs=2, seed=31)
+    try:
+        np.testing.assert_array_equal(env.reset(), [0, 0])
+        for step, action in enumerate(route, start=1):
+            _obs, rewards, dones, _infos = env.step(np.full(2, action, dtype=np.int64))
+            np.testing.assert_array_equal(dones, [step == 26] * 2)
+            np.testing.assert_array_equal(rewards, [float(step == 26)] * 2)
+        env.reset()
+        # Moving down from S enters a hole in this maze, unlike the default board.
+        _obs, rewards, dones, _infos = env.step(np.ones(2, dtype=np.int64))
+        assert dones.all()
+        assert not rewards.any()
+    finally:
+        env.close()
+
+
+def test_gymnasium_goals_are_registered_in_player_catalog() -> None:
+    catalog = PlayCatalog(repo_root=Path.cwd())
+    environment_names = {item["name"] for item in catalog.environments().items}
+
+    assert {game.split("/")[0] for game in EXPECTED} <= environment_names
+    assert "CliffWalkingSlippery-v1" not in environment_names
+    cliff_goals = catalog.goals(environment_id="CliffWalking-v1", include_evidence=False)
+    assert [item["goal_id"] for item in cliff_goals.items] == ["Default", "Slippery"]
+    assert "FrozenLake8x8-v1" not in environment_names
+    goals = catalog.goals(environment_id="FrozenLake-v1", include_evidence=False)
+    assert [item["goal_id"] for item in goals.items] == ["Default", "Maze"]
+
+
+@pytest.mark.parametrize("game", tuple(EXPECTED))
+def test_gymnasium_goal_and_recipe_materialize_exact_contract(game: str) -> None:
+    expected = EXPECTED[game]
+    runtime_game = "FrozenLake8x8-v1" if game == "FrozenLake-v1/Maze" else game.split("/")[0]
+    contract = GYMNASIUM_ENV_CONTRACTS[runtime_game]
+    document = _document(game)
+    validate_materialized_train_recipe(document)
+    config = document["train_config"]
+    goal = document["goal"]
+    backend = config["training_backend"]["config"]
+
+    assert goal["evaluation_mode"] == "training_only"
+    assert goal["objective"]["rank"] == [
+        "max(train/return/mean)",
+        "min(train/step)",
+    ]
+    assert "eval" not in goal
+    assert "release" not in goal
+    assert config["env_provider"] == "gymnasium"
+    assert config["game"] == runtime_game
+    if runtime_game == "CliffWalking-v1":
+        assert config["env_args"]["is_slippery"] is (game.endswith("/Slippery"))
+    assert config["n_envs"] == expected["n_envs"]
+    assert config["checkpoint_eval_backend"] == "none"
+    assert "checkpoint_eval_n_envs" not in config
+    assert "post_train_eval_episodes" not in config
+    assert "checkpoint_eval_acceptance" not in config
+    assert "checkpoint_eval_environment" not in config
+    assert config["checkpoint_freq"] == expected["checkpoint_freq"]
+    assert config["timesteps"] == expected["timesteps"]
+    assert config["task"]["termination"]["max_episode_steps"] == contract.max_episode_steps
+    assert document["policy_environment_hash"] == document["environment_hash"]
+    assert "evaluation_environment_hash" not in document
+    assert config["policy_model"] == {
+        "schema_version": 2,
+        "encoder": {"kind": "flatten"},
+        "fusion": {"hidden_sizes": [64, 64], "activation": "tanh"},
+        "normalize_images": False,
+        "orthogonal_init": True,
+    }
+    for name in ("n_steps", "batch_size", "n_epochs", "gamma", "gae_lambda"):
+        assert backend[name] == expected[name]
+    assert backend["device"] == "cpu"
+    assert backend["ent_coef"] == expected["ent_coef"]
+    assert backend["clip_range"] == 0.2
+    target = config["early_stop"]["conditions"]["return_target"]
+    assert target == {
+        "metric": "train/return/mean",
+        "trigger": "threshold",
+        "outcome": "success",
+        "action": "stop",
+        "start_after_steps": expected["checkpoint_freq"],
+        "patience_steps": 0,
+        "operator": ">=",
+        "threshold": expected["threshold"],
+    }
+    plateau = config["early_stop"]["conditions"]["return_plateau"]
+    assert plateau == {
+        "metric": "train/return/mean",
+        "trigger": "no_improvement",
+        "outcome": "neutral",
+        "action": "stop",
+        "patience_steps": expected["plateau"],
+        "start_after_steps": expected["plateau"],
+        "direction": "maximize",
+        "min_delta": expected.get("min_delta", 1.0),
+        "delta_mode": "absolute",
+    }
+
+    spec = environment_spec("gymnasium", runtime_game)
+    assert spec.wandb_project == runtime_game
+    assert spec.game_family.startswith("Gymnasium-")
+
+
+def _kernel(game: str):
+    task = _document(game)["train_config"]["task"]
+    descriptor = ProviderDescriptor(
+        provider_id="gymnasium",
+        native_observation_space=gym.spaces.Box(-1, 1, shape=(1,), dtype=np.float32),
+        native_action_space=gym.spaces.Discrete(3),
+    )
+    termination = task["termination"]
+    return IdentityTaskDefinition(
+        max_episode_steps=termination["max_episode_steps"],
+        signals=task["signals"],
+        events=task["events"],
+        termination=termination,
+    ).bind(descriptor, 1)
+
+
+def test_cartpole_failure_wins_over_simultaneous_successful_horizon() -> None:
+    kernel = _kernel("CartPole-v1")
+    step = kernel.process(
+        np.ones(1, dtype=np.float32),
+        np.ones(1, dtype=np.bool_),
+        np.ones(1, dtype=np.bool_),
+        {},
+    )
+
+    assert step.outcomes.tolist() == [Outcome.FAILURE]
+    assert step.terminated.tolist() == [True]
+    assert step.truncated.tolist() == [False]
+
+
+def test_cartpole_horizon_is_successful_and_bootstrappable() -> None:
+    kernel = _kernel("CartPole-v1")
+    step = kernel.process(
+        np.ones(1, dtype=np.float32),
+        np.zeros(1, dtype=np.bool_),
+        np.ones(1, dtype=np.bool_),
+        {},
+    )
+
+    assert step.outcomes.tolist() == [Outcome.SUCCESS]
+    assert step.terminated.tolist() == [False]
+    assert step.truncated.tolist() == [True]
+
+
+@pytest.mark.parametrize("game", ("MountainCar-v0", "Acrobot-v1"))
+def test_control_goal_success_wins_over_simultaneous_timeout(game: str) -> None:
+    kernel = _kernel(game)
+    step = kernel.process(
+        -np.ones(1, dtype=np.float32),
+        np.ones(1, dtype=np.bool_),
+        np.ones(1, dtype=np.bool_),
+        {},
+    )
+
+    assert step.outcomes.tolist() == [Outcome.SUCCESS]
+    assert step.terminated.tolist() == [True]
+    assert step.truncated.tolist() == [False]
+
+
+@pytest.mark.parametrize("game", tuple(EXPECTED))
+def test_gymnasium_recipe_environment_runs_short_ppo_rollout(game: str) -> None:
+    runtime_game = "FrozenLake8x8-v1" if game == "FrozenLake-v1/Maze" else game.split("/")[0]
+    config = resolve_env_config(env_config_from_mapping(_document(game)["train_config"]))
+    env = make_vec_envs(config, n_envs=2, seed=31)
+    try:
+        model = PPO(
+            "MlpPolicy",
+            env,
+            n_steps=8,
+            batch_size=16,
+            n_epochs=1,
+            learning_rate=3e-4,
+            seed=31,
+            device="cpu",
+            verbose=0,
+        )
+        model.learn(total_timesteps=32)
+        observations = env.reset()
+        actions, _state = model.predict(observations, deterministic=False)
+        next_observations, rewards, dones, infos = env.step(actions)
+
+        assert next_observations.shape == (
+            2,
+            *GYMNASIUM_ENV_CONTRACTS[runtime_game].observation_shape,
+        )
+        assert rewards.shape == (2,)
+        assert dones.shape == (2,)
+        assert len(infos) == 2
+    finally:
+        env.close()
+
+
+def test_default_frozenlake_uses_native_map_without_slipping() -> None:
+    config = _document("FrozenLake-v1/Default")["train_config"]
+    assert config["game"] == "FrozenLake-v1"
+    assert config["env_args"]["is_slippery"] is False
+    assert "desc" not in config["env_args"]
+    env = make_vec_envs(resolve_env_config(env_config_from_mapping(config)), n_envs=2, seed=31)
+    try:
+        np.testing.assert_array_equal(env.reset(), [0, 0])
+        for index, action in enumerate([2, 2, 1, 1, 1, 2]):
+            observations, rewards, dones, _infos = env.step(np.full(2, action, dtype=np.int64))
+            np.testing.assert_array_equal(dones, [index == 5] * 2)
+            np.testing.assert_array_equal(rewards, [float(index == 5)] * 2)
+    finally:
+        env.close()

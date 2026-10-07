@@ -8,7 +8,7 @@ import socket
 import tempfile
 import traceback
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from contextlib import redirect_stdout
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -70,10 +70,12 @@ from gradlab.run_contracts import (
     TerminalReceipt,
     default_liveness_policy,
 )
-from gradlab.run_supervisor import (
-    IncompleteEvaluationEvidence,
+from gradlab.supervisor_lifecycle import (
     LearnerFailure,
     LearnerTeardownTimeout,
+)
+from gradlab.run_supervisor import (
+    IncompleteEvaluationEvidence,
     METRIC_JOURNAL_RETENTION_DAYS,
     RunSupervisor,
     _terminal_outcome,
@@ -92,11 +94,18 @@ GOAL_PATH = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml")
 RECIPE_PATH = GOAL_PATH.parent / "recipes" / "ppo.yaml"
 DEFAULT_SCENARIOS = (
     "full-lifecycle",
+    "mlflow-full-lifecycle",
+    "local-only-full-lifecycle",
     "parallel-run-isolation",
+    "mlflow-parallel-run-isolation",
     "same-run-lease-fencing",
     "wandb-retry-deduplication",
     "wandb-visibility-gating",
+    "mlflow-retry-deduplication",
+    "mlflow-visibility-gating",
     "checkpoint-upload-retry",
+    "blocking-publication-lease-renewal",
+    "state-archive-lease-fencing",
     "eval-result-reconciliation",
     "modal-ambiguous-submit",
     "cancellation-terminalization",
@@ -109,6 +118,9 @@ DEFAULT_SCENARIOS = (
     "completed-result-exits-during-iteration",
     "completed-result-hung-process",
     "local-background-jobs",
+    "checkpoint-monitoring",
+    "delivery-scheduling",
+    "delivery-drain-progress",
 )
 
 
@@ -118,6 +130,8 @@ class DeterministicClock:
     def __init__(self) -> None:
         self._wall = datetime(2026, 1, 1, tzinfo=UTC).timestamp()
         self._monotonic = 0.0
+        self.maintenance: list[Callable[[], None]] = []
+        self._in_maintenance = False
 
     def time(self) -> float:
         return self._wall
@@ -132,8 +146,19 @@ class DeterministicClock:
         increment = float(seconds)
         if increment < 0:
             raise ValueError("deterministic clock cannot move backwards")
-        self._wall += increment
-        self._monotonic += increment
+        remaining = increment
+        while remaining > 0:
+            step = min(remaining, 1.0) if self.maintenance else remaining
+            self._wall += step
+            self._monotonic += step
+            remaining -= step
+            if not self._in_maintenance:
+                self._in_maintenance = True
+                try:
+                    for callback in tuple(self.maintenance):
+                        callback()
+                finally:
+                    self._in_maintenance = False
 
     def utc_datetime(self) -> datetime:
         return datetime.fromtimestamp(self._wall, UTC)
@@ -236,6 +261,7 @@ class ScriptedLearnerProcess:
 
 
 class CertificationRuntime(SupervisorRuntime):
+
     """Scriptable stand-in for process, W&B, signals, and host state."""
 
     def __init__(
@@ -267,6 +293,14 @@ class CertificationRuntime(SupervisorRuntime):
     def holder_id(self) -> str:
         return self.writer_id
 
+    @contextmanager
+    def maintain_lease(self, renew: Callable[[], None]) -> Iterator[None]:
+        self.clock.maintenance.append(renew)
+        try:
+            yield
+        finally:
+            self.clock.maintenance.remove(renew)
+
     def disk_usage(self, path: Path) -> Any:
         del path
         return SimpleNamespace(total=100, used=10, free=90)
@@ -278,16 +312,22 @@ class CertificationRuntime(SupervisorRuntime):
         *,
         limit: int,
         event_seq_offset: int = 0,
+        heartbeat: Callable[[], None] | None = None,
+        should_continue: Callable[[], bool] | None = None,
     ) -> int:
         del projector
         published = 0
         for row in store.pending_metric_frames(limit=limit):
+            if should_continue is not None and not should_continue():
+                break
+            if heartbeat is not None:
+                heartbeat()
             frame_id = int(row["id"])
             if not store.claim_metric_frame(frame_id):
                 continue
             if self.publish_failures > 0:
                 self.publish_failures -= 1
-                store.mark_metric_frame_failed(frame_id, "simulated W&B outage")
+                store.mark_metric_frame_failed(frame_id, "simulated selected-service outage")
                 continue
             payload = json.loads(str(row["payload_json"]))
             event_seq = frame_id + int(event_seq_offset)
@@ -303,9 +343,9 @@ class CertificationRuntime(SupervisorRuntime):
             if event["kind"] == "history":
                 event["payload"][ORCHESTRATION_EVENT_SEQUENCE] = event_seq
                 if event["source"].startswith("eval"):
-                    event["payload"]["eval/checkpoint/step"] = event["step"]
+                    event["payload"]["eval/step"] = event["step"]
                 elif not event["source"].startswith("orchestration"):
-                    event["payload"]["train/global_step"] = event["step"]
+                    event["payload"]["train/step"] = event["step"]
             self.wandb_events.append(event)
             if self.evidence_path is not None:
                 self.evidence_path.parent.mkdir(parents=True, exist_ok=True)
@@ -442,8 +482,12 @@ class PreparedSupervisor:
 
 
 class CertificationFixture:
-    def __init__(self, root: Path, *, clock: DeterministicClock | None = None) -> None:
+    def __init__(self, root: Path, *, clock: DeterministicClock | None = None,
+                 tracking_backend: str = "wandb",
+                 tracking_delivery: str = "online") -> None:
         self.root = root
+        self.tracking_backend = tracking_backend
+        self.tracking_delivery = tracking_delivery
         self.clock = clock or DeterministicClock()
         self.storage = RunStorageConfig(
             control=BucketConfig(uri=f"file://{root / 'control'}"),
@@ -472,6 +516,11 @@ class CertificationFixture:
         document = resolved_documents.effective
         contract_document = dict(document)
         config = dict(contract_document["train_config"])
+        config["tracking"] = {
+            "backend": tracking_backend,
+            "delivery": tracking_delivery,
+            "sources": {"backend": "certification", "delivery": "certification"},
+        }
         config["rom_asset_manifest"] = self.asset
         config["checkpoint_eval_backend"] = "modal"
         contract_document["train_config"] = config
@@ -487,6 +536,7 @@ class CertificationFixture:
                 **resolved_documents.base,
                 "train_config": {
                     **resolved_documents.base["train_config"],
+                    "tracking": config["tracking"],
                     "rom_asset_manifest": self.asset,
                     "checkpoint_eval_backend": "modal",
                 },
@@ -552,7 +602,8 @@ class CertificationFixture:
                 "entity": "certification",
                 "project": "SuperMarioBros-Nes-v0",
                 "url": (f"https://wandb.invalid/certification/SuperMarioBros-Nes-v0/runs/{run_id}"),
-            },
+            } if self.tracking_backend == "wandb" and self.tracking_delivery == "online" else {},
+            tracking=self.composed["train_config"]["tracking"],
             modal={
                 "enabled": True,
                 "environment_name": "certification",
@@ -613,8 +664,16 @@ class CertificationFixture:
         supervisor.train_config = dict(self.composed["train_config"])
         supervisor.eval_contract = evaluation_contract(self.recipe_document)
         supervisor.store.init()
-        supervisor.projector = WandbProjector(object())
-        supervisor.wandb_run_path = f"certification/SuperMarioBros-Nes-v0/{manifest.run_id}"
+        supervisor.projector = (
+            WandbProjector(object()) if self.tracking_delivery == "online" else None
+        )
+        supervisor.wandb_run_path = (
+            f"certification/SuperMarioBros-Nes-v0/{manifest.run_id}"
+            if self.tracking_backend == "wandb" and self.tracking_delivery == "online"
+            else f"mlflow:{manifest.run_id}"
+            if self.tracking_delivery == "online"
+            else ""
+        )
         supervisor.lease = self.authority.acquire_lease(
             run_id=manifest.run_id,
             attempt_id=manifest.attempt_id,
@@ -825,33 +884,59 @@ class LifecycleVerifier:
             )
 
         frames = prepared.runtime.wandb_events
+        selected_backend = (receipt.tracking or {}).get("backend", "wandb")
+        selected_delivery = (receipt.tracking or {}).get("delivery", "online")
         event_ids = [str(row["event_id"]) for row in frames]
         writers = {str(row["writer_id"]) for row in frames}
-        check(
-            "single-wandb-writer",
-            writers == {prepared.runtime.writer_id},
-            {"writers": sorted(writers)},
-        )
-        check(
-            "wandb-event-id-deduplication",
-            len(event_ids) == len(set(event_ids)),
-            {"events": len(event_ids), "unique": len(set(event_ids))},
-        )
-        check(
-            "training-and-eval-metrics-share-run",
-            any(str(row["source"]).startswith("learner") for row in frames)
-            and any(str(row["source"]).startswith("eval") for row in frames),
-            {"sources": sorted({str(row["source"]) for row in frames})},
-        )
+        if selected_delivery == "online":
+            check(
+                f"single-{selected_backend}-writer",
+                writers == {prepared.runtime.writer_id},
+                {"writers": sorted(writers)},
+            )
+            check(
+                f"{selected_backend}-event-id-deduplication",
+                len(event_ids) == len(set(event_ids)),
+                {"events": len(event_ids), "unique": len(set(event_ids))},
+            )
+            check(
+                "training-and-eval-metrics-share-run",
+                any(str(row["source"]).startswith("learner") for row in frames)
+                and any(str(row["source"]).startswith("eval") for row in frames),
+                {"sources": sorted({str(row["source"]) for row in frames})},
+            )
+        else:
+            check(
+                "local-only-makes-no-service-writes",
+                not frames and receipt.service_high_water_mark == 0,
+                {"remote_events": len(frames)},
+            )
         max_event_seq = max((int(row["event_seq"]) for row in frames), default=0)
-        check(
-            "delivery-high-water",
-            max_event_seq
-            == int(receipt.wandb_high_water_mark)
-            == int(receipt.drain["metric_segment_high_water"])
-            and int(receipt.drain["wandb_remote_high_water_mark"]) >= max_event_seq,
-            {"high_water": max_event_seq},
+        receipt_high_water = (
+            receipt.service_high_water_mark
+            if receipt.tracking is not None else receipt.wandb_high_water_mark
         )
+        remote_high_water = (
+            receipt.drain.get("service_remote_high_water_mark")
+            if receipt.tracking is not None
+            else receipt.drain.get("wandb_remote_high_water_mark")
+        )
+        if selected_delivery == "online":
+            check(
+                "delivery-high-water",
+                max_event_seq
+                == int(receipt_high_water or 0)
+                == int(receipt.drain["metric_segment_high_water"])
+                and int(remote_high_water or 0) >= max_event_seq,
+                {"high_water": max_event_seq},
+            )
+        else:
+            check(
+                "local-journal-high-water",
+                receipt.drain["metric_segment_high_water"] > 0
+                and receipt.drain["journal_archive"]["retention"] == "durable",
+                {"high_water": receipt.drain["metric_segment_high_water"]},
+            )
 
         promotion = authority.control.get_json(f"runs/{run_id}/promotion.json")
         accepted = [row for row in eval_rows if str(row["status"]) == "accepted"]
@@ -868,7 +953,9 @@ class LifecycleVerifier:
         check(
             "scientific-terminal-receipt",
             terminal == receipt.to_dict()
-            and terminal["state"] == "succeeded"
+            and terminal["state"] == (
+                "complete_local" if selected_delivery == "local_only" else "succeeded"
+            )
             and terminal["stop_reason"] == "eval_acceptance",
             {"state": terminal["state"], "stop_reason": terminal["stop_reason"]},
         )
@@ -910,6 +997,8 @@ class LifecycleVerifier:
 
 def _finalize_success(prepared: PreparedSupervisor) -> TerminalReceipt:
     supervisor = prepared.supervisor
+    selected_backend = (supervisor.manifest.tracking or {}).get("backend", "wandb")
+    selected_delivery = (supervisor.manifest.tracking or {}).get("delivery", "online")
     supervisor._seal_metrics(supervisor.clock.monotonic(), force=True)
     while supervisor._publish_wandb():
         pass
@@ -917,34 +1006,55 @@ def _finalize_success(prepared: PreparedSupervisor) -> TerminalReceipt:
     if promotion is None:
         raise AssertionError("successful certification has no accepted checkpoint")
     supervisor._publish_promotion(promotion)
-    wandb_high_water = supervisor._finish_wandb()
-    supervisor._wait_for_remote_delivery(wandb_high_water)
-    supervisor._wait_for_remote_promotion(promotion)
-    journal = supervisor.authority.archive_metric_journals(run_id=supervisor.manifest.run_id)
+    wandb_high_water = (
+        supervisor._finish_wandb() if selected_delivery == "online" else 0
+    )
+    if selected_delivery == "online":
+        supervisor._wait_for_remote_delivery(wandb_high_water)
+        supervisor._wait_for_remote_promotion(promotion)
+    journal = (
+        supervisor.authority.retain_metric_journals(run_id=supervisor.manifest.run_id)
+        if selected_backend == "mlflow" or selected_delivery == "local_only"
+        else supervisor.authority.archive_metric_journals(run_id=supervisor.manifest.run_id)
+    )
     checkpoints, evals = supervisor._terminal_inventory()
     receipt = TerminalReceipt(
         run_id=supervisor.manifest.run_id,
         attempt_id=supervisor.manifest.attempt_id,
-        state="succeeded",
+        state="complete_local" if selected_delivery == "local_only" else "succeeded",
         acceptance_required=True,
         stop_reason=supervisor.stop_reason,
         final_step=max(int(row["step"]) for row in checkpoints),
         checkpoint_inventory=checkpoints,
         eval_inventory=evals,
-        wandb_high_water_mark=wandb_high_water,
+        wandb_high_water_mark=wandb_high_water if selected_backend == "wandb" else 0,
+        tracking=(
+            supervisor.manifest.tracking
+            if selected_backend == "mlflow" or selected_delivery == "local_only"
+            else None
+        ),
+        service_high_water_mark=(
+            wandb_high_water
+            if selected_backend == "mlflow" or selected_delivery == "local_only"
+            else None
+        ),
         drain={
             "complete": True,
             "metric_segment_high_water": supervisor.store.metric_segment_high_water(),
             "eval_terminal_count": supervisor.store.terminal_eval_count(),
             "journal_archive": journal,
             "journal_expires_at": (
-                supervisor.clock.utc_datetime() + timedelta(days=METRIC_JOURNAL_RETENTION_DAYS)
-            )
-            .isoformat()
-            .replace("+00:00", "Z"),
+                (
+                    supervisor.clock.utc_datetime() + timedelta(days=METRIC_JOURNAL_RETENTION_DAYS)
+                ).isoformat().replace("+00:00", "Z")
+                if selected_backend == "wandb" and selected_delivery == "online" else None
+            ),
             "wandb_remote_high_water_mark": int(
                 prepared.runtime.summary.get(ORCHESTRATION_EVENT_SEQUENCE) or 0
-            ),
+            ) if selected_backend == "wandb" and selected_delivery == "online" else 0,
+            "service_remote_high_water_mark": int(
+                prepared.runtime.summary.get(ORCHESTRATION_EVENT_SEQUENCE) or 0
+            ) if selected_backend == "mlflow" and selected_delivery == "online" else 0,
             "publication_capacity_ratio": None,
             "failure": None,
         },
@@ -961,13 +1071,17 @@ def _finalize_success(prepared: PreparedSupervisor) -> TerminalReceipt:
     return receipt
 
 
-def _scenario_full_lifecycle(root: Path) -> dict[str, Any]:
-    recorder = ScenarioRecorder("full-lifecycle", [])
-    fixture = CertificationFixture(root)
+def _scenario_full_lifecycle(
+    root: Path, *, tracking_backend: str = "wandb", tracking_delivery: str = "online"
+) -> dict[str, Any]:
+    recorder = ScenarioRecorder(f"{tracking_backend}-{tracking_delivery}-full-lifecycle", [])
+    fixture = CertificationFixture(
+        root, tracking_backend=tracking_backend, tracking_delivery=tracking_delivery
+    )
     prepared = fixture.prepare(run_number=1)
     supervisor = prepared.supervisor
     supervisor.store.append_metrics(
-        {"train/episode/return/shaped/origin/target/rolling/mean": 1.0},
+        {"train/return/mean": 1.0},
         step=250_000,
         source="learner",
     )
@@ -1013,6 +1127,27 @@ def _scenario_full_lifecycle(root: Path) -> dict[str, Any]:
     fixture.clock.advance(2)
     supervisor.active_iteration()
     receipt = _finalize_success(prepared)
+    if tracking_backend == "mlflow":
+        recorder.require(
+            "selected-service-receipt-retains-journal",
+            receipt.tracking is not None
+            and receipt.tracking["backend"] == "mlflow"
+            and receipt.wandb_high_water_mark == 0
+            and receipt.service_high_water_mark == receipt.drain["metric_segment_high_water"]
+            and receipt.drain["journal_archive"]["retention"] == "durable",
+            evidence={
+                "service_high_water": receipt.service_high_water_mark,
+                "journal_count": receipt.drain["journal_archive"]["segment_count"],
+            },
+        )
+    if tracking_delivery == "local_only":
+        recorder.require(
+            "complete-local-keeps-scientific-promotion-and-durable-journal",
+            receipt.state == "complete_local"
+            and receipt.service_high_water_mark == 0
+            and receipt.drain["journal_archive"]["retention"] == "durable",
+            evidence={"state": receipt.state},
+        )
     verifier_checks = LifecycleVerifier().verify_success(
         prepared=prepared,
         receipt=receipt,
@@ -1025,7 +1160,9 @@ def _scenario_full_lifecycle(root: Path) -> dict[str, Any]:
     recorder.require(
         "already-submitted-rejection-does-not-displace-earlier-acceptance",
         prepared.supervisor.store.evals()[-1]["status"] == "rejected"
-        and receipt.state == "succeeded",
+        and receipt.state == (
+            "complete_local" if tracking_delivery == "local_only" else "succeeded"
+        ),
         evidence={
             "final_status": prepared.supervisor.store.evals()[-1]["status"],
             "terminal_state": receipt.state,
@@ -1039,6 +1176,8 @@ def _scenario_full_lifecycle(root: Path) -> dict[str, Any]:
             "checkpoint_count": len(supervisor.store.checkpoint_publications()),
             "eval_statuses": [row["status"] for row in supervisor.store.evals()],
             "wandb_event_count": len(prepared.runtime.wandb_events),
+            "tracking_backend": tracking_backend,
+            "tracking_delivery": tracking_delivery,
             "terminal_state": receipt.state,
             "stop_reason": receipt.stop_reason,
             "final_step": receipt.final_step,
@@ -1046,14 +1185,24 @@ def _scenario_full_lifecycle(root: Path) -> dict[str, Any]:
     }
 
 
-def _scenario_parallel_run_isolation(root: Path) -> dict[str, Any]:
-    recorder = ScenarioRecorder("parallel-run-isolation", [])
-    fixture = CertificationFixture(root)
+def _scenario_mlflow_full_lifecycle(root: Path) -> dict[str, Any]:
+    return _scenario_full_lifecycle(root, tracking_backend="mlflow")
+
+
+def _scenario_local_only_full_lifecycle(root: Path) -> dict[str, Any]:
+    return _scenario_full_lifecycle(root, tracking_delivery="local_only")
+
+
+def _scenario_parallel_run_isolation(
+    root: Path, *, tracking_backend: str = "wandb"
+) -> dict[str, Any]:
+    recorder = ScenarioRecorder(f"{tracking_backend}-parallel-run-isolation", [])
+    fixture = CertificationFixture(root, tracking_backend=tracking_backend)
     first = fixture.prepare(run_number=11)
     second = fixture.prepare(run_number=12)
     for index, prepared in enumerate((first, second), start=1):
         prepared.supervisor.store.append_metrics(
-            {"train/episode/return/shaped/origin/target/rolling/mean": float(index)},
+            {"train/return/mean": float(index)},
             step=100 * index,
             source="learner",
         )
@@ -1085,7 +1234,7 @@ def _scenario_parallel_run_isolation(root: Path) -> dict[str, Any]:
         evidence={"first_keys": len(first_keys), "second_keys": len(second_keys)},
     )
     recorder.require(
-        "parallel-wandb-writers-isolated",
+        f"parallel-{tracking_backend}-writers-isolated",
         {row["writer_id"] for row in first.runtime.wandb_events} == {first.runtime.writer_id}
         and {row["writer_id"] for row in second.runtime.wandb_events} == {second.runtime.writer_id},
         evidence={"writers": [first.runtime.writer_id, second.runtime.writer_id]},
@@ -1112,6 +1261,10 @@ def _scenario_parallel_run_isolation(root: Path) -> dict[str, Any]:
             ]
         },
     }
+
+
+def _scenario_mlflow_parallel_run_isolation(root: Path) -> dict[str, Any]:
+    return _scenario_parallel_run_isolation(root, tracking_backend="mlflow")
 
 
 def _scenario_same_run_lease_fencing(root: Path) -> dict[str, Any]:
@@ -1162,13 +1315,15 @@ def _scenario_same_run_lease_fencing(root: Path) -> dict[str, Any]:
     return {"invariants": recorder.invariants, "evidence": {"run_id": manifest.run_id}}
 
 
-def _scenario_wandb_retry_deduplication(root: Path) -> dict[str, Any]:
-    recorder = ScenarioRecorder("wandb-retry-deduplication", [])
-    fixture = CertificationFixture(root)
+def _scenario_wandb_retry_deduplication(
+    root: Path, *, tracking_backend: str = "wandb"
+) -> dict[str, Any]:
+    recorder = ScenarioRecorder(f"{tracking_backend}-retry-deduplication", [])
+    fixture = CertificationFixture(root, tracking_backend=tracking_backend)
     prepared = fixture.prepare(run_number=31, publish_failures=1)
     supervisor = prepared.supervisor
     supervisor.store.append_metrics(
-        {"train/episode/return/shaped/origin/target/rolling/mean": 3.0},
+        {"train/return/mean": 3.0},
         step=300,
         source="learner",
     )
@@ -1176,10 +1331,11 @@ def _scenario_wandb_retry_deduplication(root: Path) -> dict[str, Any]:
     supervisor.active_iteration()
     pending = supervisor.store.pending_metric_frames()
     recorder.require(
-        "wandb-failure-remains-retryable",
+        f"{tracking_backend}-failure-remains-retryable",
         len(pending) == 1 and int(pending[0]["attempts"]) == 1,
         evidence={"pending": len(pending)},
     )
+    fixture.clock.advance(2)
     supervisor.active_iteration()
     with supervisor.store.connection() as connection:
         attempts = int(
@@ -1188,7 +1344,7 @@ def _scenario_wandb_retry_deduplication(root: Path) -> dict[str, Any]:
             ]
         )
     recorder.require(
-        "wandb-retry-publishes-once",
+        f"{tracking_backend}-retry-publishes-once",
         attempts == 2
         and len(prepared.runtime.wandb_events) == 1
         and supervisor.store.metric_outbox_stats()["frames"] == 0,
@@ -1203,13 +1359,19 @@ def _scenario_wandb_retry_deduplication(root: Path) -> dict[str, Any]:
     }
 
 
-def _scenario_wandb_visibility_gating(root: Path) -> dict[str, Any]:
-    recorder = ScenarioRecorder("wandb-visibility-gating", [])
-    fixture = CertificationFixture(root)
+def _scenario_mlflow_retry_deduplication(root: Path) -> dict[str, Any]:
+    return _scenario_wandb_retry_deduplication(root, tracking_backend="mlflow")
+
+
+def _scenario_wandb_visibility_gating(
+    root: Path, *, tracking_backend: str = "wandb"
+) -> dict[str, Any]:
+    recorder = ScenarioRecorder(f"{tracking_backend}-visibility-gating", [])
+    fixture = CertificationFixture(root, tracking_backend=tracking_backend)
     prepared = fixture.prepare(run_number=36)
     supervisor = prepared.supervisor
     supervisor.store.append_metrics(
-        {"train/episode/return/shaped/origin/target/rolling/mean": 3.6},
+        {"train/return/mean": 3.6},
         step=360,
         source="learner",
     )
@@ -1227,13 +1389,17 @@ def _scenario_wandb_visibility_gating(root: Path) -> dict[str, Any]:
         high_water == 1 and timed_out,
         evidence={
             "local_high_water": high_water,
-            "remote_high_water": supervisor.wandb_remote_high_water,
+            "remote_high_water": supervisor.delivery_schedule.remote_high_water,
         },
     )
     return {
         "invariants": recorder.invariants,
         "evidence": {"virtual_timeout_seconds": 300},
     }
+
+
+def _scenario_mlflow_visibility_gating(root: Path) -> dict[str, Any]:
+    return _scenario_wandb_visibility_gating(root, tracking_backend="mlflow")
 
 
 def _scenario_checkpoint_upload_retry(root: Path) -> dict[str, Any]:
@@ -1280,6 +1446,199 @@ def _scenario_checkpoint_upload_retry(root: Path) -> dict[str, Any]:
     }
 
 
+def _scenario_blocking_publication_lease_renewal(root: Path) -> dict[str, Any]:
+    recorder = ScenarioRecorder("blocking-publication-lease-renewal", [])
+    for mode in ("slow-upload", "lost-during-upload", "renewal-outage", "expired"):
+        fixture = CertificationFixture(root / mode)
+        prepared = fixture.prepare(run_number=39)
+        supervisor = prepared.supervisor
+        fixture.record_checkpoint(prepared, step=390, kind="checkpoint")
+        fixture.record_checkpoint(prepared, step=391, kind="checkpoint")
+        authority = supervisor.authority
+        original_put = authority.models.put_file
+        original_renew = authority.renew_lease
+        stalled = False
+
+        def put_file(key: str, *args: Any, **kwargs: Any) -> Any:
+            nonlocal stalled
+            if key.endswith("model.zip") and not stalled:
+                stalled = True
+                # A single SDK call blocks beyond the original lease lifetime.
+                fixture.clock.advance(LEASE_TTL_SECONDS + 30)
+            return original_put(key, *args, **kwargs)
+
+        def renew(*args: Any, **kwargs: Any) -> Any:
+            if mode == "lost-during-upload":
+                raise LeaseUnavailable("simulated writer CAS takeover")
+            if mode == "renewal-outage":
+                raise TimeoutError("simulated lease storage outage")
+            return original_renew(*args, **kwargs)
+
+        if mode == "expired":
+            fixture.clock.advance(LEASE_TTL_SECONDS + 1)
+        failure = None
+        with (
+            patch.object(authority.models, "put_file", side_effect=put_file),
+            patch.object(authority, "renew_lease", side_effect=renew),
+            prepared.runtime.maintain_lease(
+                lambda: supervisor._renew_lease(fixture.clock.monotonic(), background=True)
+            ),
+        ):
+            try:
+                supervisor.active_iteration()
+            except LeaseUnavailable as exc:
+                failure = str(exc)
+        index = authority.models.get_json_optional(f"runs/{supervisor.manifest.run_id}/index.json")
+        publications = supervisor.store.checkpoint_publications()
+        if mode == "slow-upload":
+            recorder.require(
+                "blocked-upload-retains-writer-and-publishes-all-checkpoints",
+                failure is None
+                and not supervisor.lease_lost
+                and len(publications) == 2
+                and len((index or {}).get("checkpoints", [])) == 2
+                and supervisor.lease.generation >= 7,
+                evidence={
+                    "published": len(publications),
+                    "lease_generation": supervisor.lease.generation,
+                },
+            )
+        else:
+            keys = list(
+                authority.models.iter_keys(f"runs/{supervisor.manifest.run_id}/checkpoints/")
+            )
+            fenced = supervisor.lease_lost and not publications and index is None
+            if mode == "expired":
+                fenced = fenced and not keys and supervisor.lease_misses == 1
+            else:
+                fenced = (
+                    fenced
+                    and failure is not None
+                    and not any(key.endswith("manifest.json") for key in keys)
+                )
+            recorder.require(
+                f"{mode}-fences-publication",
+                fenced,
+                evidence={
+                    "failure": failure,
+                    "published": len(publications),
+                    "misses": supervisor.lease_misses,
+                },
+            )
+    return {
+        "invariants": recorder.invariants,
+        "evidence": {"blocked_seconds": LEASE_TTL_SECONDS + 30},
+    }
+
+
+def _scenario_state_archive_lease_fencing(root: Path) -> dict[str, Any]:
+    recorder = ScenarioRecorder("state-archive-lease-fencing", [])
+    modes = ("expired", "stalled-upload", "slow-upload", "slow-list", "background-prune")
+    for mode in modes:
+        fixture = CertificationFixture(root / mode)
+        prepared = fixture.prepare(run_number=38)
+        supervisor = prepared.supervisor
+        supervisor.train_config["state_archive"] = {"persistence": "durable"}
+        archive_root = supervisor.run_dir / "state-archive"
+        archive_root.mkdir(parents=True)
+        files = []
+        for index in range(12):
+            payload = f"provider-state-{index}".encode()
+            path = f"state-{index:02d}"
+            (archive_root / path).write_bytes(payload)
+            files.append(
+                {
+                    "path": path,
+                    "sha256": hashlib.sha256(payload).hexdigest(),
+                    "size_bytes": len(payload),
+                }
+            )
+        write_canonical_json(
+            archive_root / "closure.json",
+            {
+                "semantic_id": "state-archive-v1",
+                "schema_version": 1,
+                "status": "closed",
+                "step": 64,
+                "files": files,
+                "inventory_sha256": canonical_json_sha256(files),
+                "archive": {"semantic_id": "state-archive-v1", "entry_count": 12, "blob_count": 12},
+            },
+        )
+        authority = supervisor.authority
+        prefix = f"runs/{supervisor.manifest.run_id}/state-archive/"
+        original_put = authority.control.put_bytes
+        original_iter = authority.control.iter_keys
+
+        def slow_put(key: str, *args: Any, **kwargs: Any) -> Any:
+            result = original_put(key, *args, **kwargs)
+            if mode == "slow-upload" and key.startswith(prefix + "objects/"):
+                fixture.clock.advance(8)
+            elif mode == "stalled-upload" and key.startswith(prefix + "objects/"):
+                fixture.clock.advance(LEASE_TTL_SECONDS + 1)
+            return result
+
+        def slow_iter(*args: Any, **kwargs: Any) -> Iterator[str]:
+            for key in original_iter(*args, **kwargs):
+                if mode in {"slow-list", "background-prune"} and key.startswith(prefix):
+                    fixture.clock.advance(8)
+                yield key
+
+        if mode == "expired":
+            fixture.clock.advance(LEASE_TTL_SECONDS + 1)
+        failure = None
+        with (
+            patch.object(authority.control, "put_bytes", side_effect=slow_put),
+            patch.object(authority.control, "iter_keys", side_effect=slow_iter),
+            prepared.runtime.maintain_lease(
+                lambda: supervisor._renew_lease(fixture.clock.monotonic(), background=True)
+            )
+            if mode == "background-prune"
+            else nullcontext(),
+        ):
+            try:
+                supervisor._publish_state_archive(require_closed=True)
+                assert supervisor.lease is not None
+                supervisor.lease = authority.renew_lease(supervisor.lease)
+            except LeaseUnavailable as exc:
+                failure = str(exc)
+        if mode == "expired":
+            recorder.require(
+                "expired-writer-publishes-no-archive-bytes",
+                failure is not None and not list(authority.control.iter_keys(prefix)),
+                evidence={"failure": failure},
+            )
+        elif mode == "stalled-upload":
+            recorder.require(
+                "expired-during-upload-does-not-publish-generation-or-pointer",
+                failure is not None
+                and authority.state_archive_closure(run_id=supervisor.manifest.run_id) is None
+                and not list(authority.control.iter_keys(prefix + "generations/")),
+                evidence={"failure": failure},
+            )
+        else:
+            recorder.require(
+                f"{mode}-retains-writer-lease-beyond-original-ttl",
+                failure is None and fixture.clock.monotonic() > LEASE_TTL_SECONDS,
+                evidence={"failure": failure, "elapsed": fixture.clock.monotonic()},
+            )
+            restored_root = fixture.root / "restored"
+            publication = authority.restore_state_archive(
+                run_id=supervisor.manifest.run_id, destination=restored_root
+            )
+            recorder.require(
+                f"{mode}-complete-archive-restores",
+                publication is not None
+                and all(
+                    (restored_root / item["path"]).read_bytes()
+                    == (archive_root / item["path"]).read_bytes()
+                    for item in files
+                ),
+                evidence={"file_count": (publication or {}).get("file_count")},
+            )
+    return {"invariants": recorder.invariants, "evidence": {"modes": len(modes)}}
+
+
 def _scenario_eval_result_reconciliation(root: Path) -> dict[str, Any]:
     recorder = ScenarioRecorder("eval-result-reconciliation", [])
     fixture = CertificationFixture(root)
@@ -1303,12 +1662,12 @@ def _scenario_eval_result_reconciliation(root: Path) -> dict[str, Any]:
         "durable-acceptance-reconciled-before-next-submit",
         len(prepared.backend.submissions) == 1
         and statuses == ["accepted", "deferred"]
-        and supervisor.eval_admission_closed
+        and supervisor.automatic_evaluation.closed
         and supervisor.store.all_evals_settled(),
         evidence={
             "submissions": len(prepared.backend.submissions),
             "statuses": statuses,
-            "admission_closed": supervisor.eval_admission_closed,
+            "admission_closed": supervisor.automatic_evaluation.closed,
         },
     )
     checkpoints, evals = supervisor._terminal_inventory()
@@ -1419,7 +1778,7 @@ def _scenario_cancellation_terminalization(root: Path) -> dict[str, Any]:
         drain={
             "complete": converged,
             "metric_segment_high_water": prepared.supervisor.store.metric_segment_high_water(),
-            "wandb_remote_high_water_mark": prepared.supervisor.wandb_remote_high_water,
+            "wandb_remote_high_water_mark": prepared.supervisor.delivery_schedule.remote_high_water,
         },
         completed_at=fixture.clock.utc_now(),
     )
@@ -1453,15 +1812,23 @@ def _scenario_scratch_preservation_stop(root: Path) -> dict[str, Any]:
     prepared = fixture.prepare(run_number=56)
     supervisor = prepared.supervisor
     supervisor.store.append_metrics(
-        {"train/episode/return/shaped/origin/target/rolling/mean": 5.6},
+        {"train/return/mean": 5.6},
         step=560,
         source="learner",
     )
+    scratch_usage = {"used": 95}
     prepared.runtime.disk_usage = lambda _path: SimpleNamespace(
         total=100,
-        used=81,
-        free=19,
+        used=scratch_usage["used"],
+        free=100 - scratch_usage["used"],
     )
+    fixture.clock.advance(5)
+    boundary_continued = True
+    try:
+        supervisor.active_iteration()
+    except RuntimeError:
+        boundary_continued = False
+    scratch_usage["used"] = 96
     fixture.clock.advance(5)
     stopped = False
     try:
@@ -1469,18 +1836,20 @@ def _scenario_scratch_preservation_stop(root: Path) -> dict[str, Any]:
     except RuntimeError as exc:
         stopped = "evidence loss" in str(exc)
     recorder.require(
-        "scratch-pressure-stops-before-evidence-loss",
-        stopped
-        and supervisor.stop_reason == "scratch_storage_above_80_percent"
+        "scratch-pressure-stops-only-above-95-percent",
+        boundary_continued
+        and stopped
+        and supervisor.stop_reason == "scratch_storage_above_95_percent"
         and supervisor.store.metric_segment_high_water() == 1,
         evidence={
+            "boundary_continued": boundary_continued,
             "stop_reason": supervisor.stop_reason,
             "r2_high_water": supervisor.store.metric_segment_high_water(),
         },
     )
     return {
         "invariants": recorder.invariants,
-        "evidence": {"scratch_used_fraction": 0.81},
+        "evidence": {"continued_fraction": 0.95, "stopped_fraction": 0.96},
     }
 
 
@@ -1489,7 +1858,7 @@ def _scenario_drain_only_recovery(root: Path) -> dict[str, Any]:
     fixture = CertificationFixture(root)
     first = fixture.prepare(run_number=61)
     first.supervisor.store.append_metrics(
-        {"train/episode/return/shaped/origin/target/rolling/mean": 6.0},
+        {"train/return/mean": 6.0},
         step=600,
         source="learner",
     )
@@ -1651,14 +2020,14 @@ def _scenario_early_stop_outcomes(root: Path) -> dict[str, Any]:
             matched_condition_ids=("target_reached",),
             outcome="success",
             trigger="threshold",
-            metric="train/outcome/success/starts/all/rolling/rate/min",
+            metric="train/success/min",
             metric_step=10,
             value=0.95,
             best_value=0.95,
             elapsed_steps=0,
             patience_progress=1.0,
             condition={
-                "metric": "train/outcome/success/starts/all/rolling/rate/min",
+                "metric": "train/success/min",
                 "trigger": "threshold",
                 "operator": ">=",
                 "threshold": 0.95,
@@ -1678,7 +2047,7 @@ def _scenario_early_stop_outcomes(root: Path) -> dict[str, Any]:
     config = {
         "conditions": {
             "return_plateau": {
-                "metric": "train/episode/return/shaped/origin/target/rolling/mean",
+                "metric": "train/return/mean",
                 "trigger": "no_improvement",
                 "direction": "maximize",
                 "min_delta": 0.01,
@@ -1691,7 +2060,7 @@ def _scenario_early_stop_outcomes(root: Path) -> dict[str, Any]:
         }
     }
     machine = MetricEarlyStopStateMachine(config)
-    metric = "train/episode/return/shaped/origin/target/rolling/mean"
+    metric = "train/return/mean"
     machine.update({metric: MetricSample(value=100.0, step=0)})
     update = machine.update({metric: MetricSample(value=100.0, step=10)})
     decision = validate_metric_early_stop_decision(update.stop_decision, config)
@@ -1901,8 +2270,8 @@ def _prepare_scripted_learner(
     supervisor.run_dir.mkdir(parents=True, exist_ok=True)
     supervisor.train_config = {"training_backend": {"id": "sb3.ppo"}}
     supervisor.learner = process
-    supervisor.expected_learner_pid = process.pid
-    supervisor.learner_started_at = supervisor.clock.monotonic()
+    supervisor.learner_state.pid = process.pid
+    supervisor.learner_state.started_at = supervisor.clock.monotonic()
     write_canonical_json(
         supervisor.run_dir / "training-result.json",
         _scripted_learner_result(prepared, process=process, status=status),
@@ -1925,8 +2294,8 @@ def _scenario_failed_result_live_process(root: Path) -> dict[str, Any]:
     recorder.require(
         "failed-result-is-authoritative-within-one-poll",
         failure is not None
-        and supervisor.learner_result_observed_at == detected_at
-        and supervisor.learner_final_step == 0,
+        and supervisor.learner_state.result_observed_at == detected_at
+        and supervisor.learner_state.final_step == 0,
         evidence={
             "poll_interval_seconds": supervisor.manifest.liveness["poll_interval_seconds"],
             "detected_at": detected_at,
@@ -1957,14 +2326,14 @@ def _scenario_failed_result_live_process(root: Path) -> dict[str, Any]:
         evidence={
             "state": state,
             "stop_reason": supervisor.stop_reason,
-            "teardown": supervisor.learner_teardown_evidence,
+            "teardown": supervisor.learner_state.teardown_evidence,
         },
     )
     return {
         "invariants": recorder.invariants,
         "evidence": {
-            "final_step": supervisor.learner_final_step,
-            "teardown_phase": supervisor.learner_teardown_evidence["completed_phase"],
+            "final_step": supervisor.learner_state.final_step,
+            "teardown_phase": supervisor.learner_state.teardown_evidence["completed_phase"],
         },
     }
 
@@ -1993,18 +2362,18 @@ def _scenario_completed_result_hung_process(root: Path) -> dict[str, Any]:
         and not process.alive
         and process.term_signals == 1
         and process.kill_signals == 1
-        and supervisor.learner_teardown_evidence["completed_phase"] == "kill"
+        and supervisor.learner_state.teardown_evidence["completed_phase"] == "kill"
         and supervisor.stop_reason == "teardown_timeout",
         evidence={
             "virtual_time_seconds": fixture.clock.monotonic(),
-            "teardown": supervisor.learner_teardown_evidence,
+            "teardown": supervisor.learner_state.teardown_evidence,
         },
     )
     return {
         "invariants": recorder.invariants,
         "evidence": {
             "virtual_time_seconds": fixture.clock.monotonic(),
-            "teardown_phase": supervisor.learner_teardown_evidence["completed_phase"],
+            "teardown_phase": supervisor.learner_state.teardown_evidence["completed_phase"],
         },
     }
 
@@ -2118,7 +2487,7 @@ def _scenario_local_background_jobs(root: Path) -> dict[str, Any]:
     prepared = fixture.prepare(run_number=81)
     supervisor = prepared.supervisor
     supervisor.store.append_metrics(
-        {"train/episode/return/shaped/origin/target/rolling/mean": 1.0},
+        {"train/return/mean": 1.0},
         step=250_000,
         source="learner",
     )
@@ -2248,13 +2617,254 @@ def _scenario_local_background_jobs(root: Path) -> dict[str, Any]:
     }
 
 
+
+
+def _scenario_checkpoint_monitoring(root: Path) -> dict[str, Any]:
+    """Script only the CPU boundary; admission, R2 and retry state are real."""
+    from gradlab.eval_backend import EvalHandle, EvalPoll
+    from gradlab.monitor_config import MonitoringConfig
+    from dataclasses import asdict
+
+    recorder = ScenarioRecorder("checkpoint-monitoring", [])
+    fixture = CertificationFixture(root)
+    prepared = fixture.prepare(run_number=91)
+    supervisor = prepared.supervisor
+    supervisor.evaluation_required = False
+    supervisor.automatic_evaluation.closed = True
+    supervisor.train_config["checkpoint_monitoring"] = {
+        **asdict(MonitoringConfig()), "enabled": True, "episodes": 2,
+        "task_cpus": 3, "memory_bytes": 6 * 1024**3 + 64 * 1024**2, "spool_bytes": 4 * 512 * 1024**2,
+    }
+
+    class ScriptedCPU:
+        def __init__(self):
+            self.calls = []
+            self.canceled = set()
+            self.failed = False
+
+        def submit(self, intent):
+            self.calls.append(intent)
+            return EvalHandle("cpu", str(len(self.calls)))
+
+        def poll(self, handle):
+            if self.failed:
+                return EvalPoll("failed", error="scripted CPU failure")
+            return EvalPoll("running")
+
+        def cancel(self, handle):
+            self.canceled.add(handle.call_id)
+
+    backend = ScriptedCPU()
+    supervisor.monitor_backend = backend
+    for step, kind in ((100, "periodic"), (200, "periodic"), (300, "final")):
+        fixture.record_checkpoint(prepared, step=step, kind=kind)
+    supervisor.active_iteration()
+    recorder.require("monitoring-independent-of-acceptance", len(backend.calls) == 1
+                     and not supervisor.store.evals() and not supervisor.stop_reason,
+                     evidence={"submissions": len(backend.calls)})
+    supervisor.drain_iteration()
+    recorder.require("finalization-expands-without-dropping-checkpoints", len(backend.calls) == 3,
+                     evidence={"steps": [i["checkpoint"]["step"] for i in backend.calls]})
+    backend.failed = True
+    supervisor.monitoring.advance()
+    recorder.require("monitoring-retries-only-once", len(backend.calls) == 4
+                     and backend.calls[-1]["execution_attempt"] == 2,
+                     evidence={"submissions": len(backend.calls)})
+    try:
+        supervisor.monitoring.advance(final=True)
+    except RuntimeError as exc:
+        recorder.require("incomplete-monitoring-fails-finalization", "incomplete" in str(exc),
+                         evidence={"error": str(exc)})
+    else:
+        raise AssertionError("exhausted monitoring retry was treated as complete")
+    fixture.clock.maintenance.append(supervisor._lease_heartbeat)
+    fixture.clock.advance(3601)
+    fixture.clock.maintenance.remove(supervisor._lease_heartbeat)
+    try:
+        supervisor.monitoring.advance(final=True)
+    except RuntimeError:
+        pass
+    receipt = supervisor.monitoring.receipt
+    recorder.require("deadline-quiesces-all-workers", receipt["workers_quiescent"]
+                     and not receipt["complete"]
+                     and all(i["status"] == "failed" for i in receipt["inventory"]),
+                     evidence={"inventory": receipt["inventory"]})
+    return {"invariants": recorder.invariants, "evidence": {"submissions": len(backend.calls)}}
+
+
+def _scenario_delivery_scheduling(root: Path) -> dict[str, Any]:
+    """384 real checkpoint publications, slow storage and continuous 7 Hz ingress."""
+    from dataclasses import asdict
+    from gradlab.eval_backend import EvalPoll
+    from gradlab.monitor_config import MonitoringConfig
+
+    recorder = ScenarioRecorder("delivery-scheduling", [])
+    fixture = CertificationFixture(root)
+    prepared = fixture.prepare(run_number=92)
+    owner = prepared.supervisor
+    owner.evaluation_required = False
+    owner.automatic_evaluation.closed = True
+    # Persist evidence once at the end; avoid quadratic fixture transcript I/O.
+    prepared.runtime.evidence_path = prepared.observer.evidence_path = None
+    for index in range(384):
+        fixture.record_checkpoint(prepared, step=(index + 1) * 8192, kind="periodic")
+    owner._publish_checkpoints()
+    owner.train_config["checkpoint_monitoring"] = asdict(MonitoringConfig(enabled=True))
+
+    class CPU:
+        def submit(self, intent):
+            return EvalHandle("cpu", intent["evaluation_id"])
+
+        def poll(self, handle):
+            return EvalPoll("running")
+
+        def cancel(self, handle):
+            pass
+
+    owner.monitor_backend = CPU()
+    reads = produced = peak = 0
+    oldest = 0.0
+    origin = fixture.clock.monotonic()
+    get = owner.authority.control.get_json_optional
+    acknowledge = owner.store.mark_metric_frame_published
+
+    def ingress(seconds):
+        nonlocal produced, peak, oldest
+        fixture.clock.advance(seconds)
+        target = int((fixture.clock.monotonic() - origin) * 7)
+        while produced < target:
+            produced += 1
+            owner.store.append_metrics({"train/return/mean": float(produced)},
+                                       step=produced, source="learner")
+        peak = max(peak, owner.store.metric_outbox_stats()["frames"])
+        oldest = max(oldest, owner._oldest_unpublished_age())
+
+    def slow_read(key):
+        nonlocal reads
+        if "/monitoring/" in key:
+            reads += 1
+            ingress(0.125)
+        return get(key)
+
+    def delivered(*args, **kwargs):
+        acknowledge(*args, **kwargs)
+        ingress(0.02)
+
+    with (
+        patch.object(owner.authority.control, "get_json_optional", side_effect=slow_read),
+        patch.object(owner.store, "mark_metric_frame_published", side_effect=delivered),
+    ):
+        owner.active_iteration()
+        recovery_reads = reads
+        for _ in range(36):
+            ingress(5)
+            owner.active_iteration()
+        recorder.require("settled-queue-metadata-is-not-refetched", reads == recovery_reads == 768,
+                         evidence={"reads": reads, "checkpoints": 384})
+        recorder.require("slow-storage-does-not-starve-sole-writer",
+                         peak <= 50 and oldest < 8 and fixture.clock.monotonic() - origin > 300,
+                         evidence={"peak_pending": peak, "oldest_seconds": oldest})
+    while owner.store.metric_outbox_stats()["frames"]:
+        owner._service_delivery(force=True)
+    owner._seal_metrics(fixture.clock.monotonic(), force=True)
+    events = prepared.runtime.wandb_events
+    sequences = [e["event_seq"] for e in events]
+    recorder.require("continuous-ingress-drains-without-loss-or-reordering",
+                     len([e for e in events if e["source"] == "learner"]) == produced
+                     and sequences == sorted(set(sequences))
+                     and len({e["writer_id"] for e in events}) == 1
+                     and owner.store.metric_segment_high_water() == owner._wandb_high_water(),
+                     evidence={"produced": produced, "published": len(events)})
+    _write_evidence(root, prepared)
+    return {"invariants": recorder.invariants,
+            "evidence": {"seconds": fixture.clock.monotonic() - origin,
+                         "phase_timings": owner.phase_timings}}
+
+
+def _scenario_delivery_drain_progress(root: Path) -> dict[str, Any]:
+    """Exercise the real drain with progressing, stalled and recording-bound work."""
+    recorder = ScenarioRecorder("delivery-drain-progress", [])
+    for mode in ("progress", "stalled", "monitoring", "verified", "deadline"):
+        fixture = CertificationFixture(root / mode)
+        prepared = fixture.prepare(run_number=93)
+        owner = prepared.supervisor
+        owner.evaluation_required = False
+        # A bounded CPU boundary remains running for 350 simulated seconds.
+        started = fixture.clock.monotonic()
+        if mode in {"monitoring", "verified"}:
+            class Monitoring:
+                receipt = {"inventory": [{"status": "running" if mode == "monitoring" else "verified"}]}
+
+                def advance(self, **kwargs):
+                    if mode == "verified":
+                        return False
+                    complete = fixture.clock.monotonic() - started >= 350
+                    self.receipt = {"inventory": [{"status": "complete" if complete else "running"}]}
+                    return complete
+
+            owner.train_config["checkpoint_monitoring"] = {"enabled": True}
+            owner.monitoring = Monitoring()
+        for step in range(4):
+            owner.store.append_metrics({"train/return/mean": float(step)},
+                                       step=step, source="learner")
+        publish = prepared.runtime.publish_frames
+
+        def slow_publish(store, projector, **kwargs):
+            elapsed = fixture.clock.monotonic() - started
+            if mode in {"progress", "deadline"}:
+                if not store.metric_outbox_stats()["frames"]:
+                    return 0
+                fixture.clock.advance(100)
+                kwargs["limit"] = 1
+                # A single blocking call may exceed the one-second batch budget.
+                kwargs["should_continue"] = None
+                return publish(store, projector, **kwargs)
+            if mode in {"stalled", "verified"} or elapsed < 350:
+                fixture.clock.advance(10)
+                return 0
+            return publish(store, projector, **kwargs)
+
+        if mode == "deadline":
+            # The declared cap is authoritative even with continuous ACKs.
+            owner.manifest.compute["selected"]["max_duration_seconds"] = 250
+        error = None
+        with (
+            patch.object(prepared.runtime, "publish_frames", side_effect=slow_publish),
+            prepared.runtime.maintain_lease(
+                lambda: owner._renew_lease(fixture.clock.monotonic(), background=True)
+            ),
+        ):
+            try:
+                owner._drain()
+            except TimeoutError as exc:
+                error = str(exc)
+        elapsed = fixture.clock.monotonic() - started
+        if mode in {"progress", "monitoring"}:
+            recorder.require(f"{mode}-can-outlast-five-minutes", error is None and elapsed >= 350
+                             and owner.store.metric_outbox_stats()["frames"] == 0,
+                             evidence={"seconds": elapsed, "error": error})
+        else:
+            expected = "whole-task" if mode == "deadline" else "no checkpoint or local W&B progress"
+            recorder.require(f"{mode}-remains-bounded", error is not None and expected in error,
+                             evidence={"seconds": elapsed, "error": error})
+        _write_evidence(root / mode, prepared)
+    return {"invariants": recorder.invariants, "evidence": {}}
+
+
 SCENARIOS: dict[str, Callable[[Path], dict[str, Any]]] = {
     "full-lifecycle": _scenario_full_lifecycle,
+    "mlflow-full-lifecycle": _scenario_mlflow_full_lifecycle,
+    "local-only-full-lifecycle": _scenario_local_only_full_lifecycle,
     "parallel-run-isolation": _scenario_parallel_run_isolation,
+    "mlflow-parallel-run-isolation": _scenario_mlflow_parallel_run_isolation,
     "same-run-lease-fencing": _scenario_same_run_lease_fencing,
     "wandb-retry-deduplication": _scenario_wandb_retry_deduplication,
     "wandb-visibility-gating": _scenario_wandb_visibility_gating,
+    "mlflow-retry-deduplication": _scenario_mlflow_retry_deduplication,
+    "mlflow-visibility-gating": _scenario_mlflow_visibility_gating,
     "checkpoint-upload-retry": _scenario_checkpoint_upload_retry,
+    "blocking-publication-lease-renewal": _scenario_blocking_publication_lease_renewal,
+    "state-archive-lease-fencing": _scenario_state_archive_lease_fencing,
     "eval-result-reconciliation": _scenario_eval_result_reconciliation,
     "modal-ambiguous-submit": _scenario_modal_ambiguous_submit,
     "cancellation-terminalization": _scenario_cancellation_terminalization,
@@ -2267,6 +2877,9 @@ SCENARIOS: dict[str, Callable[[Path], dict[str, Any]]] = {
     "completed-result-exits-during-iteration": (_scenario_completed_result_exits_during_iteration),
     "completed-result-hung-process": _scenario_completed_result_hung_process,
     "local-background-jobs": _scenario_local_background_jobs,
+    "checkpoint-monitoring": _scenario_checkpoint_monitoring,
+    "delivery-scheduling": _scenario_delivery_scheduling,
+    "delivery-drain-progress": _scenario_delivery_drain_progress,
 }
 
 

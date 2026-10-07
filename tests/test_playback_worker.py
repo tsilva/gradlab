@@ -5,7 +5,7 @@ from argparse import Namespace
 import pytest
 
 from gradlab.playback_worker import IsolatedPlaybackHost
-from gradlab.play_web import PROTOCOL_VERSION
+from gradlab.play_engine import PROTOCOL_VERSION
 
 
 def test_isolated_playback_worker_starts_without_a_source() -> None:

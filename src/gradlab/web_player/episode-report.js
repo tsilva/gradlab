@@ -24,7 +24,9 @@ export function episodeReport(snapshot) {
   const transition = snapshot?.transition || {};
   const route = snapshot?.app?.route || {};
   const mode = String(session.playback_contract?.mode || "training");
-  const semantics = snapshot?.mode === "recording"
+  const semantics = snapshot?.mode === "trajectory"
+    ? `Recorded ${words(snapshot.trajectory?.classification)} Playback · inspection only`
+    : snapshot?.mode === "recording"
     ? "Recorded episode"
     : snapshot?.mode === "dataset"
       ? "Recorded dataset"
@@ -64,7 +66,8 @@ export function episodeReport(snapshot) {
       ? checkpointLabel(route.checkpoint_id)
       : snapshot?.mode === "recording"
         ? "Local recording"
-        : snapshot?.mode === "dataset" ? "Recorded dataset" : "Local checkpoint",
+        : snapshot?.mode === "dataset" ? "Recorded dataset"
+          : snapshot?.mode === "trajectory" ? "Imported episode" : "Local checkpoint",
     disclaimer: "Playback supports interpretation; it is not acceptance or promotion evidence.",
   };
 }

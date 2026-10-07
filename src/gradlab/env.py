@@ -6,14 +6,15 @@ import tempfile
 import time
 import traceback
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import asdict, replace
 from typing import Any, Mapping, Sequence
 
 import numpy as np
-import stable_retro as retro
+import env_stableretro_turbo as retro
 
 from gradlab import env_providers as provider_runtime
 from gradlab.action_contract import compile_runtime_action_contract
+from gradlab.action_overrides import with_conditional_action_overrides
 from gradlab.batch_runtime import BatchRuntime, ProviderDescriptor
 from gradlab.env_providers import (
     DEFAULT_RETRO_VEC_ENV as RetroVecEnv,
@@ -42,12 +43,15 @@ from gradlab.env_identity import task_config_from_train_config, validate_task_co
 from gradlab.env_registry import environment_spec
 from gradlab.task_kernels import (
     CELL_NOVELTY_REWARD_KEY,
+    EVENT_DELTA_REWARDS_KEY,
+    EVENT_REWARDS_KEY,
     IdentityTaskDefinition,
     MarioTaskConfig,
     MarioTaskDefinition,
     with_cell_novelty,
     with_deathmatch_reward,
     with_episode_progress_metrics,
+    with_event_rewards,
     with_reward_transform,
 )
 from gradlab.model_inputs import with_model_inputs
@@ -58,6 +62,7 @@ from gradlab.validation import (
 from gradlab.rom_runtime import RomRuntimeBinding
 
 configure_matplotlib_cache()
+
 
 def validate_obs_crop_mode(value: str) -> str:
     if value not in {"remove", "mask"}:
@@ -312,6 +317,7 @@ def make_native_provider(
     n_envs: int,
     *,
     rom_binding: RomRuntimeBinding | None = None,
+    native_kwargs_overrides: Mapping[str, Any] | None = None,
 ) -> tuple[Any, ProviderDescriptor]:
     """Construct and describe one provider, closing it if description fails."""
 
@@ -326,6 +332,8 @@ def make_native_provider(
         state_weight_mapping=state_weight_mapping,
         runtime_rom_path=rom_binding.rom_path if rom_binding is not None else None,
     )
+    if native_kwargs_overrides is not None:
+        native_kwargs.update(native_kwargs_overrides)
     native_env = make_provider_vec_env(config, native_kwargs=native_kwargs)
     try:
         descriptor = _provider_descriptor(config, native_env)
@@ -347,6 +355,7 @@ def bind_native_provider(
     capture_step_diagnostics: bool = False,
     state_archive: Mapping[str, Any] | None = None,
     state_archive_root: str | os.PathLike[str] | None = None,
+    occupancy: Mapping[str, Any] | None = None,
 ) -> BatchRuntime:
     """Transfer a constructed provider into the task runtime or close it on failure."""
 
@@ -366,6 +375,12 @@ def bind_native_provider(
             policy_action_values=action_values,
             policy_action_codec=task_action_codec(config),
         )
+        kernel = with_conditional_action_overrides(
+            kernel,
+            descriptor,
+            config.task.get("signals", {}),
+            action_contract,
+        )
         runtime = BatchRuntime(
             native_env,
             descriptor,
@@ -376,6 +391,8 @@ def bind_native_provider(
             capture_step_diagnostics=capture_step_diagnostics,
             state_archive=state_archive,
             state_archive_root=state_archive_root,
+            occupancy=occupancy,
+            occupancy_environment=asdict(config),
         )
         return runtime
     except BaseException:
@@ -428,9 +445,9 @@ def _bound_task_kernel(
             "generic native-vector tasks require native actions or a task action codec"
         )
     reward_mode = reward.get("reward_mode")
-    if reward_mode not in {"native", "sample-factory-v0"}:
+    if reward_mode not in {"native", "events", "sample-factory-v0"}:
         raise ValueError(
-            "generic native-vector tasks require native or Sample Factory Deathmatch rewards"
+            "generic native-vector tasks require native, events, or Sample Factory Deathmatch rewards"
         )
     if task_conditioning(config).get("enabled"):
         raise ValueError("generic native-vector tasks do not support task conditioning")
@@ -458,6 +475,12 @@ def _bound_task_kernel(
             reward,
         )
     kernel = with_cell_novelty(kernel, reward.get(CELL_NOVELTY_REWARD_KEY))
+    kernel = with_event_rewards(
+        kernel,
+        reward.get(EVENT_REWARDS_KEY),
+        event_delta_rewards=reward.get(EVENT_DELTA_REWARDS_KEY),
+        include_native=reward_mode != "events",
+    )
     kernel = with_reward_transform(kernel, reward)
     kernel = with_episode_progress_metrics(
         kernel,
@@ -483,6 +506,8 @@ def make_vec_envs(
     rom_binding: RomRuntimeBinding | None = None,
     state_archive: Mapping[str, Any] | None = None,
     state_archive_root: str | os.PathLike[str] | None = None,
+    occupancy: Mapping[str, Any] | None = None,
+    native_kwargs_overrides: Mapping[str, Any] | None = None,
 ) -> Any:
     from gradlab.training.sb3_vec_env import GradLabVecEnv
 
@@ -495,6 +520,8 @@ def make_vec_envs(
         rom_binding=rom_binding,
         state_archive=state_archive,
         state_archive_root=state_archive_root,
+        occupancy=occupancy,
+        native_kwargs_overrides=native_kwargs_overrides,
     )
     vec_env = GradLabVecEnv(runtime)
     vec_env.seed(seed)
@@ -512,29 +539,29 @@ def make_training_batch_runtime(
     rom_binding: RomRuntimeBinding | None = None,
     state_archive: Mapping[str, Any] | None = None,
     state_archive_root: str | os.PathLike[str] | None = None,
+    occupancy: Mapping[str, Any] | None = None,
+    native_kwargs_overrides: Mapping[str, Any] | None = None,
 ) -> BatchRuntime:
     os.environ.setdefault("STABLE_RETRO_DISABLE_AUDIO", "1")
-    if state_archive is not None:
+    if state_archive is not None or occupancy is not None:
         from gradlab.state_archive import normalize_state_archive_config
 
-        normalized_archive = normalize_state_archive_config(
-            state_archive,
-            n_envs=n_envs,
-        )
-        assert normalized_archive is not None
-        cell = normalized_archive["recorder"].get("cell")
-        sources = {
-            str(dimension["source"])
-            for dimension in (cell or {}).get("dimensions", ())
-            if isinstance(dimension, Mapping) and "source" in dimension
-        }
+        normalized_archive = normalize_state_archive_config(state_archive, n_envs=n_envs)
+        cell = (normalized_archive or {}).get("recorder", {}).get("cell") or {}
+        dimensions = list(cell.get("dimensions", ()))
+        if occupancy is not None:
+            from gradlab.occupancy import normalize_occupancy_config
+
+            occupancy = normalize_occupancy_config(occupancy)
+            dimensions.extend(occupancy["cell"]["dimensions"])
+        sources = {str(item["source"]) for item in dimensions if "source" in item}
         if sources:
             env_args = dict(config.env_args)
             configured_filter = env_args.get("info_filter")
             configured_keys: set[str] = set()
             if isinstance(configured_filter, Mapping):
                 if str(configured_filter.get("mode", "all")) != "all":
-                    raise ValueError("state archive cell sources require info_filter mode='all'")
+                    raise ValueError("state cell sources require info_filter mode='all'")
                 keys = configured_filter.get("keys")
                 if keys is not None:
                     if isinstance(keys, str | bytes) or not isinstance(
@@ -544,7 +571,7 @@ def make_training_batch_runtime(
                         raise ValueError("info_filter.keys must be a sequence")
                     configured_keys.update(str(key) for key in keys)
             elif configured_filter is not None and str(configured_filter) != "all":
-                raise ValueError("state archive cell sources require info_filter='all'")
+                raise ValueError("state cell sources require info_filter='all'")
             task = config.task if isinstance(config.task, Mapping) else {}
             signals = task.get("signals")
             if isinstance(signals, Mapping):
@@ -562,7 +589,12 @@ def make_training_batch_runtime(
             }
             config = replace(config, env_args=env_args)
     config = resolve_mixed_state_config(config, n_envs=n_envs)
-    native_env, descriptor = make_native_provider(config, n_envs, rom_binding=rom_binding)
+    native_env, descriptor = make_native_provider(
+        config,
+        n_envs,
+        rom_binding=rom_binding,
+        native_kwargs_overrides=native_kwargs_overrides,
+    )
     return bind_native_provider(
         config,
         n_envs=n_envs,
@@ -574,6 +606,7 @@ def make_training_batch_runtime(
         capture_step_diagnostics=capture_step_diagnostics,
         state_archive=state_archive,
         state_archive_root=state_archive_root,
+        occupancy=occupancy,
     )
 
 
@@ -705,6 +738,8 @@ def make_training_vec_env(
     rom_binding: RomRuntimeBinding | None = None,
     state_archive: Mapping[str, Any] | None = None,
     state_archive_root: str | os.PathLike[str] | None = None,
+    occupancy: Mapping[str, Any] | None = None,
+    native_kwargs_overrides: Mapping[str, Any] | None = None,
 ) -> Any:
     return make_vec_envs(
         config=config,
@@ -714,6 +749,8 @@ def make_training_vec_env(
         rom_binding=rom_binding,
         state_archive=state_archive,
         state_archive_root=state_archive_root,
+        occupancy=occupancy,
+        native_kwargs_overrides=native_kwargs_overrides,
     )
 
 
@@ -726,6 +763,7 @@ def make_eval_vec_env(
     rom_binding: RomRuntimeBinding | None = None,
     state_archive: Mapping[str, Any] | None = None,
     state_archive_root: str | os.PathLike[str] | None = None,
+    native_kwargs_overrides: Mapping[str, Any] | None = None,
 ) -> Any:
     return make_vec_envs(
         config=resolve_env_config(config),
@@ -735,6 +773,7 @@ def make_eval_vec_env(
         rom_binding=rom_binding,
         state_archive=state_archive,
         state_archive_root=state_archive_root,
+        native_kwargs_overrides=native_kwargs_overrides,
     )
 
 

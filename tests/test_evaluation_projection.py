@@ -10,7 +10,6 @@ from gradlab.evaluation_projection import (
 )
 from gradlab.metric_names import (
     EVAL_ACCEPTANCE_EPISODE_COMPLETED_COUNT,
-    EVAL_ACCEPTANCE_EPISODE_PLANNED_COUNT,
     EVAL_CHECKPOINT_STEP,
     LEADER_CHECKPOINT_ARTIFACT_REF,
     LEADER_CHECKPOINT_EVALUATION_SOURCE,
@@ -38,91 +37,110 @@ def recipe_document(version: int) -> dict[str, object]:
 
 def test_recipe_owned_evaluation_schema_accepts_current_version() -> None:
     assert (
-        metrics_schema_version_from_recipe_document(
-            recipe_document(METRICS_SCHEMA_VERSION)
-        )
+        metrics_schema_version_from_recipe_document(recipe_document(METRICS_SCHEMA_VERSION))
         == METRICS_SCHEMA_VERSION
     )
 
 
-@pytest.mark.parametrize("version", [16, 17, 18, 20])
+@pytest.mark.parametrize("version", [16, 17, 18, 19, 20, 21, 22, 23])
 def test_recipe_owned_evaluation_schema_rejects_unknown_versions(version: int) -> None:
     with pytest.raises(ValueError, match="unsupported metrics schema"):
         metrics_schema_version_from_recipe_document(recipe_document(version))
 
 
-def test_v19_projection_keeps_one_bounded_eval_surface() -> None:
+def test_current_projection_keeps_one_bounded_eval_surface() -> None:
     projection = evaluation_wandb_projection(
         {
-            "eval/full/episode/return/shaped/mean": 4.0,
-            "eval/full/episode/return/shaped/std": 1.0,
-            "eval/full/outcome/success/starts/rate/min": 0.5,
-            "eval/full/outcome/success/from/Start/rate": 0.5,
-            "eval/full/outcome/reason/timeout/rate": 0.5,
-            "eval/full/duration/seconds": 2.0,
+            "eval/return/mean": 4.0,
+            "eval/return_std": 1.0,
+            "eval/success/min": 0.5,
+            "eval/outcome/success/from/Start/rate": 0.5,
+            "eval/outcome/reason/timeout/rate": 0.5,
+            "eval/duration/seconds": 2.0,
             "failure_count": 1,
         },
         schema_version=METRICS_SCHEMA_VERSION,
         checkpoint_step=100,
         accepted=False,
-        episodes_planned=2,
         episodes_completed=2,
     )
 
     assert projection[EVAL_CHECKPOINT_STEP] == 100
-    assert projection[EVAL_ACCEPTANCE_EPISODE_PLANNED_COUNT] == 2.0
+    assert "eval/acceptance/episode/planned/count" not in projection
     assert projection[EVAL_ACCEPTANCE_EPISODE_COMPLETED_COUNT] == 2.0
-    assert "eval/full/outcome/success/from/Start/rate" not in projection
-    assert "eval/full/outcome/reason/timeout/rate" not in projection
-    assert "eval/full/duration/seconds" not in projection
+    assert "eval/outcome/success/from/Start/rate" not in projection
+    assert "eval/outcome/reason/timeout/rate" not in projection
+    assert "eval/duration/seconds" not in projection
     assert "failure_count" not in projection
 
 
-def test_v19_promotion_projects_only_configured_finite_leader_fields() -> None:
+@pytest.mark.parametrize("required", [False, True])
+@pytest.mark.parametrize("starts", [{"Start": 0.5}, {"Start": 0.5, "Other": 1.0}])
+def test_success_mean_is_suppressed_only_for_unselected_single_start(required, starts) -> None:
+    mean = sum(starts.values()) / len(starts)
+    projection = evaluation_wandb_projection(
+        {
+            "eval/success/min": min(starts.values()),
+            "eval/success/mean": mean,
+            "success_rate_by_start": starts,
+        },
+        schema_version=METRICS_SCHEMA_VERSION,
+        checkpoint_step=100,
+        accepted=False,
+        episodes_completed=4,
+        required_metrics=frozenset({"eval/success/mean"} if required else ()),
+    )
+    assert projection["eval/success/min"] == 0.5
+    assert ("eval/success/mean" in projection) == (required or len(starts) > 1)
+    if required or len(starts) > 1:
+        assert projection["eval/success/mean"] == mean
+
+
+def test_v20_promotion_projects_only_configured_finite_leader_fields() -> None:
     run = SimpleNamespace(summary={})
     publish_promotion_summary(
         run,
         checkpoint_step=200,
         checkpoint_url="https://models.example/model.zip",
         metrics={
-            "eval/full/episode/return/shaped/mean": 8.0,
-            "eval/full/episode/return/shaped/max": 10.0,
-            "eval/full/progress/x/max": 42.0,
-            "eval/full/episode/return/shaped/std": 3.0,
+            "eval/return/mean": 8.0,
+            "eval/return/max": 10.0,
+            "eval/progress/x/max": 42.0,
+            "eval/return_std": 3.0,
         },
         updated_at="2026-07-29T00:00:00Z",
         selection_rank=[
-            "max(eval/full/progress/x/max)",
-            "max(eval/full/episode/return/shaped/mean)",
-            "min(leader/checkpoint/step)",
+            "max(eval/progress/x/max)",
+            "max(eval/return/mean)",
+            "min(leader/step)",
         ],
         evaluation_source="modal:automatic",
     )
 
     assert run.summary[leader_checkpoint_progress_metric("x")] == 42.0
-    assert run.summary["leader/checkpoint/episode/return/shaped/mean"] == 8.0
+    assert run.summary["leader/return/mean"] == 8.0
     assert LEADER_CHECKPOINT_RETURN_SHAPED_MAX not in run.summary
-    assert "leader/checkpoint/episode/return/shaped/std" not in run.summary
-    assert "leader/checkpoint/objective" not in run.summary
-    assert "leader/checkpoint/rank_values" not in run.summary
-    assert "leader/checkpoint/acceptance_pass" not in run.summary
+    assert "leader/return_std" not in run.summary
+    assert "leader/objective" not in run.summary
+    assert "leader/rank_values" not in run.summary
+    assert "leader/acceptance_pass" not in run.summary
 
 
-def test_v19_promotion_projects_progress_mean_and_max_for_deathmatch_rank() -> None:
+def test_v20_promotion_projects_progress_mean_and_max_for_deathmatch_rank() -> None:
     run = SimpleNamespace(summary={})
     publish_promotion_summary(
         run,
         checkpoint_step=300,
         checkpoint_url="https://models.example/deathmatch.zip",
         metrics={
-            "eval/full/progress/kills/mean": 12.5,
-            "eval/full/progress/kills/max": 20.0,
+            "eval/progress/kills/mean": 12.5,
+            "eval/progress/kills/max": 20.0,
         },
         updated_at="2026-08-06T00:00:00Z",
         selection_rank=[
-            "max(eval/full/progress/kills/mean)",
-            "max(eval/full/progress/kills/max)",
-            "min(leader/checkpoint/step)",
+            "max(eval/progress/kills/mean)",
+            "max(eval/progress/kills/max)",
+            "min(leader/step)",
         ],
         evaluation_source="modal:automatic",
     )
@@ -137,11 +155,11 @@ def test_promotion_rejects_a_missing_rank_input_instead_of_fabricating_zero() ->
             SimpleNamespace(summary={}),
             checkpoint_step=200,
             checkpoint_url="https://models.example/model.zip",
-            metrics={"eval/full/episode/return/shaped/mean": 8.0},
+            metrics={"eval/return/mean": 8.0},
             updated_at="2026-07-29T00:00:00Z",
             selection_rank=[
-                "max(eval/full/outcome/success/starts/rate/min)",
-                "min(leader/checkpoint/step)",
+                "max(eval/success/min)",
+                "min(leader/step)",
             ],
             evaluation_source="modal:automatic",
         )
@@ -150,17 +168,17 @@ def test_promotion_rejects_a_missing_rank_input_instead_of_fabricating_zero() ->
 def test_remote_promotion_fence_requires_complete_receipt_projection() -> None:
     run = SimpleNamespace(summary={})
     selection_rank = [
-        "max(eval/full/progress/x/max)",
-        "max(eval/full/episode/return/shaped/mean)",
-        "min(leader/checkpoint/step)",
+        "max(eval/progress/x/max)",
+        "max(eval/return/mean)",
+        "min(leader/step)",
     ]
     publish_promotion_summary(
         run,
         checkpoint_step=200,
         checkpoint_url="https://models.example/model.zip",
         metrics={
-            "eval/full/progress/x/max": 42.0,
-            "eval/full/episode/return/shaped/mean": 8.0,
+            "eval/progress/x/max": 42.0,
+            "eval/return/mean": 8.0,
         },
         updated_at="2026-08-07T00:00:00Z",
         selection_rank=selection_rank,

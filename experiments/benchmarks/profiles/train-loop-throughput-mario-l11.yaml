@@ -12,7 +12,9 @@ recipe_overrides:
 - train.backend.config.batch_size=256
 - train.backend.config.n_epochs=1
 - train.checkpoint_freq=0
+- train.checkpoint_steps=[]
+- train.checkpoint_candidates=null
 run_name: benchmark_train_loop_mario_l11
 run_description: Consolidated native-vector SB3 on-policy throughput probe for Mario Level1-1.
 required_metrics:
-- train/throughput/loop/rate
+- train/throughput/rate

@@ -4,6 +4,18 @@ schema_version = 3
 #   ~/.config/gradlab/operator.toml
 [environment]
 WANDB_ENTITY = "<wandb-entity>"
+# A private route reachable from the selected training host and operator machine.
+# Enroll only fleets with a verified private route and capacity.
+MLFLOW_TRACKING_URI = "https://<private-mlflow-host>"
+# Logical destination identity is frozen in each MLflow Run manifest.
+MLFLOW_OPERATOR_PROFILE = "<private-mlflow-profile>"
+# Exact configured dstack fleet IDs permitted to reach the private service.
+MLFLOW_ALLOWED_FLEETS = "<approved-fleet-id>"
+# basic (default) requires the writer username/password references below.
+# network is explicit: private HTTPS, network access controls, no basic credentials.
+MLFLOW_AUTH_MODE = "basic"
+# Optional for a private CA: base64 of its single PEM certificate.
+# GRADLAB_MLFLOW_TLS_CA_B64 = "<base64-pem-ca-certificate>"
 GRADLAB_CONTROL_R2_URI = "s3://<control-bucket>"
 GRADLAB_CONTROL_R2_ENDPOINT_URL = "https://<account-id>.r2.cloudflarestorage.com"
 GRADLAB_CONTROL_R2_REGION = "auto"
@@ -17,6 +29,9 @@ GRADLAB_MODELS_R2_PUBLIC_BASE_URL = "https://<public-bucket-id>.r2.dev"
 
 # Coordinator metadata is explicit so each fleet has exactly one control plane.
 # The selected coordinator token is resolved lazily from its Keychain reference.
+# Optional ssh_tunnel metadata lets the CLI reach a loopback-only coordinator
+# from the operator machine. Destinations are tried in order and must all name
+# the same coordinator host (for example, LAN first and private VPN second).
 [dstack]
 default_coordinator = "primary"
 default_fleet = "primary-gpu"
@@ -25,11 +40,13 @@ default_fleet = "primary-gpu"
 project = "<dstack-project>"
 server_url = "http://127.0.0.1:3000"
 token = { service = "gradlab-dstack-admin", account = "<operator-account>" }
+ssh_tunnel = { destinations = ["<ssh-user>@<primary-host>.local", "<ssh-user>@<primary-host-vpn>"], remote_host = "127.0.0.1", remote_port = 3000 }
 
 [dstack.coordinators.secondary]
 project = "<dstack-project>"
 server_url = "http://127.0.0.1:3002"
 token = { service = "gradlab-dstack-admin-secondary", account = "<operator-account>" }
+ssh_tunnel = { destinations = ["<ssh-user>@<secondary-host>.local", "<ssh-user>@<secondary-host-vpn>"], remote_host = "127.0.0.1", remote_port = 3000 }
 
 [dstack.fleets.primary-gpu]
 coordinator = "primary"
@@ -50,6 +67,15 @@ disk = "50GB"
 [keychain.WANDB_API_KEY]
 service = "gradlab-wandb"
 account = "api-key"
+
+# Omit both MLflow credential entries when using network authentication.
+[keychain.MLFLOW_TRACKING_USERNAME]
+service = "gradlab-mlflow"
+account = "username"
+
+[keychain.MLFLOW_TRACKING_PASSWORD]
+service = "gradlab-mlflow"
+account = "password"
 
 [keychain.GRADLAB_CONTROL_R2_ACCESS_KEY_ID]
 service = "gradlab-r2-control"

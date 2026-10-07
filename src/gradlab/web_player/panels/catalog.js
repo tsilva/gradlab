@@ -78,61 +78,38 @@ export const PANEL_TYPES = Object.freeze({
   },
 });
 
-const EXPLAIN_LAYOUT = Object.freeze({
+const ALL_PANELS_LAYOUT = Object.freeze({
   game: { x: 0, y: 0, w: 8, h: 15, visible: true, window: "main" },
   controls: { x: 8, y: 0, w: 2, h: 15, visible: false, window: "main" },
   policy: { x: 8, y: 0, w: 4, h: 15, visible: true, window: "main" },
-  value: { x: 0, y: 15, w: 4, h: 7, visible: true, window: "main" },
-  "step-reward": { x: 4, y: 15, w: 4, h: 7, visible: true, window: "main" },
-  "episode-return": { x: 8, y: 15, w: 4, h: 7, visible: true, window: "main" },
-  observation: { x: 4, y: 22, w: 5, h: 8, visible: false, window: "main" },
-  signals: { x: 9, y: 22, w: 3, h: 8, visible: false, window: "main" },
-  events: { x: 0, y: 30, w: 4, h: 7, visible: false, window: "main" },
-  raw: { x: 4, y: 30, w: 8, h: 7, visible: false, window: "main" },
-  "reward-analysis": { x: 0, y: 37, w: 12, h: 15, visible: false, window: "main" },
-  attribution: { x: 0, y: 52, w: 4, h: 8, visible: false, window: "main" },
-  cnn: { x: 0, y: 52, w: 8, h: 15, visible: false, window: "main" },
-});
-
-const WATCH_LAYOUT = Object.freeze({
-  ...EXPLAIN_LAYOUT,
-  game: { x: 0, y: 0, w: 12, h: 15, visible: true, window: "main" },
-  controls: { x: 9, y: 0, w: 3, h: 15, visible: false, window: "main" },
-  policy: { ...EXPLAIN_LAYOUT.policy, visible: false },
-  value: { ...EXPLAIN_LAYOUT.value, visible: false },
-  "step-reward": { ...EXPLAIN_LAYOUT["step-reward"], visible: false },
-  "episode-return": { ...EXPLAIN_LAYOUT["episode-return"], visible: false },
-});
-
-const DEBUG_LAYOUT = Object.freeze({
-  ...EXPLAIN_LAYOUT,
-  game: { x: 0, y: 0, w: 8, h: 15, visible: true, window: "main" },
-  controls: { x: 8, y: 0, w: 2, h: 15, visible: false, window: "main" },
-  observation: { x: 8, y: 0, w: 4, h: 15, visible: true, window: "main" },
-  policy: { x: 0, y: 15, w: 4, h: 8, visible: true, window: "main" },
-  signals: { x: 4, y: 15, w: 4, h: 8, visible: true, window: "main" },
-  events: { x: 8, y: 15, w: 4, h: 8, visible: true, window: "main" },
-  raw: { x: 0, y: 23, w: 12, h: 7, visible: true, window: "main" },
-  value: { ...EXPLAIN_LAYOUT.value, visible: false },
-  "step-reward": { ...EXPLAIN_LAYOUT["step-reward"], visible: false },
-  "episode-return": { ...EXPLAIN_LAYOUT["episode-return"], visible: false },
-  "reward-analysis": { x: 0, y: 30, w: 12, h: 15, visible: true, window: "main" },
+  observation: { x: 0, y: 15, w: 4, h: 7, visible: true, window: "main" },
+  "step-reward": { x: 4, y: 15, w: 3, h: 7, visible: true, window: "main" },
+  "episode-return": { x: 7, y: 15, w: 3, h: 7, visible: true, window: "main" },
+  events: { x: 10, y: 15, w: 2, h: 7, visible: true, window: "main" },
+  "reward-table": { x: 0, y: 22, w: 12, h: 7, visible: true, window: "main" },
+  value: { x: 0, y: 29, w: 6, h: 8, visible: true, window: "main" },
+  signals: { x: 6, y: 29, w: 6, h: 19, visible: true, window: "main" },
+  raw: { x: 0, y: 52, w: 12, h: 7, visible: false, window: "main" },
+  "reward-analysis": { x: 0, y: 37, w: 6, h: 15, visible: true, window: "main" },
+  attribution: { x: 0, y: 52, w: 4, h: 15, visible: false, window: "main" },
+  cnn: { x: 4, y: 52, w: 8, h: 15, visible: false, window: "main" },
 });
 
 const PAIRED_LAYOUT = Object.freeze({
-  game: { x: 0, y: 0, w: 12, h: 15, visible: true, window: "main" },
-  controls: { x: 9, y: 0, w: 3, h: 15, visible: false, window: "main" },
-  policy: { x: 0, y: 0, w: 6, h: 8, visible: true, window: "stats" },
-  value: { x: 6, y: 0, w: 6, h: 8, visible: true, window: "stats" },
-  "step-reward": { x: 0, y: 8, w: 6, h: 7, visible: true, window: "stats" },
+  "game": { x: 0, y: 0, w: 8, h: 15, visible: true, window: "main" },
+  "observation": { x: 8, y: 0, w: 4, h: 4, visible: true, window: "main" },
+  "policy": { x: 8, y: 4, w: 4, h: 11, visible: true, window: "main" },
+  "step-reward": { x: 0, y: 0, w: 6, h: 8, visible: true, window: "stats" },
+  "reward-table": { x: 6, y: 0, w: 6, h: 8, visible: true, window: "stats" },
+  "value": { x: 0, y: 8, w: 6, h: 7, visible: true, window: "stats" },
   "episode-return": { x: 6, y: 8, w: 6, h: 7, visible: true, window: "stats" },
-  observation: { x: 0, y: 15, w: 6, h: 8, visible: true, window: "stats" },
-  signals: { x: 6, y: 15, w: 3, h: 8, visible: true, window: "stats" },
-  events: { x: 9, y: 15, w: 3, h: 8, visible: true, window: "stats" },
-  raw: { x: 0, y: 23, w: 12, h: 7, visible: true, window: "stats" },
-  "reward-analysis": { x: 0, y: 30, w: 12, h: 15, visible: true, window: "stats" },
-  attribution: { x: 0, y: 45, w: 4, h: 15, visible: true, window: "stats" },
-  cnn: { x: 4, y: 45, w: 8, h: 15, visible: true, window: "stats" },
+  "reward-analysis": { x: 0, y: 15, w: 6, h: 8, visible: true, window: "stats" },
+  "events": { x: 6, y: 15, w: 2, h: 8, visible: true, window: "stats" },
+  "signals": { x: 8, y: 15, w: 4, h: 8, visible: true, window: "stats" },
+  "controls": { x: 8, y: 23, w: 4, h: 7, visible: false, window: "stats" },
+  "raw": { x: 0, y: 30, w: 12, h: 7, visible: false, window: "stats" },
+  "attribution": { x: 0, y: 37, w: 4, h: 15, visible: false, window: "stats" },
+  "cnn": { x: 4, y: 37, w: 8, h: 15, visible: false, window: "stats" },
 });
 
 export const BUILTIN_PANEL_PRESETS = Object.freeze({
@@ -148,7 +125,7 @@ export const BUILTIN_PANEL_PRESETS = Object.freeze({
   },
   policy: {
     type: "telemetry",
-    title: "Policy decision",
+    title: "Action decision",
     config: {
       blocks: [
         {
@@ -174,8 +151,11 @@ export const BUILTIN_PANEL_PRESETS = Object.freeze({
         {
           kind: "line",
           title: "Value estimate vs realized return-to-go",
-          metrics: ["policy/value", "policy/realized-return"],
-          foot: "V(s) is expected discounted future policy reward; G(s) is this trajectory’s realized discounted future reward—not its success flag or cumulative episode return.",
+          metrics: [
+            "policy/value",
+            "policy/realized-return",
+            "policy/value-error",
+          ],
         },
       ],
     },
@@ -192,6 +172,11 @@ export const BUILTIN_PANEL_PRESETS = Object.freeze({
         },
       ],
     },
+  },
+  "reward-table": {
+    type: "telemetry",
+    title: "Reward table",
+    config: { blocks: [{ kind: "reward-table" }] },
   },
   "episode-return": {
     type: "telemetry",
@@ -211,13 +196,13 @@ export const BUILTIN_PANEL_PRESETS = Object.freeze({
     title: "Reward analysis",
     config: {
       blocks: [
-        { kind: "reward-breakdown", scope: "step" },
+        { kind: "reward-breakdown", scope: "episode" },
       ],
     },
   },
   observation: {
     type: "observation",
-    title: "Observation",
+    title: "Input",
     config: {},
   },
   attribution: {
@@ -277,9 +262,12 @@ export function telemetryPanelProcessing(config) {
     if (["line", "histogram", "distribution", "namespace-explorer"].includes(block.kind)) {
       processing.add("history");
     }
+    if (block.kind === "reward-table") {
+      ["history", "rewards", "policy", "critic-calibration"].forEach(feature => processing.add(feature));
+    }
     if (block.kind === "reward-breakdown") {
       processing.add("reward-accounting");
-      if (block.scope === "episode") processing.add("history");
+      if (block.scope !== "step") processing.add("history");
     }
     if (block.kind === "namespace-explorer") {
       processing.add(block.namespace === "reward-component" ? "reward-accounting" : "signals");
@@ -294,21 +282,8 @@ export function telemetryPanelProcessing(config) {
   return [...processing];
 }
 
-export const WORKSPACE_PRESETS = Object.freeze({
-  watch: { label: "Watch", description: "Game-first playback and the episode summary" },
-  explain: { label: "Explain", description: "Policy, value, and reward evidence" },
-  debug: { label: "Debug", description: "Observation, signals, events, and raw transition data" },
-  custom: { label: "Customize", description: "Your current panel arrangement" },
-});
-
-export function defaultPanelInstances({ paired = false, preset = "watch" } = {}) {
-  const layout = paired
-    ? PAIRED_LAYOUT
-    : preset === "debug"
-      ? DEBUG_LAYOUT
-      : preset === "explain"
-        ? EXPLAIN_LAYOUT
-        : WATCH_LAYOUT;
+export function defaultPanelInstances({ paired = false } = {}) {
+  const layout = paired ? PAIRED_LAYOUT : ALL_PANELS_LAYOUT;
   return Object.fromEntries(
     Object.entries(BUILTIN_PANEL_PRESETS).map(([id, preset]) => [
       id,

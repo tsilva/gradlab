@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       ref:
-        description: Optional git ref to build
+        description: Full commit SHA on main to validate (empty uses the dispatch SHA)
         required: false
         type: string
 
@@ -21,6 +21,7 @@ concurrency:
 env:
   PYTHON_VERSION: "3.14"
   UV_CACHE_DIR: .uv-cache
+  UV_CONFIG_FILE: ${{ github.workspace }}/uv-tool.toml
 
 jobs:
   build:
@@ -28,13 +29,34 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.version.outputs.version }}
+      source-sha: ${{ steps.source.outputs.sha }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           persist-credentials: false
           fetch-depth: 0
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.sha }}
+
+      - name: Verify source identity
+        id: source
+        shell: bash
+        env:
+          REQUESTED_REF: ${{ inputs.ref }}
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
+            [[ "$GITHUB_REF" == "refs/heads/main" ]] || exit 1
+            if [[ -n "$REQUESTED_REF" ]]; then
+              [[ "$REQUESTED_REF" =~ ^[0-9a-f]{40}$ && "$sha" == "$REQUESTED_REF" ]] || exit 1
+            fi
+            git merge-base --is-ancestor "$sha" origin/main
+          else
+            [[ "$sha" == "$GITHUB_SHA" ]] || exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "Building source $sha"
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -44,8 +66,17 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
 
+      - name: Build locked player assets
+        run: |
+          npm install --global pnpm@10.33.0 --ignore-scripts --min-release-age=10080
+          pnpm install --frozen-lockfile
+          pnpm check:web
+          pnpm build:web
+
       - name: Install locked environments
-        run: uv sync --frozen --group dev --group release
+        run: |
+          uv lock --check
+          uv sync --frozen --group dev --group release
 
       - name: Resolve version
         id: version
@@ -69,27 +100,39 @@ jobs:
 
       - name: Check version consistency
         run: >-
-          uv run python .codex/skills/build-release/scripts/release_build.py
+          uv run python scripts/release_build.py
           check-version --version "${{ steps.version.outputs.version }}"
 
-      - name: Check PyPI version is unused
-        if: github.event_name == 'push' && github.ref_type == 'tag'
-        run: >-
-          uv run python .codex/skills/build-release/scripts/release_build.py
-          check-pypi --version "${{ steps.version.outputs.version }}"
-
-      - name: Run source checks
+      - name: Install recording test prerequisites
         run: |
-          uv run ruff check .
-          uv run pytest -q
-          uv run gradlab validate
-          uv run gradlab experiment certify --tier simulated --json
+          sudo apt-get update
+          sudo apt-get install --yes ffmpeg
+          ffmpeg -version
+          ffprobe -version
+
+      - name: Lint source
+        run: uv run ruff check .
+
+      - name: Run Python tests
+        run: uv run pytest -q --maxfail=1
+
+      - name: Validate configuration
+        run: uv run gradlab validate
+
+      - name: Certify lifecycle determinism
+        run: |
+          evidence="$(mktemp -d)"
+          uv run gradlab experiment certify --tier simulated --json > "$evidence/first.json"
+          uv run gradlab experiment certify --tier simulated --json > "$evidence/second.json"
+          cmp "$evidence/first.json" "$evidence/second.json"
+          cat "$evidence/first.json"
 
       - name: Build and audit release distributions
         run: >-
-          uv run python .codex/skills/build-release/scripts/release_build.py build
+          uv run python scripts/release_build.py build
           --version "${{ steps.version.outputs.version }}"
           --out-dir dist/release-v${{ steps.version.outputs.version }}
+          ${{ github.event_name == 'workflow_dispatch' && '--allow-published' || '' }}
 
       - name: Upload audited distribution bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -116,7 +159,7 @@ jobs:
           path: dist
 
       - name: Publish package distributions to PyPI
-        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
 
   github-release:
     name: Publish GitHub release
