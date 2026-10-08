@@ -354,7 +354,7 @@ class TrainImageTests(unittest.TestCase):
         self.assertFalse(gpu_lines & dependency_lines)
         self.assertEqual(
             train_plan_sha256(root),
-            "c706c4e0175987b1561189c46d5558aaf7069785d0b06197f9c2e31fcc7f2d2b",
+            "74f5769c0d77e63dfd1ac2db815d158de14355f83ff3c80298efbe7db82abd62",
         )
         for line in gpu.splitlines():
             name = line.split("==", maxsplit=1)[0]
@@ -378,7 +378,7 @@ class TrainImageTests(unittest.TestCase):
         self.assertEqual(foundations.count("runs-on: ubuntu-24.04"), 1)
         self.assertEqual(
             foundations.count(
-                "docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f"
+                "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c"
             ),
             1,
         )
@@ -390,7 +390,7 @@ class TrainImageTests(unittest.TestCase):
         self.assertNotIn("name: Build train dependencies", runtime)
         self.assertEqual(
             runtime.count(
-                "docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f"
+                "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c"
             ),
             1,
         )
