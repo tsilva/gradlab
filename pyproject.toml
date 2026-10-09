@@ -117,9 +117,13 @@ constraint-dependencies = [
     "mistralai!=2.4.6",
     "guardrails-ai!=0.10.1",
     "cryptography>=50",
-    "gitpython>=3.1.58",
+    "gitpython>=3.1.62",
     "h2>=4.4.1",
     "setuptools>=83",
+    "multidict>=6.9.1",
+    "werkzeug>=3.1.9",
+    "urllib3>=2.8.0",
+    "mako>=1.4.2",
 ]
 [tool.uv.exclude-newer-package]
 env-breakoutatari2600-turbo-native = false
