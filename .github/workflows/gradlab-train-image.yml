@@ -47,7 +47,7 @@ on:
 
 permissions:
   contents: read
-  packages: write
+  packages: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ inputs.source_sha || github.event.pull_request.head.sha || github.sha }}
@@ -62,6 +62,9 @@ env:
 
 jobs:
   foundations:
+    permissions:
+      contents: read
+      packages: write
     uses: ./.github/workflows/gradlab-train-foundations.yml
     with:
       source_sha: ${{ inputs.source_sha || github.sha }}
@@ -69,6 +72,9 @@ jobs:
     secrets: inherit
 
   build:
+    permissions:
+      contents: read
+      packages: write
     needs: foundations
     runs-on: ubuntu-24.04
     outputs:

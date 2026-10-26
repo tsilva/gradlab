@@ -39,7 +39,7 @@ on:
 
 permissions:
   contents: read
-  packages: write
+  packages: read
 
 env:
   REGISTRY: ghcr.io
@@ -49,6 +49,9 @@ env:
 
 jobs:
   resolve:
+    permissions:
+      contents: read
+      packages: write
     runs-on: ubuntu-24.04
     concurrency:
       group: train-foundations-${{ inputs.source_sha }}

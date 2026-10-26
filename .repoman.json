@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "exceptions": {
+    "dependencies.sources": {
+      "pyproject.toml#tool.uv.exclude-newer-package.env-breakoutatari2600-turbo-native": "AGENTS.md Dependencies explicitly permits forward runtime releases for env-breakoutatari2600-turbo-native; all other packages remain subject to the seven-day policy.",
+      "pyproject.toml#tool.uv.exclude-newer-package.env-gradoom-turbo-torch": "AGENTS.md Dependencies explicitly permits forward runtime releases for env-gradoom-turbo-torch; all other packages remain subject to the seven-day policy.",
+      "pyproject.toml#tool.uv.exclude-newer-package.env-stableretro-turbo": "AGENTS.md Dependencies explicitly permits forward runtime releases for env-stableretro-turbo; all other packages remain subject to the seven-day policy.",
+      "pyproject.toml#tool.uv.exclude-newer-package.env-supermariobrosnes-turbo-emu": "AGENTS.md Dependencies explicitly permits forward runtime releases for env-supermariobrosnes-turbo-emu; all other packages remain subject to the seven-day policy.",
+      "pyproject.toml#tool.uv.exclude-newer-package.env-vizdoom-turbo": "AGENTS.md Dependencies explicitly permits forward runtime releases for env-vizdoom-turbo; all other packages remain subject to the seven-day policy."
+    }
+  }
+}
