@@ -1,4 +1,0 @@
-interface:
-  display_name: "Autoresearch"
-  short_description: "Tune gradlab recipes from seed-stable training signals"
-  default_prompt: "Use $autoresearch to run a training-only fixed-rung search for this gradlab recipe and apply a five-seed training-signal-confirmed winner."

@@ -1,4 +1,0 @@
-interface:
-  display_name: "Upload Checkpoint"
-  short_description: "Publish checkpoint to HF and YouTube"
-  default_prompt: "Use $upload-checkpoint to publish this trained checkpoint to Hugging Face and YouTube."

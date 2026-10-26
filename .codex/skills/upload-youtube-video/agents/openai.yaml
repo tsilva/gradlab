@@ -1,4 +1,0 @@
-interface:
-  display_name: "Upload YouTube Video"
-  short_description: "Upload model preview videos with clean descriptions"
-  default_prompt: "Use $upload-youtube-video to upload this preview video and link it to the model page."

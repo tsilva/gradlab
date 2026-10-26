@@ -1,0 +1,88 @@
+# Certify Lifecycle
+
+Use the checked-in `gradlab experiment certify` gate. It executes the real
+supervisor authority, SQLite outbox/ledger, file-backed R2 protocol, checkpoint
+publication, evaluation dispatch/validation, sole-writer MLflow/W&B projection,
+local-only journal retention, early stop, promotion, checkpoint monitoring,
+recovery, cancellation, and terminal-receipt logic against
+deterministic local boundaries. It denies network access and requires no
+credentials.
+
+Apply the [entry skill](../SKILL.md)'s preparation. The maintained implementation is
+`src/gradlab/lifecycle_certification.py`; discover the current scenario registry
+with `--list` instead of keeping a second registry in the skill.
+
+## Run the complete Tier 1 gate
+
+```bash
+gradlab experiment certify --tier simulated --json
+```
+
+Do not substitute isolated unit tests for this command. A pass requires every
+registered scenario and independent invariant verifier to pass. Report:
+
+- overall status and `report_sha256`;
+- each failed scenario and invariant, if any;
+- whether a failure bundle was preserved;
+- the exact replay command when a bundle exists.
+
+The complete gate must remain byte-deterministic across two unchanged runs and
+normally finish in under 60 seconds.
+
+## Run targeted scenarios
+
+List available scenarios:
+
+```bash
+gradlab experiment certify --list
+```
+
+Select one or more:
+
+```bash
+gradlab experiment certify \
+  --scenario mlflow-full-lifecycle \
+  --scenario local-only-full-lifecycle \
+  --json
+```
+
+Use a targeted scenario while repairing a failure, then rerun the complete gate
+before declaring the lifecycle certified.
+
+## Preserve or replay evidence
+
+Keep raw file-backed buckets, SQLite ledgers, supervisor transcript, simulated
+selected-service events, report, and replay manifest:
+
+```bash
+gradlab experiment certify \
+  --tier simulated \
+  --artifacts-dir ~/.config/gradlab/runs/certification/manual-check \
+  --json
+```
+
+The destination must be empty. Without an explicit destination, passing
+artifacts are temporary; failing artifacts are preserved under
+`~/.config/gradlab/runs/certification/failure-<report-prefix>/`.
+
+Replay the exact scenario set:
+
+```bash
+gradlab experiment certify \
+  --replay <failure-bundle>/replay.json \
+  --json
+```
+
+Compare the failing invariant, raw R2 objects, SQLite rows, transcript event
+order, and selected-service event IDs/high-water marks. Local-only evidence
+requires retained journals and no remote-delivery claim; inspect monitoring
+inventories separately from Acceptance evaluations. Repair the production path
+exercised by the scenario rather than weakening the invariant or changing the replay.
+
+## Scope boundary
+
+Tier 1 proves deterministic orchestration semantics with real local persistence
+and scripted service boundaries. It does not prove live dstack scheduling, real
+R2 permissions/consistency, MLflow/W&B backend visibility, Modal deployment, ROM
+provisioning, or GPU training. Those belong to service-integration and
+hardware-specific acceptance tiers.

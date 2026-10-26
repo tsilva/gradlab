@@ -1,4 +1,0 @@
-interface:
-  display_name: "Launch Experiment"
-  short_description: "Launch training and run live Modal checkpoint evals"
-  default_prompt: "Use $launch-experiment to launch or monitor this GradLab run, or evaluate selected checkpoints through Modal with evidence-backed completion."

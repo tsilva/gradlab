@@ -1,0 +1,4 @@
+interface:
+  display_name: "Launch Experiment"
+  short_description: "Launch and follow runs with durable evidence"
+  default_prompt: "Use $gradlab_launch-experiment to launch or follow this GradLab run, or evaluate selected checkpoints through the durable queue."

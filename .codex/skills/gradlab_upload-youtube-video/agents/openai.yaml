@@ -1,0 +1,4 @@
+interface:
+  display_name: "Upload YouTube Video"
+  short_description: "Maintain previews and route release uploads"
+  default_prompt: "Use $gradlab_upload-youtube-video to maintain this preview or route its checkpoint-release upload through the durable publisher."

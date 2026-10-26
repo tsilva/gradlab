@@ -1,0 +1,4 @@
+interface:
+  display_name: "Autoresearch"
+  short_description: "Tune numeric PPO/A2C settings from verified journals"
+  default_prompt: "Use $gradlab_autoresearch to tune this GradLab recipe's numeric PPO/A2C hyperparameters within the fixed search contract and apply a five-seed confirmed winner."

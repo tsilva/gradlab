@@ -1,0 +1,4 @@
+interface:
+  display_name: "Certify Lifecycle"
+  short_description: "Certify delivery, journals, and run lifecycle"
+  default_prompt: "Use $gradlab_certify-lifecycle to run the deterministic lifecycle gate and interpret preserved evidence across tracking modes."
