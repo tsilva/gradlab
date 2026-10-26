@@ -348,3 +348,7 @@ pass. Keep generated datasets, previews, and measurements outside tracked source
 The pilot report must include integrity results, a reconstructed trajectory preview,
 full-RGB novelty, compression and reuse separately, index overhead, storage projections,
 throughput, and memory observations. Those measurements validate the collector only.
+
+## License
+
+[MIT License](../../LICENSE).

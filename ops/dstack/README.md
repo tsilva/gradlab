@@ -115,3 +115,7 @@ The alternate `completed-result-hung-process` mode ignores graceful stop and
 SIGTERM so teardown must reach SIGKILL and terminalize with
 `teardown_timeout`. Neither fixture constructs an environment or trains a
 policy.
+
+## License
+
+[MIT License](../../LICENSE).

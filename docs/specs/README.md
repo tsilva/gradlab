@@ -7,3 +7,7 @@ Root [`SPECS.md`](../../SPECS.md) is authoritative for project-wide user product
 - [`queued-execution.md`](queued-execution.md) — current local-queue, training-container, and lifecycle-certification requirements
 - [`go-explore.md`](go-explore.md) — current Go-Explore checkpoint requirements
 - [`training-datasets.md`](training-datasets.md) — Checkpoint Monitoring, complete evaluation trajectories, durable R2/media delivery, and explicit dataset Publication
+
+## License
+
+[MIT License](../../LICENSE).

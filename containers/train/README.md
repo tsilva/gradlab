@@ -106,3 +106,7 @@ promotion, and resumable recovery.
 Host image cleanup is a separate root-owned timer. It queries dstack for
 active/queued immutable digests and removes only unused gradlab-managed images,
 preserving active containers and demanded digests.
+
+## License
+
+[MIT License](../../LICENSE).

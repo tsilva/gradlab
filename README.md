@@ -332,11 +332,6 @@ uv run --frozen python scripts/upload_youtube_video.py --auth-only
 
 After verifying access and token refresh, retire the former local OAuth files. A Google `deleted_client` error requires a replacement Desktop OAuth client before reauthorization; copying the deleted client's JSON to Infisical cannot restore it.
 
-## License
-
-GradLab is licensed under the [MIT License](LICENSE). Third-party attributions
-are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-
 ## Secret scanning
 
 GitHub Actions scans changed commits with the pinned Infisical CLI. New branches
@@ -344,3 +339,8 @@ and rewritten pushes scan the complete history reachable from the new head, even
 when the previous commit is no longer available. Missing pull-request revisions
 and scanner errors still fail the check. Reports publish only finding locations;
 credentials and matched source content remain private.
+
+## License
+
+GradLab is licensed under the [MIT License](LICENSE). Third-party attributions
+are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

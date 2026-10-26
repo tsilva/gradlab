@@ -64,3 +64,7 @@ Back up both SQLite files using `python ops/mlflow/sqlite_snapshot.py backup <da
 ## Pilot gate
 
 The bounded live pilot requires separate compute authorization. Compare matched W&B and MLflow Runs, measure metric ingest rate, remote-visibility latency, database and artifact growth, representative-video access, server CPU/memory, and learner throughput. Verify GradLab public views, private-R2 journal integrity, restore, and resource release. Keep MLflow unavailable as a selectable production target on other fleets until private route and capacity checks pass there.
+
+## License
+
+[MIT License](../../LICENSE).

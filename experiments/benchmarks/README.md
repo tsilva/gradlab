@@ -51,3 +51,7 @@ Use `allow_state_none=true` only for explicit emulator hot-path diagnostics.
 
 The canonical training-loop profile exercises the consolidated runtime only. Provider/runtime stepping
 overhead is measured separately by the native provider/runtime conformance benchmark.
+
+## License
+
+[MIT License](../../LICENSE).

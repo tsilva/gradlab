@@ -88,3 +88,7 @@ distribution to those ordered legal tuples. Sampling, log probability, entropy, 
 and evaluation therefore use only actions already supported by that goal. The profile is
 part of effective-goal, environment, checkpoint, and publication provenance. Omitting
 `action_profile` preserves the existing discrete action space and checkpoint behavior.
+
+## License
+
+[MIT License](../LICENSE).
