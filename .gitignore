@@ -31,6 +31,7 @@ coverage.xml
 htmlcov/
 
 # Local config/secrets
+/.access.local.toml
 .env
 .env.*
 !.env.example

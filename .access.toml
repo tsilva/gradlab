@@ -1,0 +1,20 @@
+# Credential requirements only; never put secret values in this file.
+# Operator-specific provider bindings belong in ignored .access.local.toml.
+# These profiles describe standalone tool access, not GradLab operator configuration.
+version = 1
+
+[profiles.wandb]
+description = "Authenticate standalone Weights & Biases tooling."
+variables = ["WANDB_API_KEY"]
+
+[profiles.huggingface-read]
+description = "Download models and inspect Hugging Face resources."
+variables = ["HF_TOKEN"]
+
+[profiles.huggingface-write]
+description = "Upload authorized model and checkpoint artifacts to Hugging Face."
+variables = ["HF_TOKEN"]
+
+[profiles.modal]
+description = "Authenticate standalone Modal tooling."
+variables = ["MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET"]

@@ -90,8 +90,8 @@ def new_oauth_transaction(
 ) -> OAuthTransaction:
     installed = _installed_client(client_config)
     verifier = secrets.token_urlsafe(64)
-    challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip(
-        "="
+    challenge = (
+        base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
     )
     state = secrets.token_urlsafe(32)
     params = {
@@ -195,7 +195,7 @@ def refresh_access_token(
     return {
         **dict(token),
         **refreshed,
-        "refresh_token": refresh_token,
+        "refresh_token": refreshed.get("refresh_token") or refresh_token,
         "client_id": str(installed["client_id"]),
         "token_uri": TOKEN_URL,
         "scopes": sorted(set(token.get("scopes") or ())),
@@ -430,9 +430,7 @@ class YouTubeClient:
                 },
                 "status": {
                     "privacyStatus": str(privacy),
-                    "selfDeclaredMadeForKids": bool(
-                        status.get("selfDeclaredMadeForKids", False)
-                    ),
+                    "selfDeclaredMadeForKids": bool(status.get("selfDeclaredMadeForKids", False)),
                 },
             },
         )
@@ -446,7 +444,10 @@ class YouTubeClient:
                 params["pageToken"] = page_token
             value = self._request_json(f"{API_URL}/playlists?{urllib.parse.urlencode(params)}")
             for item in value.get("items") or ():
-                if isinstance(item, Mapping) and str((item.get("snippet") or {}).get("title")) == title:
+                if (
+                    isinstance(item, Mapping)
+                    and str((item.get("snippet") or {}).get("title")) == title
+                ):
                     results.append(dict(item))
             page_token = str(value.get("nextPageToken") or "")
             if not page_token:
@@ -465,9 +466,7 @@ class YouTubeClient:
                 "maxResults": "1",
             }
             try:
-                self._request_json(
-                    f"{API_URL}/playlistItems?{urllib.parse.urlencode(params)}"
-                )
+                self._request_json(f"{API_URL}/playlistItems?{urllib.parse.urlencode(params)}")
             except YouTubePublicationError as exc:
                 if exc.status == 404:
                     continue
@@ -539,13 +538,9 @@ class YouTubeClient:
             }
             if page_token:
                 params["pageToken"] = page_token
-            value = self._request_json(
-                f"{API_URL}/playlistItems?{urllib.parse.urlencode(params)}"
-            )
+            value = self._request_json(f"{API_URL}/playlistItems?{urllib.parse.urlencode(params)}")
             results.extend(
-                dict(item)
-                for item in value.get("items") or ()
-                if isinstance(item, Mapping)
+                dict(item) for item in value.get("items") or () if isinstance(item, Mapping)
             )
             page_token = str(value.get("nextPageToken") or "")
             if not page_token:
@@ -567,14 +562,11 @@ class YouTubeClient:
             }
             if page_token:
                 params["pageToken"] = page_token
-            value = self._request_json(
-                f"{API_URL}/playlistItems?{urllib.parse.urlencode(params)}"
-            )
+            value = self._request_json(f"{API_URL}/playlistItems?{urllib.parse.urlencode(params)}")
             for item in value.get("items") or ():
                 if (
                     isinstance(item, Mapping)
-                    and str((item.get("contentDetails") or {}).get("videoId") or "")
-                    == video_id
+                    and str((item.get("contentDetails") or {}).get("videoId") or "") == video_id
                 ):
                     return {
                         "already_present": True,

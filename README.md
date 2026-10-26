@@ -185,6 +185,43 @@ install -m 600 ops/operator.example.toml ~/.config/gradlab/operator.toml
 gradlab experiment operator-preflight --json
 ```
 
+Secrets in `operator.toml` use value-free `[infisical.NAME]` bindings with explicit HTTPS instance, project,
+environment, folder path and secret name. Install the Infisical CLI and run `infisical login`;
+Gradlab fetches requested credentials in memory and aborts on a failed read. dstack
+coordinator tokens use the same reference format. Modal tokens are stored in Infisical
+as well. Standalone tool credential requirements are declared in
+[`.access.toml`](.access.toml), with `wandb`, `huggingface-read`,
+`huggingface-write`, and `modal` profiles. Put operator-specific provider
+bindings in gitignored `.access.local.toml`; both files contain references only.
+They are an agent discovery convention, not configuration read by GradLab or
+the Infisical CLI. Existing GradLab operator and publication launchers keep
+their own credential configuration.
+
+Both access files use `version = 1`. Shared `[profiles.NAME]` tables contain a
+description and a nonempty `variables` list. Provider bindings use
+`[bindings.NAME]` with a matching profile. An Infisical binding contains
+`provider = "infisical"`, `instance`, `project_id`, `environment`, and `path`.
+Bindings may be shared in `.access.toml` when appropriate. Each binding in
+`.access.local.toml` replaces the entire shared binding for that profile;
+fields are never merged. Local files contain only `version` and `bindings`.
+Reject malformed or unsupported configurations and missing bindings rather
+than guessing a source. Keep local binding files owner-only and untracked.
+
+For example, resolve the `modal` profile and use its binding with the native
+Infisical injector:
+
+```bash
+infisical run --projectId=YOUR_PROJECT_ID --env=prod --path=/modal \
+  --domain=https://app.infisical.com \
+  --expand=false --include-imports=false --silent --telemetry=false \
+  -- modal profile list
+```
+
+Replace `YOUR_PROJECT_ID` with your tooling project's ID and select your
+Infisical instance with `--domain` when needed. Keep that folder limited to
+`MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET`; credentials stay in the child
+environment and must not be saved to a plaintext Modal token file.
+
 Then launch a checked-in recipe using its resolved goal and bounded defaults:
 
 ```bash
@@ -260,6 +297,40 @@ explicitly authorized. See [COMPUTE.md](COMPUTE.md) and the
 ## Architecture
 
 ![GradLab architecture](./architecture.png)
+
+## YouTube credentials in Infisical
+
+The default YouTube credential backend uses private `youtube_client_secret.json` and `youtube_token.json` files in the GradLab config directory. To select Infisical, install and log in to its CLI, store the complete client and token JSON objects in a dedicated project, and create `youtube_infisical.json` in that same config directory:
+
+```json
+{
+  "instance": "https://app.infisical.com",
+  "project_id": "your-project-UUID",
+  "environment": "prod",
+  "path": "/youtube",
+  "executable": "infisical",
+  "secrets": {
+    "client": "GRADLAB_YOUTUBE_CLIENT_JSON",
+    "token": "GRADLAB_YOUTUBE_TOKEN_JSON"
+  }
+}
+```
+
+Both operator references and YouTube store configurations require `instance`,
+`project_id`, `environment` and `path`; none has an implicit default. Existing
+Infisical configurations missing these fields must be updated before use. Select
+the narrow folder that owns the credentials; `/` is accepted only when explicitly
+configured. Malformed scopes and unknown fields stop access before calling the CLI.
+
+Optional `login_profile` pins the Infisical login. Its identity needs read access to both secrets and write access to the token secret. The player, durable publisher, and standalone YouTube script use the selected store, including refresh and consent writeback. Writes use stdin without creating plaintext JSON files. Vault failures stop credential access without a local-file fallback; local token locking remains in place for the player and publisher.
+
+From the repository, reconnect without uploading or changing a video:
+
+```bash
+uv run --frozen python scripts/upload_youtube_video.py --auth-only
+```
+
+After verifying access and token refresh, retire the former local OAuth files. A Google `deleted_client` error requires a replacement Desktop OAuth client before reauthorization; copying the deleted client's JSON to Infisical cannot restore it.
 
 ## License
 
