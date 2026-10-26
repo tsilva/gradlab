@@ -362,6 +362,12 @@ resuming as its cause without a matched uninterrupted continuation.
   `d * ln(2)`. Continuous `Box` policies report differential entropy, which has no finite
   action-space-only minimum or maximum. The bounds remain a pure policy-space calculation used by
   diagnostics and are not duplicated as W&B metrics.
+- `train/entropy/mean` measures policy entropy over update samples; it is not the entropy
+  coefficient, a failure probability, or uncertainty specifically at failure-critical states.
+  Custom PPO minimizes `policy_loss - ent_coef * entropy + vf_coef * value_loss`, so a
+  positive coefficient rewards entropy. Scalar objective contributions do not establish their
+  relative gradient magnitudes. A zero coefficient removes this regularizer but does not disable
+  stochastic action sampling or require a deterministic policy.
 - For custom PPO, `train/clip/fraction` averages minibatch fractions across attempted epochs and counts sampled action-probability ratios outside the clipping interval. It does not measure how far those ratios moved or the fraction of gradients disabled; similar fractions can accompany different policy changes. `train/kl/mean` averages minibatch estimates from the last attempted epoch, not a fresh full-rollout evaluation of the final policy. Interpret both alongside learning rate and progress at matched timesteps; neither has a universally desirable target.
 - `train/learning_rate` reports the optimizer rate applied to the update. Optional `learning_rate_milestones` interpolate from `learning_rate` at step zero through declared absolute-transition `step`/`value` points, then hold the last value. Equal consecutive values define a constant phase. Milestones replace the linear endpoint/duration settings; extending or resuming a run does not restart their absolute timeline.
 - Custom PPO checks each minibatch's approximate KL against `1.5 * target_kl` before its optimizer step. Exceeding the threshold stops remaining optimization on the collected rollout, retaining earlier optimizer steps; it neither interrupts rollout collection nor rolls back the policy. The reference is the policy that collected that rollout, and PPO ratio clipping remains enabled. The logged epoch mean is not the individual triggering estimate, and an average KL cannot establish behavior preservation in rare states.
@@ -434,6 +440,14 @@ resuming as its cause without a matched uninterrupted continuation.
   which corresponds to `0.5` on this provider-normalized metric. It does not
   rescale the metric to the recipe's episode boundary; use the run's recorded
   success rule when interpreting completion and progress-based occupancy buckets.
+  Once the FirstWall rolling window is full, a mean of `0.5` requires all 100
+  episodes to finish at the `0.5` ceiling. A failed episode just short of clearing
+  can leave the mean very close to `0.5` without satisfying that threshold;
+  normalized progress mean is not the episode-clear fraction. The ceiling is
+  attainable, and `0.5` is exactly representable in binary floating point.
+  During warm-up the mean uses fewer than 100 episodes, so this progress threshold
+  alone does not require a full window. Training Success remains distinct from
+  frozen-checkpoint Acceptance evidence.
   The default recipe enables four occupancy buckets for quarters of the first
   wall, using provider-signal edges `0`, `0.125`, `0.25`, `0.375`, and `0.5`.
   The `TwoWalls` goal ends at `1.0`; its `ppo-two-walls` recipe uses eight quarter-wall occupancy
