@@ -45,6 +45,7 @@ dependencies = [
     "aiohttp>=3.14.3,<4",
     "pillow>=12.3,<13",
     "pyarrow>=25,<26",
+    "psutil>=7,<8",
 ]
 
 [project.scripts]
@@ -162,6 +163,7 @@ train-image-build = [
     "packaging>=26.1,<27",
 ]
 train-runtime = [
+    "psutil>=7,<8",
     "env-stableretro-turbo==1.0.1.post48; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "env-supermariobrosnes-turbo-emu==0.7.4; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "env-breakoutatari2600-turbo-native==0.5.15; sys_platform == 'linux' and platform_machine == 'x86_64'",

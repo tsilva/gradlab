@@ -49,6 +49,9 @@ authority for that decision.
   remains a metadata dimension, not the experiment name. Existing service bindings are reused
   by immutable GradLab Run ID across experiments; changing routing does not move existing Runs
   or duplicate their scientific record.
+- MLflow projects an allowlist of frozen research configuration into searchable parameters: seeds, goal/recipe hashes and overrides, provider, rollout settings, backend hyperparameters, source/runtime, and compute target. Nested fields use dotted names, such as `training_backend.config.learning_rate`. Credentials and operator configuration are excluded. The immutable recipe and Run manifest remain authoritative.
+- MLflow metric timestamps are the original journal event `created_at` in UTC milliseconds, including replay, sync, and recovery. Training and evaluation retain their scientific step axes; `ops/` and `system/` diagnostics use the journal sequence. Delivery time never replaces observation time. Older synthetic timestamps require a backed-up, terminal-only projection repair; replaying them as new points would create duplicates.
+- The sole writer samples available host CPU, RAM, and visible NVIDIA sensors every 15 seconds into the same durable journal. CPU uses deltas and omits its first unprimed reading. Missing or unsupported sensors are omitted. Measurements describe the visible host/container scope, may include other processes, and never establish scientific success; old Runs without samples remain unavailable.
 - Local-only runs retain history frames in SQLite with `local_only` delivery status so bounded
   benchmarks can evaluate every rollout rather than only the latest scalar; those frames never
   enter the publisher retry queue.
@@ -127,6 +130,7 @@ authority for that decision.
   nonvisual environments may omit it. An explicit transition-dataset Monitoring
   campaign separately delivers its representative video at `eval/monitor/video`.
 - MLflow stores asset bytes only in the public-model R2 store. Its `gradlab.asset.{journal_sequence}` tags retain immutable URLs, hashes, sizes and Checkpoint steps; the Run description lists recent clickable R2 assets. These tags and links are metadata, not additional scientific metrics. Evaluation-private videos remain private evidence; the supervisor publishes a verified representative copy in public-model R2 for viewing.
+- MLflow’s native Artifacts browser holds only configuration, dashboard guidance, and immutable asset/checkpoint reference JSON. Model/media bytes stay in canonical R2; checkpoint links and playback commands also appear in the Run description. The MLflow metadata store must pass an upload/list/download round trip before fleet use.
 - Interactive playback uses local descriptor keys such as `reward/shaped`, `policy/value`, and
   `action/executed` to configure live panels. They are typed projections of one streamed transition
   or its bounded in-browser history, are not emitted metrics, and must not be interpreted as aliases
@@ -835,8 +839,16 @@ and target-progress fields are not registry metrics and cannot enter the publish
 | `ops/evals/count` | Pending evaluations | Persisted evaluation intents pending submission or a verified result; intents deferred after acceptance are excluded. | evaluations | supervisor sample | history | last | ops/sequence | operational | - | - |
 | `ops/drain/seconds` | GPU idle drain time | Elapsed wall time since learner exit, sampled after the first terminal drain. This is not measured GPU utilization and excludes subsequent publication and terminal work. | seconds | terminal drain | history | last | ops/sequence | operational | - | - |
 | `ops/scratch/fraction` | Scratch used | Fraction of the task scratch filesystem currently used. | fraction | supervisor sample | history | last | ops/sequence | operational | - | - |
+| `system/cpu_utilization_percentage` | Host CPU utilization | Host-wide CPU busy percentage over the interval between hardware samples; the first sample is omitted. | percent | supervisor sample | history | last | ops/sequence | operational | - | - |
+| `system/system_memory_usage_megabytes` | Host memory used | Host physical memory total minus available memory, in MiB. | MiB | supervisor sample | history | last | ops/sequence | operational | - | - |
+| `system/system_memory_usage_percentage` | Host memory utilization | Host physical memory total minus available memory divided by total, as a percentage. | percent | supervisor sample | history | last | ops/sequence | operational | - | - |
+| `system/gpu/{device}/utilization_percentage` | GPU {device} utilization | NVIDIA device GPU utilization sampled by nvidia-smi; device is its reported index. | percent | supervisor sample | history | last | ops/sequence | operational | - | - |
+| `system/gpu/{device}/memory_usage_megabytes` | GPU {device} memory used | NVIDIA device allocated framebuffer memory in MiB, including other processes on that device. | MiB | supervisor sample | history | last | ops/sequence | operational | - | - |
+| `system/gpu/{device}/memory_total_megabytes` | GPU {device} memory total | NVIDIA device total framebuffer memory in MiB. | MiB | supervisor sample | history | last | ops/sequence | operational | - | - |
+| `system/gpu/{device}/power_usage_watts` | GPU {device} power | NVIDIA device sampled power draw. | watts | supervisor sample | history | last | ops/sequence | operational | - | - |
+| `system/gpu/{device}/temperature_celsius` | GPU {device} temperature | NVIDIA device sampled temperature. | celsius | supervisor sample | history | last | ops/sequence | operational | - | - |
 | `ops/state` | Terminal run state | Receipt-backed terminal run state. | text | terminal receipt | summary | none | ops/sequence | operational | - | - |
-| `ops/reason` | Terminal run reason | Receipt-backed terminal reason when the run did not succeed. | text | terminal receipt | summary | none | ops/sequence | operational | - | - |
+| `ops/reason` | Terminal run reason | Receipt-backed terminal reason, including successful early stops. | text | terminal receipt | summary | none | ops/sequence | operational | - | - |
 | `train/curriculum/cells/count` | Curriculum archive cells | Current archive-curriculum cell count. | cells | rollout | history | last | train/step | training | - | - |
 | `train/curriculum/entries/count` | Curriculum archive entries | Current immutable entry count retained by the curriculum view. | entries | rollout | history | last | train/step | training | - | - |
 | `train/curriculum/candidates/count` | Curriculum admission candidates | Non-terminal cell-crossing candidates observed during the rollout. | transitions | rollout | history | last | train/step | training | - | - |

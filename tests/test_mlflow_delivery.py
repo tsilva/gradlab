@@ -34,6 +34,7 @@ from tests.test_experiment_cli import _manifest_only_run
 
 @pytest.fixture(autouse=True)
 def public_assets(tmp_path: Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
     uri = (tmp_path / "public-assets").as_uri()
     monkeypatch.setenv("GRADLAB_MODELS_R2_URI", uri)
     monkeypatch.setenv("GRADLAB_MODELS_R2_PUBLIC_BASE_URL", uri)
@@ -117,7 +118,7 @@ def test_experiment_routing_change_preserves_existing_mlflow_binding(tmp_path):
         tracking_uri=uri, experiment_name="gradlab-NES-SuperMarioBros",
         gradlab_run_id=run_id, created_at_ms=1_800_000_000_000,
     )
-    old.publish_frame({"id": 1, "kind": "history", "step": 128, "source": "train",
+    old.publish_frame({"created_at": 1_800_000_001.25, "id": 1, "kind": "history", "step": 128, "source": "train",
                        "payload_json": json.dumps({"train/return/mean": 0.75})})
     recovered = MlflowDelivery.open(
         tracking_uri=uri, experiment_name="gradlab-SuperMarioBros-Nes-v0",
@@ -217,6 +218,7 @@ def test_mlflow_exposes_representative_video_from_canonical_r2(tmp_path: Path) -
         created_at_ms=1_800_000_000_000,
     )
     delivery.publish_frame({
+        "created_at": 1_800_000_001.25,
         "id": 1, "kind": "evaluation_video", "step": 256, "source": "eval",
         "payload_json": json.dumps({
             "bucket_uri": bucket.config.uri, "key": "runs/video.mp4",
@@ -224,6 +226,7 @@ def test_mlflow_exposes_representative_video_from_canonical_r2(tmp_path: Path) -
         }),
     })
     delivery.publish_frame({
+        "created_at": 1_800_000_001.25,
         "id": 1, "kind": "evaluation_video", "step": 256, "source": "eval",
         "payload_json": json.dumps({"bucket_uri": bucket.config.uri,
                                     "key": "runs/video.mp4", "bytes": len(content), "sha256": digest}),
@@ -234,11 +237,12 @@ def test_mlflow_exposes_representative_video_from_canonical_r2(tmp_path: Path) -
     assert reference["sha256"] == digest
     assert reference["step"] == 256
     assert tags["mlflow.note.content"].count("[episode.mp4") == 1
-    assert delivery.client.list_artifacts(delivery.run_id) == []
+    assert [f.path for f in delivery.client.list_artifacts(delivery.run_id, "gradlab/assets")] == ["gradlab/assets/000000000001-episode.mp4.json"]
     assert delivery.remote_high_water() == 1
 
     with pytest.raises(ValueError, match="hash/size mismatch"):
         delivery.publish_frame({
+        "created_at": 1_800_000_001.25,
             "id": 2, "kind": "evaluation_video", "step": 512, "source": "eval",
             "payload_json": json.dumps({"bucket_uri": bucket.config.uri,
                                         "key": "runs/video.mp4", "bytes": len(content), "sha256": "0" * 64}),
@@ -277,7 +281,7 @@ def test_replay_after_tracking_server_restart_has_one_visible_point(tmp_path: Pa
         assert [(point.value, point.step) for point in history] == [(0.5, 256)]
         assert resumed.remote_high_water() == 1
         client = MlflowClient(tracking_uri=uri)
-        assert client.list_artifacts(service_run_id) == []
+        assert [f.path for f in client.list_artifacts(service_run_id, "gradlab/assets")] == ["gradlab/assets/000000000001-summary.json.json"]
         reference = json.loads(client.get_run(service_run_id).data.tags["gradlab.asset.000000000001"])
         assert Path(reference["url"].removeprefix("file://")).read_bytes() == b'{"score":0.5}'
 
@@ -314,7 +318,7 @@ def test_direct_local_online_writer_drains_to_real_mlflow_store(
             json.dumps({"status": "completed", "terminal_reason": "resource_exhaustion"})
         )
     delivery = json.loads((tmp_path / "metrics-delivery.json").read_text())
-    assert delivery["high_water"] == 1
+    assert delivery["high_water"] >= 1
     client = MlflowClient(tracking_uri=uri)
     experiment = client.get_experiment_by_name("gradlab-SuperMarioBros-Nes-v0")
     assert client.get_run(delivery["service_run_id"]).info.experiment_id == experiment.experiment_id
@@ -414,7 +418,7 @@ def test_irrecoverable_mlflow_replacement_replays_journal_without_rewriting_rece
         run_id=manifest.run_id,
         attempt_id=manifest.attempt_id,
         events=[{
-            "event_seq": 1, "event_id": "event-1", "kind": "history", "step": 128,
+            "event_seq": 1, "event_id": "event-1", "created_at": 1_800_000_001.25, "kind": "history", "step": 128,
             "source": "train", "payload": {"train/return/mean": 0.75},
         }],
     )
@@ -456,3 +460,39 @@ def test_irrecoverable_mlflow_replacement_replays_journal_without_rewriting_rece
         result["service_run_id"], "train/return/mean"
     )
     assert [(point.value, point.step) for point in history] == [(0.75, 128)]
+
+
+def test_real_event_times_survive_replay_and_operational_axes(tmp_path):
+    service = MlflowDelivery.open(tracking_uri=f"sqlite:///{tmp_path / 'tracking.db'}",
+                                 experiment_name='debug', gradlab_run_id='gradlab-'+'e'*32,
+                                 created_at_ms=1000)
+    for seq, timestamp, value in [(1, 1800000001.125, 0.5), (2, 1800000061.875, 0.75)]:
+        frame = {'id': seq, 'created_at': timestamp, 'step': 128, 'kind': 'history',
+                 'source': 'orchestration:health',
+                 'payload_json': json.dumps({'ops/outbox/count':value})}
+        service.publish_frame(frame)
+        service.publish_frame(frame)
+    history = service.client.get_metric_history(service.run_id, 'ops/outbox/count')
+    assert [(p.timestamp,p.step) for p in history] == [(1800000001125,1),(1800000061875,2)]
+    for bad in (None, True, float('nan'), -1):
+        with pytest.raises(ValueError, match='retained event'):
+            service.publish_frame({**frame, 'created_at':bad})
+
+
+def test_run_parameters_search_and_artifact_reference_roundtrip(tmp_path):
+    config = {'seed':12,'game':'Bandit-v0','training_backend':{'id':'sb3','parameters':{'learning_rate':0.0003,'api_key':'never-project'}},
+              'goal_slug':'Level1-1','recipe_slug':'ppo','source_sha':'a'*40,
+              'run_description':'Debugging training evidence','MLFLOW_TRACKING_PASSWORD':'never-project'}
+    service = MlflowDelivery.open(tracking_uri=f"sqlite:///{tmp_path / 'tracking.db'}",
+                                 experiment_name='debug', gradlab_run_id='gradlab-'+'f'*32,
+                                 created_at_ms=1000, train_config=config)
+    service.publish_run_metadata(config)
+    matches = service.client.search_runs([service.experiment_id], "params.seed = '12' AND params.`training_backend.id` = 'sb3'")
+    assert [r.info.run_id for r in matches] == [service.run_id]
+    run = service.client.get_run(service.run_id)
+    assert run.data.params['training_backend.parameters.learning_rate'] == '0.0003'
+    assert 'MLFLOW_TRACKING_PASSWORD' not in run.data.params
+    assert 'training_backend.parameters.api_key' not in run.data.params
+    path = service.client.download_artifacts(service.run_id,'gradlab/run-configuration.json',str(tmp_path))
+    assert json.loads(Path(path).read_text())['parameters'] == run.data.params
+    assert 'Debugging training evidence' in run.data.tags['mlflow.note.content']

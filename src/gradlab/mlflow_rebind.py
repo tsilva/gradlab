@@ -73,6 +73,12 @@ def replace_mlflow_binding(
         )
         if service.run_id == original.get("service_run_id"):
             raise ValueError("replacement service still has the original binding")
+        service.publish_run_metadata({**recipe["recipe"]["train_config"],
+                                      "run_description": manifest.run_description,
+                                      "goal_slug": manifest.goal_slug,
+                                      "recipe_slug": manifest.recipe_slug,
+                                      "recipe_sha256": manifest.recipe_sha256,
+                                      "source_sha": manifest.source_sha})
         for event in events:
             service.publish_frame(
                 {
@@ -80,6 +86,7 @@ def replace_mlflow_binding(
                     "kind": event["kind"],
                     "step": event.get("step"),
                     "source": event.get("source"),
+                    "created_at": event["created_at"],
                     "payload_json": json.dumps(event["payload"], sort_keys=True),
                 }
             )

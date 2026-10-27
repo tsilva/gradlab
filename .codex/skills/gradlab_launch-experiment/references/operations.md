@@ -88,6 +88,7 @@ Each JSON line combines dstack and authoritative R2 state. Inspect `completed`,
 Failed, canceled, interrupted, or resumable terminal Attempts are distinct
 outcomes. Do not wait for an Acceptance receipt a failed Attempt cannot produce.
 Use receipt evidence rather than inferring scientific success from dstack state.
+Use `gradlab.r2_store.public_object_request` for anonymous artifact checks; Cloudflare can reject Python's default user agent with error 1010 and produce a misleading HTTP 403.
 
 If the follow process fails or shows an anomaly:
 

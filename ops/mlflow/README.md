@@ -68,3 +68,52 @@ The bounded live pilot requires separate compute authorization. Compare matched 
 ## License
 
 [MIT License](../../LICENSE).
+
+## Debugging training
+
+GradLab logs the retained journal event time as each metric's UTC millisecond
+timestamp. Retries and explicit sync preserve that time. Use scientific steps
+for training/evaluation comparisons and wall time to correlate host diagnostics.
+Operational and hardware metrics use the event sequence on step charts.
+
+The Overview shows the Run description and searchable parameters. For example,
+search `params.seed = '12' AND params.\`training_backend.id\` = 'sb3.ppo'`.
+Nested backend settings use `training_backend.config.*`; goal/recipe hashes,
+overrides, provider, source and runtime identify the compared workload.
+
+Artifacts under `gradlab/` contain configuration and JSON references to public
+checkpoints and representative assets. Model/media bytes remain in canonical R2.
+An operator can use a private persistent local directory (for example,
+`--artifacts-destination /var/lib/gradlab/mlflow/artifact-metadata`) instead of a
+separate private S3 metadata bucket. Back up that directory with the database.
+Do not switch destinations while writers are active. Preserve the old destination
+and its contents when recovering an inaccessible metadata store. Verify native
+artifact upload, listing, and download after the switch; changing the destination
+does not migrate old contents.
+
+In Model metrics, add a **Debugging** section and collapse automatic groups. Add
+one line chart per metric, with no smoothing or outlier suppression:
+
+| Focus | Metrics | X-axis |
+| --- | --- | --- |
+| Learning | `train/success/min`, `train/return/mean` | Step |
+| PPO stability | `train/kl/mean`, `train/clip/fraction`, `train/entropy/mean`, `train/value_loss/mean`, `train/explained_variance` | Step |
+| Performance | `train/throughput/rate`, `train/between_rollouts/seconds` | Step |
+| Delivery | `ops/outbox/count`, `ops/visibility/seconds` | Time (wall) |
+| Hardware | CPU/RAM and available `system/gpu/{device}/*` in System metrics | Time (wall) |
+
+The native chart layout is saved in the browser workspace. The artifact
+`gradlab/debugging-dashboard.json` records this profile portably. Hardware is
+sampled at the 15-second health cadence without a second MLflow writer. Unsupported
+sensors and historical Runs without samples have no fabricated zero series.
+
+For affected historical scalar-only Runs, `repair_timestamps.py` corrects the
+projection without changing Run identity, values, scientific steps, journals, or
+terminal receipts. Hold the GradLab writer lease, verify terminal journal
+high-water evidence, make a verified `sqlite_snapshot.py` backup, and stop the
+MLflow service before invoking it. Supply an evidence JSON containing the
+immutable `manifest`, exact `service_run_id`, and hash-verified `events` from
+`read_control_journal`. The script refuses unexpected rows and active targets,
+rebuilds latest-value ordering, checks integrity, and is idempotent. Restart the
+service and verify histories before releasing the lease. Retain the evidence,
+script output and snapshot receipt in the private operations record.

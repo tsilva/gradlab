@@ -264,6 +264,9 @@ class CertificationRuntime(SupervisorRuntime):
 
     """Scriptable stand-in for process, W&B, signals, and host state."""
 
+    def hardware_metrics(self) -> dict[str, float]:
+        return {"system/cpu_utilization_percentage": 25.0}
+
     def __init__(
         self,
         *,

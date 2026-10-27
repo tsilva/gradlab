@@ -109,6 +109,7 @@ def test_registry_relationships_and_axes_resolve_with_custom_progress_names():
             assert metric_definition(definition.axis) is not None
         concrete = definition.name.format(
             algorithm="ppo",
+            device="0",
             progress="return",
             start="Start",
             reason="event",

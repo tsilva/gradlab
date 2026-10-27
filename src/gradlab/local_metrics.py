@@ -6,6 +6,7 @@ import fcntl
 import json
 import os
 import threading
+import time
 from collections.abc import Callable
 from contextlib import ExitStack, contextmanager, nullcontext
 from pathlib import Path
@@ -14,6 +15,7 @@ from gradlab.clock import parse_utc_datetime
 from gradlab.env import resolve_env_config
 from gradlab.env_config import env_config_from_mapping
 from gradlab.local_publication import local_publication
+from gradlab.hardware_metrics import HardwareSampler
 from gradlab.mlflow_delivery import MlflowDelivery, mlflow_experiment_name
 from gradlab.operator_environment import load_repository_operator_environment
 from gradlab.policy_bundle import write_canonical_json
@@ -36,6 +38,7 @@ def _open_delivery(run_dir, config, environment, publication, *, backfill):
             experiment_name=mlflow_experiment_name(config),
             gradlab_run_id=config["wandb_run_id"],
             created_at_ms=int(parse_utc_datetime(started_at).timestamp() * 1000),
+            train_config=config,
         )
         if publication is not None:
             key = f"runs/{config['wandb_run_id']}/metrics-binding.json"
@@ -146,7 +149,14 @@ def local_metrics_writer(
 
         def publish():
             try:
+                sampler = HardwareSampler() if not backfill else None
+                next_sample = 0.0
                 while not stopped.is_set():
+                    if sampler is not None and time.monotonic() >= next_sample:
+                        metrics = sampler.sample()
+                        if metrics:
+                            store.append_metrics(metrics, step=0, source="orchestration:hardware")
+                        next_sample = time.monotonic() + 15
                     if publication is not None:
                         publication.publish()
                     writer.publish()

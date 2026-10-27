@@ -1,6 +1,6 @@
 """MLflow projection of GradLab's validated metric journal.
 
-The journal sequence and the Run creation time give every metric a stable MLflow
+The retained event time and journal sequence give every metric a stable MLflow
 identity. Replaying an uncertain write submits the same key, timestamp, step,
 and value; the pinned SQLite-backed MLflow service retains one visible point.
 """
@@ -9,13 +9,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+import os
 import re
 import tempfile
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
-from mlflow.entities import Metric, RunTag
+from mlflow.entities import Metric, Param, RunTag
 from mlflow.tracking import MlflowClient
 
 from gradlab.evaluation_projection import validate_evaluation_metric_payload
@@ -39,6 +41,46 @@ from gradlab.wandb_utils import resolve_wandb_project
 
 
 RUN_ID_TAG = "gradlab.run_id"
+
+# Only public research configuration is projected; operator settings and credentials
+# never enter searchable parameters.
+RUN_PARAMETER_KEYS = frozenset({
+    "seed", "game", "env_provider", "state", "n_envs", "frame_skip", "timesteps",
+    "goal_slug", "goal_sha256", "goal_contract_sha256", "effective_goal_contract_sha256",
+    "recipe_slug", "recipe_sha256", "recipe_variant_id", "recipe_overrides",
+    "source_sha", "runtime_build_source_sha", "runtime_input_sha256", "runtime_image_ref",
+    "compute_target", "metrics_schema_version", "reward_shape", "reward_shape_sha256",
+    "training_backend", "policy_model", "early_stop", "checkpoint_eval_backend",
+    "obs_resize", "obs_crop", "sticky_action_prob", "max_pool_frames",
+})
+
+
+def run_parameters(config: Mapping[str, Any]) -> dict[str, str]:
+    """Flatten an allowlisted immutable configuration for MLflow comparison."""
+    result: dict[str, str] = {}
+
+    def visit(key: str, value: Any) -> None:
+        if re.search(r"(?:^|[._-])(token|password|secret|credential|api_key)(?:$|[._-])", key, re.I):
+            return
+        if isinstance(value, Mapping):
+            for child, item in sorted(value.items()):
+                visit(f"{key}.{child}", item)
+        elif value is not None:
+            text = value if isinstance(value, str) else json.dumps(value, sort_keys=True)
+            if len(key) > 250 or len(text) > 6000:
+                raise ValueError(f"MLflow parameter exceeds its bound: {key}")
+            result[key] = text
+
+    for key in sorted(RUN_PARAMETER_KEYS & config.keys()):
+        visit(key, config[key])
+    return result
+
+
+def event_timestamp_ms(row: Mapping[str, Any]) -> int:
+    value = row.get("created_at")
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value) or value < 0:
+        raise ValueError("MLflow projection requires the retained event created_at timestamp")
+    return int(value * 1000)
 
 
 def mlflow_experiment_name(train_config: Mapping[str, Any]) -> str:
@@ -88,6 +130,7 @@ class MlflowDelivery:
         experiment_name: str,
         gradlab_run_id: str,
         created_at_ms: int,
+        train_config: Mapping[str, Any] | None = None,
     ) -> MlflowDelivery:
         if re.fullmatch(r"gradlab-[0-9a-f]{32}", gradlab_run_id) is None:
             raise ValueError("MLflow binding requires a GradLab Run ID")
@@ -112,7 +155,7 @@ class MlflowDelivery:
         if len(matches) > 1:
             raise RuntimeError("MLflow has multiple bindings for one GradLab Run")
         if matches:
-            return cls(
+            delivery = cls(
                 client,
                 run_id=matches[0].info.run_id,
                 gradlab_run_id=gradlab_run_id,
@@ -120,6 +163,9 @@ class MlflowDelivery:
                 tracking_uri=tracking_uri,
                 experiment_id=matches[0].info.experiment_id,
             )
+            if train_config is not None:
+                delivery.publish_run_metadata(train_config)
+            return delivery
         experiment = client.get_experiment_by_name(experiment_name)
         if experiment is None:
             try:
@@ -135,7 +181,7 @@ class MlflowDelivery:
             experiment_id,
             tags={RUN_ID_TAG: gradlab_run_id, "mlflow.runName": gradlab_run_id},
         ).info.run_id
-        return cls(
+        delivery = cls(
             client,
             run_id=run_id,
             gradlab_run_id=gradlab_run_id,
@@ -143,17 +189,78 @@ class MlflowDelivery:
             tracking_uri=tracking_uri,
             experiment_id=experiment_id,
         )
+        if train_config is not None:
+            delivery.publish_run_metadata(train_config)
+        return delivery
 
-    def _metric_batch(self, values: Mapping[str, Any], *, sequence: int, step: int) -> None:
+    def publish_run_metadata(self, config: Mapping[str, Any]) -> None:
+        parameters = run_parameters(config)
+        tags = {"gradlab.metrics_schema_version": str(METRICS_SCHEMA_VERSION)}
+        for name in ("goal_slug", "recipe_slug", "source_sha", "compute_target"):
+            if name in parameters:
+                tags[f"gradlab.{name}"] = parameters[name]
+        description = str(config.get("run_description") or "").strip()
+        if description:
+            # Keep independently projected asset links in the description.
+            old = self.client.get_run(self.run_id).data.tags.get("mlflow.note.content", "")
+            sections = re.findall(r"<!-- (gradlab-[\w-]+) -->.*?<!-- /\1 -->", old, re.S)
+            preserved = [re.search(r"<!-- " + name + r" -->.*?<!-- /" + name + r" -->", old, re.S)[0]
+                         for name in sections]
+            tags["mlflow.note.content"] = "\n\n".join([description, *preserved])
+        for offset in range(0, len(parameters), 100):
+            items = list(parameters.items())[offset:offset + 100]
+            self.client.log_batch(self.run_id, params=[Param(k, v) for k, v in items], synchronous=True)
+        self.client.log_batch(self.run_id, tags=[RunTag(k, v) for k, v in tags.items()], synchronous=True)
+        self.client.log_dict(
+            self.run_id,
+            {"run_id": self.gradlab_run_id, "parameters": parameters},
+            "gradlab/run-configuration.json",
+        )
+        from gradlab.mlflow_debugging import DEBUGGING_DASHBOARD
+
+        self.client.log_dict(self.run_id, DEBUGGING_DASHBOARD, "gradlab/debugging-dashboard.json")
+        self.publish_checkpoint_references()
+
+    def publish_checkpoint_references(self, index: Mapping[str, Any] | None = None) -> None:
+        """Expose metadata in MLflow's browser while retaining all asset bytes in R2."""
+        from gradlab.r2_store import BucketConfig, R2Bucket
+
+        base = os.environ.get("GRADLAB_MODELS_R2_PUBLIC_BASE_URL", "").rstrip("/")
+        if not base:
+            return
+        index_url = f"{base}/runs/{self.gradlab_run_id}/index.json"
+        document: dict[str, Any] = {"run_id": self.gradlab_run_id, "public_run_index_url": index_url,
+                                    "play_command": f"gradlab play --run {self.gradlab_run_id}"}
+        if index is None and os.environ.get("GRADLAB_MODELS_R2_URI"):
+            bucket = R2Bucket(BucketConfig.from_env("GRADLAB_MODELS_R2", public=True))
+            index = bucket.get_json_optional(f"runs/{self.gradlab_run_id}/index.json")
+        if index is not None:
+            if index.get("run_id") != self.gradlab_run_id:
+                raise ValueError("checkpoint index belongs to another Run")
+            document["checkpoints"] = [
+                {key: row[key] for key in ("checkpoint_id", "step", "purpose", "public_url", "sha256")}
+                for row in index.get("checkpoints", [])
+            ]
+        self.client.log_dict(self.run_id, document, "gradlab/checkpoint-references.json")
+        self.client.set_tag(self.run_id, "gradlab.public_run_index_url", index_url)
+        previous = self.client.get_run(self.run_id).data.tags.get("mlflow.note.content", "")
+        marker = "<!-- gradlab-checkpoints -->"
+        previous = re.sub(marker + r".*?<!-- /gradlab-checkpoints -->", "", previous, flags=re.S).strip()
+        lines = [f"[Public checkpoint index]({index_url})", f"Playback: `gradlab play --run {self.gradlab_run_id}`"]
+        for checkpoint in document.get("checkpoints", []):
+            lines.append(f"- [{checkpoint['purpose']} · {checkpoint['step']:,} steps]({checkpoint['public_url']})")
+        self.client.set_tag(self.run_id, "mlflow.note.content",
+                            previous + "\n\n" + marker + "\n" + "\n".join(lines) + "\n<!-- /gradlab-checkpoints -->")
+
+    def _metric_batch(self, values: Mapping[str, Any], *, sequence: int, step: int, timestamp: int) -> None:
         payload = dict(values)
         payload[ORCHESTRATION_EVENT_SEQUENCE] = float(sequence)
-        timestamp = self.created_at_ms + sequence
         metrics = [
             Metric(
                 key=key,
                 value=float(value),
                 timestamp=timestamp,
-                step=sequence if key == ORCHESTRATION_EVENT_SEQUENCE else step,
+                step=sequence if key.startswith(("ops/", "system/")) else step,
             )
             for key, value in payload.items()
         ]
@@ -178,6 +285,7 @@ class MlflowDelivery:
                      "sha256": digest, "bytes": len(content), "name": name, "step": step}
         tag = f"gradlab.asset.{sequence:012d}"
         self.client.set_tag(self.run_id, tag, json.dumps(reference, sort_keys=True))
+        self.client.log_dict(self.run_id, reference, f"gradlab/assets/{sequence:012d}-{name}.json")
         run = self.client.get_run(self.run_id)
         references = [json.loads(value) for key, value in sorted(run.data.tags.items())
                       if key.startswith("gradlab.asset.")]
@@ -207,6 +315,7 @@ class MlflowDelivery:
         kind = str(row["kind"])
         payload = json.loads(str(row["payload_json"]))
         source = str(row.get("source") or "")
+        timestamp = event_timestamp_ms(row)
         if kind == "history":
             if source.startswith("eval"):
                 validate_evaluation_metric_payload(
@@ -217,7 +326,7 @@ class MlflowDelivery:
                 validate_metric_payload(payload)
                 if not source.startswith("orchestration"):
                     payload["train/step"] = float(step)
-            self._metric_batch(payload, sequence=sequence, step=step)
+            self._metric_batch(payload, sequence=sequence, step=step, timestamp=timestamp)
             return
         if kind == "monitoring":
             metrics = dict(payload["metrics"])
@@ -232,11 +341,11 @@ class MlflowDelivery:
                     name="representative.mp4",
                     step=step,
                 )
-            self._metric_batch(metrics, sequence=sequence, step=step)
+            self._metric_batch(metrics, sequence=sequence, step=step, timestamp=timestamp)
             return
         if kind == "evaluation_video":
             self._r2_artifact(sequence=sequence, video=payload, name="episode.mp4", step=step)
-            self._metric_batch({EVAL_CHECKPOINT_STEP: float(step)}, sequence=sequence, step=step)
+            self._metric_batch({EVAL_CHECKPOINT_STEP: float(step)}, sequence=sequence, step=step, timestamp=timestamp)
             return
         if kind in {"curriculum_distribution", "occupancy", "eval_by_start"}:
             axis = EVAL_CHECKPOINT_STEP if kind == "eval_by_start" else "train/step"
@@ -246,7 +355,7 @@ class MlflowDelivery:
                 content=json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(),
                 step=step,
             )
-            self._metric_batch({axis: float(step)}, sequence=sequence, step=step)
+            self._metric_batch({axis: float(step)}, sequence=sequence, step=step, timestamp=timestamp)
             return
         raise ValueError(f"unsupported supervisor telemetry frame kind: {kind}")
 
@@ -334,6 +443,7 @@ class MlflowDelivery:
         self, *, state: str, reason: str, timeout_seconds: float | None = None
     ) -> None:
         del timeout_seconds
+        self.publish_checkpoint_references()
         self.client.set_tag(self.run_id, ORCHESTRATION_RUN_TERMINAL_STATE, state)
         self.client.set_tag(self.run_id, ORCHESTRATION_RUN_TERMINAL_REASON, reason)
         self.close(success=state in {"succeeded", "stopped", "complete_local"})

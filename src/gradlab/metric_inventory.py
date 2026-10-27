@@ -160,6 +160,8 @@ def resolve_metric_inventory(config: Mapping[str, Any]) -> MetricInventory:
     evaluation = config.get("checkpoint_eval_backend", "none") != "none"
     starts = config.get("states") or (config.get("state") or "default",)
     dimensions = {
+        # Hardware availability is observed at runtime, never inferred from a recipe.
+        "device": (),
         "progress": tuple(config.get("episode_progress_fields", ())),
         "start": tuple(metric_value_segment(start) for start in starts) if success else (),
         "reason": tuple(dict.fromkeys((*events, "timeout", "terminated", "unclassified"))),

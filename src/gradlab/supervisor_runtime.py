@@ -77,6 +77,14 @@ class SupervisorRuntime:
     def disk_usage(self, path: Path) -> Any:
         return shutil.disk_usage(path)
 
+    def hardware_metrics(self) -> dict[str, float]:
+        from gradlab.hardware_metrics import HardwareSampler
+
+        sampler = getattr(self, "_hardware_sampler", None)
+        if sampler is None:
+            sampler = self._hardware_sampler = HardwareSampler()
+        return sampler.sample()
+
     def start_wandb(
         self,
         train_config: Mapping[str, Any],
@@ -107,6 +115,7 @@ class SupervisorRuntime:
             experiment_name=mlflow_experiment_name(train_config),
             gradlab_run_id=str(train_config["wandb_run_id"]),
             created_at_ms=created_at_ms,
+            train_config=train_config,
         )
 
     def resume_wandb(

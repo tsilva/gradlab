@@ -20,6 +20,10 @@ uvx gradlab@0.2.2 train gradlab__bandit/ppo
 The run writes a directly playable policy below `~/.config/gradlab/runs/`.
 
 Goals and recipes default to MLflow through `experiments/tracking.yaml`.
+MLflow records original event times, searchable research parameters, canonical
+checkpoint links in its Artifacts browser, and available CPU/RAM/GPU diagnostics.
+See [MLflow debugging and setup](ops/mlflow/README.md#debugging-training) for the
+focused chart layout and metadata-store verification.
 Select W&B explicitly with `--set tracking.backend=wandb` for local training or
 `--override tracking.backend=wandb` for experiment launches. The bundled smoke
 recipe uses `local_only` delivery and requires no tracking service.

@@ -2017,6 +2017,8 @@ class RunSupervisor:
             ORCHESTRATION_SCRATCH_USED_FRACTION: (usage.used / max(usage.total, 1)),
         }
         step = int(self.store.outbox_health().get("local_latest_step") or 0)
+        # Diagnostics use the same outbox, retention, and sole service writer.
+        metrics.update(self.runtime.hardware_metrics())
         self.store.append_metrics(
             metrics,
             step=step,
