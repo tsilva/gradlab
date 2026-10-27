@@ -30,7 +30,7 @@ dependencies = [
     "wandb-workspaces>=0.4,<0.5",
     "mlflow-skinny==3.16.1",
     "boto3>=1.34,<2",
-    "certifi>=2026.5.20",
+    "certifi>=2026.10.19",
     "pyyaml>=6,<7",
     "omegaconf>=2.3,<3",
     "huggingface-hub>=1.0,<2",
@@ -42,8 +42,8 @@ dependencies = [
     "rich>=15,<16",
     "tqdm>=4.67,<5",
     "textual>=8.2.8,<9",
-    "aiohttp>=3.14.3,<4",
-    "pillow>=12.3,<13",
+    "aiohttp>=3.14.4,<4",
+    "pillow>=13,<14",
     "pyarrow>=25,<26",
     "psutil>=7,<8",
 ]
@@ -54,11 +54,11 @@ gradlab = "gradlab.main:main"
 [project.optional-dependencies]
 dataset = [
     "datasets>=5,<6",
-    "pillow>=12.3,<13",
+    "pillow>=13,<14",
 ]
 dataset-minari = [
     "datasets>=5,<6",
-    "pillow>=12.3,<13",
+    "pillow>=13,<14",
     "minari>=0.5,<0.6",
 ]
 
@@ -118,9 +118,11 @@ constraint-dependencies = [
     "mistralai!=2.4.6",
     "guardrails-ai!=0.10.1",
     "cryptography>=50",
-    "gitpython>=3.1.62",
+    "gitpython>=3.2.1",
     "h2>=4.4.1",
-    "setuptools>=83",
+    "setuptools>=84.1.0",
+    "filelock>=4.2.1,<5",
+    "opentelemetry-api>=1.45.1,<2",
     "multidict>=6.9.1",
     "werkzeug>=3.1.9",
     "urllib3>=2.8.0",
@@ -177,13 +179,13 @@ train-runtime = [
     "opencv-python>=4.13,<5",
     "torch==2.13.0; sys_platform == 'linux' and platform_machine == 'x86_64'",
     "tensorboard>=2.16,<3",
-    "pillow>=12.3,<13",
+    "pillow>=13,<14",
     "rich>=15,<16",
     "tqdm>=4.67,<5",
     "wandb>=0.18,<0.23",
     "mlflow-skinny==3.16.1",
     "boto3>=1.34,<2",
-    "certifi>=2026.5.20",
+    "certifi>=2026.10.19",
     "pyyaml>=6,<7",
     "huggingface-hub>=1.0,<2",
     "captum>=0.9,<1",
