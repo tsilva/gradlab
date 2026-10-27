@@ -6,7 +6,10 @@
       "pyproject.toml#tool.uv.exclude-newer-package.env-gradoom-turbo-torch": "AGENTS.md Dependencies explicitly permits forward runtime releases for env-gradoom-turbo-torch; all other packages remain subject to the seven-day policy.",
       "pyproject.toml#tool.uv.exclude-newer-package.env-stableretro-turbo": "AGENTS.md Dependencies explicitly permits forward runtime releases for env-stableretro-turbo; all other packages remain subject to the seven-day policy.",
       "pyproject.toml#tool.uv.exclude-newer-package.env-supermariobrosnes-turbo-emu": "AGENTS.md Dependencies explicitly permits forward runtime releases for env-supermariobrosnes-turbo-emu; all other packages remain subject to the seven-day policy.",
-      "pyproject.toml#tool.uv.exclude-newer-package.env-vizdoom-turbo": "AGENTS.md Dependencies explicitly permits forward runtime releases for env-vizdoom-turbo; all other packages remain subject to the seven-day policy."
+      "pyproject.toml#tool.uv.exclude-newer-package.env-vizdoom-turbo": "AGENTS.md Dependencies explicitly permits forward runtime releases for env-vizdoom-turbo; all other packages remain subject to the seven-day policy.",
+      "pyproject.toml#tool.uv.exclude-newer-package.mlflow": "User explicitly approved the one-time MLflow 3.17.2 security age exception on 2026-10-27. Exact 3.17.2 package requirements and the fixed 2026-10-21T02:08:46Z cutoff admit no later releases; other packages retain their existing age policy.",
+      "pyproject.toml#tool.uv.exclude-newer-package.mlflow-skinny": "User explicitly approved the one-time MLflow 3.17.2 security age exception on 2026-10-27. Exact 3.17.2 package requirements and the fixed 2026-10-21T02:08:46Z cutoff admit no later releases; other packages retain their existing age policy.",
+      "pyproject.toml#tool.uv.exclude-newer-package.mlflow-tracing": "User explicitly approved the one-time MLflow 3.17.2 security age exception on 2026-10-27. Exact 3.17.2 package requirements and the fixed 2026-10-21T02:08:46Z cutoff admit no later releases; other packages retain their existing age policy."
     }
   }
 }

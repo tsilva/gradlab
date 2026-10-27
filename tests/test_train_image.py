@@ -348,7 +348,7 @@ class TrainImageTests(unittest.TestCase):
         self.assertIn("env-gradoom-turbo-torch==0.2.1", dependencies)
         self.assertIn("env-breakoutatari2600-turbo-native==0.5.15", dependencies)
         self.assertIn("box2d-py==2.3.8", dependencies)
-        self.assertIn("mlflow-skinny==3.16.1", dependencies)
+        self.assertIn("mlflow-skinny==3.17.2", dependencies)
         self.assertNotIn("wandb-workspaces==", gpu + dependencies)
         self.assertIn("torch==2.13.0", gpu)
         gpu_lines = set(gpu.splitlines())
