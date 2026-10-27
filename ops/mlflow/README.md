@@ -1,6 +1,15 @@
 # MLflow pilot
 
-This template prepares a single-host, version-pinned MLflow 3.16.1 service. It does not enroll a compute fleet or authorize a live training campaign. Hostnames, credentials, endpoints, capacity, and enrollment evidence belong in the operator-local inventory.
+This template prepares a single-host, version-pinned MLflow 3.17.2 service. It does not enroll a compute fleet or authorize a live training campaign. Hostnames, credentials, endpoints, capacity, and enrollment evidence belong in the operator-local inventory.
+
+The MLflow 3.17.2 security update has an explicitly approved release-age exception
+for `mlflow`, `mlflow-skinny`, and `mlflow-tracing`. Their exact package versions
+and fixed artifact cutoff (`2026-10-21T02:08:46Z`) are recorded in the project
+and tool-install configuration. This permits the reviewed release without
+admitting newer MLflow releases or changing the seven-day gate for other packages.
+Remove those three cutoffs during a later dependency update once the normal age
+gate admits its selected releases. Updating these files does not upgrade a running
+operator service; use a separately authorized service-maintenance procedure.
 
 ## Installation and route
 
