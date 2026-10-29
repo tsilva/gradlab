@@ -133,6 +133,10 @@ simulated lifecycle gate twice to check determinism. It uses CPU only and does
 not launch experiments or deploy services. Full-suite validation remains part of
 the release workflow.
 
+Successful regression jobs prune the uv cache before saving it, retaining wheels
+built from source. Prebuilt wheels may be downloaded again on later runs;
+dependency versions remain fixed by `uv.lock`.
+
 Published wheels and source distributions include the compiled player. Running
 an installed GradLab package does not require Node or pnpm.
 
