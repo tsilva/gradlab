@@ -8,7 +8,7 @@ This specification applies to GradLab's current local queue and dstack-backed ex
 - One on-demand local worker must outlive requesting clients, recover safely after interruption, expose evidence-backed status, and exit when no work remains.
 - Each current queued training Run must execute in one training container on one single-GPU host or one explicitly configured CPU-only local worker.
 - CPU-only local workers must use the same exact-source immutable training image and orchestration lifecycle as GPU workers; target selection must not silently change the training recipe.
-- Enabled Checkpoint evaluation defaults to separately scheduled Modal compute; an explicit training-container backend uses bounded CPU work alongside training. Either backend uses the same frozen Acceptance contract and supervisor authority. An explicit disabled mode submits no Acceptance evaluations and cannot promote a Checkpoint.
+- Enabled Checkpoint evaluation may use separately scheduled Modal compute or an explicitly selected training-container backend with bounded CPU work alongside training. Defaults belong to recipes or execution configuration and must resolve into the recorded Run Configuration. Either backend uses the same frozen Acceptance contract and supervisor authority. An explicit disabled mode submits no Acceptance evaluations and cannot promote a Checkpoint.
 - The execution architecture must minimize separately operated services and must not require a project-operated relational database service, as recorded in [`ADR-0001`](../adr/0001-avoid-project-operated-database-service.md).
 - Embedded file-backed state such as SQLite is allowed.
 - The lifecycle certification gate must be deterministic, require no credentials, and preserve replayable evidence.

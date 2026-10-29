@@ -27,6 +27,23 @@ Current research state:
 - `benchmarks/`: reproducible benchmark profiles and supporting documentation.
 - `scripts/`: active experiment utilities used by benchmarks and tooling.
 
+## Screening recipes
+
+`goals/Breakout-Atari2600-v0/TwoWalls/recipes/ppo-screening.yaml` uses the same
+training settings, budget, and checkpoint cadence as `ppo-two-walls.yaml` while
+disabling automatic Checkpoint evaluation and Checkpoint Monitoring. Both recipes
+share one training preset; the existing evaluated recipe keeps its default.
+
+Other screening recipes can import `recipes/_presets/screening.yaml` after their
+training preset in `defaults`. The resolved mode and all source-file hashes remain
+in the immutable recipe provenance. No new Goal or evaluation method is needed.
+
+Inspect training metrics as proxies and select retained Checkpoints for explicit
+evaluation through the existing Player workflow. An Evaluated Goal keeps its
+frozen Acceptance criteria, evaluation seeds, and full-episode evidence checks;
+screening itself cannot establish Acceptance or Promotion. A Training-Only Goal
+remains ineligible for Acceptance. Monitoring remains a separate opt-in campaign.
+
 ## Provider-owned policy signal histories
 
 Structured policy inputs use the existing `task.model_inputs.context` contract. A

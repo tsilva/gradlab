@@ -182,6 +182,16 @@ Queued training uses dstack for placement, a single supervisor-controlled
 training container, Modal for separately scheduled checkpoint evaluation, R2
 for run authority and artifacts, and W&B for metrics.
 
+Checkpoint evaluation defaults come from recipes or execution configuration and
+resolve into the recorded Run Configuration. Modal remains the current fallback;
+an explicit choice may use bounded training-container evaluation or disable
+evaluation. Disabled evaluation cannot establish Acceptance or Promotion.
+
+For screening, select the [TwoWalls screening recipe](experiments/goals/Breakout-Atari2600-v0/TwoWalls/recipes/ppo-screening.yaml).
+It keeps the original training settings and checkpoint cadence, disables automatic
+evaluation and monitoring, and preserves the contract for separate Acceptance
+evaluation. See [screening recipes](experiments/README.md#screening-recipes).
+
 Copy the portable operator template into private user configuration and run the
 read-only preflight before launching:
 

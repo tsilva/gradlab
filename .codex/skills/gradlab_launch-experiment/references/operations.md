@@ -41,9 +41,11 @@ Use an explicit `--target <fleet>` only for a requested override. Paid spot
 compute needs finite hourly and total-cost bounds; on-demand additionally needs
 `--allow-on-demand`. Preserve a finite whole-task duration. Use
 `--checkpoint-eval-backend modal|training-container|none` only when overriding
-the resolved recipe mode. Enabled evaluation defaults to Modal; `none` admits
-no Acceptance evaluations or Promotion. Opt-in Checkpoint Monitoring is a
-separate non-Acceptance dataset campaign and keeps its declared limits.
+the resolved recipe mode. Defaults come from recipes or execution configuration;
+Modal remains the current fallback. Record the resolved mode in the Run
+Configuration. `none` admits no Acceptance evaluations or Promotion. Opt-in
+Checkpoint Monitoring is a separate non-Acceptance dataset campaign and keeps
+its declared limits.
 
 Launch requires clean, pushed exact source and an immutable runtime receipt.
 Modal deployment and ROM staging apply to the selected provider/evaluation

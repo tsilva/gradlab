@@ -1086,14 +1086,25 @@ class RunSupervisorTests(unittest.TestCase):
             777,
         )
 
-    def test_health_publication_keeps_only_the_v20_operational_surface(self) -> None:
+    def test_health_publication_keeps_operational_and_hardware_metrics(self) -> None:
         supervisor = self.supervisor()
         supervisor.store.init()
+        hardware_metrics = {
+            "system/cpu_utilization_percentage": 25.0,
+            "system/system_memory_usage_megabytes": 512.0,
+            "system/system_memory_usage_percentage": 50.0,
+            "system/gpu/0/utilization_percentage": 80.0,
+        }
 
-        supervisor._emit_health(15.0)
+        with patch.object(
+            supervisor.runtime, "hardware_metrics", return_value=hardware_metrics,
+        ) as sample:
+            supervisor._emit_health(15.0)
 
+        sample.assert_called_once_with()
+        published = supervisor.store.latest_metrics()
         self.assertEqual(
-            set(supervisor.store.latest_metrics()),
+            set(published),
             {
                 "ops/outbox/count",
                 "ops/outbox/age/seconds",
@@ -1101,7 +1112,11 @@ class RunSupervisorTests(unittest.TestCase):
                 "ops/checkpoints/count",
                 "ops/evals/count",
                 "ops/scratch/fraction",
+                *hardware_metrics,
             },
+        )
+        self.assertEqual(
+            {name: published[name] for name in hardware_metrics}, hardware_metrics,
         )
         internal = supervisor.store.state("backpressure")
         assert internal is not None

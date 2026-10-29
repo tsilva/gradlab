@@ -54,7 +54,8 @@ GradLab is a public, reproducible, general-purpose reinforcement-learning resear
 - Every Run must declare its reward transforms and their order, and providers must not apply undeclared or duplicate transforms.
 - Every supported environment must work through common training, evaluation, Publication, and Playback workflows.
 - Equivalent Run contracts must work on local and cost-limited cloud compute without provider-specific research code.
-- Checkpoint evaluation must default to Modal, allow an explicitly selected training-container backend, and allow an explicit disabled mode.
+- Checkpoint evaluation must support Modal, an explicitly selected training-container backend, and an explicit disabled mode. Defaults belong to recipes or execution configuration and must resolve into the recorded Run Configuration.
+- Screening recipes must default to disabled automatic Checkpoint evaluation while preserving Checkpoints, Run provenance, and the Evaluated Goal's contract for separate Acceptance evaluation. Screening measures must not establish Acceptance or Promotion.
 - A Run with Checkpoint evaluation disabled must not establish Acceptance or Promotion.
 - Every supported execution system must provide the common lifecycle for each execution mode that it declares.
 - The common lifecycle must cover progress, outcome measures, Checkpoints, graceful stopping, and final artifacts.

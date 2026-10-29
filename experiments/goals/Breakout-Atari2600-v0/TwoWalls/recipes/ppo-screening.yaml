@@ -1,0 +1,6 @@
+defaults:
+- ../../../../recipes/_presets/breakout-two-walls-ppo@_global_
+- ../../../../recipes/_presets/screening@_global_
+- _self_
+recipe_id: ppo-screening
+description: Screen TwoWalls PPO without automatic evaluation; preserve checkpoints and the Goal's contract for separate Acceptance evaluation.
