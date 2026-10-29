@@ -126,6 +126,13 @@ see the [experiment layout](experiments/README.md).
 
 ## Source development
 
+The [regression CI workflow](.github/workflows/gradlab-python-checks.yml) runs on
+relevant pushes to `main` and pull requests. It validates configuration, tests
+screening, checkpoints, provenance, and Acceptance, and runs the credential-free
+simulated lifecycle gate twice to check determinism. It uses CPU only and does
+not launch experiments or deploy services. Full-suite validation remains part of
+the release workflow.
+
 Published wheels and source distributions include the compiled player. Running
 an installed GradLab package does not require Node or pnpm.
 
