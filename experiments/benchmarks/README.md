@@ -44,7 +44,9 @@ generated result and isolated run evidence under `logs/benchmarks/`.
   for rollout/update throughput.
 - `ppo_backend_comparison`: five paired AB/BA runs per declared environment, with warmup iterations
   excluded, complete offline metric history, a per-environment non-regression gate, and a
-  geometric-mean speedup gate.
+  geometric-mean speedup gate. Its GradLab arm explicitly uses `fp32` and
+  `max-throughput`, independently of the production recipe's execution profile;
+  its SB3 arm excludes GradLab-only execution settings.
 
 Benchmark requests should default to real imported saved states, not `State.NONE`.
 Use `allow_state_none=true` only for explicit emulator hot-path diagnostics.

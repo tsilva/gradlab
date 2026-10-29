@@ -418,7 +418,12 @@ class ConfigValidationTests(unittest.TestCase):
         a2c = compose_train_document(self.MARIO_L11_GOAL, self.MARIO_SINGLE_RECIPES / "a2c.yaml")
 
         self.assertEqual(ppo["recipe_id"], "ppo")
-        self.assertEqual(ppo["train_config"]["training_backend"]["id"], "sb3.ppo")
+        self.assertEqual(ppo["train_config"]["training_backend"]["id"], "gradlab.ppo")
+        self.assertEqual(
+            ppo["train_config"]["training_backend"]["config"]["execution_profile"],
+            "sb3-parity",
+        )
+        self.assertEqual(ppo["train_config"]["training_backend"]["config"]["precision"], "fp32")
         for field in (
             "learning_rate_final",
             "learning_rate_schedule_timesteps",
@@ -601,6 +606,28 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(report.counts["benchmark_profiles"], 4)
         self.assertEqual(report.counts["workspace_manifests"], 1)
         self.assertEqual(report.counts["workspace_projects"], 25)
+
+    def test_report_artifacts_are_excluded_but_json_configs_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reports = root / "experiments/reports/nested"
+            reports.mkdir(parents=True)
+            report_json = reports / "result.json"
+            report_json.write_text('{"clears": 400}\n', encoding="utf-8")
+            (reports / "fixture.yaml").write_text("fixture: true\n", encoding="utf-8")
+            config = root / "experiments/recipes/_presets/invalid.json"
+            config.parent.mkdir(parents=True)
+            config.write_text("{}\n", encoding="utf-8")
+
+            report = validate_experiment_tree(root)
+
+            self.assertEqual(report.counts["json_files"], 1)
+            self.assertEqual(report.counts["yaml_files"], 0)
+            self.assertEqual(
+                [issue.path for issue in report.issues if issue.message == "experiments configs must be YAML"],
+                ["experiments/recipes/_presets/invalid.json"],
+            )
+            self.assertEqual(report_json.read_text(encoding="utf-8"), '{"clears": 400}\n')
 
     def test_recipe_cannot_be_launched_for_a_different_goal(self) -> None:
         with self.assertRaisesRegex(ValueError, "does not belong to goal"):

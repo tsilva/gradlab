@@ -4,7 +4,7 @@ import json
 import math
 import re
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -392,11 +392,13 @@ def _train_loop_config(
     *,
     recipe_file: str | None = None,
     run_name: str | None = None,
+    prepare_materialized: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     document = compose_train_document(
         Path(str(profile["goal_file"])),
         Path(str(recipe_file or profile["recipe_file"])),
         recipe_overrides=profile.get("recipe_overrides", ()),
+        prepare_materialized=prepare_materialized,
     )
     config = dict(require_mapping(document["train_config"], label="train_config"))
     config["checkpoint_eval_backend"] = "none"
@@ -493,6 +495,17 @@ def _ppo_backend_config(
     variant: str,
     run_name: str,
 ) -> dict[str, Any]:
+    def select_execution_profile(document: dict[str, Any]) -> None:
+        config = document["train_config"]["training_backend"]["config"]
+        # Benchmark arms keep their declared execution choices even when the
+        # production recipe switches to a different PPO backend or profile.
+        config.pop("precision", None)
+        config.pop("execution_profile", None)
+        if profile[f"{variant}_backend"] == "gradlab.ppo":
+            config.update(precision="fp32", execution_profile="max-throughput")
+        elif config.get("checkpoint_update_steps") == []:
+            config.pop("checkpoint_update_steps")
+
     scoped = {
         **dict(profile),
         "goal_file": str(case["goal_file"]),
@@ -500,7 +513,7 @@ def _ppo_backend_config(
         "recipe_overrides": _ppo_backend_overrides(profile, case, variant=variant),
         "run_name": run_name,
     }
-    return _train_loop_config(scoped)
+    return _train_loop_config(scoped, prepare_materialized=select_execution_profile)
 
 
 def _assert_ppo_backend_equivalence(

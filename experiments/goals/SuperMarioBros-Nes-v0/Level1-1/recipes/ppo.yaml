@@ -3,4 +3,10 @@ defaults:
 - _self_
 reward_shape: speedrun-v1
 recipe_id: ppo
-description: Stable low-KL, late-decay PPO baseline for {{ goal_id }}.
+description: Uncompiled, unfused custom PPO with low KL and late decay for {{ goal_id }}.
+train:
+  backend:
+    id: gradlab.ppo
+    config:
+      precision: fp32
+      execution_profile: sb3-parity

@@ -121,6 +121,8 @@ pnpm test:web                       # run web-player tests
 Use `gradlab <command> --help` for full arguments. Gameplay datasets, leader
 queries, W&B reports, and workspace management are also available through the
 `dataset`, `leaders`, `reports`, and `workspaces` commands.
+Configuration validation excludes portable evidence under `experiments/reports/`;
+see the [experiment layout](experiments/README.md).
 
 ## Source development
 
@@ -281,9 +283,9 @@ explicitly authorized. See [COMPUTE.md](COMPUTE.md) and the
   `compiled-fused-parity` isolate the CUDA optimizations; `max-throughput`
   additionally uses GPU-native permutation and is the default. The backend
   keeps PPO artifacts mutually resumable with SB3 and uses eager execution on
-  CPU or MPS. Checked-in
-  training recipes remain on `sb3.ppo` until the dedicated RTX 4090 throughput
-  gate passes.
+  CPU or MPS. The Mario Level1-1 `ppo` recipe explicitly selects `gradlab.ppo`
+  with `sb3-parity` and `fp32`, disabling policy compilation and fused Adam.
+  Other recipes select their backend and execution profile independently.
 - NES recipes require a lawfully obtained ROM supplied with `--rom-path` or
   registered with `gradlab rom sync`. ROMs and credentials must remain outside
   source control.

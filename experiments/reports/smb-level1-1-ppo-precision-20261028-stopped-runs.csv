@@ -1,0 +1,7 @@
+label,precision,seed,state,run_id,attempt_id,stop_reason,final_step,retained_checkpoints,assessments_complete,learner_seconds_complete_8m,weighted_throughput_1m_to_4m,first_passing_step,final_clear_rate,quality_auc_common_grid,public_run_index_url
+01-fp16-100,amp-fp16,100,complete,gradlab-fa6011f2a4078de9cd5a51702fa13926,attempt-d5f82750c6c37661,training_cap_complete,8003584,8,8,1252.6372950077057,6448.625225161275,6004736,0.97,0.8114285714285714,https://pub-fc35c0b186ce4aad8eea5e93d38c99db.r2.dev/runs/gradlab-fa6011f2a4078de9cd5a51702fa13926/index.json
+02-bf16-100,amp-bf16,100,complete,gradlab-a147f8a41d25c6550d326ebc9661e5df,attempt-4a21770f98e61101,training_cap_complete,8003584,8,8,1460.5731348991394,5531.783877418951,4005888,0.995,0.8757142857142856,https://pub-fc35c0b186ce4aad8eea5e93d38c99db.r2.dev/runs/gradlab-a147f8a41d25c6550d326ebc9661e5df/index.json
+03-bf16-200,amp-bf16,200,canceled,gradlab-7170aa747a3a35401b19a54e7cd82c90,attempt-876a42e7f83e387d,canceled,6324224,7,0,,5555.459036376264,,,,https://pub-fc35c0b186ce4aad8eea5e93d38c99db.r2.dev/runs/gradlab-7170aa747a3a35401b19a54e7cd82c90/index.json
+04-fp16-200,amp-fp16,200,canceled_before_admission,,,,,0,0,,,,,,
+05-fp16-300,amp-fp16,300,canceled_before_admission,,,,,0,0,,,,,,
+06-bf16-300,amp-bf16,300,canceled_before_admission,,,,,0,0,,,,,,

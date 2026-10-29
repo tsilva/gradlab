@@ -16,6 +16,10 @@ benchmark profiles live under `benchmarks/`. Generated local run
 outputs belong under `~/.config/gradlab/runs/`; other generated logs and models
 belong under ignored `logs/` and `models/` paths.
 
+Portable experiment reports and supporting evidence live under `reports/`.
+`gradlab validate` excludes that subtree from configuration-file checks and
+counts; JSON files elsewhere in the experiment tree remain invalid configuration.
+
 Current research state:
 
 - `goals/`: active goal contracts, optional environment fragments, and W&B view declarations.

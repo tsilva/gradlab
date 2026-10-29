@@ -1,0 +1,19 @@
+# SMB Level1-1 custom PPO precision trial
+
+Status: stopped by the user on 2026-10-28 after two fully assessed Runs and one partially trained Run. The remaining three Runs were never admitted. See the [retained partial results](smb-level1-1-ppo-precision-20261028-stopped.md). This protocol records the original plan; it is not a completed six-Run result.
+
+Exactly six training Runs compare `amp-fp16` and `amp-bf16` on seeds 100, 200 and 300. Both use custom `gradlab.ppo`, the eager `sb3-parity` execution profile, no compilation, no fused optimizer, and the existing NumPy shuffle. FP16 uses gradient scaling; BF16 does not. Weights and optimizer state retain the implementation's native storage types; these are automatic mixed-precision modes.
+
+Order: FP16-100, BF16-100, BF16-200, FP16-200, FP16-300, BF16-300. Each requests 8,000,000 transitions (8,003,584 after complete rollout updates), observes its training streak without stopping, and has a 45-minute training bound. The whole campaign has a 12-hour limit from its own actual queue creation. Work runs sequentially under a detached worker on the training machine. Each learner requests 12 CPUs, 40 GB RAM, one RTX 4090 GPU, and 50 GB disk. The campaign deadline is 2026-10-29T08:00:23.642266+00:00.
+
+The source is `2069964e7ce38de8f87392de084145e6af8f87d3`. The immutable training image digest is `sha256:e5b0b2978a608984c6d499d272de11081c6b8b07a7c9354a9bdcc865071cc1a3`. The private operational plan SHA256 is `89cf211d0173f9abf10433e0f173c95c322b45c62748535dc493667582417a8d`. All other recipe settings and the environment/Goal contract match the earlier FP32 execution-profile study.
+
+Eight post-update checkpoints per Run are assessed at the actual steps 1,007,616; 2,007,040; 3,006,464; 4,005,888; 5,005,312; 6,004,736; 7,004,160; and 8,003,584. Every assessment uses all 400 fixed episodes, base seed 20,000, 16 lanes, the original stochastic action rules, the unchanged watchdog, and no fail-fast shortcut. Each assessment has 8 CPUs, 40 GiB RAM and a five-minute container bound. The total is at most 48 assessments and 19,200 episodes, with one representative video drawn from each declared assessment. Assessment uses common CPU policy inference from the saved parameters. These assessments grant no Acceptance, Promotion or Release.
+
+Compare learner wall time including initialization, transition-weighted throughput over the common 1M–4M window, full quality curves, normalized trapezoidal quality AUC, first measured checkpoint with at least 380/400 clears, and final quality. Threshold crossing is resolved only to adjacent checkpoint intervals; nonattainment remains right-censored. Three training seeds are the independent units. Episode-level intervals do not estimate uncertainty across training seeds.
+
+The previous uncompiled, unfused FP32 Runs for seeds 100 and 200 are historical controls. There is no matching FP32 seed 300 and no new FP32 learner in this authorization. Any FP32 comparison therefore has only two matched seeds and must acknowledge differences in host load and run time. FP16 versus BF16 has three paired seeds. Do not infer a reliable quality winner from one trajectory, a transient threshold crossing, or a speed difference alone.
+
+Preserve failed attempts, all durable launch identities and all evidence. Do not retry training automatically, silently change numerical protections, tune hyperparameters, add seeds, or replay an uncertain launch. Completion requires terminal/drain/journal/service receipts, hash-verified results and videos, and actual resource release.
+
+The first Run is [`gradlab-fa6011f2a4078de9cd5a51702fa13926`](https://pub-fc35c0b186ce4aad8eea5e93d38c99db.r2.dev/runs/gradlab-fa6011f2a4078de9cd5a51702fa13926/index.json), Attempt `attempt-d5f82750c6c37661`. Canonical training metrics use the selected MLflow service. No policy quality result is available at admission.

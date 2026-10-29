@@ -84,10 +84,19 @@ def validate_experiment_tree(repo_root: Path | str = Path(".")) -> ValidationRep
             ),
         )
 
-    yaml_files = sorted(experiments_dir.rglob("*.yaml")) + sorted(
-        experiments_dir.rglob("*.yml")
-    )
-    json_files = sorted(experiments_dir.rglob("*.json"))
+    # Portable reports and their fixtures are evidence, not launch configuration.
+    reports_dir = experiments_dir / "reports"
+    yaml_files = [
+        path
+        for path in sorted(experiments_dir.rglob("*.yaml"))
+        + sorted(experiments_dir.rglob("*.yml"))
+        if not path.is_relative_to(reports_dir)
+    ]
+    json_files = [
+        path
+        for path in sorted(experiments_dir.rglob("*.json"))
+        if not path.is_relative_to(reports_dir)
+    ]
     counts["yaml_files"] = len(yaml_files)
     counts["json_files"] = len(json_files)
     for path in json_files:
