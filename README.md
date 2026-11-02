@@ -19,6 +19,11 @@ uvx gradlab@0.2.2 train gradlab__bandit/ppo
 
 The run writes a directly playable policy below `~/.config/gradlab/runs/`.
 
+Saved-state curricula require `state_archive.curriculum.restore_entries: true`
+to practise from recorded states. Durable archive publication preserves a verified
+generation while collection continues during remote uploads. See the
+[curriculum metrics](METRICS.md) to distinguish recorded inventory from actual practice.
+
 Goals and recipes default to MLflow through `experiments/tracking.yaml`.
 MLflow records original event times, searchable research parameters, canonical
 checkpoint links in its Artifacts browser, and available CPU/RAM/GPU diagnostics.

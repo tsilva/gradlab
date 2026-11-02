@@ -2083,39 +2083,38 @@ class RunSupervisor:
         from gradlab.state_archive import archive_lock
 
         with archive_lock(archive_root, exclusive=False):
-            heartbeat()
             closure_path = archive_root / "closure.json"
             if not closure_path.is_file():
                 if require_closed:
                     raise RuntimeError("state archive is enabled but has no local closure")
                 return 0
             closure_sha256 = file_sha256(closure_path)
-            if closure_sha256 == self.state_archive_closure_sha256:
-                publication = self.state_archive_publication
-                if require_closed and (
-                    publication is None or publication.get("status") != "closed"
-                ):
-                    raise RuntimeError("state archive has no closed publication")
-                return 0
-            publication = self.authority.publish_state_archive(
-                run_id=self.manifest.run_id,
-                attempt_id=self.manifest.attempt_id,
-                archive_root=archive_root,
-                heartbeat=heartbeat,
-            )
-            self.authority.prune_state_archive(self.lease, heartbeat=heartbeat)
-            if require_closed and publication.get("status") != "closed":
-                raise RuntimeError("state archive final closure is not closed")
-            self.state_archive_publication = publication
-            self.state_archive_closure_sha256 = closure_sha256
-            self._emit(
-                "state_archive_published",
-                step=int(publication["step"]),
-                status=str(publication["status"]),
-                generation_sha256=str(publication["generation_sha256"]),
-                file_count=int(publication["file_count"]),
-            )
-            return 1
+        if closure_sha256 == self.state_archive_closure_sha256:
+            publication = self.state_archive_publication
+            if require_closed and (
+                publication is None or publication.get("status") != "closed"
+            ):
+                raise RuntimeError("state archive has no closed publication")
+            return 0
+        publication = self.authority.publish_state_archive(
+            run_id=self.manifest.run_id,
+            attempt_id=self.manifest.attempt_id,
+            archive_root=archive_root,
+            heartbeat=heartbeat,
+        )
+        self.authority.prune_state_archive(self.lease, heartbeat=heartbeat)
+        if require_closed and publication.get("status") != "closed":
+            raise RuntimeError("state archive final closure is not closed")
+        self.state_archive_publication = publication
+        self.state_archive_closure_sha256 = str(publication["closure_sha256"])
+        self._emit(
+            "state_archive_published",
+            step=int(publication["step"]),
+            status=str(publication["status"]),
+            generation_sha256=str(publication["generation_sha256"]),
+            file_count=int(publication["file_count"]),
+        )
+        return 1
 
     def _advance_monitoring(self, *, final: bool = False) -> bool:
         settings = self.train_config.get("checkpoint_monitoring") or {}
