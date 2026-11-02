@@ -24,6 +24,10 @@ to practise from recorded states. Durable archive publication preserves a verifi
 generation while collection continues during remote uploads. See the
 [curriculum metrics](METRICS.md) to distinguish recorded inventory from actual practice.
 
+On Linux, a supervised learner and its process group stop if their supervisor
+dies, including an abrupt kill. Normal cancellation still requests a cooperative
+learner stop and preserves finalization while the supervisor remains alive.
+
 Goals and recipes default to MLflow through `experiments/tracking.yaml`.
 MLflow records original event times, searchable research parameters, canonical
 checkpoint links in its Artifacts browser, and available CPU/RAM/GPU diagnostics.

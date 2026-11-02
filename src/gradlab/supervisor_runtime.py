@@ -228,13 +228,17 @@ class SupervisorRuntime:
         log_path: Path,
         environment: Mapping[str, str],
     ) -> LearnerProcess:
+        if len(command) < 3 or command[1] not in {"-m", "-c"}:
+            raise ValueError("supervised learner requires a Python -m/-c command")
+        child_environment = dict(environment)
+        child_environment["GRADLAB_LEARNER_PARENT_PID"] = str(os.getpid())
         log = log_path.open("a", encoding="utf-8")
         learner = subprocess.Popen(
-            list(command),
+            [command[0], "-m", "gradlab.learner_bootstrap", *command[1:]],
             stdout=log,
             stderr=subprocess.STDOUT,
             text=True,
-            env=dict(environment),
+            env=child_environment,
             start_new_session=True,
         )
         learner._gradlab_log = log  # type: ignore[attr-defined]
