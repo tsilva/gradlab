@@ -44,6 +44,18 @@ frozen Acceptance criteria, evaluation seeds, and full-episode evidence checks;
 screening itself cannot establish Acceptance or Promotion. A Training-Only Goal
 remains ineligible for Acceptance. Monitoring remains a separate opt-in campaign.
 
+## Mario route discovery
+
+`goals/SuperMarioBros-Nes-v0/Level1-3/recipes/go-explore-route-diagnostic.yaml`
+searches for a complete action sequence with Go-Explore, bounded to one million
+environment transitions. Launch it with an explicit finite task duration, for
+example `--max-duration 30m`. Automatic Acceptance evaluation is disabled. Each
+checkpoint retains its portable route graph and the graph's emulator snapshots
+for subsequent replay and local PPO diagnostics. Verify a candidate route from
+the original level start before using it as a demonstration; search results do
+not establish the learned PPO policy's 100-episode Acceptance.
+
+
 ## Provider-owned policy signal histories
 
 Structured policy inputs use the existing `task.model_inputs.context` contract. A
