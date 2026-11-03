@@ -6,31 +6,26 @@ from collections.abc import Mapping
 from pathlib import Path
 import re
 from typing import Any
-from urllib.parse import urlsplit
 from urllib.error import URLError
 
 
 def normalize_initial_policy(value: Any, *, label: str) -> dict[str, Any] | None:
     if value is None:
         return None
-    fields = {"url", "sha256", "size_bytes", "reset_value_head"}
+    fields = {"repo_id", "revision", "sha256", "size_bytes", "reset_value_head"}
     if not isinstance(value, Mapping) or set(value) != fields:
         raise ValueError(f"{label} must define exactly {sorted(fields)}")
-    url = value["url"]
-    if not isinstance(url, str):
-        raise ValueError(f"{label}.url must be an immutable public Hugging Face weights URL")
-    parsed = urlsplit(url)
+    repo_id = value["repo_id"]
     if (
-        parsed.scheme != "https"
-        or parsed.netloc != "huggingface.co"
-        or parsed.query
-        or parsed.fragment
+        not isinstance(repo_id, str)
         or re.fullmatch(
-            r"/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/resolve/[0-9a-f]{40}/policy\.pt", parsed.path
-        )
-        is None
+            r"[A-Za-z0-9_][A-Za-z0-9_.-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*", repo_id
+        ) is None
     ):
-        raise ValueError(f"{label}.url must pin a full Hugging Face commit and policy.pt")
+        raise ValueError(f"{label}.repo_id must identify a Hugging Face owner and model")
+    revision = value["revision"]
+    if not isinstance(revision, str) or re.fullmatch(r"[0-9a-f]{40}", revision) is None:
+        raise ValueError(f"{label}.revision must pin a full Hugging Face commit")
     if (
         not isinstance(value["sha256"], str)
         or re.fullmatch(r"[0-9a-f]{64}", value["sha256"]) is None
@@ -49,9 +44,10 @@ def initialize_policy(model: Any, spec: Mapping[str, Any], *, root: Path) -> Non
 
     from gradlab.model_sources import _download_public_file
 
+    url = f"https://huggingface.co/{spec['repo_id']}/resolve/{spec['revision']}/policy.pt"
     try:
         path = _download_public_file(
-            spec["url"],
+            url,
             root / spec["sha256"] / "policy.pt",
             expected_sha256=spec["sha256"],
             expected_size=spec["size_bytes"],

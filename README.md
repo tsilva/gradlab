@@ -318,9 +318,9 @@ explicitly authorized. See [COMPUTE.md](COMPUTE.md) and the
   with `sb3-parity` and `fp32`, disabling policy compilation and fused Adam.
   Other recipes select their backend and execution profile independently.
 - Custom PPO can initialize from immutable public tensor-only weights with
-  `train.backend.config.initial_policy`: `url` must pin a full Hugging Face
-  commit and `policy.pt`; `sha256`, `size_bytes`, and boolean `reset_value_head`
-  are required. Tensor names, shapes, dtypes and finiteness must match the
+  `train.backend.config.initial_policy` requires a Hugging Face model `repo_id`
+  and full commit `revision` for `policy.pt`, plus `sha256`, `size_bytes`, and
+  boolean `reset_value_head`. Tensor names, shapes, dtypes and finiteness must match the
   requested policy. This initializes a fresh optimizer and transition counter;
   recovery resumes the saved checkpoint without repeating initialization.
   `critic_only: true` fits an independent critic while freezing the actor;

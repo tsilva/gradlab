@@ -24,7 +24,8 @@ from gradlab.training.ppo_engine import (
 
 def spec():
     return dict(
-        url="https://huggingface.co/owner/model/resolve/" + "a" * 40 + "/policy.pt",
+        repo_id="owner/model",
+        revision="a" * 40,
         sha256="b" * 64,
         size_bytes=123,
         reset_value_head=True,
@@ -56,19 +57,19 @@ def model(*, shared=False):
 
 
 @pytest.mark.parametrize(
-    "url",
+    "field,value",
     [
-        "https://huggingface.co/owner/model/resolve/main/policy.pt",
-        "http://huggingface.co/owner/model/resolve/" + "a" * 40 + "/policy.pt",
-        "https://other.example/owner/model/resolve/" + "a" * 40 + "/policy.pt",
-        "https://huggingface.co@other.example/owner/model/resolve/" + "a" * 40 + "/policy.pt",
-        "https://huggingface.co/owner/model/resolve/" + "a" * 40 + "/policy.pt?token=x",
-        "https://huggingface.co/owner/model/resolve/" + "a" * 40 + "/../policy.pt",
+        ("repo_id", "https://huggingface.co/owner/model"),
+        ("repo_id", "owner/model?token=x"),
+        ("repo_id", "owner/.."),
+        ("repo_id", "owner/model/extra"),
+        ("revision", "main"),
+        ("revision", "a" * 39),
     ],
 )
-def test_initial_policy_rejects_unpinned_or_credential_bearing_urls(url):
+def test_initial_policy_rejects_invalid_model_coordinates(field, value):
     with pytest.raises(ValueError):
-        normalize_initial_policy({**spec(), "url": url}, label="init")
+        normalize_initial_policy({**spec(), field: value}, label="init")
 
 
 @pytest.mark.parametrize(
@@ -108,6 +109,7 @@ def test_initialization_loads_only_matching_finite_tensors_and_resets_critic(mon
     with torch.no_grad():
         after = child.policy.get_distribution(observations).distribution.probs
     assert torch.equal(before, after)
+    assert calls[0][0] == f"https://huggingface.co/owner/model/resolve/{'a' * 40}/policy.pt"
     assert calls[0][2] == {"expected_sha256": "b" * 64, "expected_size": 123}
     assert all(torch.count_nonzero(p) == 0 for p in child.policy.value_net.parameters())
     assert not child.policy.optimizer.state

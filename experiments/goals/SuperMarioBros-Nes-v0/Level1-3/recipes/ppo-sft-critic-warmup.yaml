@@ -19,7 +19,8 @@ train:
       execution_profile: sb3-parity
       device: cuda
       initial_policy:
-        url: https://huggingface.co/tsilva/SuperMarioBros-Nes-v0_Level1-3/resolve/f9a633f9a7c5105beeb09d654b7af6e2f7c5404a/policy.pt
+        repo_id: tsilva/SuperMarioBros-Nes-v0_Level1-3
+        revision: f9a633f9a7c5105beeb09d654b7af6e2f7c5404a
         sha256: 973a7dd18dca33553f0e931d933f670dce53f2e31dbeb648fd30578aee210dec
         size_bytes: 6762393
         reset_value_head: true
