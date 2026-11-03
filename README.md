@@ -317,6 +317,19 @@ explicitly authorized. See [COMPUTE.md](COMPUTE.md) and the
   CPU or MPS. The Mario Level1-1 `ppo` recipe explicitly selects `gradlab.ppo`
   with `sb3-parity` and `fp32`, disabling policy compilation and fused Adam.
   Other recipes select their backend and execution profile independently.
+- Custom PPO can initialize from immutable public tensor-only weights with
+  `train.backend.config.initial_policy`: `url` must pin a full Hugging Face
+  commit and `policy.pt`; `sha256`, `size_bytes`, and boolean `reset_value_head`
+  are required. Tensor names, shapes, dtypes and finiteness must match the
+  requested policy. This initializes a fresh optimizer and transition counter;
+  recovery resumes the saved checkpoint without repeating initialization.
+  `critic_only: true` fits an independent critic while freezing the actor;
+  it requires `train.policy_model.share_features_extractor: false` and a
+  positive value-loss coefficient. A later Run can resume with `critic_only: false`.
+  `bootstrap_truncations: false` optimizes bounded-episode returns with zero
+  continuation at truncation. It does not change environment boundaries or
+  Acceptance criteria. The default remains true, and both modes are recorded
+  in the critic value contract and respected by Playback.
 - NES recipes require a lawfully obtained ROM supplied with `--rom-path` or
   registered with `gradlab rom sync`. ROMs and credentials must remain outside
   source control.

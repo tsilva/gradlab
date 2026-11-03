@@ -285,7 +285,11 @@ resuming as its cause without a matched uninterrupted continuation.
   discount, and truncation semantics match the training value contract. Playback labels this
   bootstrap when it computes the diagnostic and withholds the comparison if the exact final-state
   critic value is unavailable; treating truncation as termination by substituting a zero bootstrap
-  would fabricate a misleading residual.
+  would fabricate a misleading residual. Custom PPO may explicitly declare
+  `bootstrap_truncations: false` and a `zero` truncation value contract. In that
+  bounded-episode objective, the recorded zero continuation is intentional and
+  Playback closes the diagnostic without requesting a terminal critic value.
+  This changes the learning target, not the environment boundary or clear criterion.
 - Playback's Action decision panel separates the Policy's selected action and its probability
   from `transition.effective_action`, the action after conditional overrides expressed in the
   Policy action space. It labels that effective action as “Command sent to environment” using the recorded
@@ -874,6 +878,13 @@ and target-progress fields are not registry metrics and cannot enter the publish
 | `leader/episode_steps/mean` | Leader episode length | Selected-checkpoint mean evaluation episode length. | steps | selection | summary | none | - | selection | - | - |
 | `eval/monitor/video` | Monitoring representative episode | Full original-frame video from the recorded subset nearest the full evaluation-set median normalized brick progress; ties use manifest ordinal. Omitted when zero episodes are recorded. | video | complete monitoring evaluation | history | last | eval/step | monitoring | - | - |
 | `eval/video` | Checkpoint evaluation episode | Full native-frame video of the first declared lane-0 episode, recorded during the same evaluation and counted once in its episode manifest. | video | complete checkpoint evaluation | history | last | eval/step | evaluation | - | - |
+| `diagnostic/sft-ppo-init/development_clear` | SFT PPO initialization clear | Sampled full-start frozen development episode clear indicator; no actor updates or Acceptance. Step is the episode index. | boolean | episode | history | last | - | operational | - | - |
+| `diagnostic/sft-ppo-init/development_clear_mean` | SFT PPO initialization clear mean | Cumulative clear fraction over the declared frozen development episodes, including deaths and stalls. Not an Acceptance result. | fraction | episode | history | last | - | operational | - | - |
+| `diagnostic/sft-ppo-init/development_max_progress` | SFT PPO initialization progress | Maximum task camera-scroll progress in that frozen development episode. | value | episode | history | last | - | operational | - | - |
+| `diagnostic/sft-ppo-init/critic_validation_rmse` | Critic initialization validation RMSE | RMSE against discounted on-policy returns under the initialization study's declared reward, discount and boundary contract. Step counts critic-only optimizer updates; episode partitions and handling of censoring must be recorded. | value | update | history | last | - | operational | - | - |
+| `diagnostic/sft-ppo-init/critic_audit_rmse` | Critic initialization audit RMSE | Once-only RMSE for the validation-selected critic on the reserved episode partition. Realized stochastic returns contain irreducible uncertainty; this is not a clear-rate measure. | value | update | history | last | - | operational | - | - |
+| `diagnostic/sft-ppo-init/critic_constant_audit_rmse` | Constant critic audit RMSE | Same audit targets predicted by the mean return of the fitting partition; baseline for value initialization, not policy performance. | value | update | history | last | - | operational | - | - |
+| `diagnostic/sft-ppo-init/actor_probability_max_error` | Initialization actor probability error | Maximum probability difference on the declared fixed observation probe before and after encoder separation and critic-only fitting; supplement with the complete actor parameter hash. Zero establishes preservation on those probes, not robustness. | value | update | history | last | - | operational | - | - |
 <!-- METRIC_REGISTRY_END -->
 
 ## Registry relationships and dashboard applicability

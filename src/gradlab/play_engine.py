@@ -1501,9 +1501,9 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
             and "state_value" in introspection
             and self.value_contract is not None
         ):
-            if self.value_contract.get("truncation_bootstrap") != "terminal-value":
+            if self.value_contract.get("truncation_bootstrap") not in {"terminal-value", "zero"}:
                 reasons.append(
-                    "training value contract does not declare terminal-value truncation bootstrap"
+                    "training value contract does not declare a supported truncation target"
                 )
             elif getattr(transition, "return_bootstrap_value", None) is None:
                 reasons.append(

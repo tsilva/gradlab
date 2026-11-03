@@ -305,7 +305,10 @@ def _bootstrap_device_time_limits(
     calls: _CompiledPolicyCalls,
     precision: _Precision,
     gamma: float,
+    enabled: bool = True,
 ) -> None:
+    if not enabled:
+        return
     if buffer.final_observations is None or buffer.truncated is None:
         return
     flat_truncated = buffer.truncated.flatten()
@@ -639,6 +642,13 @@ def _make_model(
             verbose=0,
         )
         model.rollout_buffer = None
+        if backend_config.get("initial_policy") is not None:
+            from gradlab.training.ppo_initialization import initialize_policy
+
+            initialize_policy(model, backend_config["initial_policy"], root=context.run_dir / ".initial-policy")
+    from gradlab.training.ppo_initialization import configure_critic_only
+
+    configure_critic_only(model, enabled=bool(backend_config.get("critic_only", False)))
     model.n_steps = int(backend_config["n_steps"])
     model.batch_size = int(backend_config["batch_size"])
     model.n_epochs = int(backend_config["n_epochs"])
@@ -834,6 +844,9 @@ def _ppo_update(
     omit_if_nonfinite: frozenset[str] = frozenset(),
 ) -> dict[str, float]:
     model.policy.set_training_mode(True)
+    from gradlab.training.ppo_initialization import preserve_actor_eval_mode
+
+    preserve_actor_eval_mode(model)
     learning_rate = float(model.lr_schedule(progress_remaining))
     for group in model.policy.optimizer.param_groups:
         group["lr"] = learning_rate
@@ -1226,7 +1239,7 @@ def run_gradlab_ppo(
                 batch_step = runtime.step(environment_actions)
                 truncated_lanes: np.ndarray | None = None
                 terminal_values: torch.Tensor | None = None
-                if not device_resident:
+                if not device_resident and backend_config.get("bootstrap_truncations", True):
                     truncated_lanes = np.flatnonzero(batch_step.truncated)
                     if truncated_lanes.size:
                         if batch_step.final_observations is None:
@@ -1302,6 +1315,7 @@ def run_gradlab_ppo(
                     calls=calls,
                     precision=precision,
                     gamma=float(model.gamma),
+                    enabled=backend_config.get("bootstrap_truncations", True),
                 )
             buffer.finish(
                 last_values=last_values,
