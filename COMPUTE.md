@@ -61,6 +61,14 @@ receipt, supervisor, storage, evaluation policy, and terminal drain as GPU
 workers. Select a CPU-compatible recipe or record an explicit device override;
 target selection does not rewrite learning parameters.
 
+GPU allocations are checked inside the training container before materialization
+or learner startup. Missing CUDA produces a startup-failure receipt and no
+training. Explicit `device: cuda` also rejects CPU fallback. Visual PPO presets
+select CUDA; CPU recipes and explicit `gpu = "0"` workers retain their CPU path.
+Operator preflight and coordinator fleet metadata alone do not prove current
+worker GPU inventory or container device assignment; use the launch skill's
+host-inventory and first-Run CUDA checks before expanding a campaign.
+
 The current training image is `linux/amd64`. An Apple silicon worker using that
 exact image needs verified x86-64 emulation inside a Linux worker with Docker,
 SSH, and systemd. Installing Docker Desktop alone does not enroll such a

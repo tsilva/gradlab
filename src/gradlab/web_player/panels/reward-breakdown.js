@@ -10,7 +10,7 @@ const COMPONENT_ORDER = Object.freeze([
 ]);
 
 const COMPONENT_LABELS = Object.freeze({
-  native_reward: "Native reward",
+  native_reward: "Native reward contribution",
   cell_novelty_reward: "Cell novelty",
   event_reward: "Event reward",
   progress_reward: "Progress",
@@ -169,6 +169,9 @@ function aggregateLedgers(ledgers, selected, scope) {
       const current = rows.get(entry.id) || {
         id: entry.id,
         label: entry.label,
+        description: entry.id === "native_reward"
+          ? "Provider reward multiplied by the recipe's native-reward weight, before global reward scaling. A zero weight makes this contribution zero even when provider reward is nonzero."
+          : undefined,
         kind: entry.kind,
         raw: entry.raw === null ? null : 0,
         impact: 0,
@@ -339,12 +342,19 @@ export function rewardBreakdownPresentation({
   };
 }
 
+function percentageMagnitude(value) {
+  const magnitude = Math.abs(value);
+  return magnitude > 0 && magnitude < 0.1
+    ? String(Number(magnitude.toPrecision(3)))
+    : magnitude.toFixed(1);
+}
+
 export function signedContributionLabel(value) {
-  return value === null || value === undefined
+  return !Number.isFinite(value)
     ? "N/A"
-    : `${value >= 0 ? "+" : ""}${value.toFixed(1)}%`;
+    : `${value < 0 ? "-" : "+"}${percentageMagnitude(value)}%`;
 }
 
 export function magnitudeShareLabel(value) {
-  return value === null || value === undefined ? "N/A" : `${value.toFixed(1)}%`;
+  return !Number.isFinite(value) ? "N/A" : `${value < 0 ? "-" : ""}${percentageMagnitude(value)}%`;
 }

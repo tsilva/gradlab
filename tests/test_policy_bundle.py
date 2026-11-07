@@ -683,7 +683,7 @@ def test_recipe_materializes_the_backend_config_executed_by_the_learner() -> Non
     assert training_backend_config_hash(recipe_train_config) == training_backend_config_hash(
         executed_train_config
     )
-    assert training_backend_config(recipe_train_config)["device"] == "auto"
+    assert training_backend_config(recipe_train_config)["device"] == "cuda"
 
 
 def test_resume_approval_does_not_rebind_the_scientific_backend_config() -> None:

@@ -43,6 +43,16 @@ class _WandbRun:
         self.exit_code = kwargs.get("exit_code")
 
 
+def _mlflow_artifact_files(delivery: MlflowDelivery, path: str | None = None) -> list[str]:
+    files = []
+    for entry in delivery.client.list_artifacts(delivery.run_id, path):
+        if entry.is_dir:
+            files.extend(_mlflow_artifact_files(delivery, entry.path))
+        else:
+            files.append(entry.path)
+    return files
+
+
 @pytest.mark.parametrize("backend", ["wandb", "mlflow"])
 def test_selected_service_adapter_contract_has_same_scientific_projection(
     backend: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -87,7 +97,8 @@ def test_selected_service_adapter_contract_has_same_scientific_projection(
     summary = adapter.remote_summary()
     assert summary["train/return/mean"] == 0.75
     if backend == "mlflow":
-        assert adapter.client.list_artifacts(adapter.run_id) == []
+        artifacts = _mlflow_artifact_files(adapter)
+        assert artifacts and all(path.endswith(".json") for path in artifacts)
         reference = json.loads(summary["gradlab.asset.000000000002"])
         assert reference["bytes"] == len(video)
         assert reference["sha256"] == hashlib.sha256(video).hexdigest()
@@ -115,6 +126,48 @@ def test_wandb_adapter_marks_failed_terminal_as_failed() -> None:
     WandbProjector(run).publish_terminal(state="resumable_failure", reason="delivery_timeout")
     assert run.summary["ops/state"] == "resumable_failure"
     assert run.exit_code == 1
+
+
+@pytest.mark.parametrize(
+    ("state", "status"),
+    [
+        ("completed", "FINISHED"),
+        ("succeeded", "FINISHED"),
+        ("stopped", "FINISHED"),
+        ("complete_local", "FINISHED"),
+        ("canceled", "KILLED"),
+        ("interrupted", "KILLED"),
+        ("failed", "FAILED"),
+        ("resumable_failure", "FAILED"),
+    ],
+)
+def test_mlflow_terminal_status_preserves_lifecycle_outcome(
+    state: str, status: str, tmp_path: Path,
+) -> None:
+    delivery = MlflowDelivery.open(
+        tracking_uri=f"sqlite:///{tmp_path / 'tracking.db'}",
+        experiment_name="gradlab-test", gradlab_run_id="gradlab-" + "d" * 32,
+        created_at_ms=1_800_000_000_000,
+    )
+    delivery.publish_terminal(state=state, reason="test_terminal_reason")
+    run = delivery.client.get_run(delivery.run_id)
+    assert run.info.status == status
+    assert run.data.tags["ops/state"] == state
+    assert run.data.tags["ops/reason"] == "test_terminal_reason"
+
+
+def test_mlflow_rejects_unknown_terminal_before_mutation(tmp_path: Path) -> None:
+    delivery = MlflowDelivery.open(
+        tracking_uri=f"sqlite:///{tmp_path / 'tracking.db'}",
+        experiment_name="gradlab-test", gradlab_run_id="gradlab-" + "e" * 32,
+        created_at_ms=1_800_000_000_000,
+    )
+    with pytest.raises(ValueError, match="unsupported MLflow terminal state"):
+        delivery.publish_terminal(state="unknown", reason="invalid")
+    run = delivery.client.get_run(delivery.run_id)
+    assert run.info.status == "RUNNING"
+    assert "ops/state" not in run.data.tags
+    assert "ops/reason" not in run.data.tags
 
 
 def test_mlflow_media_failure_keeps_frame_unacknowledged_for_replay(
@@ -149,7 +202,8 @@ def test_mlflow_media_failure_keeps_frame_unacknowledged_for_replay(
     assert publish_outbox(store, delivery, limit=10) == 1
     assert delivery.remote_high_water() == 1
     assert delivery.client.get_metric_history(delivery.run_id, "ops/sequence")[0].value == 1
-    assert delivery.client.list_artifacts(delivery.run_id) == []
+    artifacts = _mlflow_artifact_files(delivery)
+    assert artifacts and all(path.endswith(".json") for path in artifacts)
     reference = json.loads(delivery.remote_summary()["gradlab.asset.000000000001"])
     assert reference["sha256"] == payload["sha256"]
     assert Path(reference["url"].removeprefix("file://")).read_bytes() == b"mp4"

@@ -16,6 +16,7 @@ from gradlab.checkpoint_contract import checkpoint_manifest_contract_sha256
 from gradlab.clock import Clock, SystemClock, parse_utc_datetime
 from gradlab.early_stop import metric_threshold_evidence
 from gradlab.eval_backend import EvalBackend
+from gradlab.env_registry import supports_evaluation_video
 from gradlab.evaluation_attempts import (
     build_modal_eval_payload,
     compile_eval_intent,
@@ -385,6 +386,10 @@ class ManualEvaluationSupervisor:
     ) -> dict[str, Any]:
         normalized = dict(contract)
         environment = normalized.get("environment")
+        if isinstance(environment, Mapping) and supports_evaluation_video(
+            environment["env_provider"], environment["game"]
+        ):
+            normalized["record_episode"] = True
         if not requires_complete_evaluation(environment):
             return normalized
         policy_value = normalized.get("evidence_policy")

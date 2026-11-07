@@ -5,8 +5,8 @@ they do not create a second scientific contract or replace command validation.
 
 | Concern | Authoritative source |
 | --- | --- |
-| Project-wide stakeholder requirements | Root [`SPECS.md`](../../SPECS.md) |
-| Capability-specific stakeholder requirements | [`docs/specs/README.md`](../specs/README.md) and its indexed specifications |
+| Essential product commitments | Root [`SPECS.md`](../../SPECS.md) |
+| Detailed capability commitments | [`docs/specs/README.md`](../specs/README.md) and its indexed specifications |
 | Domain vocabulary and architectural decisions | [`CONTEXT.md`](../../CONTEXT.md) and [`docs/adr/`](../adr/) |
 | Compute policy and operator-local fleet/access facts | [`COMPUTE.md`](../../COMPUTE.md) and `~/.config/gradlab/instances.md` |
 | Metric names and scientific meaning | [`METRICS.md`](../../METRICS.md) |
@@ -47,3 +47,28 @@ intent again before finishing as required by the specification policy.
 | Publish the next Python package release | `gradlab_build-release`, publication path |
 | Build a release candidate locally | `gradlab_build-release`, local-candidate path |
 | Certify or debug the orchestration lifecycle | `gradlab_certify-lifecycle` |
+
+## Agent service access
+
+The local `gradlab-huggingface` launcher selects the dedicated Agent Vault bundle
+`local-gradlab-huggingface` for `huggingface.co`. The child sees the exact
+`HF_TOKEN=hf_gradlab_proxy_placeholder`, a scoped proxy session, and process-local
+CA trust. The launcher pins the Infisical instance and proxy CA, clears the
+inherited environment, and requests a 30-minute session. It provides proxy
+routing without OS sandboxing.
+
+```sh
+~/.config/infisical/run-agent-vault gradlab-huggingface -- hf auth whoami
+```
+
+The original Gradlab Secret Manager `dev` folder `/agents/huggingface` holds the
+fine-grained source key. After rotation, update the Agent Vault service through
+trusted administration and repeat the identity and scope checks. Keep the
+credential scoped to the reviewed repository operations. Collection permissions
+apply across the account and require separate review. The publishing workflow
+must still honor its publication approvals.
+
+The current checks cover fake credential rejection, unmatched-host denial and
+real Hub CLI identity. Large-file, LFS and Xet transfers need separate validation
+because their clients may use other hosts and temporary credentials. The local
+operator and training credential launchers are separate.

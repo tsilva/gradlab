@@ -153,7 +153,8 @@ Configuration-selected internal learner feedback, such as an archive curriculum'
 priority statistic, is not telemetry merely because it has a readable name. Internal feedback
 identifiers do not use metric paths and are not published to W&B unless a separately registered
 metric explicitly projects them. If projected, the emitted name and semantics must appear in the
-registry below. For SB3 PPO and A2C, archive-curriculum `priority_metric: value_error` specifically
+registry below. For SB3 PPO/A2C and custom GradLab PPO, archive-curriculum
+`priority_metric: value_error` specifically
 means the arithmetic mean of `abs(A_t)` over one completed archive-origin trajectory, where `A_t`
 is raw GAE before PPO minibatch normalization. That scalar updates the archive's cell-level EMA and
 is intentionally not emitted; `train/curriculum/feedback/count` reports only how
@@ -315,6 +316,21 @@ resuming as its cause without a matched uninterrupted continuation.
   effective actions after overrides in Policy action space, including human input. Missing actions
   or an incomplete episode prefix withhold the affected frequencies; future steps and other
   episodes are excluded. These inspection statistics are local diagnostics, not W&B metrics.
+- Mario coordinate names depend on their source. Task/playback `x_pos` and
+  `global_x_pos` are global camera-scroll progress computed from the task's
+  `xscrollHi`/`xscrollLo` binding; `max_x_pos` and `global_max_x_pos` are its
+  episode maxima. `level_x_pos` and `level_max_x_pos` are the corresponding
+  per-level values. These legacy aliases are not the provider player-position
+  signal. Playback merges task metrics over provider info, so task `x_pos` wins.
+  In archive cell definitions, the declared `x_pos` signal instead resolves to
+  the provider's player position before that merge. Do not compare its bucket
+  directly with task progress or label task maxima as raw player positions.
+  `y_pos`, `player_motion`, and `player_task` in Mario playback remain provider
+  fields: world-space vertical position, ROM movement state, and ROM player task.
+  Movement state 1 means jumping or swimming, not necessarily ascending; task 8
+  means player control, not proof that recovery is physically possible. In
+  development reports, label horizontal maxima as camera-scroll/task progress
+  and state explicitly which coordinate a landing or frontier threshold uses.
 - Mario recipes disable automatic checkpoint evaluation and stop when
   `train/success/min` first reaches one. For a single start,
   that means 100 consecutive genuine target-origin clears; for multiple starts, every configured
@@ -377,11 +393,33 @@ resuming as its cause without a matched uninterrupted continuation.
   positive coefficient rewards entropy. Scalar objective contributions do not establish their
   relative gradient magnitudes. A zero coefficient removes this regularizer but does not disable
   stochastic action sampling or require a deterministic policy.
+  Low entropy alone does not establish overfitting or an inability to continue policy-gradient
+  learning. It can make alternative actions rare and categorical-policy gradients small;
+  assess recovery and improvement with closed-loop development checks rather than an entropy
+  threshold. Entropy on fixed demonstration states does not describe unvisited states.
+- For categorical actions that encode button combinations, entropy describes the complete
+  combinations. Sum their probabilities using the recorded action meanings to obtain each
+  button's marginal probability. Equal probability on `right+A` and `right+A+B` gives positive
+  action entropy while A stays down with probability one and B varies. Inspect the relevant
+  state and action sequence when reasoning about button-release timing.
 - For SB3 and custom PPO, `train/clip/fraction` averages minibatch fractions across attempted epochs and counts sampled action-probability ratios outside the clipping interval. It does not measure how far those ratios moved or the fraction of gradients disabled; similar fractions can accompany different policy changes. `train/kl/mean` averages minibatch estimates from the last attempted epoch, including a minibatch that triggers KL stopping, not a fresh full-rollout evaluation of the final policy. A small clip fraction can coexist with a large KL estimate because their aggregation windows differ and the fraction does not measure ratio magnitude. Interpret both alongside learning rate and progress at matched timesteps; neither has a universally desirable target.
 - At normal SB3 on-policy rollout-end dumps, optimizer metrics describe optimization of the preceding rollout: SB3 dumps after collecting the next rollout and before optimizing it. GradLab's between-rollout timing in that dump describes the same preceding optimization interval. Rollout advantage/value/action diagnostics describe the newly collected rollout. Align those input diagnostics with the preceding dump when investigating an optimizer spike; the offset is one full `n_envs * n_steps` rollout during uninterrupted full-rollout training. The final training-end flush can have different alignment because no next rollout is collected.
 - `train/learning_rate` reports the optimizer rate applied to the update. Optional `learning_rate_milestones` interpolate from `learning_rate` at step zero through declared absolute-transition `step`/`value` points, then hold the last value. Equal consecutive values define a constant phase. Milestones replace the linear endpoint/duration settings; extending or resuming a run does not restart their absolute timeline.
 - SB3 and custom PPO check each minibatch's approximate KL against `1.5 * target_kl` before its optimizer step. Exceeding the threshold stops remaining optimization on the collected rollout, retaining earlier optimizer steps; it neither interrupts rollout collection nor rolls back the policy. The reference is the policy that collected that rollout, and PPO ratio clipping remains enabled. This is a stopping trigger, not a hard KL ceiling: earlier optimizer steps may already have overshot it. PPO objective clipping likewise does not constrain action-probability ratios to the clipping interval. The logged epoch mean is not the individual triggering estimate, and an average KL cannot establish behavior preservation in rare states. Aggregate histories do not identify the triggering minibatch, completed optimizer-step count, probability-ratio tails, or gradient source.
-- Changing GAE lambda changes both the policy advantage estimator and the critic return targets. Value loss and explained variance across different lambda settings therefore describe different target distributions; larger loss alone does not prove critic divergence or greater advantage variance. Advantage normalization rescales the estimator but does not remove noise in its action ranking. Rollout advantage standard deviation measures dispersion across sampled transitions, not conditional estimator noise at fixed states; differences across runs can reflect changed state occupancy and true action-value variation.
+- Changing the discount factor gamma or GAE lambda changes both the policy advantage estimator and the critic return targets. Value loss and explained variance across these settings therefore describe different target distributions; larger loss alone does not prove critic divergence or greater advantage variance. Advantage normalization rescales the estimator but does not remove noise in its action ranking. Rollout advantage standard deviation measures dispersion across sampled transitions, not conditional estimator noise at fixed states; differences across runs can reflect changed state occupancy and true action-value variation.
+- Episode return sums rewards without temporal discounting. Changing gamma changes the
+  learner's advantage and value targets, not the definition of `train/return/mean`.
+  Recomputing discounted reward sums from a frozen replay can help inspect this difference;
+  those sums are not PPO's clipped surrogate loss or evidence that a different gamma has
+  been trained successfully.
+  Discounting can rank a shorter failure with less total reward above a slower successful
+  trajectory. This does not establish a positive reward for dying or that every winning
+  route ranks worse. Comparing continuations from the same state isolates a different
+  question from comparing whole routes with different speeds and action prefixes.
+  A policy-facing completion bonus B received k transitions after the return reference
+  contributes gamma^k * B to that reference's discounted return. Calibrate using the
+  actual payout transition and the reward after scaling/clipping; a larger bonus does
+  not extend the discount horizon or provide success examples before any are observed.
 - Actor-critic explained variance is `1 - Var(value_target - value_prediction) /
   Var(value_target)`: one means the residual variance is zero (perfect up to a constant prediction
   offset), zero means the critic explains no more target variance than a constant baseline, and
@@ -393,12 +431,19 @@ resuming as its cause without a matched uninterrupted continuation.
   state-insensitive baseline, while tiny target variance can make the ratio ill-conditioned.
   Common causes include partially observed return-relevant state, rapidly changing policy state
   occupancy, shared actor-critic feature drift, and bootstrap-heavy rollouts.
+  High explained variance does not establish policy quality: a critic can accurately predict
+  a repeatable unsuccessful trajectory. Check the task's success metrics alongside return.
 - GradLab does not currently emit separate actor, critic, shared-trunk, pre-clipping, or
-  post-clipping gradient norms for SB3 actor-critic updates. SB3 backpropagates one combined policy,
-  entropy, and value objective and clips the norm over the complete policy parameter set, so
+  post-clipping gradient norms for SB3 actor-critic or custom PPO updates. Both backpropagate one
+  combined policy, entropy, and value objective and clip the norm over the complete policy
+  parameter set, so
   `train/policy_loss/mean` and `train/value_loss/mean`, with `algorithm` equal to
   `ppo` or `a2c`, are not proxies for their respective
-  gradient magnitudes.
+  gradient magnitudes. A frozen-policy gradient probe can measure component gradients on its
+  declared diagnostic batch, but those measurements are not the live PPO minibatch gradients or
+  the parameter changes made by Adam.
+  Analytic full-distribution KL after a diagnostic optimizer step describes that batch and
+  optimizer state; it is distinct from the sampled-action estimate in `train/kl/mean`.
 - For reward-transform ablations, first compare `train/reward/task/{mean,std}` with
   `train/reward/{mean,std}`. `task.reward.reward_scale` is a finite multiplier from zero through one,
   so values below one attenuate the policy-facing reward. If raw rewards match but shaped
@@ -504,6 +549,11 @@ resuming as its cause without a matched uninterrupted continuation.
 - Snapshot-curriculum `train/curriculum/probability/max` and `train/curriculum/effective_cells/count` summarize the
   current cell-probability distribution. They do not report realized per-cell selection frequency
   or identify which resident cells were selected.
+  Configured `archive_share` and nonzero cell/entry counts do not establish that practice
+  occurred: archive restoration requires `state_archive.curriculum.restore_entries: true`.
+  Verify actual practice with `train/curriculum/restore/count` and
+  `train/curriculum/transitions/fraction`; recording-only configurations can retain states
+  without collecting archive-origin transitions.
 - Go-Explore `train/go-explore/visits/count` includes initialization visits and subsequent
   nonterminal destination-cell visits. It is not a count of every collected pre-action state.
   Curriculum admission counts refer to cell-crossing candidates, while archive cell and entry
@@ -563,7 +613,13 @@ resuming as its cause without a matched uninterrupted continuation.
   the fraction on which the component contributed. Each component also has an absolute share;
   pre-transform task statistics appear when the immutable transform contract is non-identity or a scientific selector requires them. Mario's `progress` component includes
   both its base new-progress reward and any configured additional new-progress reward above
-  `progress_reward_boost_start_x`. An identity task's `event` component is the sum of its declared
+  `progress_reward_boost_start_x`. In Mario `reward_mode: additive`, progress uses uncapped
+  new-progress delta and successful completion adds `completion_reward`; the declared
+  `progress_reward_cap` and `terminal_reward` are inactive in that mode. In particular,
+  `terminal_reward: 50` with `completion_reward: 0` does not give an additive-mode clear bonus.
+  Life-loss and per-transition time penalties still apply. Inspect the selected mode and
+  effective reward definition rather than interpreting every declared field as active.
+  An identity task's `event` component is the sum of its declared
   signed `event_rewards` for events firing on that transition. Its per-event reward metrics split
   that sum by declared event. An identity `equals` event contributes on every policy transition
   whose post-transition signal matches; `previous_equals` contributes when the signal at the start
@@ -594,6 +650,12 @@ resuming as its cause without a matched uninterrupted continuation.
   contribution (`impact / abs(final reward)`) and absolute transformed activity share. Signed
   contributions preserve penalties, can exceed 100%, and are unavailable at zero final reward;
   this is intentionally different from `train/reward/part/{component}/share` below.
+  The ledger's `Native reward contribution` is the task reward component after its configured
+  coefficient, before the global scale. It is distinct from the Step reward panel's
+  provider-output series: a zero native-reward coefficient can yield a zero ledger
+  component while the chart's `Provider reward` is nonzero. Nonzero component percentages
+  below 0.1% use three significant digits (scientific notation when appropriate), retaining
+  the sign instead of rounding to `0.0%`; larger percentages retain one decimal place.
 - Under the current `VizdoomDefendCenter-v1` identity-reward contract, every spawned target has one
   health point, its death adds `+1`, the player starts with 52 pistol rounds, and the scenario has no
   ammo replenishment. A normal episode return is therefore `player kills - 1` when the player dies
@@ -804,6 +866,15 @@ and target-progress fields are not registry metrics and cannot enter the publish
 | `train/policy_loss/mean` | Policy-gradient loss | Actor-critic policy-gradient loss. | scalar | rollout | history | last | train/step | training | - | - |
 | `train/value_loss/mean` | Value loss | Actor-critic value loss. | scalar | rollout | history | last | train/step | training | - | - |
 | `train/gamma` | Discount factor | Discount frozen at rollout start, used for timeout bootstrapping and GAE; scheduled by absolute training transitions and restored on resume. | scalar | rollout | history | last | train/step | training | - | - |
+| `train/sil/attempts` | SIL update attempts | Candidate pools sampled after this base update. Zero while replay is empty. | updates | rollout | history | last | train/step | training | - | - |
+| `train/sil/updates` | SIL optimizer updates | Actor optimizer steps executed after this base update. A candidate pool without positive gaps contributes no update. | updates | rollout | history | last | train/step | training | - | - |
+| `train/sil/recent_transitions` | SIL recent replay size | Eligible transitions retained in the recent episode pool. | transitions | rollout | history | last | train/step | training | - | - |
+| `train/sil/success_transitions` | SIL success replay size | Eligible transitions retained in the protected success pool. A transition can also appear in the recent pool. | transitions | rollout | history | last | train/step | training | - | - |
+| `train/sil/success_episodes` | SIL success episodes | Target-start successful episodes currently in protected replay. | episodes | rollout | history | last | train/step | training | - | - |
+| `train/sil/dropped_episodes` | SIL oversized episodes | Cumulative count of lane histories dropped after exceeding the configured length limit. | episodes | rollout | history | last | train/step | training | - | - |
+| `train/sil/eligible_fraction` | SIL positive candidate fraction | Mean fraction of sampled candidates whose stored discounted return exceeds current critic value. Present when candidate pools were sampled. | ratio | rollout | history | last | train/step | training | - | - |
+| `train/sil/policy_loss` | SIL policy loss | Mean replay actor loss over executed minibatches after this base update. | scalar | rollout | history | last | train/step | training | - | - |
+| `train/sil/positive_gap` | SIL return gap | Mean positive part of stored return minus current critic value over executed SIL minibatches. | scalar | rollout | history | last | train/step | training | - | - |
 | `train/learning_rate` | Learning rate | Current actor-critic learning rate. | scalar | rollout | history | last | train/step | training | - | - |
 | `train/entropy/mean` | Policy entropy | Actor-critic policy entropy with the entropy-loss sign reversed, averaged over the update samples. Discrete entropy is nonnegative; continuous differential entropy can be negative. | nats | rollout | history | last | train/step | training | - | - |
 | `train/noise/std/mean` | Policy distribution std | Arithmetic mean of exp(policy.log_std) over its parameter entries; this summarizes continuous-policy scale parameters, not the empirical standard deviation of sampled or executed actions. | scalar | rollout | history | last | train/step | training | - | - |
@@ -878,6 +949,13 @@ and target-progress fields are not registry metrics and cannot enter the publish
 | `leader/episode_steps/mean` | Leader episode length | Selected-checkpoint mean evaluation episode length. | steps | selection | summary | none | - | selection | - | - |
 | `eval/monitor/video` | Monitoring representative episode | Full original-frame video from the recorded subset nearest the full evaluation-set median normalized brick progress; ties use manifest ordinal. Omitted when zero episodes are recorded. | video | complete monitoring evaluation | history | last | eval/step | monitoring | - | - |
 | `eval/video` | Checkpoint evaluation episode | Full native-frame video of the first declared lane-0 episode, recorded during the same evaluation and counted once in its episode manifest. | video | complete checkpoint evaluation | history | last | eval/step | evaluation | - | - |
+| `diagnostic/local-sft/update` | Local SFT optimizer update | Completed supervised optimizer updates in an explicitly labelled standalone local prototype; not environment transitions, PPO updates, or Acceptance evidence. These diagnostics do not register a training backend. | updates | update | history | last | diagnostic/local-sft/update | operational | - | - |
+| `diagnostic/local-sft/teacher_nll` | Local SFT teacher NLL | Mean unsmoothed negative log probability of the demonstrated action over the prototype's fixed control-state dataset; distinct from its label-smoothed optimization loss. | nats | update | history | last | diagnostic/local-sft/update | operational | - | - |
+| `diagnostic/local-sft/teacher_action_accuracy` | Local SFT action accuracy | Fraction of fixed teacher control-state inputs whose highest-probability action matches the demonstration; does not measure closed-loop success. | fraction | update | history | last | diagnostic/local-sft/update | operational | - | - |
+| `diagnostic/local-sft/teacher_state_entropy` | Local SFT teacher-state entropy | Mean categorical action entropy on fixed teacher control-state inputs; not entropy on sampled full-start trajectories. | nats | update | history | last | diagnostic/local-sft/update | operational | - | - |
+| `diagnostic/local-sft/sampled_clear` | Local SFT sampled development clear | One sampled full-start development episode's level-clear indicator at the specified optimizer update; not an aggregate rate or Acceptance result. | boolean | probe | history | last | diagnostic/local-sft/update | operational | - | - |
+| `diagnostic/local-sft/sampled_max_camera_progress` | Local SFT sampled development progress | Maximum task camera-scroll progress in that single sampled full-start development episode; not archive-cell player position. | value | probe | history | last | diagnostic/local-sft/update | operational | - | - |
+| `diagnostic/local-sft/elapsed_seconds` | Local SFT elapsed time | Elapsed wall time since standalone local fitting began, including intervening development probes. | seconds | update | history | last | diagnostic/local-sft/update | operational | - | - |
 | `diagnostic/sft-ppo-init/development_clear` | SFT PPO initialization clear | Sampled full-start frozen development episode clear indicator; no actor updates or Acceptance. Step is the episode index. | boolean | episode | history | last | - | operational | - | - |
 | `diagnostic/sft-ppo-init/development_clear_mean` | SFT PPO initialization clear mean | Cumulative clear fraction over the declared frozen development episodes, including deaths and stalls. Not an Acceptance result. | fraction | episode | history | last | - | operational | - | - |
 | `diagnostic/sft-ppo-init/development_max_progress` | SFT PPO initialization progress | Maximum task camera-scroll progress in that frozen development episode. | value | episode | history | last | - | operational | - | - |
@@ -919,12 +997,17 @@ diagnostic and does not participate in ranking.
 The standard Step reward panel shows a dashed amber overlay of shaped reward contributions
 using a separately pinned reference step and recorded discount: `gamma**(reward_step - reference_step) *
 reward_shaped`. Rewards before the reference are excluded and dimmed; the reference has delay zero.
-The reference initializes at step zero of each episode, even when Stats first receives a later
-transition, and changes only
-when the user presses “Set return reference to cursor”.
+The reference initializes at step one, the first recorded decision's pre-action state,
+even when Stats first receives a later transition. Thus the reward on step one has
+weight one and contributions align with that state's `G(s)`. Step-zero references
+from an earlier viewer, including explicit references to the initial observation,
+normalize to step one without inventing a reward sample. Positive explicitly pinned
+references remain unchanged. Both reward panels display the reference step and gamma;
+the reference changes only when the user presses “Set return reference to cursor”,
+not when seeking or hovering.
 Hovering does not change the reference state, table rows, values, or highlighted row.
 The compact table stays anchored to the selected Playback step and shows up to five current and future
-recorded samples with native (`reward_provider`) and shaped (`reward_shaped`) rewards,
+recorded samples with provider (`reward_provider`) and shaped (`reward_shaped`) rewards,
 step delay, discount weight, discounted shaped contribution, G(s), and V(s).
 G(s) uses the authoritative full-episode `realized_return` for that row’s pre-action
 state, not a sum of sampled chart points or rewards from the pinned reference. V(s)
@@ -979,3 +1062,69 @@ native game score, distinct from shaped return. The median, Wilson bounds and
 video retain their `eval/monitor/` names because they have no training counterpart.
 Shared names do not grant Acceptance or leader authority: monitoring is delivered
 only as a dedicated monitoring event with an explicit scalar allowlist.
+
+## Standalone PPO and self-imitation study projections
+
+The `diagnostic/ppo-sil/` namespace is an analysis-only projection from private
+prototype evidence. It does not register a training backend or establish
+Acceptance. In continuation studies, steps count additional training transitions
+from the common parent; step zero is the unchanged parent. Its original training
+step and immutable checkpoint identity must remain in the study provenance. In
+from-scratch studies, steps count transitions since random initialization and
+step zero is that untrained policy; record the initialization fingerprint and
+absence of imported checkpoints or learning data. On a SIL arm, canonical
+`train/*` update diagnostics describe the PPO update before the subsequent SIL
+updates; the metrics below describe replay and frozen-policy assessments.
+
+| Metric suffix after `diagnostic/ppo-sil/` | Meaning |
+| --- | --- |
+| `training_completed_episodes` | Cumulative completed training episodes since the prototype started, including failures and truncations. |
+| `training_completed_clears` | Cumulative task-success episodes among those completed training episodes; not a frozen-policy clear rate. |
+| `replay_transitions` | Current replay size after whole-episode eviction, counting only retained controllable pre-action states. Returns are calculated from complete episodes before filtering; incomplete tails are excluded. |
+| `sil_updates` | Executed SIL minibatch updates after this PPO iteration; a candidate pool with no positive return gap skips its update. |
+| `sil_update_limit` | Maximum attempted SIL minibatch updates after this PPO iteration under the declared training-only phase rule. The discovery-replay comparison uses 4 before the first self-generated clear and 16 afterward in its treatment, versus 16 throughout in its control. This is a cap, not the executed count; positive-gap gating can skip updates. |
+| `post_clear_transitions` | Training transitions consumed after the rollout boundary that first observed this trial's own clear. Zero before discovery and on that boundary; subsequent values exclude the discovery rollout. Record the absolute first-clear frontier and declared additional budget. This is exposure, not frozen-policy quality; report runs that never acquire a clear separately rather than interpreting their zeros as consolidation. |
+| `entropy_coefficient` | Actual scalar entropy-bonus coefficient passed to this PPO update, indexed by additional transitions. This is regularization strength, not measured policy entropy; the declared schedule may reach its endpoint before the total training budget. |
+| `sil_positive_fraction` | Mean fraction of uniformly drawn candidate states with observed discounted return greater than the current critic prediction, across this iteration's candidate pools. This is not the fraction of the entire buffer or a success rate. |
+| `sil_positive_gap` | Mean positive return-minus-current-value gap over executed, priority-sampled SIL minibatches; zero if none execute. |
+| `sil_sampled_clear_fraction` | Mean fraction of SIL minibatch transitions originating in successful episodes, over executed minibatches; zero if none execute. This describes replay selection, not policy reliability. |
+| `sil_fresh_state_kl_mean` | Mean categorical KL from the policy immediately after PPO to the policy after SIL, measured on the declared fixed subsample of fresh rollout states. It excludes PPO's own policy change. |
+| `sil_fresh_state_kl_max` | Largest per-state KL on that same subsample; not a global bound on policy change. |
+| `validation_clear_mean` | Clear fraction in the fixed, sampled full-start development panel used for checkpoint selection. Record panel size, environment seeds, policy RNG seeds, sampling temperature and tie-break rule. |
+| `validation_critic_rmse` | Decision-weighted critic RMSE against complete discounted episode returns in that validation panel, with the study's reward, discount and boundary semantics. |
+| `validation_critic_bias` | Decision-weighted mean prediction minus observed discounted return in that panel; positive values indicate overestimation. |
+| `test_clear_mean` | Clear fraction on a fresh sampled development panel, collected only after validation selects the checkpoint. This panel cannot select checkpoints and is not Acceptance. |
+| `test_critic_rmse` | The same decision-weighted critic RMSE on the separate test panel. |
+| `test_critic_bias` | The same prediction-minus-return bias on the separate test panel. |
+| `self_generated_success_memory_episodes` | Number of this trial's own successful training episodes retained in its protected replay memory. Starts at zero; imported demonstrations are excluded. The scratch study caps this at 32 episodes and 65,536 controllable transitions, preserves its first own clear, and reservoir-samples other successes. |
+| `first_win_action_probability_min` | Smallest current probability of a demonstrated action over controllable states from this trial's first self-generated clear. Evaluated on that fixed trajectory at declared checkpoints; this is a retention probe, not a closed-loop success rate or expert-data metric. |
+| `first_win_positive_gap_fraction` | Fraction of states on that same first-own-clear trajectory whose observed discounted return exceeds the current critic prediction. A state outside this gate receives no SIL weight. |
+| `validation_median_progress` | Median episode-maximum task progress on the fixed validation panel. The scratch study uses this only to break ties in validation clear counts, then favors the earliest checkpoint; it does not change the Acceptance objective. Mario values use camera-scroll task progress, not archive-cell player position. |
+| `final_test_clear_mean` | Sampled clear fraction of the preregistered fixed-final-budget policy on the test panel. A secondary endpoint, reported alongside the validation-selected policy without selecting between them using test outcomes. |
+| `budget_reference_test_clear_mean` | Sampled clear fraction of a preregistered reference checkpoint on the same fresh test panel as the final checkpoint, assessed only after validation selects the policy. The reference may use a fixed transition budget or a declared own-training event such as the first-clear rollout frontier; record its resolved absolute `budget_reference_step` and rule. It is a secondary comparison endpoint and cannot select checkpoints. Reuse an assessment when policy identity matches another endpoint. |
+| `final_vs_reference_gained_count`, `final_vs_reference_lost_count` | Test cases gained or lost by the fixed-final checkpoint relative to the declared earlier budget-reference checkpoint, matching environment and policy RNG seeds. These compare two checkpoints within a training seed, not independent training replicates or a population reliability bound. |
+| `confirmation_clear_mean` | Sampled clear fraction on a separately declared untouched development confirmation panel for the exact validation-selected policy. A study may preregister this assessment only after a perfect primary test. It must not select or retune the policy and is not formal Acceptance; omitted when the condition is unmet. |
+| `greedy_clear_mean` | Diagnostic full-start clear fraction with deterministic action selection on the declared greedy panel. It does not substitute for the sampled objective or establish Acceptance. |
+| `retired_failure_clear_mean` | Diagnostic sampled clear fraction on explicitly retired failure cases inspected during earlier debugging. Recheck only after validation selects the checkpoint; these cases cannot select it or establish fresh-test progress or Acceptance. |
+| `validation_start_value`, `test_start_value` | Mean critic prediction at the initial state across the declared sampled validation/test episodes. Separate from decision-weighted critic metrics. |
+| `validation_start_return`, `test_start_return` | Mean observed discounted return from the initial state across that same frozen panel, with the study's reward and boundary semantics. |
+| `validation_start_bias`, `test_start_bias` | Initial-state mean prediction minus mean observed return on that panel. Does not describe calibration at every trajectory state. |
+| `validation_winning_start_positive_gap_fraction`, `test_winning_start_positive_gap_fraction` | Among successful episodes in that frozen panel, the fraction with initial observed return greater than initial prediction. Omitted when there are no clears. A hypothetical start-state gate, not eligibility over actual replay candidates. |
+| `test_parent_clear_mean` | Sampled clear fraction of the fixed, hash-pinned parent on the same new test panel as a continuation study. The parent is not selected using this panel. |
+| `test_parent_gained_count`, `test_parent_lost_count` | Paired test episodes gained or lost by the validation-selected continuation relative to its fixed parent, matched by environment and policy RNG seed. Counts do not quantify variation across training seeds. |
+| `observed_completed_frontier` | Largest episode-maximum task progress in completed episode records available to the observer at projection time. Logged at the latest recorded learner step; the episode file and metric journal are read separately, so this is a lagged operational frontier snapshot, not exact transition attribution or evaluation evidence. |
+
+Frozen episode-level analysis artifacts can additionally compare initial-state value
+predictions with observed discounted returns. An average initial-value minus initial-return
+gap is a start-state calibration diagnostic, distinct from the decision-weighted
+`test_critic_bias` above. A hypothetical initial-state R>V gate on those frozen episodes
+is distinct from `sil_positive_fraction` over actual replay candidates and does not
+measure eligibility across all trajectory states. Such a diagnostic alone does not
+identify which optimizer caused the calibration gap.
+
+Replay targets use the actual scaled rewards, the declared discount, and zero
+continuation at episode boundaries in the bounded-return study. The actor loss
+uses a detached positive return gap; the one-sided value loss can update the
+critic. Priority sampling is performed within a uniform candidate pool and is
+not an exact recomputation of every buffer priority. One training seed and
+episode-level intervals do not quantify variability across training seeds.

@@ -47,7 +47,12 @@ from gradlab.policy_bundle import (
     write_canonical_json,
 )
 from gradlab.recipe_documents import compose_resolved_train_documents
-from gradlab.training_backend import training_backend_config_hash
+from gradlab.training_backend import (
+    training_backend_config,
+    training_backend_config_hash,
+    training_backend_id,
+    training_backend_runtime_metadata,
+)
 
 
 def test_checkpoint_step_is_derived_from_learner_filename() -> None:
@@ -95,9 +100,9 @@ def test_model_metadata_round_trips_playback_environment(tmp_path: Path) -> None
             {
                 "kind": "checkpoint",
                 "checkpoint_step": 250_000,
-                "algorithm_id": "ppo",
-                "model_class": "stable_baselines3.ppo.ppo.PPO",
-                "training_backend_id": "sb3.ppo",
+                **training_backend_runtime_metadata(
+                    training_backend_id(train_config), training_backend_config(train_config)
+                ),
                 "training_backend_config_hash": training_backend_config_hash(train_config),
                 "training_metadata": {
                     **training_metadata(config),

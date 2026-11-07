@@ -71,6 +71,11 @@ class SupervisorRuntime:
     def runtime_contract(self, *, runtime_image_ref: str) -> dict[str, Any]:
         return runtime_contract(runtime_image_ref=runtime_image_ref)
 
+    def require_cuda(self) -> None:
+        from gradlab.device import require_cuda
+
+        require_cuda()
+
     def holder_id(self) -> str:
         return f"{uuid.uuid4().hex}@{os.uname().nodename}"
 

@@ -31,8 +31,12 @@ learner stop and preserves finalization while the supervisor remains alive.
 Goals and recipes default to MLflow through `experiments/tracking.yaml`.
 MLflow records original event times, searchable research parameters, canonical
 checkpoint links in its Artifacts browser, and available CPU/RAM/GPU diagnostics.
+Its execution status distinguishes completion, interruption, and failure; use the
+task's success metrics and Acceptance evidence to judge whether the policy solved it.
 See [MLflow debugging and setup](ops/mlflow/README.md#debugging-training) for the
 focused chart layout and metadata-store verification.
+Selected-checkpoint evaluations record one of the declared episodes for environments
+that support video; recording does not add another evaluation episode.
 Select W&B explicitly with `--set tracking.backend=wandb` for local training or
 `--override tracking.backend=wandb` for experiment launches. The bundled smoke
 recipe uses `local_only` delivery and requires no tracking service.
@@ -67,7 +71,12 @@ from the existing icon automatically. No Node.js, npm, compiler, or rebuild is
 needed to run the installed player. `gradlab play` serves compiled player assets
 by default. From a source checkout, pass `--hotreload` to start Vite and reload
 frontend changes in the open viewer. The header warns when hot reload is active.
-The **Stats** button opens or focuses a synchronized GradLab window.
+The **Stats** button opens or focuses a synchronized GradLab window. Reward panels
+show their pinned return-reference step and discount; the default step-one reference
+aligns contributions with the first decision's return-to-go. Use **Set return reference
+to cursor** to change it; scrubbing keeps it fixed. **Provider reward** is the environment
+output, while **Native reward contribution** is its weighted task component. Tiny nonzero
+component percentages retain enough precision to remain visible.
 Closing the last Player or Stats window stops the local player cleanly; keeping
 either window open keeps the session running.
 Ctrl+C or killing the GradLab process closes its viewer windows without affecting
@@ -226,38 +235,17 @@ Secrets in `operator.toml` use value-free `[infisical.NAME]` bindings with expli
 environment, folder path and secret name. Install the Infisical CLI and run `infisical login`;
 Gradlab fetches requested credentials in memory and aborts on a failed read. dstack
 coordinator tokens use the same reference format. Modal tokens are stored in Infisical
-as well. Standalone tool credential requirements are declared in
-[`.access.toml`](.access.toml), with `wandb`, `huggingface-read`,
-`huggingface-write`, and `modal` profiles. Put operator-specific provider
-bindings in gitignored `.access.local.toml`; both files contain references only.
-They are an agent discovery convention, not configuration read by GradLab or
-the Infisical CLI. Existing GradLab operator and publication launchers keep
-their own credential configuration.
+as well. These project-owned operator and publication launchers retain their own
+credential configuration.
 
-Both access files use `version = 1`. Shared `[profiles.NAME]` tables contain a
-description and a nonempty `variables` list. Provider bindings use
-`[bindings.NAME]` with a matching profile. An Infisical binding contains
-`provider = "infisical"`, `instance`, `project_id`, `environment`, and `path`.
-Bindings may be shared in `.access.toml` when appropriate. Each binding in
-`.access.local.toml` replaces the entire shared binding for that profile;
-fields are never merged. Local files contain only `version` and `bindings`.
-Reject malformed or unsupported configurations and missing bindings rather
-than guessing a source. Keep local binding files owner-only and untracked.
-
-For example, resolve the `modal` profile and use its binding with the native
-Infisical injector:
-
-```bash
-infisical run --projectId=YOUR_PROJECT_ID --env=prod --path=/modal \
-  --domain=https://app.infisical.com \
-  --expand=false --include-imports=false --silent --telemetry=false \
-  -- modal profile list
-```
-
-Replace `YOUR_PROJECT_ID` with your tooling project's ID and select your
-Infisical instance with `--domain` when needed. Keep that folder limited to
-`MODAL_TOKEN_ID` and `MODAL_TOKEN_SECRET`; credentials stay in the child
-environment and must not be saved to a plaintext Modal token file.
+Standalone agent Hugging Face access uses the dedicated Agent Vault bundle through
+`~/.config/infisical/run-agent-vault gradlab-huggingface -- COMMAND`. The CLI
+receives an `HF_TOKEN` placeholder. See [agent service access](docs/agents/workflows.md#agent-service-access)
+for token permissions, provisioning, and verification. A usable fine-grained publishing
+token and an enabled proxied service are prerequisites. W&B is not part of this
+setup. The former `.access.toml` and `.access.local.toml` inventories are retired
+for this repository. Other services, including the publisher's YouTube access,
+need their own reviewed credential flow; this HF route does not supply them.
 
 Then launch a checked-in recipe using its resolved goal and bounded defaults:
 
@@ -307,16 +295,24 @@ explicitly authorized. See [COMPUTE.md](COMPUTE.md) and the
 - Queued `complete_local` Runs seal the journal to private R2. An operator can
   later run `gradlab sync-run <run-id>` to project that journal to the Run's
   frozen backend without changing its terminal receipt.
-- `gradlab.ppo` is the opt-in tensor-native PPO backend. It accepts the
+- Checked-in PPO recipes use the tensor-native `gradlab.ppo` backend. It accepts the
   `sb3.ppo` configuration surface plus `precision` (`fp32`, `amp-fp16`, or
   `amp-bf16`) and an `execution_profile`. `sb3-parity` preserves SB3's eager,
   unfused, environment-major minibatch path; `compiled-parity` and
   `compiled-fused-parity` isolate the CUDA optimizations; `max-throughput`
   additionally uses GPU-native permutation and is the default. The backend
   keeps PPO artifacts mutually resumable with SB3 and uses eager execution on
-  CPU or MPS. The Mario Level1-1 `ppo` recipe explicitly selects `gradlab.ppo`
-  with `sb3-parity` and `fp32`, disabling policy compilation and fused Adam.
-  Other recipes select their backend and execution profile independently.
+  CPU or MPS. The Atari, Mario, classic-control, and discrete Gymnasium PPO base
+  presets use `sb3-parity` and `fp32`, disabling policy compilation and fused
+  Adam; goal-specific configurations can declare other profiles and precisions.
+  SB3 backends remain available for explicit comparison configurations.
+- Visual PPO presets request `device: cuda`; classic-control, discrete Gymnasium,
+  and the bundled bandit smoke recipe select CPU. Explicit CUDA selection fails
+  when CUDA is unavailable. A dstack task allocated a GPU also checks CUDA inside
+  its training container before materialization or learner startup, so stale
+  worker inventory cannot silently turn that task into CPU training. CPU-only
+  workers declare `gpu = "0"` and require a CPU-compatible recipe or explicit
+  device override.
 - Custom PPO can initialize from immutable public tensor-only weights with
   `train.backend.config.initial_policy` requires a Hugging Face model `repo_id`
   and full commit `revision` for `policy.pt`, plus `sha256`, `size_bytes`, and

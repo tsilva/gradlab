@@ -42,6 +42,17 @@ from gradlab.wandb_utils import resolve_wandb_project
 
 RUN_ID_TAG = "gradlab.run_id"
 
+_TERMINAL_STATUSES = {
+    "completed": "FINISHED",
+    "succeeded": "FINISHED",
+    "stopped": "FINISHED",
+    "complete_local": "FINISHED",
+    "canceled": "KILLED",
+    "interrupted": "KILLED",
+    "failed": "FAILED",
+    "resumable_failure": "FAILED",
+}
+
 # Only public research configuration is projected; operator settings and credentials
 # never enter searchable parameters.
 RUN_PARAMETER_KEYS = frozenset({
@@ -443,10 +454,14 @@ class MlflowDelivery:
         self, *, state: str, reason: str, timeout_seconds: float | None = None
     ) -> None:
         del timeout_seconds
+        try:
+            status = _TERMINAL_STATUSES[state]
+        except KeyError:
+            raise ValueError(f"unsupported MLflow terminal state: {state}") from None
         self.publish_checkpoint_references()
         self.client.set_tag(self.run_id, ORCHESTRATION_RUN_TERMINAL_STATE, state)
         self.client.set_tag(self.run_id, ORCHESTRATION_RUN_TERMINAL_REASON, reason)
-        self.close(success=state in {"succeeded", "stopped", "complete_local"})
+        self.client.set_terminated(self.run_id, status=status)
 
     def close(self, *, success: bool) -> None:
         self.client.set_terminated(

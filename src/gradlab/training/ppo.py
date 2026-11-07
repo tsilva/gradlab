@@ -22,6 +22,7 @@ GRADLAB_PPO_DEFAULT_CONFIG: dict[str, Any] = {
     "initial_policy": None,
     "critic_only": False,
     "bootstrap_truncations": True,
+    "sil": None,
 }
 
 
@@ -60,6 +61,7 @@ def _normalize_gradlab_ppo(config: Mapping[str, Any], *, label: str) -> dict[str
                 "initial_policy",
                 "critic_only",
                 "bootstrap_truncations",
+                "sil",
             }
         },
         label=label,
@@ -79,6 +81,12 @@ def _normalize_gradlab_ppo(config: Mapping[str, Any], *, label: str) -> dict[str
             raise ValueError(f"{label}.{key} must be boolean")
         if key in config:
             normalized[key] = value
+    if config.get("sil") is not None:
+        from gradlab.training.sil import normalize_sil
+
+        sil = normalize_sil(config["sil"], label=f"{label}.sil")
+        if sil is not None:
+            normalized["sil"] = sil
     return normalized
 
 
@@ -107,6 +115,21 @@ class GradLabPPOBackend:
                 raise ValueError("critic_only requires policy_model.share_features_extractor=false")
             if backend_config["vf_coef"] <= 0:
                 raise ValueError("critic_only requires a positive vf_coef")
+        if backend_config.get("sil") is not None:
+            if common_config["policy_model"].get("share_features_extractor", True):
+                raise ValueError("actor-only SIL requires policy_model.share_features_extractor=false")
+            if backend_config.get("critic_only"):
+                raise ValueError("SIL is incompatible with critic_only")
+            if backend_config.get("resume"):
+                raise ValueError("SIL training resume requires replay and optimizer restoration")
+            if backend_config.get("bootstrap_truncations", True):
+                raise ValueError("SIL requires bootstrap_truncations=false for matching return targets")
+            if backend_config.get("gamma_final") not in (None, backend_config["gamma"]):
+                raise ValueError("SIL requires a constant gamma for replay targets")
+            if backend_config["precision"] != "fp32":
+                raise ValueError("SIL currently requires fp32")
+            if common_config.get("env_provider") == "env-gradoom-turbo-torch":
+                raise ValueError("SIL currently requires a host observation runtime")
 
     def run(self, context: BackendContext):
         from gradlab.training.ppo_engine import run_gradlab_ppo

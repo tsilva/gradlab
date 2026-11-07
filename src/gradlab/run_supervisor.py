@@ -28,7 +28,7 @@ from gradlab.supervisor_lifecycle import (
 from gradlab.checkpoint_contract import checkpoint_manifest_contract_sha256
 from gradlab.cli_parser import ExactArgumentParser
 from gradlab.clock import parse_utc_datetime, utc_timestamp
-from gradlab.dstack_backend import DSTACK_VERSION
+from gradlab.dstack_backend import DSTACK_VERSION, DstackResources
 from gradlab.early_stop import validate_metric_early_stop_decision
 from gradlab.env import resolve_env_config
 from gradlab.eval_backend import EvalBackend, EvalHandle
@@ -595,6 +595,9 @@ class RunSupervisor:
             )
         if str(os.environ.get("GRADLAB_ORCHESTRATOR") or "") != "dstack":
             raise RuntimeError("run supervisor may execute only inside a dstack task")
+        resources = DstackResources.from_manifest(self.manifest.compute.get("resources"))
+        if resources.gpu.strip() != "0":
+            self.runtime.require_cuda()
 
     def materialize(self) -> None:
         goal_path = (

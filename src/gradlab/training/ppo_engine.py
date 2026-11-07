@@ -14,7 +14,7 @@ from stable_baselines3.common.preprocessing import get_action_dim
 from stable_baselines3.common.utils import get_schedule_fn
 
 from gradlab.action_codecs import LegalTupleMultiDiscrete
-from gradlab.batch_runtime import BatchMetricRecord, CurriculumStepAttribution
+from gradlab.batch_runtime import BatchMetricRecord, CurriculumStepAttribution, EpisodeRecord
 from gradlab.callbacks import (
     ARCHIVE_CURRICULUM_METRIC_MAP,
     RewardStatsAccumulator,
@@ -44,7 +44,7 @@ from gradlab.training.sb3_on_policy import (
 )
 from gradlab.training_backend import BackendContext
 from gradlab.training_lifecycle import ProgressField, TrainingExecutionMode, TrainingResult
-from gradlab.training_metrics import ThroughputWindow
+from gradlab.training_metrics import ThroughputWindow, episode_succeeded
 
 ObservationTree = torch.Tensor | dict[str, "ObservationTree"]
 
@@ -1103,6 +1103,9 @@ def run_gradlab_ppo(
     try:
         set_random_seed(int(common_config["seed"]))
         validate_action_space(env.action_space, algorithm_id="ppo")
+        sil_config = backend_config.get("sil")
+        if sil_config is not None and (device_resident or not isinstance(env.action_space, spaces.Discrete)):
+            raise ValueError("SIL requires host observations and a Discrete policy action space")
         device_name = resolve_sb3_device(str(backend_config["device"]))
         device = torch.device(device_name)
         if device_resident and device.type != "cuda":
@@ -1177,6 +1180,35 @@ def run_gradlab_ppo(
                 runtime, context, initial_step=model.num_timesteps
             )
         observations = runtime.reset(seed=int(common_config["seed"]))
+        sil_episodes = sil_updater = sil_mask = None
+        if sil_config is not None:
+            from gradlab.training.sil import SilConfig, SilEpisodes, SilReplay, SilUpdater
+
+            if not isinstance(observations, np.ndarray):
+                raise ValueError("SIL currently requires a single host observation array")
+            settings = SilConfig(**sil_config)
+            replay = SilReplay(settings, seed=int(common_config["seed"]))
+            sil_episodes = SilEpisodes(replay, n_envs=n_envs, gamma=float(model.gamma))
+            policy = model.policy
+            critic_ids = {
+                id(parameter)
+                for module in (policy.vf_features_extractor, policy.mlp_extractor.value_net, policy.value_net)
+                for parameter in module.parameters()
+            }
+            actor_ids = {
+                id(parameter)
+                for module in (policy.pi_features_extractor, policy.mlp_extractor.policy_net, policy.action_net)
+                for parameter in module.parameters()
+            }
+            if actor_ids & critic_ids:
+                raise ValueError("actor-only SIL requires disjoint actor and critic parameters")
+            sil_updater = SilUpdater(
+                policy, [parameter for parameter in policy.parameters() if id(parameter) in actor_ids],
+                replay, device=device, max_grad_norm=float(model.max_grad_norm),
+            )
+            sil_mask = np.ones(n_envs, dtype=np.bool_)
+            if settings.control_signal is not None:
+                sil_mask[:] = [info[settings.control_signal] == settings.control_value for info in runtime.reset_infos]
         _preflight_cuda_memory(
             observations,
             model=model,
@@ -1236,7 +1268,10 @@ def run_gradlab_ppo(
                         model.policy,
                     )
                 )
+                sil_observations = observations.copy() if sil_episodes is not None else None
                 batch_step = runtime.step(environment_actions)
+                if sil_episodes is not None:
+                    sil_episodes.collect(sil_observations, environment_actions.reshape(-1), batch_step.rewards, sil_mask)
                 truncated_lanes: np.ndarray | None = None
                 terminal_values: torch.Tensor | None = None
                 if not device_resident and backend_config.get("bootstrap_truncations", True):
@@ -1292,6 +1327,21 @@ def run_gradlab_ppo(
                         )
                     elif hasattr(record, "episode_return"):
                         episodes.append(record)
+                if sil_episodes is not None:
+                    for record in episodes:
+                        if isinstance(record, EpisodeRecord):
+                            sil_episodes.complete(
+                                lane=record.lane, length=record.episode_length,
+                                success=episode_succeeded(record) and record.start_origin == "target",
+                                discard=record.boundary_reason == "forced_reset",
+                            )
+                    if batch_step.control_boundaries is not None:
+                        for lane in np.flatnonzero(batch_step.control_boundaries):
+                            sil_episodes.complete(lane=int(lane), length=0, success=False, discard=True)
+                    if settings.control_signal is not None:
+                        sil_mask[:] = batch_step.transition_info[settings.control_signal] == settings.control_value
+                        for lane in np.flatnonzero(done_array):
+                            sil_mask[lane] = runtime.reset_infos[int(lane)][settings.control_signal] == settings.control_value
                 context.session.advance(int(model.num_timesteps), episodes)
                 context.session.observe_episode_completions(
                     step=int(model.num_timesteps),
@@ -1353,6 +1403,9 @@ def run_gradlab_ppo(
                 extra_metric_tensors=rollout_metric_tensors,
                 omit_if_nonfinite=optional_rollout_metrics,
             )
+            if sil_updater is not None:
+                update_metrics.update(sil_updater.update())
+                update_metrics["train/sil/dropped_episodes"] = sil_episodes.dropped_episodes
             update_checkpoints.after_update(model, context, config.game)
             rollout_metrics = dict(curriculum_metrics)
             rollout_metrics.update(reward_stats.flush())
