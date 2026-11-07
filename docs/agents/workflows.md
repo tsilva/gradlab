@@ -39,6 +39,7 @@ intent again before finishing as required by the specification policy.
 | Launch or follow this recipe/Run | `gradlab_launch-experiment`, launch/monitor path |
 | Fix or finish this failed workflow | `gradlab_launch-experiment`, repair mode within the request's bounds |
 | Evaluate these selected published Checkpoints | `gradlab_launch-experiment`, manual-evaluation path and requested list/result completion gate |
+| Evaluate a completed local source-overlay Run on its own host | `gradlab evaluate-local` with the recorded baseline and overlay receipts, exact checkpoint digest, and a private queue directory |
 | Tune this recipe's numeric PPO/A2C hyperparameters | `gradlab_autoresearch`, fixed training-only protocol |
 | Optimize architecture, rollout size, rewards, or another backend | Explicit experiment plan covering the requested axes |
 | Publish this unevaluated Checkpoint | `gradlab_upload-checkpoint`, Checkpoint Publication path |

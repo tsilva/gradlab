@@ -442,6 +442,8 @@ def generated_metadata(
     model_tag_url = f"https://huggingface.co/{repo_id}/tree/{release_version}"
     source_commit = str(source_value.get("commit") or "")
     recipe_name = str(source_value.get("recipe") or "")
+    overlay_sha = (source_value.get("overlay") or {}).get("overlay_sha256")
+    source_label = "Source base" if overlay_sha else "Source/recipe"
     r2_manifest = str(
         source_value.get("model_document_url") or evaluation.get("checkpoint_artifact") or ""
     )
@@ -463,7 +465,8 @@ def generated_metadata(
             f"Immutable model: {model_tag_url}",
             run_link,
             f"R2 manifest: {r2_manifest}",
-            f"Source/recipe: https://github.com/tsilva/gradlab/tree/{source_commit} ({recipe_name})",
+            f"{source_label}: https://github.com/tsilva/gradlab/tree/{source_commit} ({recipe_name})",
+            *([f"Source overlay SHA-256: {overlay_sha}"] if overlay_sha else []),
             "GitHub: https://github.com/tsilva/gradlab",
             "Collection: {{COLLECTION_URL}}",
             "Playlist: {{PLAYLIST_URL}}",
@@ -565,7 +568,10 @@ def prepare_release_bundle(
         evaluation_document,
         algorithm_id=str(bundle.model["policy"].get("algorithm_id") or ""),
     )
-    source = publication_source_from_policy_bundle(bundle, evaluation)
+    overlay = (evaluation_evidence_document.get("provenance") or {}).get("source_overlay")
+    source = publication_source_from_policy_bundle(
+        bundle, evaluation, **({"source_overlay": overlay} if overlay else {})
+    )
     expected_evidence = {
         "checkpoint_sha256": bundle.checkpoint_sha256,
         "recipe_sha256": bundle.recipe_sha256,
@@ -735,7 +741,10 @@ class PlayerPublicationService:
         previous = assert_goal_repository_compatible(
             api, repo_id=repo_id, identity=identity, token=False
         )
-        source = publication_source_from_policy_bundle(bundle, normalized_evaluation)
+        overlay = (evidence_document.get("provenance") or {}).get("source_overlay")
+        source = publication_source_from_policy_bundle(
+            bundle, normalized_evaluation, **({"source_overlay": overlay} if overlay else {})
+        )
         checkpoint_manifest = _required_mapping(
             evidence.get("checkpoint_manifest"), label="checkpoint manifest"
         )
@@ -844,6 +853,7 @@ class PlayerPublicationService:
                 rejected.append(f"{idempotency_key}: incomplete intent/raw join")
                 continue
             evidence = {
+                "run_manifest": authority.manifest(run_id),
                 "checkpoint_manifest": checkpoint.to_dict(),
                 "recipe": deepcopy(bundle.recipe),
                 "intent": deepcopy(dict(intent)),
@@ -932,7 +942,10 @@ class PlayerPublicationService:
             token=hf_credential.token,
         )
         version, parent_commit = next_release_version(api, repo_id)
-        source = publication_source_from_policy_bundle(bundle, normalized_evaluation)
+        overlay = (evaluation_evidence_document.get("provenance") or {}).get("source_overlay")
+        source = publication_source_from_policy_bundle(
+            bundle, normalized_evaluation, **({"source_overlay": overlay} if overlay else {})
+        )
         checkpoint_manifest = _required_mapping(
             evidence.get("checkpoint_manifest"), label="checkpoint manifest"
         )

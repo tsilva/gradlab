@@ -32,6 +32,14 @@ prerequisite or unsupported input rather than bypassing admission or inventing
 evidence. Local files must first enter a supported public Run workflow; the
 current player publisher admits verified catalog Checkpoints.
 
+For a source-overlay Run accepted through `gradlab evaluate-local`, use
+`gradlab publish-local <run-directory> --acceptance-queue <private-queue-directory>`
+on the host holding the original Run and its private evaluation. This imports
+the original checkpoint and recipe bytes and the verified Acceptance evidence.
+The import records the original and relocated evidence digests when it moves
+the evaluation video into the configured store. A Release still uses the
+player's representative capture and the normal Publication controls.
+
 ## Admit one release
 
 1. Resolve the exact Run and Checkpoint from the public catalog. For local-only

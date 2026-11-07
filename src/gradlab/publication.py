@@ -691,16 +691,23 @@ def normalize_publication_evaluation(
 def publication_source_from_policy_bundle(
     bundle: PolicyBundle,
     evaluation: PublicationEvaluation,
+    *,
+    source_overlay: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     provenance = _require_mapping(bundle.model.get("provenance"), label="model.json provenance")
     checkpoint = _require_mapping(bundle.model.get("checkpoint"), label="model.json checkpoint")
     seed = _required_int(provenance.get("seed"), label="model.json provenance.seed")
     commit = _required_text(
-        provenance.get("repo_git_commit"),
+        source_overlay["base_commit"] if source_overlay else provenance.get("repo_git_commit"),
         label="model.json provenance.repo_git_commit",
     ).lower()
     if not re.fullmatch(r"[0-9a-f]{40}", commit):
         raise ValueError("model.json provenance.repo_git_commit must be a full Git SHA")
+    if source_overlay and (
+        provenance.get("repo_git_commit")
+        or canonical_json_sha256(dict(source_overlay["overlay_files"])) != source_overlay["overlay_sha256"]
+    ):
+        raise ValueError("release source overlay conflicts with checkpoint provenance")
     checkpoint_step = _required_int(checkpoint.get("step"), label="model.json checkpoint.step")
     if checkpoint_step != evaluation.checkpoint_step:
         raise ValueError("model.json checkpoint_step disagrees with evaluation")
@@ -710,6 +717,7 @@ def publication_source_from_policy_bundle(
     return {
         "repository": "https://github.com/tsilva/gradlab",
         "commit": commit,
+        **({"overlay": dict(source_overlay)} if source_overlay else {}),
         "run_id": _required_text(
             provenance.get("wandb_run_id"),
             label="model.json provenance.wandb_run_id",
@@ -1013,6 +1021,7 @@ def render_model_card(
             ),
             "seed": _required_int(source.get("seed"), label="manifest source.seed"),
             "source_commit": commit,
+            "source_overlay": (source.get("overlay") or {}).get("overlay_sha256"),
             "checkpoint_artifact": _markdown_value(
                 _required_text(
                     source.get("checkpoint_artifact"),

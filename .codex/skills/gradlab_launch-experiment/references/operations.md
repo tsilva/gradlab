@@ -162,6 +162,26 @@ queued for later lease acquisition without turning this into training monitoring
 Use the immutable Run's exact-source runtime. Do not add legacy reader probing
 to accommodate an older Run; any backport needs an evidence-proven repair.
 
+### Evaluate a completed local source-overlay Run
+
+Run the command on the host with the original completed Run, source tree, and
+recorded Python environment. Pass the recorded input receipt, which binds the
+baseline receipt and overlay digests, and independently verify the requested
+checkpoint hash. For ROM-backed runs, pass the original ROM via `--rom-path`.
+
+```bash
+gradlab evaluate-local <run-directory> --source <source-tree> \
+  --baseline-receipt <baseline.json> --input-receipt <inputs.json> \
+  --checkpoint-sha256 <sha256> --queue-dir <private-queue-directory>
+```
+
+This imports the Run into file-backed storage under the private queue and runs
+its final Checkpoint through the standard Acceptance verifier on CPU. It
+preserves the saved recipe and original Run. Inspect the job with
+`gradlab jobs --queue-dir <private-queue-directory> show <job-id>` and verify its
+subject's terminal Acceptance verdict. The private catalog and evidence do not
+constitute a public Checkpoint or Hugging Face Release.
+
 ## Recovery and final report
 
 In repair mode, wait for the failed task to become terminal, its writer lease
