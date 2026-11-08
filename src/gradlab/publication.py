@@ -52,6 +52,12 @@ EVALUATION_EVIDENCE_DOCUMENT_TYPE = "gradlab.evaluation_evidence"
 EVALUATION_EVIDENCE_VERSION = 2
 RESEARCH_RELEASE_TIER = "research"
 HISTORICAL_RELEASE_TIER = "historical-import"
+# The published 0.2.2 package predates the fields in this archived recipe.
+_MARIO_SIL_PLAYBACK_SOURCE = {
+    "babe9450334e6b9cdcff31371c81668ee678c1544ad3db7dd0bbdea0b1a7f22d": (
+        "3a803d249661809d5c00c28a529f4752dc6b9ca3"
+    ),
+}
 HUGGINGFACE_RELEASE_FILES = frozenset(
     {
         ".gitattributes",
@@ -938,21 +944,32 @@ def render_model_card(
         f"{_metric_value(row['value'], row['unit'])} | `{row['direction']}` |"
         for row in ranking.get("outcomes") or ()
     )
-    quick_start_lines = [
-        "```bash",
-        "uvx --from gradlab gradlab play " + model_ref,
-        "```",
-    ]
+    overlay = source.get("overlay") or {}
+    playback_commit = _MARIO_SIL_PLAYBACK_SOURCE.get(overlay.get("overlay_sha256"))
+    quick_start_intro: list[str] = []
+    quick_start_commands: list[str] = []
+    launcher = "uvx --from gradlab gradlab"
+    if playback_commit:
+        quick_start_intro.extend(["Use this GradLab source revision to load the recorded recipe.", ""])
+        quick_start_commands.extend([
+            "git clone https://github.com/tsilva/gradlab.git",
+            "cd gradlab",
+            f"git checkout {playback_commit}",
+            "uv sync --frozen",
+        ])
+        launcher = "uv run --frozen gradlab"
+    play_command = f"{launcher} play {model_ref}"
     if provider == "env-stableretro-turbo":
-        quick_start_lines = [
-            "Import a legally obtained compatible game image, then play the immutable release:",
+        quick_start_intro.extend(["Put a legally obtained compatible game image in `~/roms`.", ""])
+        quick_start_commands.append(f"{launcher} rom import ~/roms --game {game}")
+    elif provider == "env-supermariobrosnes-turbo-emu":
+        quick_start_intro.extend([
+            "Use a legally obtained ROM that matches the game image recorded with this checkpoint.",
             "",
-            "```bash",
-            f"uvx --from gradlab gradlab rom import ~/roms --game {game}",
-            "uvx --from gradlab gradlab play " + model_ref,
-            "```",
-        ]
-    quick_start = "\n".join(quick_start_lines)
+        ])
+        play_command += " --rom-path ~/roms/SuperMarioBros.nes"
+    quick_start_commands.append(play_command)
+    quick_start = "\n".join([*quick_start_intro, "```bash", *quick_start_commands, "```"])
     run_name = _required_text(source.get("run_name"), label="manifest source.run_name")
     run_url = wandb_url or (
         f"{DEFAULT_PUBLIC_MODELS_BASE_URL.rstrip('/')}/runs/{run_id}/index.json"

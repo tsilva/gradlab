@@ -57,6 +57,11 @@ player's representative capture and the normal Publication controls.
    submitting again. Authorization to publish the named result permits this
    admission; do not require an extra approval when the request is already clear.
 
+The Mario Level 1-3 repository can take its first v4 Release when `main` is
+the reviewed legacy checkpoint and `sft-20261102` points to that same commit.
+The publisher uses the expected parent for the new commit and leaves the SFT
+tag available as the legacy checkpoint's immutable reference.
+
 The authenticated player routes are `/api/publication/current`, `/render`,
 `/preflight`, `/preview`, `/admit`, and `/jobs/{job_id}` under the same prefix.
 Use its existing session controls and authority checks; do not extract or print

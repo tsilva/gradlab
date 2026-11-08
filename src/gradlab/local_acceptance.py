@@ -20,6 +20,7 @@ from gradlab.manual_evaluation import ManualEvaluationQueue, private_evaluation_
 from gradlab.modal_eval_protocol import normalize_attempt_result
 from gradlab.policy_bundle import load_policy_bundle_from_checkpoint
 from gradlab.publication_evidence import validate_publication_evidence
+from gradlab.r2_store import BucketConfig, R2Bucket
 from gradlab.rom_assets import verify_rom_file
 from gradlab.run_authority import RunAuthority
 from gradlab.run_contracts import (
@@ -76,7 +77,12 @@ def publish_accepted_local_run(
         raise ValueError("private raw and verified Acceptance video bindings differ")
     video_path = None
     if video:
-        video_key = origin.evaluation.key_from_uri(video["object_uri"])
+        # The receipt binds the recording to its original private bucket even
+        # when the operator copies the verified queue to the publication host.
+        recorded_bucket = R2Bucket(BucketConfig(str(manifest.storage["evaluation"])))
+        if recorded_bucket.scheme != "file":
+            raise ValueError("local Acceptance must record a file-backed video source")
+        video_key = recorded_bucket.key_from_uri(video["object_uri"])
         uri = urlparse(origin.evaluation.uri(video_key))
         video_path = Path(unquote(uri.path))
         if file_sha256(video_path) != video["sha256"] or video_path.stat().st_size != video["bytes"]:
