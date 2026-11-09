@@ -24,8 +24,7 @@ gradlab: https://github.com/tsilva/gradlab
 
     updated = MODULE.replace_description_link_block(
         existing,
-        "Model: https://huggingface.co/tsilva/new\n"
-        "gradlab: https://github.com/tsilva/gradlab",
+        "Model: https://huggingface.co/tsilva/new\ngradlab: https://github.com/tsilva/gradlab",
     )
 
     assert "A PPO agent completes Level 1-4." in updated
@@ -92,3 +91,15 @@ def test_access_token_merges_client_config_into_player_issued_token(
     assert observed["client_id"] == "client"
     assert observed["client_secret"] == "secret"
     assert observed["token_uri"] == "https://oauth.example/token"
+
+
+def test_auth_only_never_uploads_or_changes_videos(monkeypatch):
+    calls = []
+    monkeypatch.setattr("sys.argv", [str(SCRIPT), "--auth-only"])
+    monkeypatch.setattr(MODULE, "youtube_store", lambda _: object())
+    monkeypatch.setattr(MODULE, "load_client_config", lambda _: {"client_id": "client"})
+    monkeypatch.setattr(MODULE, "authorize", lambda *args, **kw: calls.append(kw))
+    monkeypatch.setattr(MODULE, "access_token", lambda *args, **kw: 1 / 0)
+    monkeypatch.setattr(MODULE, "upload_video", lambda *args, **kw: 1 / 0)
+    MODULE.main()
+    assert calls == [{"no_browser": False}]

@@ -28,7 +28,7 @@ GRADLAB_MODELS_R2_REGION = "auto"
 GRADLAB_MODELS_R2_PUBLIC_BASE_URL = "https://<public-bucket-id>.r2.dev"
 
 # Coordinator metadata is explicit so each fleet has exactly one control plane.
-# The selected coordinator token is resolved lazily from its Keychain reference.
+# The selected coordinator token is resolved lazily from its Infisical reference.
 # Optional ssh_tunnel metadata lets the CLI reach a loopback-only coordinator
 # from the operator machine. Destinations are tried in order and must all name
 # the same coordinator host (for example, LAN first and private VPN second).
@@ -39,13 +39,13 @@ default_fleet = "primary-gpu"
 [dstack.coordinators.primary]
 project = "<dstack-project>"
 server_url = "http://127.0.0.1:3000"
-token = { service = "gradlab-dstack-admin", account = "<operator-account>" }
+token = { instance = "https://app.infisical.com", project_id = "<project-id>", secret_name = "DSTACK_PRIMARY_TOKEN", environment = "prod", path = "/dstack" }
 ssh_tunnel = { destinations = ["<ssh-user>@<primary-host>.local", "<ssh-user>@<primary-host-vpn>"], remote_host = "127.0.0.1", remote_port = 3000 }
 
 [dstack.coordinators.secondary]
 project = "<dstack-project>"
 server_url = "http://127.0.0.1:3002"
-token = { service = "gradlab-dstack-admin-secondary", account = "<operator-account>" }
+token = { instance = "https://app.infisical.com", project_id = "<project-id>", secret_name = "DSTACK_SECONDARY_TOKEN", environment = "prod", path = "/dstack" }
 ssh_tunnel = { destinations = ["<ssh-user>@<secondary-host>.local", "<ssh-user>@<secondary-host-vpn>"], remote_host = "127.0.0.1", remote_port = 3000 }
 
 [dstack.fleets.primary-gpu]
@@ -62,20 +62,29 @@ memory = "28GB"
 gpu = "1"
 disk = "50GB"
 
-# Other secret values stay in macOS Keychain. These entries contain references only.
+# Secret values stay in Infisical. These entries contain references only.
 
-[keychain.WANDB_API_KEY]
-service = "gradlab-wandb"
-account = "api-key"
+[infisical.WANDB_API_KEY]
+instance = "https://app.infisical.com"
+project_id = "<project-id>"
+secret_name = "WANDB_API_KEY"
+environment = "prod"
+path = "/wandb"
 
 # Omit both MLflow credential entries when using network authentication.
-[keychain.MLFLOW_TRACKING_USERNAME]
-service = "gradlab-mlflow"
-account = "username"
+[infisical.MLFLOW_TRACKING_USERNAME]
+instance = "https://app.infisical.com"
+project_id = "<project-id>"
+secret_name = "MLFLOW_TRACKING_USERNAME"
+environment = "prod"
+path = "/mlflow"
 
-[keychain.MLFLOW_TRACKING_PASSWORD]
-service = "gradlab-mlflow"
-account = "password"
+[infisical.MLFLOW_TRACKING_PASSWORD]
+instance = "https://app.infisical.com"
+project_id = "<project-id>"
+secret_name = "MLFLOW_TRACKING_PASSWORD"
+environment = "prod"
+path = "/mlflow"
 
 [keychain.GRADLAB_CONTROL_R2_ACCESS_KEY_ID]
 service = "gradlab-r2-control"
@@ -101,7 +110,17 @@ account = "access-key-id"
 service = "gradlab-r2-models"
 account = "secret-access-key"
 
-# Modal remains the source of truth for its own token. gradlab imports the active
-# profile in memory and requires this credential file to use mode 0600.
-[modal]
-path = "~/.modal.toml"
+# Modal credentials are also fetched in memory from Infisical.
+[infisical.MODAL_TOKEN_ID]
+instance = "https://app.infisical.com"
+project_id = "<personal-tooling-project-id>"
+secret_name = "MODAL_TOKEN_ID"
+environment = "prod"
+path = "/modal"
+
+[infisical.MODAL_TOKEN_SECRET]
+instance = "https://app.infisical.com"
+project_id = "<personal-tooling-project-id>"
+secret_name = "MODAL_TOKEN_SECRET"
+environment = "prod"
+path = "/modal"

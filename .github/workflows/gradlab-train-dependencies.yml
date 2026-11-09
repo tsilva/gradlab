@@ -25,10 +25,13 @@ on:
 
 permissions:
   contents: read
-  packages: write
+  packages: read
 
 jobs:
   foundations:
+    permissions:
+      contents: read
+      packages: write
     uses: ./.github/workflows/gradlab-train-foundations.yml
     with:
       source_sha: ${{ inputs.source_sha || github.sha }}

@@ -89,6 +89,8 @@ assert "gradlab.play_session" not in sys.modules
 
     def test_delegated_help_uses_complete_public_command(self) -> None:
         cases = (
+            (("autoresearch", "--help"), "usage: gradlab autoresearch"),
+            (("autoresearch", "init", "--help"), "usage: gradlab autoresearch init"),
             (("train", "--help"), "usage: gradlab train"),
             (("sync", "--help"), "usage: gradlab sync"),
             (("experiment", "launch", "--help"), "usage: gradlab experiment launch"),

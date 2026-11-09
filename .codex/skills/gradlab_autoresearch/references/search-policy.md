@@ -1,0 +1,159 @@
+# Autoresearch Training-Signal Policy
+
+## Objective and defaults
+
+Select the most sample-efficient seed-stable recipe supported by durable training completion
+signals. Use success evidence when the task declares success termination. When a goal ranks
+episode return but declares no success event, use robust late-training return evidence instead.
+Autoresearch does not evaluate or promote checkpoints and cannot establish goal acceptance.
+
+Use the operator-configured local fleet, at most 48 reserved jobs, three stale
+search rounds, a `0.90` strong threshold, and five untouched confirmation seeds
+requiring at least four strong runs. Resolve and freeze the fleet at initialization:
+
+```text
+rollout_quantum = n_steps * n_envs
+screen_cap = ceil((0.20 * timesteps) / rollout_quantum) * rollout_quantum
+pair_cap = ceil((0.50 * timesteps) / rollout_quantum) * rollout_quantum
+full_effective_cap = ceil(timesteps / rollout_quantum) * rollout_quantum
+```
+
+Require `screen_cap < pair_cap < full_effective_cap`. Launch the confirmation recipe at its
+original configured `timesteps`.
+
+Use `gradlab.seeds.DEFAULT_TRAIN_SEED` (currently `123`) and validate each full
+vector-lane span with `gradlab.seeds.validate_training_seed` before reservation.
+For `n_envs=N`, use screen seed `123`, paired seeds `123+N` and `123+2N`, and confirmation seeds
+`123+3N` through `123+7N`. These are separate fresh runs; no rung resumes another run.
+
+## Evidence and ranking
+
+### Success mode
+
+A screen passes only when the terminal-fenced verified GradLab journal shows at least one cumulative training
+success for every configured start. A missing start or zero success prevents the paired rung.
+
+For paired evidence, define a seed as strong when
+`train/success/min` reaches the frozen threshold at any logged
+`train/step`. Missing window-100 history is not strong. Rank eligible two-seed candidates
+lexicographically by:
+
+1. more strong seeds;
+2. lower median first-strong step, censoring non-strong seeds at the 50% effective cap;
+3. lower worst censored first-strong step;
+4. higher worst-seed peak window-100 minimum;
+5. stable candidate ID only as an exact tie-break.
+
+Candidate-ID ties never reset staleness. Use only the binary pass/fail aggregate from a failed
+confirmation to exclude that candidate; do not use holdout per-seed evidence for later proposals.
+
+### Return mode
+
+For every durably completed Run, read
+`train/return/mean` and summarize the final
+10% of observed training steps with its mean, p05, and standard deviation; also retain the peak
+and last value. Missing or non-finite history is invalid evidence.
+
+Always pair the baseline. In each search round, pair only the screen with the highest final-10%
+mean, then p05, then peak; candidate ID is only an exact tie-break. Rank eligible two-seed
+candidates lexicographically by:
+
+1. higher worst-seed final-10% mean;
+2. higher median final-10% mean;
+3. higher worst-seed final-10% p05;
+4. higher median final-10% p05;
+5. higher median peak.
+
+At confirmation reservation, freeze the incumbent's worst paired final-10% mean. At least four of
+five untouched full-cap seeds must meet that floor. A failed holdout remains a binary exclusion;
+do not use its per-seed values to choose later candidates.
+
+## Frozen experiment contract
+
+Schema-v6 studies read hash-verified, contiguous journal events through the
+recorded Attempt terminal high-water mark. Fence the immutable manifest and
+terminal hashes; later evaluation or service-sync events cannot alter a trial.
+Online completion requires delivery to the frozen selected service; local-only
+completion requires durable journals and no service-delivery claim.
+
+Never tune or change:
+
+- goal, game, starts, provider, environment, preprocessing, task, reward, termination, evaluation
+  contract, checkpoint cadence, or release semantics;
+- `n_envs`, backend ID, `n_steps`, device, resume state, architecture, categorical choices, resolved tracking backend and delivery,
+  checkpoint publication, or artifact publication;
+- source revision or the exact runtime image/input/build-source triplet.
+
+The only study-level launch overrides outside a candidate delta are the preregistered rung
+`train.timesteps`, description, and `--checkpoint-eval-backend none`. Do not persist these in the
+winning leaf recipe. Fixed rung caps are separate declared training runs, not metric-driven early
+stops.
+
+Training evidence ranks recipes only. Never reinterpret it as checkpoint acceptance, promotion,
+evaluation evidence, release evidence, or proof that a playable artifact satisfies the goal.
+
+## Allowed candidate space
+
+Tune only numeric, non-null keys already present in the composed backend config. Never introduce a
+new key, move a zero baseline, change a boolean or categorical value, or change `n_steps`.
+
+Each candidate changes one coherent group:
+
+- learning-rate schedule: `learning_rate`, `learning_rate_final`,
+  `learning_rate_schedule_timesteps`;
+- entropy schedule: `ent_coef`, `ent_coef_final`, `ent_coef_schedule_timesteps`;
+- discounting: `gamma`, `gae_lambda`;
+- value weighting: `vf_coef`;
+- PPO update: `batch_size`, `n_epochs`, `clip_range`, `target_kl`, `adam_eps`;
+- A2C optimizer: existing numeric optimizer fields such as `learning_rate`,
+  `learning_rate_final`, `max_grad_norm`, `rms_prop_eps`, and `vf_coef`.
+
+Keep values within 0.25x to 4x of baseline and their semantic domains. Preserve integer types.
+For PPO, require `batch_size` to divide fixed `n_steps * n_envs` and keep update work per
+environment step at or below 2x baseline.
+
+Propose at most three candidates per round, favoring a conservative lower setting, conservative
+higher setting, and one local schedule or interaction alternative in the same group. Never repeat
+a registered candidate.
+
+## Capacity, recovery, and stopping
+
+Read effective capacity immediately before each reservation and never alter it. Submit
+generated commands only within that capacity and obey the controller's `launch_concurrently`
+result; do not infer permission to submit a concurrent wave. Promote a passed screen into its paired rung as soon as the
+controller requests it, but propose no new round until every screen and required pair in the
+current round has complete durable evidence.
+
+Every generated launch uses one deterministic submission key and seed. Reconcile before enqueue:
+
+- exact cohort: record it;
+- zero rows: execute once;
+- partial rows or mismatched seeds, sources, overrides, runtime, or training-only backend: pause.
+
+Operational failure, cancellation, unresolved observer failure, `potential_bug`, `attention_required`,
+source drift, runtime drift, or unverified journal retention or required service delivery pauses rather than consuming a new wave.
+A fully drained `stopped` terminal with typed `early_stop_neutral:<condition_id>` and a matching
+neutral `no_improvement` / `action: stop` receipt is `designed_plateau_stop` negative evidence:
+preserve its journal observations, censor its success fields, and continue the study without allowing
+that run to win a rung. Continue recognizing immutable historical `failed` /
+`early_stop_failure:<condition_id>` plateau receipts as `designed_early_stop_failure` under the
+same censoring rule without rewriting them. Transient R2 evidence reads remain retryable without
+scientific state mutation. Reconnecting an exited observer for the same Run is allowed
+within the monitoring deadline; it creates no Attempt. If observation cannot be restored,
+record attention and pause later waves.
+
+Reserve five jobs for confirmation throughout search. Stop after three stale rounds or when the
+remaining budget cannot support another screen, its possible two-run pair, and confirmation. A
+failed five-seed confirmation excludes the candidate, resets staleness, and continues only if the
+budget supports a valid next action.
+
+## Winner application
+
+Require at least four of five untouched full-cap seeds to satisfy the active success or return
+confirmation rule. Record the result as `training-signal-confirmed`, never accepted or promoted.
+
+Apply in two phases: preregister the exact leaf postimage and hash while the leaf equals its pinned
+preimage, then apply and recompose. Require the recomposed train configuration to equal the frozen
+baseline plus only the winning numeric backend delta. Preserve all goal-owned evaluation settings
+for ordinary future launches. Keep reports under `~/.config/gradlab/runs/autoresearch/`; only the leaf recipe patch is
+source content.

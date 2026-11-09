@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from gradlab.dstack_backend import DstackResources
+from gradlab.secret_reference import InfisicalReference, read_secret
 
 
 OPERATOR_CONFIG_ENV = "GRADLAB_OPERATOR_CONFIG"
@@ -58,7 +59,7 @@ class DstackCoordinatorProfile:
     coordinator_id: str
     project: str
     server_url: str
-    token: KeychainReference
+    token: KeychainReference | InfisicalReference
     ssh_tunnel: SshTunnelProfile | None = None
 
 
@@ -255,7 +256,12 @@ def _profile_name(value: object, *, label: str) -> str:
     return name
 
 
-def _keychain_reference(value: object, *, label: str) -> KeychainReference:
+def _keychain_reference(value: object, *, label: str) -> KeychainReference | InfisicalReference:
+    if isinstance(value, Mapping) and "project_id" in value:
+        try:
+            return InfisicalReference.parse(value)
+        except ValueError:
+            raise OperatorConfigurationError(f"{label}: invalid Infisical reference") from None
     if not isinstance(value, Mapping):
         raise OperatorConfigurationError(f"{label} must be a mapping")
     extra = set(value) - {"service", "account"}
@@ -448,6 +454,12 @@ def resolve_dstack_token(
     process_value = str(values.get("DSTACK_TOKEN") or "").strip()
     if process_value:
         return process_value, "process-environment"
+    if isinstance(profile.token, InfisicalReference):
+        try:
+            value = read_secret(profile.token)
+        except ValueError as exc:
+            raise OperatorConfigurationError(str(exc)) from None
+        return value, "infisical"
     lookup = _keychain_lookup if keychain_lookup is None else keychain_lookup
     value = lookup(profile.token)
     if value is None:
@@ -552,7 +564,7 @@ def load_operator_environment(
         )
     _require_not_writable_by_others(path, label="operator config")
     document = _read_toml(path, label="operator config")
-    allowed_top_level = {"schema_version", "environment", "keychain", "modal", "dstack"}
+    allowed_top_level = {"schema_version", "environment", "keychain", "modal", "dstack", "infisical"}
     extra = set(document) - allowed_top_level
     if extra:
         raise OperatorConfigurationError(
@@ -598,6 +610,29 @@ def load_operator_environment(
             continue
         values[name] = value
         loaded_sources[name] = "operator-config"
+    references = document.get("infisical") or {}
+    if not isinstance(references, Mapping):
+        raise OperatorConfigurationError("operator config [infisical] must be a mapping")
+    for raw_name, raw_reference in references.items():
+        if selected_names is not None and raw_name not in selected_names:
+            continue
+        name = _validate_environment_name(raw_name, label="Infisical binding")
+        if name not in PROTECTED_ENV_NAMES:
+            raise OperatorConfigurationError("Infisical binding is not a protected value")
+        try:
+            reference = InfisicalReference.parse(raw_reference)
+        except ValueError:
+            raise OperatorConfigurationError("Invalid Infisical binding") from None
+        if str(values.get(name) or "").strip():
+            continue
+        try:
+            value = read_secret(reference)
+        except ValueError as exc:
+            raise OperatorConfigurationError(str(exc)) from None
+        if value is None:
+            raise OperatorConfigurationError("Infisical credential is missing")
+        values[name] = value
+        loaded_sources[name] = "infisical"
     lookup = _keychain_lookup if keychain_lookup is None else keychain_lookup
     for name, reference in _keychain_references(
         document,

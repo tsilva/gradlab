@@ -1048,7 +1048,11 @@ def _derive_critic_value_contract(
         "discount": discount,
         **({"discount_schedule": schedule} if schedule is not None else {}),
         "action_sampling": default_action_selection_mode(algorithm_id),
-        "truncation_bootstrap": "terminal-value",
+        "truncation_bootstrap": (
+            "zero" if backend.get("id") == "gradlab.ppo"
+            and backend_config.get("bootstrap_truncations") is False
+            else "terminal-value"
+        ),
     }
 
 

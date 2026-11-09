@@ -247,7 +247,10 @@ required_metrics: [train/throughput/not_real]
         )
         self.assertIsNotNone(command.stdin)
         train_config = json.loads(command.stdin)
-        self.assertEqual(train_config["training_backend"]["id"], "sb3.ppo")
+        self.assertEqual(train_config["training_backend"]["id"], "gradlab.ppo")
+        self.assertEqual(
+            train_config["training_backend"]["config"]["execution_profile"], "sb3-parity"
+        )
         self.assertEqual(train_config["checkpoint_eval_backend"], "none")
         self.assertNotIn("checkpoint_eval_stages", train_config)
         self.assertIsNone(train_config["early_stop"])

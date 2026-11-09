@@ -15,7 +15,8 @@ from gradlab.checkpoint_acceptance import requires_complete_evaluation
 from gradlab.checkpoint_contract import checkpoint_manifest_contract_sha256
 from gradlab.clock import Clock, SystemClock, parse_utc_datetime
 from gradlab.early_stop import metric_threshold_evidence
-from gradlab.eval_backend import EvalBackend
+from gradlab.eval_backend import EvalBackend, EvalHandle
+from gradlab.env_registry import supports_evaluation_video
 from gradlab.evaluation_attempts import (
     build_modal_eval_payload,
     compile_eval_intent,
@@ -38,6 +39,7 @@ from gradlab.job_queue import (
     ensure_flusher,
     register_handler,
 )
+from gradlab.json_utils import canonical_json_sha256
 from gradlab.metric_names import (
     EVAL_FULL_EPISODE_RETURN_SHAPED_MEAN,
     EVAL_FULL_OUTCOME_SUCCESS_STARTS_RATE_MEAN,
@@ -51,7 +53,8 @@ from gradlab.policy_bundle import (
     evaluation_contract,
     evaluation_contract_sha256,
 )
-from gradlab.r2_store import ConditionalWriteConflict, RunStorageConfig
+from gradlab.r2_store import BucketConfig, ConditionalWriteConflict, RunStorageConfig
+from gradlab.rom_assets import verify_rom_file
 from gradlab.run_authority import Lease, LeaseUnavailable, RunAuthority
 from gradlab.run_contracts import (
     CheckpointManifest,
@@ -63,12 +66,15 @@ from gradlab.run_contracts import (
     document_sha256,
 )
 from gradlab.runtime_refs import RuntimeImageInfo, modal_readiness_for_release
+from gradlab.source_overlay import verify_source_tree
 from gradlab.supervisor_ledger import SupervisorLedger
 from gradlab.supervisor_runtime import SupervisorRuntime
+from gradlab.training_container_eval import TrainingContainerEvalBackend
 from gradlab.wandb_publisher import promotion_summary_matches, wandb_delivery_high_water
 
 
 MANUAL_EVAL_PROTOCOL = "modal-acceptance-v4"
+LOCAL_MANUAL_EVAL_PROTOCOL = "local-post-training-acceptance-v1"
 MAX_MANUAL_EVAL_SELECTION = 100
 MANUAL_EVAL_JOB_TYPE = "evaluate-checkpoints"
 MANUAL_EVAL_JOB_VERSION = 3
@@ -95,6 +101,16 @@ class EvaluationProjectionPending(RuntimeError):
 
 class EvaluationSelectionChanged(ValueError):
     pass
+
+
+def private_evaluation_authority(queue_root: Path) -> RunAuthority:
+    root = queue_root / "authority"
+    models = (root / "models").as_uri()
+    return RunAuthority(RunStorageConfig(
+        control=BucketConfig((root / "control").as_uri()),
+        evaluation=BucketConfig((root / "evaluation").as_uri()),
+        models=BucketConfig(models, public_base_url=models),
+    ))
 
 
 @dataclass(frozen=True)
@@ -160,6 +176,8 @@ class ManualEvaluationSupervisor:
         holder_id: str | None = None,
         work_root: Path | None = None,
         runtime: SupervisorRuntime | None = None,
+        local_source: Path | None = None,
+        rom_path: Path | None = None,
     ) -> None:
         self.authority = authority
         self.repo_root = Path(repo_root).resolve()
@@ -167,7 +185,11 @@ class ManualEvaluationSupervisor:
         self.modal_config: ModalEvalConfig = load_modal_eval_config(
             self.repo_root / "experiments" / "modal_eval.yaml"
         )
-        self.backend_factory = backend_factory or self._modal_backend
+        self.local_source = local_source
+        self.rom_path = rom_path
+        self.backend_factory = backend_factory or (
+            self._local_backend if local_source is not None else self._modal_backend
+        )
         self.project_results = bool(project_results)
         self.runtime = runtime or SupervisorRuntime(clock=self.clock)
         self._backends: dict[str, EvalBackend] = {}
@@ -179,6 +201,23 @@ class ManualEvaluationSupervisor:
             else self.repo_root / "runs" / "manual-evaluation"
         )
         self.work_root.mkdir(parents=True, exist_ok=True)
+
+    def _local_backend(self, manifest: RunManifest) -> EvalBackend:
+        from gradlab.local_train import _runtime_packages
+
+        source = self.local_source
+        overlay = manifest.compute.get("source_overlay")
+        if source is None or not isinstance(overlay, Mapping):
+            raise EvaluationContractIneligible("local evaluation requires a verified source overlay")
+        if manifest.compute.get("runtime", {}).get("packages") != _runtime_packages():
+            raise EvaluationContractIneligible("local evaluator packages differ from the recorded runtime")
+        try:
+            verify_source_tree(source, overlay["effective_files"])
+        except (ValueError, OSError) as exc:
+            raise EvaluationContractIneligible(f"recorded evaluation source did not verify: {exc}") from exc
+        return TrainingContainerEvalBackend(
+            self.work_root / "local-acceptance", worker_source=source / "src"
+        )
 
     def _modal_backend(self, manifest: RunManifest) -> EvalBackend:
         app_name = str(manifest.modal.get("app_name") or "").strip()
@@ -287,7 +326,9 @@ class ManualEvaluationSupervisor:
             checkpoint=checkpoint,
             recipe_format_version=int(recipe_document["format_version"]),
             evaluation_contract_sha256=contract_sha256,
-            transform=self._current_protocol_contract,
+            transform=lambda value: self._current_protocol_contract(
+                value, complete=self.local_source is not None
+            ),
         )
         if enforce_current_protocol:
             self._validate_current_protocol(contract)
@@ -297,7 +338,7 @@ class ManualEvaluationSupervisor:
             checkpoint=checkpoint,
             execution_contract=contract,
             evaluation_contract_sha256=contract_sha256,
-            protocol=MANUAL_EVAL_PROTOCOL,
+            protocol=LOCAL_MANUAL_EVAL_PROTOCOL if self.local_source else MANUAL_EVAL_PROTOCOL,
             timeout_seconds=timeout,
             created_at=self.clock.utc_datetime().astimezone(UTC),
         )
@@ -382,10 +423,16 @@ class ManualEvaluationSupervisor:
     @staticmethod
     def _current_protocol_contract(
         contract: Mapping[str, Any],
+        *,
+        complete: bool = False,
     ) -> dict[str, Any]:
         normalized = dict(contract)
         environment = normalized.get("environment")
-        if not requires_complete_evaluation(environment):
+        if isinstance(environment, Mapping) and supports_evaluation_video(
+            environment["env_provider"], environment["game"]
+        ):
+            normalized["record_episode"] = True
+        if not complete and not requires_complete_evaluation(environment):
             return normalized
         policy_value = normalized.get("evidence_policy")
         policy = dict(policy_value) if isinstance(policy_value, Mapping) else {}
@@ -466,7 +513,7 @@ class ManualEvaluationSupervisor:
         attempt: int,
         expires_at: float,
     ) -> dict[str, Any]:
-        return build_modal_eval_payload(
+        payload = build_modal_eval_payload(
             manifest=context.manifest,
             checkpoint=context.checkpoint,
             intent=context.intent,
@@ -476,6 +523,12 @@ class ManualEvaluationSupervisor:
             child_margin_seconds=int(self.modal_config.timeouts.child_margin_seconds),
             expiry_margin_seconds=int(self.modal_config.timeouts.expiry_margin_seconds),
         )
+        if self.local_source and isinstance(context.intent.execution_contract.get("asset"), Mapping):
+            if self.rom_path is None:
+                raise EvaluationContractIneligible("local evaluation requires the recorded ROM")
+            verify_rom_file(self.rom_path, context.intent.execution_contract["asset"])
+            payload["rom_get_url"] = self.rom_path.resolve().as_uri()
+        return payload
 
     def _projection_key(self, context: _EvaluationContext) -> str:
         name = (
@@ -930,6 +983,50 @@ class ManualEvaluationSupervisor:
             }
 
         now = self.clock.time()
+        if self.local_source and prepared is not None and dispatch is None:
+            expires_at = float(prepared["expires_at"])
+            payload = self._payload(context, attempt=attempt, expires_at=expires_at)
+            backend = self._backend(context.manifest)
+            if expires_at <= now:
+                backend.cancel(EvalHandle("training-container", canonical_json_sha256(payload)))
+                return {
+                    "checkpoint_id": context.checkpoint.checkpoint_id,
+                    "state": "expired",
+                    "evaluation": None,
+                    "message": "local evaluation dispatch could not be reconciled before its deadline",
+                }
+            handle = backend.submit(payload)
+            self.authority.put_eval_dispatch(
+                run_id=context.manifest.run_id,
+                idempotency_key=key,
+                attempt=attempt,
+                modal_call_id=handle.call_id,
+            )
+            return {
+                "checkpoint_id": context.checkpoint.checkpoint_id,
+                "state": "submitted",
+                "evaluation": None,
+                "message": None,
+            }
+        if self.local_source and dispatch is not None:
+            handle = EvalHandle("training-container", str(dispatch["modal_call_id"]))
+            backend = self._backend(context.manifest)
+            if prepared is not None and float(prepared["expires_at"]) <= now:
+                backend.cancel(handle)
+                return {
+                    "checkpoint_id": context.checkpoint.checkpoint_id,
+                    "state": "expired",
+                    "evaluation": None,
+                    "message": "local evaluation exceeded its deadline",
+                }
+            poll = backend.poll(handle)
+            if poll.status in {"failed", "canceled"}:
+                return {
+                    "checkpoint_id": context.checkpoint.checkpoint_id,
+                    "state": "failed",
+                    "evaluation": None,
+                    "message": poll.error or "local evaluation worker stopped",
+                }
         if prepared is not None and float(prepared["expires_at"]) > now:
             return {
                 "checkpoint_id": context.checkpoint.checkpoint_id,
@@ -950,17 +1047,15 @@ class ManualEvaluationSupervisor:
                 "message": "evaluation exhausted its retry allowance",
             }
         expires_at = now + int(context.intent.timeout_seconds)
+        if self.local_source:
+            self._backend(context.manifest)
         self.authority.prepare_eval_attempt(
             run_id=context.manifest.run_id,
             idempotency_key=key,
             attempt=next_attempt,
             expires_at=expires_at,
         )
-        payload = self._payload(
-            context,
-            attempt=next_attempt,
-            expires_at=expires_at,
-        )
+        payload = self._payload(context, attempt=next_attempt, expires_at=expires_at)
         try:
             handle = self._backend(context.manifest).submit(payload)
         except Exception as exc:
@@ -1207,15 +1302,19 @@ class ManualEvaluationSupervisor:
                     "expired",
                 }:
                     continue
-                _attempt, _prepared, dispatch = self._latest_attempt(context)
-                if dispatch is not None:
+                attempt, prepared, dispatch = self._latest_attempt(context)
+                if dispatch is not None or (self.local_source and prepared is not None):
                     try:
-                        from gradlab.eval_backend import EvalHandle
-
+                        call_id = (
+                            str(dispatch["modal_call_id"]) if dispatch is not None
+                            else canonical_json_sha256(self._payload(
+                                context, attempt=attempt, expires_at=float(prepared["expires_at"])
+                            ))
+                        )
                         self._backend(manifest).cancel(
                             EvalHandle(
-                                provider="modal",
-                                call_id=str(dispatch["modal_call_id"]),
+                                provider="training-container" if self.local_source else "modal",
+                                call_id=call_id,
                             )
                         )
                     except Exception as exc:
@@ -1285,7 +1384,7 @@ class ManualEvaluationJobHandler:
 
     @classmethod
     def validate_payload(cls, payload: Mapping[str, Any]) -> dict[str, Any]:
-        allowed = {"repo_root", "queue_root", "run_id", "checkpoint_ids"}
+        allowed = {"repo_root", "queue_root", "run_id", "checkpoint_ids", "local_source", "rom_path"}
         unknown = set(payload) - allowed
         if unknown:
             raise ValueError(f"manual evaluation job has unknown field: {sorted(unknown)[0]}")
@@ -1304,24 +1403,41 @@ class ManualEvaluationJobHandler:
             raise ValueError("manual evaluation job requires checkpoints")
         if len(checkpoint_ids) > MAX_MANUAL_EVAL_SELECTION:
             raise ValueError(f"select at most {MAX_MANUAL_EVAL_SELECTION} checkpoints per request")
-        return {
+        result = {
             "repo_root": str(repo_root.resolve()),
             "queue_root": str(queue_root.resolve()),
             "run_id": run_id,
             "checkpoint_ids": list(checkpoint_ids),
         }
+        for field in ("local_source", "rom_path"):
+            if field in payload:
+                path = Path(str(payload[field])).expanduser()
+                if not path.is_absolute():
+                    raise ValueError(f"manual evaluation {field} must be absolute")
+                result[field] = str(path.resolve())
+        if "rom_path" in result and "local_source" not in result:
+            raise ValueError("manual evaluation rom_path requires local_source")
+        return result
 
     def advance(self, job: Mapping[str, Any]) -> HandlerResult:
         payload = self.validate_payload(job["payload"])
         repo_root = Path(payload["repo_root"])
-        load_repository_operator_environment(repo_root)
         queue_root = Path(payload["queue_root"])
+        local_source = Path(payload["local_source"]) if "local_source" in payload else None
+        if local_source is None:
+            load_repository_operator_environment(repo_root)
+        authority = (
+            private_evaluation_authority(queue_root) if local_source
+            else RunAuthority(RunStorageConfig.from_env())
+        )
         holder_fingerprint = hashlib.sha256(str(queue_root).encode("utf-8")).hexdigest()[:16]
         supervisor = ManualEvaluationSupervisor(
-            authority=RunAuthority(RunStorageConfig.from_env()),
+            authority=authority,
             repo_root=repo_root,
             holder_id=f"manual-eval-local-{holder_fingerprint}",
             work_root=queue_root / "work",
+            local_source=local_source,
+            rom_path=Path(payload["rom_path"]) if "rom_path" in payload else None,
         )
         try:
             return supervisor.advance_batch(
@@ -1363,19 +1479,30 @@ class ManualEvaluationQueue:
         *,
         repo_root: Path,
         store: JobStore | None = None,
+        local_source: Path | None = None,
+        rom_path: Path | None = None,
     ) -> None:
         self.repo_root = Path(repo_root).resolve()
         self.store = store or JobStore()
         self.store.init()
+        self.local_source = local_source.resolve() if local_source else None
+        self.rom_path = rom_path.resolve() if rom_path else None
         self._last_ensure = 0.0
 
     def _planner(self) -> ManualEvaluationSupervisor:
-        load_repository_operator_environment(self.repo_root)
+        if self.local_source is None:
+            load_repository_operator_environment(self.repo_root)
+        authority = (
+            private_evaluation_authority(self.store.root) if self.local_source
+            else RunAuthority(RunStorageConfig.from_env())
+        )
         return ManualEvaluationSupervisor(
-            authority=RunAuthority(RunStorageConfig.from_env()),
+            authority=authority,
             repo_root=self.repo_root,
             project_results=False,
             work_root=self.store.work_root,
+            local_source=self.local_source,
+            rom_path=self.rom_path,
         )
 
     def publication_evidence(self, *, run_id: str, checkpoint_id: str) -> dict[str, Any]:
@@ -1475,6 +1602,8 @@ class ManualEvaluationQueue:
                         "queue_root": str(self.store.root),
                         "run_id": run_id,
                         "checkpoint_ids": [context.checkpoint.checkpoint_id for context in pending],
+                        **({"local_source": str(self.local_source)} if self.local_source else {}),
+                        **({"rom_path": str(self.rom_path)} if self.rom_path else {}),
                     },
                     idempotency_key=idempotency_key,
                     subjects=[

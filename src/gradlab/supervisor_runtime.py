@@ -71,11 +71,24 @@ class SupervisorRuntime:
     def runtime_contract(self, *, runtime_image_ref: str) -> dict[str, Any]:
         return runtime_contract(runtime_image_ref=runtime_image_ref)
 
+    def require_cuda(self) -> None:
+        from gradlab.device import require_cuda
+
+        require_cuda()
+
     def holder_id(self) -> str:
         return f"{uuid.uuid4().hex}@{os.uname().nodename}"
 
     def disk_usage(self, path: Path) -> Any:
         return shutil.disk_usage(path)
+
+    def hardware_metrics(self) -> dict[str, float]:
+        from gradlab.hardware_metrics import HardwareSampler
+
+        sampler = getattr(self, "_hardware_sampler", None)
+        if sampler is None:
+            sampler = self._hardware_sampler = HardwareSampler()
+        return sampler.sample()
 
     def start_wandb(
         self,
@@ -107,6 +120,7 @@ class SupervisorRuntime:
             experiment_name=mlflow_experiment_name(train_config),
             gradlab_run_id=str(train_config["wandb_run_id"]),
             created_at_ms=created_at_ms,
+            train_config=train_config,
         )
 
     def resume_wandb(
@@ -219,13 +233,17 @@ class SupervisorRuntime:
         log_path: Path,
         environment: Mapping[str, str],
     ) -> LearnerProcess:
+        if len(command) < 3 or command[1] not in {"-m", "-c"}:
+            raise ValueError("supervised learner requires a Python -m/-c command")
+        child_environment = dict(environment)
+        child_environment["GRADLAB_LEARNER_PARENT_PID"] = str(os.getpid())
         log = log_path.open("a", encoding="utf-8")
         learner = subprocess.Popen(
-            list(command),
+            [command[0], "-m", "gradlab.learner_bootstrap", *command[1:]],
             stdout=log,
             stderr=subprocess.STDOUT,
             text=True,
-            env=dict(environment),
+            env=child_environment,
             start_new_session=True,
         )
         learner._gradlab_log = log  # type: ignore[attr-defined]

@@ -242,6 +242,7 @@ class MetricsDocumentationTests(unittest.TestCase):
         reasons = [f"reason-{index}" for index in range(5)]
         values = {
             "algorithm": list(metric_names.TRAIN_ACTOR_CRITIC_ALGORITHMS),
+            "device": ["0"],
             "reason": reasons,
             "start": starts,
             "component": ["progress"],
@@ -260,8 +261,10 @@ class MetricsDocumentationTests(unittest.TestCase):
                     name = name.replace(f"{{{placeholder}}}", replacement, 1)
                 scalar_names.add(name)
 
-        self.assertLessEqual(len(metric_names.METRIC_DEFINITIONS), 108)
-        self.assertLessEqual(len(scalar_names), 97)
+        # Keep the scientific budget intact; host diagnostics have a separate bound.
+        self.assertLessEqual(sum(not d.name.startswith("system/") for d in metric_names.METRIC_DEFINITIONS), 108)
+        self.assertLessEqual(sum(not n.startswith("system/") for n in scalar_names), 97)
+        self.assertEqual(sum(n.startswith("system/") for n in scalar_names), 8)
         self.assertEqual(
             len(
                 {
@@ -302,12 +305,16 @@ class MetricsDocumentationTests(unittest.TestCase):
             "visits",
             "transitions/second",
             "bytes/second",
+            "percent",
+            "MiB",
+            "watts",
+            "celsius",
         }
         for definition in metric_names.METRIC_DEFINITIONS:
             with self.subTest(metric=definition.name):
                 self.assertRegex(
                     definition.name,
-                    r"^(train|eval|leader|ops)/",
+                    r"^(train|eval|leader|ops|system)/",
                 )
                 self.assertNotIn("//", definition.name)
                 self.assertIn(definition.unit, allowed_units)
@@ -318,6 +325,7 @@ class MetricsDocumentationTests(unittest.TestCase):
                 sample_values = {
                     "algorithm": "ppo",
                     "protocol": "full",
+                    "device": "0",
                 }
                 sample = definition.name
                 for placeholder in placeholders:

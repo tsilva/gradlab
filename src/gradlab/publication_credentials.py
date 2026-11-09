@@ -11,6 +11,7 @@ from typing import Any, Iterator, Mapping
 
 from gradlab.file_utils import atomic_write_json
 from gradlab.local_paths import default_gradlab_config_dir
+from gradlab.infisical_credentials import SecretStoreError, load_store
 
 
 class CredentialSecurityError(RuntimeError):
@@ -81,14 +82,13 @@ def youtube_credential_paths(
 ) -> YouTubeCredentialPaths:
     config_root = default_gradlab_config_dir(environment)
     resolved_root = _require_owned_directory(config_root, create=True)
-    client = _require_owned_file(
-        config_root / "youtube_client_secret.json",
-        root=resolved_root,
-    )
+    store = youtube_store(resolved_root)
+    client_path = config_root / "youtube_client_secret.json"
+    client = client_path if store else _require_owned_file(client_path, root=resolved_root)
     token_path = config_root / "youtube_token.json"
     token = (
         _require_owned_file(token_path, root=resolved_root)
-        if token_path.exists()
+        if not store and token_path.exists()
         else token_path
     )
     lock = _require_owned_file(
@@ -97,6 +97,24 @@ def youtube_credential_paths(
         create=True,
     )
     return YouTubeCredentialPaths(resolved_root, client, token, lock)
+
+
+def youtube_store(root: Path):
+    try:
+        return load_store(root / "youtube_infisical.json")
+    except SecretStoreError as exc:
+        raise CredentialSecurityError(str(exc)) from None
+
+
+def youtube_token_available(path: Path, *, root: Path) -> bool:
+    return youtube_store(root) is not None or path.exists()
+
+
+def _vault_role(path: Path, root: Path):
+    if path.parent.resolve() != root:
+        raise CredentialSecurityError("credential destination escapes its private directory")
+    role = {"youtube_client_secret.json": "client", "youtube_token.json": "token"}.get(path.name)
+    return (youtube_store(root), role) if role else (None, None)
 
 
 @contextmanager
@@ -116,6 +134,12 @@ def credential_lock(path: Path) -> Iterator[None]:
 
 
 def load_private_json(path: Path, *, root: Path) -> dict[str, Any]:
+    store, role = _vault_role(path, root)
+    if store:
+        try:
+            return store.read(role)
+        except SecretStoreError as exc:
+            raise CredentialSecurityError(str(exc)) from None
     secured = _require_owned_file(path, root=root)
     descriptor = os.open(secured, os.O_RDONLY | os.O_NOFOLLOW)
     try:
@@ -134,6 +158,13 @@ def load_private_json(path: Path, *, root: Path) -> dict[str, Any]:
 
 
 def save_private_json(path: Path, value: Mapping[str, Any], *, root: Path) -> None:
+    store, role = _vault_role(path, root)
+    if store:
+        try:
+            store.write(role, dict(value))
+        except SecretStoreError as exc:
+            raise CredentialSecurityError(str(exc)) from None
+        return
     if path.parent.resolve() != root:
         raise CredentialSecurityError("credential destination escapes its private directory")
     atomic_write_json(path, dict(value))
@@ -191,9 +222,7 @@ def resolve_huggingface_credential(
         ) from exc
     configured_token_path = str(values.get("HF_TOKEN_PATH") or "").strip()
     token_path = (
-        Path(configured_token_path).expanduser()
-        if configured_token_path
-        else hf_home / "token"
+        Path(configured_token_path).expanduser() if configured_token_path else hf_home / "token"
     )
     configured_stored_path = str(values.get("HF_STORED_TOKENS_PATH") or "").strip()
     stored_tokens_path = (
@@ -201,7 +230,10 @@ def resolve_huggingface_credential(
         if configured_stored_path
         else hf_home / "stored_tokens"
     )
-    if token_path.parent.resolve() != resolved_home or stored_tokens_path.parent.resolve() != resolved_home:
+    if (
+        token_path.parent.resolve() != resolved_home
+        or stored_tokens_path.parent.resolve() != resolved_home
+    ):
         raise CredentialSecurityError("Hugging Face token paths must stay inside private HF_HOME")
     _secure_hf_file(token_path, root=resolved_home)
     _secure_hf_file(stored_tokens_path, root=resolved_home)
@@ -220,4 +252,5 @@ __all__ = [
     "resolve_huggingface_credential",
     "save_private_json",
     "youtube_credential_paths",
+    "youtube_token_available",
 ]

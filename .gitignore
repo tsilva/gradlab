@@ -31,6 +31,7 @@ coverage.xml
 htmlcov/
 
 # Local config/secrets
+/.access.local.toml
 .env
 .env.*
 !.env.example
@@ -77,3 +78,6 @@ artifacts/
 
 # Compiled player assets (included in Python distributions)
 /src/gradlab/web_player/dist/
+/INBOX.md
+/.local/repo-inbox/
+/.internal/

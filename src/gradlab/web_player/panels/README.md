@@ -131,3 +131,7 @@ Add a visualization metric by adding a descriptor. Add a reusable visualization
 shape by extending telemetry block validation, the editor, and the generic
 renderer. Add a specialized panel only when it needs behavior that does not fit
 the telemetry contract.
+
+## License
+
+[MIT License](../../../../LICENSE).

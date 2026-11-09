@@ -230,7 +230,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(train_config["timesteps"], 2_000_000)
         self.assertEqual(train_config["checkpoint_eval_backend"], "none")
         self.assertNotIn("stop_on_acceptance", train_config)
-        self.assertEqual(train_config["training_backend"]["id"], "sb3.ppo")
+        self.assertEqual(train_config["training_backend"]["id"], "gradlab.ppo")
         self.assertEqual(train_config["env_provider"], "env-vizdoom-turbo")
         self.assertEqual(train_config["game"], "VizdoomBasic-v1")
         self.assertEqual(train_config["state"], "default")
@@ -418,7 +418,12 @@ class ConfigValidationTests(unittest.TestCase):
         a2c = compose_train_document(self.MARIO_L11_GOAL, self.MARIO_SINGLE_RECIPES / "a2c.yaml")
 
         self.assertEqual(ppo["recipe_id"], "ppo")
-        self.assertEqual(ppo["train_config"]["training_backend"]["id"], "sb3.ppo")
+        self.assertEqual(ppo["train_config"]["training_backend"]["id"], "gradlab.ppo")
+        self.assertEqual(
+            ppo["train_config"]["training_backend"]["config"]["execution_profile"],
+            "sb3-parity",
+        )
+        self.assertEqual(ppo["train_config"]["training_backend"]["config"]["precision"], "fp32")
         for field in (
             "learning_rate_final",
             "learning_rate_schedule_timesteps",
@@ -457,7 +462,7 @@ class ConfigValidationTests(unittest.TestCase):
                 policy_model = document["train_config"]["policy_model"]
                 self.assertEqual(policy_model["schema_version"], 2)
                 self.assertEqual(
-                    set(policy_model),
+                    set(policy_model) - {"share_features_extractor"},
                     {
                         "schema_version",
                         "encoder",
@@ -467,13 +472,13 @@ class ConfigValidationTests(unittest.TestCase):
                     },
                 )
 
-        self.assertEqual(actor_critic_recipes, 53)
+        self.assertEqual(actor_critic_recipes, 56)
 
     def test_every_mario_recipe_disables_eval_and_stops_at_perfect_clear_window(self) -> None:
         mario_root = Path("experiments/goals/SuperMarioBros-Nes-v0")
         recipes = sorted(mario_root.glob("*/recipes/*.yaml"))
 
-        self.assertEqual(len(recipes), 25)
+        self.assertEqual(len(recipes), 28)
         for recipe_path in recipes:
             with self.subTest(recipe=recipe_path):
                 goal_path = recipe_path.parent.parent / "_goal.yaml"
@@ -481,6 +486,13 @@ class ConfigValidationTests(unittest.TestCase):
                 train_config = document["train_config"]
                 self.assertEqual(train_config["checkpoint_eval_backend"], "none")
                 self.assertNotIn("stop_on_acceptance", train_config)
+                if recipe_path.name == "ppo-sil-actor-only.yaml":
+                    self.assertIsNone(train_config["early_stop"])
+                    self.assertEqual(train_config["timesteps"], 9_310_208)
+                    self.assertEqual(train_config["training_backend"]["id"], "gradlab.ppo")
+                    self.assertTrue(train_config["training_backend"]["config"]["sil"]["enabled"])
+                    self.assertFalse(train_config["policy_model"]["share_features_extractor"])
+                    continue
                 conditions = train_config["early_stop"]["conditions"]
                 self.assertEqual(set(conditions), {"clear_100"})
                 self.assertEqual(
@@ -596,11 +608,33 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(report.counts["json_files"], 0)
         self.assertGreaterEqual(report.counts["yaml_files"], 15)
         self.assertGreaterEqual(report.counts["goals"], 1)
-        self.assertEqual(report.counts["train_recipes"], 56)
+        self.assertEqual(report.counts["train_recipes"], 60)
         self.assertGreaterEqual(report.counts["env_configs"], 0)
         self.assertEqual(report.counts["benchmark_profiles"], 4)
         self.assertEqual(report.counts["workspace_manifests"], 1)
         self.assertEqual(report.counts["workspace_projects"], 25)
+
+    def test_report_artifacts_are_excluded_but_json_configs_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            reports = root / "experiments/reports/nested"
+            reports.mkdir(parents=True)
+            report_json = reports / "result.json"
+            report_json.write_text('{"clears": 400}\n', encoding="utf-8")
+            (reports / "fixture.yaml").write_text("fixture: true\n", encoding="utf-8")
+            config = root / "experiments/recipes/_presets/invalid.json"
+            config.parent.mkdir(parents=True)
+            config.write_text("{}\n", encoding="utf-8")
+
+            report = validate_experiment_tree(root)
+
+            self.assertEqual(report.counts["json_files"], 1)
+            self.assertEqual(report.counts["yaml_files"], 0)
+            self.assertEqual(
+                [issue.path for issue in report.issues if issue.message == "experiments configs must be YAML"],
+                ["experiments/recipes/_presets/invalid.json"],
+            )
+            self.assertEqual(report_json.read_text(encoding="utf-8"), '{"clears": 400}\n')
 
     def test_recipe_cannot_be_launched_for_a_different_goal(self) -> None:
         with self.assertRaisesRegex(ValueError, "does not belong to goal"):

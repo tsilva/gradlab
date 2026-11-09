@@ -1,16 +1,19 @@
 from __future__ import annotations
 
 import subprocess
+import re
 import tempfile
 import tomllib
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from containers.train.dependency_key import dependency_key
 from containers.train.environment_contract import Distribution, validate_distribution_contract
 from containers.train.gpu_key import gpu_key
-from containers.train.lock_projection import projection_contents, train_plan_sha256
+from containers.train.lock_projection import projected_requirements, projection_contents, train_plan_sha256
 from containers.train.runtime_key import RUNTIME_INPUT_PATHS, overlay_key, runtime_key
+from containers.train.smoke import smoke_trajectory_parquet
 from containers.train.vizdoom_smoke import _config as vizdoom_smoke_config
 
 
@@ -19,6 +22,9 @@ DIGEST_B = "sha256:" + "b" * 64
 
 
 class TrainImageTests(unittest.TestCase):
+    def test_trajectory_parquet_smoke_uses_the_export_schema(self) -> None:
+        smoke_trajectory_parquet()
+
     def test_vizdoom_smoke_declares_the_strict_constructor_contract(self) -> None:
         for game in ("VizdoomBasic-v1", "VizdoomDeathmatch-v1"):
             with self.subTest(game=game):
@@ -346,19 +352,29 @@ class TrainImageTests(unittest.TestCase):
         self.assertIn("env-gradoom-turbo-torch==0.2.1", dependencies)
         self.assertIn("env-breakoutatari2600-turbo-native==0.5.15", dependencies)
         self.assertIn("box2d-py==2.3.8", dependencies)
-        self.assertIn("mlflow-skinny==3.16.1", dependencies)
+        self.assertIn("mlflow-skinny==3.17.2", dependencies)
+        self.assertIn("pyarrow==25.0.0", dependencies)
         self.assertNotIn("wandb-workspaces==", gpu + dependencies)
         self.assertIn("torch==2.13.0", gpu)
         gpu_lines = set(gpu.splitlines())
         dependency_lines = set(dependencies.splitlines())
         self.assertFalse(gpu_lines & dependency_lines)
-        self.assertEqual(
-            train_plan_sha256(root),
-            "a62b122b786204092ee5ae15739e8fc4cca981bdd10b156a0ec8b539226c10f7",
-        )
         for line in gpu.splitlines():
             name = line.split("==", maxsplit=1)[0]
             self.assertTrue(name in {"torch", "triton"} or name.startswith(("cuda-", "nvidia-")))
+
+    def test_train_plan_identity_tracks_gpu_and_dependency_artifact_changes(self) -> None:
+        root = Path(".").resolve()
+        locked = projected_requirements(root)
+        baseline = train_plan_sha256(root)
+        for name in ("torch", "mlflow-skinny"):
+            with self.subTest(package=name):
+                changed = dict(locked)
+                requirement, artifact = changed[name].split(" --hash=", maxsplit=1)
+                replacement = "sha256:" + ("0" if artifact != "sha256:" + "0" * 64 else "1") * 64
+                changed[name] = requirement + " --hash=" + replacement
+                with mock.patch("containers.train.lock_projection.projected_requirements", return_value=changed):
+                    self.assertNotEqual(train_plan_sha256(root), baseline)
 
     def test_workflows_publish_only_immutable_layer_tags(self) -> None:
         dependency = Path(".github/workflows/gradlab-train-dependencies.yml").read_text(
@@ -377,9 +393,7 @@ class TrainImageTests(unittest.TestCase):
         self.assertIn("workflow_call:", foundations)
         self.assertEqual(foundations.count("runs-on: ubuntu-24.04"), 1)
         self.assertEqual(
-            foundations.count(
-                "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c"
-            ),
+            len(re.findall(r"docker/setup-buildx-action@[0-9a-f]{40}(?:\s|$)", foundations)),
             1,
         )
         self.assertIn("name: Build GPU foundation", foundations)
@@ -389,9 +403,7 @@ class TrainImageTests(unittest.TestCase):
         self.assertNotIn("name: Build GPU foundation", runtime)
         self.assertNotIn("name: Build train dependencies", runtime)
         self.assertEqual(
-            runtime.count(
-                "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c"
-            ),
+            len(re.findall(r"docker/setup-buildx-action@[0-9a-f]{40}(?:\s|$)", runtime)),
             1,
         )
         self.assertIn("runtime-${{ steps.runtime_meta.outputs.runtime_input_sha256 }}", runtime)

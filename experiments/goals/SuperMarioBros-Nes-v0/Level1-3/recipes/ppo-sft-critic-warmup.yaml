@@ -1,0 +1,41 @@
+defaults:
+- ../../../../recipes/_presets/mario-single-ppo@_global_
+- _self_
+recipe_id: ppo-sft-critic-warmup
+description: Calibrate an independent critic from the pinned SFT actor before bounded PPO retention testing.
+reward_shape: sft-ppo-v1
+train:
+  timesteps: 262144
+  checkpoint_freq: 0
+  checkpoint_steps: [16384, 65536, 131072, 262144]
+  checkpoint_candidates: null
+  checkpoint_eval_backend: none
+  policy_model:
+    share_features_extractor: false
+  backend:
+    id: gradlab.ppo
+    config:
+      precision: fp32
+      execution_profile: sb3-parity
+      device: cuda
+      initial_policy:
+        repo_id: tsilva/SuperMarioBros-Nes-v0_Level1-3
+        revision: f9a633f9a7c5105beeb09d654b7af6e2f7c5404a
+        sha256: 973a7dd18dca33553f0e931d933f670dce53f2e31dbeb648fd30578aee210dec
+        size_bytes: 6762393
+        reset_value_head: true
+      critic_only: true
+      bootstrap_truncations: false
+      gamma: 0.999
+      gae_lambda: 1.0
+      learning_rate: 1.0e-4
+      learning_rate_final: 1.0e-4
+      n_steps: 1024
+      batch_size: 512
+      n_epochs: 2
+      normalize_advantage: true
+      clip_range: 0.05
+      target_kl: 0.005
+      ent_coef: 0.0
+      ent_coef_final: 0.0
+      vf_coef: 0.5

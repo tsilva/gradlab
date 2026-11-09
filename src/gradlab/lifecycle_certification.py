@@ -264,6 +264,9 @@ class CertificationRuntime(SupervisorRuntime):
 
     """Scriptable stand-in for process, W&B, signals, and host state."""
 
+    def hardware_metrics(self) -> dict[str, float]:
+        return {"system/cpu_utilization_percentage": 25.0}
+
     def __init__(
         self,
         *,
@@ -292,6 +295,9 @@ class CertificationRuntime(SupervisorRuntime):
 
     def holder_id(self) -> str:
         return self.writer_id
+
+    def require_cuda(self) -> None:
+        """The deterministic fixture simulates its allocated GPU."""
 
     @contextmanager
     def maintain_lease(self, renew: Callable[[], None]) -> Iterator[None]:
@@ -717,6 +723,7 @@ def _accepted_or_rejected_raw(
     row: Mapping[str, Any],
     *,
     accepted: bool,
+    evaluation_store: Any | None = None,
 ) -> dict[str, Any]:
     intent = dict(row["intent"])
     contract = dict(intent["execution_contract"])
@@ -739,7 +746,7 @@ def _accepted_or_rejected_raw(
     ]
     attempt = int(row["attempt"])
     asset = contract.get("asset")
-    return {
+    result = {
         "schema_version": int(contract["schema_version"]),
         "attempt_id": f"{intent['idempotency_key'][:20]}-a{attempt}",
         "execution_key": execution_key(contract),
@@ -759,6 +766,26 @@ def _accepted_or_rejected_raw(
         "duration_seconds": 1.0,
         "evaluation_evidence": {},
     }
+    if contract.get("record_episode") is True:
+        if evaluation_store is None:
+            raise ValueError("simulated episode video requires its evaluation store")
+        # Tier 1 simulates media identity and delivery, not native RGB encoding.
+        body = b"simulated-native-rgb-video"
+        key = (
+            str(intent["result_key"]).rsplit("/", 1)[0]
+            + f"/video/{intent['idempotency_key'][:20]}-a{attempt}.mp4"
+        )
+        evaluation_store.put_bytes(key, body, content_type="video/mp4")
+        result["video"] = {
+            "episode_id": str(entries[0]["episode_id"]),
+            "object_uri": evaluation_store.uri(key),
+            "content_type": "video/mp4",
+            "source": "native_rgb",
+            "bytes": len(body),
+            "frames": 2,
+            "sha256": hashlib.sha256(body).hexdigest(),
+        }
+    return result
 
 
 def _write_raw_result(
@@ -769,7 +796,9 @@ def _write_raw_result(
 ) -> dict[str, Any]:
     rows = prepared.supervisor.store.evals(statuses=("submitted",))
     row = rows[position]
-    raw = _accepted_or_rejected_raw(row, accepted=accepted)
+    raw = _accepted_or_rejected_raw(
+        row, accepted=accepted, evaluation_store=prepared.supervisor.authority.evaluation
+    )
     prepared.supervisor.authority.evaluation.put_json(
         str(row["intent"]["result_key"]),
         raw,
@@ -2570,6 +2599,7 @@ def _scenario_local_background_jobs(root: Path) -> dict[str, Any]:
         _accepted_or_rejected_raw(
             {"intent": context.intent.to_dict(), "attempt": 1},
             accepted=True,
+            evaluation_store=fixture.authority.evaluation,
         ),
         create_only=True,
     )

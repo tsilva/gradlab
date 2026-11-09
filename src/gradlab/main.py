@@ -8,10 +8,12 @@ from gradlab.cli_parser import ExactArgumentParser
 
 
 COMMANDS: dict[str, tuple[str, str]] = {
+    "autoresearch": ("tune recipes from verified training journals", "gradlab.autoresearch"),
     "monitor": ("calibrate checkpoint monitoring from measured evidence", "gradlab.monitor_calibration"),
     "sync": ("project a finished local Run to its frozen metrics service", "gradlab.local_metrics"),
     "sync-run": ("project a queued complete_local Run to its frozen metrics service", "gradlab.queued_tracking_sync"),
     "publish-local": ("upload a complete local-only Run's checkpoints and journal", "gradlab.local_publication"),
+    "evaluate-local": ("queue Acceptance for a completed source-overlay Run on this host", "gradlab.local_acceptance"),
     "rebind-mlflow": ("audit and replay an irrecoverable MLflow service replacement", "gradlab.mlflow_rebind"),
     "train": ("train a checked-in recipe locally", "gradlab.local_train"),
     "experiment": ("launch and observe dstack training experiments", "gradlab.experiment_cli"),
@@ -43,7 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="gradlab",
         description="Unified command surface for gradlab training, eval, playback, and ops.",
         epilog=(
-            "Research: train, experiment, eval, play, validate.  Environments: env, rom, "
+            "Research: train, experiment, autoresearch, eval, play, validate.  Environments: env, rom, "
             "benchmark.  Datasets: dataset.  Operations: jobs.  Results: leaders, reports, "
             "workspaces."
         ),

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import importlib.util
 import io
 import json
 import tempfile
@@ -11,12 +10,7 @@ from types import SimpleNamespace
 from unittest import mock
 
 
-ROOT = Path(__file__).resolve().parents[1]
-SCRIPT = ROOT / ".codex/skills/autoresearch/scripts/study.py"
-SPEC = importlib.util.spec_from_file_location("autoresearch_study", SCRIPT)
-assert SPEC and SPEC.loader
-study = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(study)
+from gradlab import autoresearch as study
 
 
 def immutable_run_id(value: int | str) -> str:
@@ -42,10 +36,42 @@ def training_evidence(
         "strong": strong,
         "observed_max_step": 50_176,
         "strong_threshold": 0.9,
-        "wandb_run_id": resolved_run_id,
-        "wandb_url": f"https://wandb.ai/e/p/runs/{resolved_run_id}",
-        "wandb_state": "finished",
+        "run_id": resolved_run_id,
         "collected_at": "2026-01-01T00:00:00Z",
+    }
+
+
+def current_event(event: dict, state: dict) -> dict:
+    terminal = event["attempt_terminal"]
+    tracking = dict(state["policy"]["tracking"])
+    identity = {"run_id": event["run_id"], "attempt_id": "attempt-" + "e" * 16}
+    event["attempt_id"] = identity["attempt_id"]
+    event["dstack"]["status"] = "done"
+    event["semantic"]["manifest"].update(identity, tracking=tracking)
+    terminal.update(identity, tracking=tracking, service_high_water_mark=12)
+    terminal["wandb_high_water_mark"] = 0
+    terminal["drain"].update(
+        metric_segment_high_water=12,
+        service_remote_high_water_mark=12,
+        journal_archive={"retention": "durable", "segment_count": 1},
+    )
+    return event
+
+
+def fenced_evidence(evidence: dict, state_path: Path) -> dict:
+    records = [
+        row
+        for wave in study.load_state(state_path)["waves"]
+        for row in wave["terminal_runs"]
+        if row["run_id"] == evidence["run_id"]
+    ]
+    (record,) = records
+    return {
+        **evidence,
+        **{
+            key: record[key]
+            for key in ("attempt_id", "journal_high_water", "terminal_sha256", "manifest_sha256")
+        },
     }
 
 
@@ -63,8 +89,7 @@ def run_record(
         "run_id": resolved_run_id,
         "seed": seed,
         "classification": "completed",
-        "wandb_run_id": resolved_run_id,
-        "wandb_url": f"https://wandb.ai/e/p/runs/{resolved_run_id}",
+        "tracking": {"backend": "mlflow", "delivery": "online"},
         "training_evidence": training_evidence(
             all_starts=all_starts,
             strong=strong,
@@ -127,6 +152,7 @@ def base_state(root: Path) -> dict:
             "confirmation_required": 4,
             "strong_threshold": 0.9,
             "checkpoint_evaluation": "disabled",
+            "tracking": {"backend": "mlflow", "delivery": "online"},
         },
         "baseline": {
             "backend_config": backend,
@@ -134,6 +160,7 @@ def base_state(root: Path) -> dict:
             "train_config": {
                 "timesteps": 100_000,
                 "checkpoint_eval_backend": "modal",
+                "tracking": {"backend": "mlflow", "delivery": "online"},
                 "environment": {"env_config": {"state": "Level1-3", "n_envs": 16}},
                 "training_backend": {"id": "sb3.ppo", "config": backend},
             },
@@ -236,6 +263,141 @@ def reserve_args(state_path: Path, phase: str, **kwargs) -> SimpleNamespace:
 
 
 class AutoresearchStudyTests(unittest.TestCase):
+    def test_terminal_gate_supports_each_frozen_tracking_mode(self) -> None:
+        for backend in ("mlflow", "wandb"):
+            for delivery in ("online", "local_only"):
+                with (
+                    self.subTest(backend=backend, delivery=delivery),
+                    tempfile.TemporaryDirectory() as directory,
+                ):
+                    root = Path(directory)
+                    state = base_state(root)
+                    state["policy"]["tracking"] = {"backend": backend, "delivery": delivery}
+                    run_id = immutable_run_id(7)
+                    state["waves"] = [
+                        {
+                            "phase": "baseline-screen",
+                            "round": 0,
+                            "candidate_id": state["baseline_candidate_id"],
+                            "submission_key": "gate",
+                            "seeds": [123],
+                            "run_ids": [run_id],
+                            "terminal_runs": [],
+                            "status": "launched",
+                            "closed": False,
+                            "timesteps": 20_480,
+                        }
+                    ]
+                    path = root / "study.json"
+                    study.atomic_json(path, state)
+                    event = current_event(
+                        {
+                            "run_id": run_id,
+                            "scientific_success": False,
+                            "dstack": {"terminal": True},
+                            "semantic": {
+                                "terminal": None,
+                                "manifest": {
+                                    "seed": 123,
+                                    "compute": {"submission_key": "gate"},
+                                },
+                            },
+                            "attempt_terminal": {
+                                "state": "succeeded",
+                                "acceptance_required": False,
+                                "drain": {"complete": True},
+                            },
+                        },
+                        state,
+                    )
+                    if delivery == "local_only":
+                        event["attempt_terminal"]["state"] = "complete_local"
+                        event["attempt_terminal"]["service_high_water_mark"] = 0
+                        event["attempt_terminal"]["drain"]["service_remote_high_water_mark"] = 0
+                    with redirect_stdout(io.StringIO()):
+                        study.command_record_terminal(
+                            SimpleNamespace(
+                                study=str(path),
+                                submission_key=None,
+                                run_id=None,
+                                seed=None,
+                                event_json=json.dumps(event),
+                                event_file=None,
+                            )
+                        )
+                    saved = study.load_state(path)
+                    self.assertEqual(saved["status"], "active")
+                    self.assertEqual(saved["waves"][0]["status"], "awaiting_evidence")
+                    record = saved["waves"][0]["terminal_runs"][0]
+                    self.assertEqual(record["tracking"], state["policy"]["tracking"])
+                    self.assertEqual(record["journal_high_water"], 12)
+
+    def test_terminal_gate_rejects_incomplete_delivery_or_identity(self) -> None:
+        for fault in ("service", "journal", "tracking", "identity", "dstack"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                state = base_state(root)
+                run_id = immutable_run_id(7)
+                state["waves"] = [
+                    {
+                        "phase": "baseline-screen",
+                        "round": 0,
+                        "candidate_id": state["baseline_candidate_id"],
+                        "submission_key": "gate",
+                        "seeds": [123],
+                        "run_ids": [run_id],
+                        "terminal_runs": [],
+                        "status": "launched",
+                        "closed": False,
+                        "timesteps": 20_480,
+                    }
+                ]
+                path = root / "study.json"
+                study.atomic_json(path, state)
+                event = current_event(
+                    {
+                        "run_id": run_id,
+                        "scientific_success": False,
+                        "dstack": {"terminal": True},
+                        "semantic": {
+                            "terminal": None,
+                            "manifest": {
+                                "seed": 123,
+                                "compute": {"submission_key": "gate"},
+                            },
+                        },
+                        "attempt_terminal": {
+                            "state": "succeeded",
+                            "acceptance_required": False,
+                            "drain": {"complete": True},
+                        },
+                    },
+                    state,
+                )
+                terminal = event["attempt_terminal"]
+                if fault == "service":
+                    terminal["drain"]["service_remote_high_water_mark"] = 11
+                elif fault == "journal":
+                    terminal["drain"]["journal_archive"]["segment_count"] = 0
+                elif fault == "tracking":
+                    terminal["tracking"] = {"backend": "wandb", "delivery": "online"}
+                elif fault == "identity":
+                    terminal["run_id"] = immutable_run_id(999)
+                else:
+                    event["dstack"]["status"] = "failed"
+                with redirect_stdout(io.StringIO()):
+                    study.command_record_terminal(
+                        SimpleNamespace(
+                            study=str(path),
+                            submission_key=None,
+                            run_id=None,
+                            seed=None,
+                            event_json=json.dumps(event),
+                            event_file=None,
+                        )
+                    )
+                self.assertEqual(study.load_state(path)["status"], "paused")
+
     def test_init_ignores_non_current_schema_and_resumes_current_study(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -257,6 +419,7 @@ class AutoresearchStudyTests(unittest.TestCase):
                     "timesteps": 100_000,
                     "n_envs": 16,
                     "checkpoint_eval_backend": "modal",
+                    "tracking": {"backend": "mlflow", "delivery": "online"},
                     "environment": {"env_config": {"state": "Level1-3", "n_envs": 16}},
                     "training_backend": {"id": "sb3.ppo", "config": backend},
                 },
@@ -320,7 +483,9 @@ class AutoresearchStudyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "study.json"
             path.write_text(json.dumps({"schema_version": 1}), encoding="utf-8")
-            with self.assertRaisesRegex(ValueError, "only schema 5 is current"):
+            with self.assertRaisesRegex(
+                ValueError, f"only schema {study.SCHEMA_VERSION} is current"
+            ):
                 study.load_state(path)
 
     def test_candidate_identity_and_validation_remain_bounded(self) -> None:
@@ -440,7 +605,7 @@ class AutoresearchStudyTests(unittest.TestCase):
         self.assertEqual(score["worst_censored_first_strong_step"], 50_176)
         self.assertEqual(score["worst_peak_rolling_success_rate_min"], 0.7)
 
-    def test_terminal_then_remote_evidence_is_persisted_idempotently(self) -> None:
+    def test_mlflow_terminal_then_journal_evidence_is_persisted_idempotently(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             state_path = root / "runs/autoresearch/test/study.json"
@@ -471,6 +636,7 @@ class AutoresearchStudyTests(unittest.TestCase):
                         "recipe_overrides": study.expected_recipe_overrides(state, wave),
                         "run_description": study.run_description(state, wave, 123),
                         "checkpoint_eval_backend": "none",
+                        "tracking": {"backend": "mlflow", "delivery": "online"},
                         "image_digest": runtime["image_ref"],
                         "runtime_input_sha256": runtime["input_sha256"],
                         "runtime_build_source_sha": runtime["build_source_sha"],
@@ -521,7 +687,7 @@ class AutoresearchStudyTests(unittest.TestCase):
                         submission_key=None,
                         run_id=None,
                         seed=None,
-                        event_json=json.dumps(event),
+                        event_json=json.dumps(current_event(event, state)),
                         event_file=None,
                     )
                 )
@@ -538,7 +704,11 @@ class AutoresearchStudyTests(unittest.TestCase):
             )
             with (
                 mock.patch.object(study, "git_head", return_value=state["source_sha"]),
-                mock.patch.object(study, "fetch_training_evidence", return_value=evidence),
+                mock.patch.object(
+                    study,
+                    "fetch_training_evidence",
+                    return_value=fenced_evidence(evidence, state_path),
+                ),
                 redirect_stdout(io.StringIO()),
             ):
                 study.command_collect_training_evidence(
@@ -628,7 +798,7 @@ class AutoresearchStudyTests(unittest.TestCase):
                         submission_key=None,
                         run_id=None,
                         seed=None,
-                        event_json=json.dumps(event),
+                        event_json=json.dumps(current_event(event, state)),
                         event_file=None,
                     )
                 )
@@ -648,7 +818,11 @@ class AutoresearchStudyTests(unittest.TestCase):
             )
             with (
                 mock.patch.object(study, "git_head", return_value=state["source_sha"]),
-                mock.patch.object(study, "fetch_training_evidence", return_value=observed),
+                mock.patch.object(
+                    study,
+                    "fetch_training_evidence",
+                    return_value=fenced_evidence(observed, state_path),
+                ),
                 redirect_stdout(io.StringIO()),
             ):
                 study.command_collect_training_evidence(
@@ -730,7 +904,7 @@ class AutoresearchStudyTests(unittest.TestCase):
                         submission_key=None,
                         run_id=None,
                         seed=None,
-                        event_json=json.dumps(event),
+                        event_json=json.dumps(current_event(event, state)),
                         event_file=None,
                     )
                 )
@@ -754,7 +928,11 @@ class AutoresearchStudyTests(unittest.TestCase):
             )
             with (
                 mock.patch.object(study, "git_head", return_value=state["source_sha"]),
-                mock.patch.object(study, "fetch_training_evidence", return_value=observed),
+                mock.patch.object(
+                    study,
+                    "fetch_training_evidence",
+                    return_value=fenced_evidence(observed, state_path),
+                ),
                 redirect_stdout(io.StringIO()),
             ):
                 study.command_collect_training_evidence(
@@ -837,88 +1015,6 @@ class AutoresearchStudyTests(unittest.TestCase):
             {"action": "reserve_search_pair", "candidate_id": first_id},
         )
 
-    def test_authoritative_evidence_uses_all_start_counts_and_canonical_peak(
-        self,
-    ) -> None:
-        run = SimpleNamespace(
-            id="gradlab-42",
-            url="https://wandb.ai/e/p/runs/gradlab-42",
-            state="finished",
-            scan_history=lambda **_kwargs: [
-                {
-                    "train/step": 50_176,
-                    "train/target/success/from/A/episode/count": 2,
-                    "train/target/success/from/B/episode/count": 0,
-                    "train/success/min": 0.91,
-                }
-            ],
-        )
-        api = SimpleNamespace(run=lambda _path: run)
-        fake_wandb = SimpleNamespace(Api=lambda: api)
-        with (
-            mock.patch.dict("sys.modules", {"wandb": fake_wandb}),
-            mock.patch("gradlab.wandb_utils.load_wandb_env"),
-        ):
-            evidence = study.fetch_training_evidence(
-                url="https://wandb.ai/e/p/runs/gradlab-42",
-                expected_run_id="gradlab-42",
-                starts=["A", "B"],
-                strong_threshold=0.9,
-            )
-
-        self.assertFalse(evidence["all_starts_succeeded"])
-        self.assertEqual(evidence["peak_rolling_success_rate_min"], 0.91)
-        self.assertEqual(evidence["first_strong_step"], 50_176)
-        self.assertTrue(evidence["strong"])
-        self.assertEqual(evidence["authority"], "wandb_history")
-
-    def test_return_evidence_does_not_query_absent_success_metrics(self) -> None:
-        queried_keys: list[list[str]] = []
-        return_metric = "train/return/mean"
-        return_rows = [
-            {
-                "train/step": step * 4096,
-                return_metric: float(step),
-            }
-            for step in range(1, 101)
-        ]
-
-        def scan_history(*, keys: list[str]) -> list[dict]:
-            queried_keys.append(keys)
-            if any("outcome/success" in key for key in keys):
-                return []
-            if return_metric in keys:
-                return return_rows
-            return [{"train/step": row["train/step"]} for row in return_rows]
-
-        run = SimpleNamespace(
-            id="gradlab-43",
-            url="https://wandb.ai/e/p/runs/gradlab-43",
-            state="finished",
-            scan_history=scan_history,
-        )
-        api = SimpleNamespace(run=lambda _path: run)
-        fake_wandb = SimpleNamespace(Api=lambda: api)
-        with (
-            mock.patch.dict("sys.modules", {"wandb": fake_wandb}),
-            mock.patch("gradlab.wandb_utils.load_wandb_env"),
-        ):
-            evidence = study.fetch_training_evidence(
-                url="https://wandb.ai/e/p/runs/gradlab-43",
-                expected_run_id="gradlab-43",
-                starts=["default"],
-                strong_threshold=0.9,
-                mode=study.EVIDENCE_RETURN,
-            )
-
-        self.assertTrue(evidence["return_evidence_valid"])
-        self.assertEqual(evidence["return_points"], 100)
-        self.assertEqual(evidence["return_tail_mean"], 95.5)
-        self.assertEqual(evidence["success_counts_by_start"], {"default": 0})
-        self.assertFalse(evidence["all_starts_succeeded"])
-        self.assertFalse(evidence["strong"])
-        self.assertFalse(any("outcome/success" in key for keys in queried_keys for key in keys))
-
     def test_eval_backed_or_unverified_terminal_pauses(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -971,7 +1067,7 @@ class AutoresearchStudyTests(unittest.TestCase):
                         submission_key=None,
                         run_id=None,
                         seed=None,
-                        event_json=json.dumps(event),
+                        event_json=json.dumps(current_event(event, state)),
                         event_file=None,
                     )
                 )

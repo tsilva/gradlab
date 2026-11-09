@@ -274,6 +274,7 @@ _PLACEHOLDER_PATTERNS = {
     "condition": "[A-Za-z0-9_.-]+",
     "event": "[A-Za-z0-9_.-]+",
     "progress": "[A-Za-z0-9_.-]+",
+    "device": "[0-9]+",
 }
 
 

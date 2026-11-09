@@ -114,7 +114,7 @@ def test_queued_sync_reads_journal_under_lease_and_stops_on_lease_expiry(
 
     def read_under_lease(_control, _run_id):
         assert authority.control.get_json(f"runs/{run_id}/writer-lease.json")["run_id"] == run_id
-        return [{"event_seq": 1, "event_id": "one", "step": 1000,
+        return [{"event_seq": 1, "event_id": "one", "created_at": 1800000001.25, "step": 1000,
                  "source": "training", "kind": "history",
                  "payload": {"train/return/mean": 0.5}}]
 

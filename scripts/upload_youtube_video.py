@@ -15,6 +15,12 @@ from typing import Any
 
 from gradlab.cli_parser import ExactArgumentParser
 from gradlab.local_paths import default_gradlab_config_dir, default_runs_dir
+from gradlab.publication_credentials import (
+    load_private_json,
+    save_private_json,
+    youtube_store,
+    youtube_token_available,
+)
 
 
 YOUTUBE_UPLOAD_SCOPES = (
@@ -68,7 +74,7 @@ class OAuthCallbackServer(http.server.HTTPServer):
 
 
 def load_client_config(path: Path) -> dict[str, Any]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload = load_private_json(path, root=path.parent.resolve())
     config = payload.get("installed") or payload.get("web")
     if not config:
         raise SystemExit(f"OAuth client secret must contain 'installed' or 'web': {path}")
@@ -117,11 +123,17 @@ def request_json(
 
 
 def save_json(path: Path, payload: dict[str, Any]) -> None:
+    if path.name == "youtube_token.json":
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        save_private_json(path, payload, root=path.parent.resolve())
+        return
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def authorize(client_config: dict[str, Any], token_path: Path, *, no_browser: bool) -> dict[str, Any]:
+def authorize(
+    client_config: dict[str, Any], token_path: Path, *, no_browser: bool
+) -> dict[str, Any]:
     token_uri = client_config["token_uri"]
     client_id = client_config["client_id"]
     client_secret = client_config.get("client_secret", "")
@@ -193,8 +205,8 @@ def refresh_token(token: dict[str, Any]) -> dict[str, Any]:
 
 
 def access_token(client_config: dict[str, Any], token_path: Path, *, no_browser: bool) -> str:
-    if token_path.is_file():
-        token = json.loads(token_path.read_text(encoding="utf-8"))
+    if youtube_token_available(token_path, root=token_path.parent.resolve()):
+        token = load_private_json(token_path, root=token_path.parent.resolve())
         token.setdefault("client_id", client_config["client_id"])
         token.setdefault("client_secret", client_config.get("client_secret", ""))
         token.setdefault(
@@ -210,7 +222,8 @@ def access_token(client_config: dict[str, Any], token_path: Path, *, no_browser:
                 "Stored YouTube OAuth token expired or was revoked; starting authorization flow.",
                 flush=True,
             )
-            token_path.unlink(missing_ok=True)
+            if youtube_store(token_path.parent.resolve()) is None:
+                token_path.unlink(missing_ok=True)
             token = authorize(client_config, token_path, no_browser=no_browser)
         save_json(token_path, token)
     else:
@@ -307,7 +320,7 @@ def video_duration_seconds(video_path: Path) -> float | None:
             capture_output=True,
             text=True,
         )
-    except (FileNotFoundError, subprocess.CalledProcessError):
+    except FileNotFoundError, subprocess.CalledProcessError:
         return None
     try:
         return float(completed.stdout.strip())
@@ -416,7 +429,11 @@ def replace_description_link_block(existing: str, model_page: str) -> str:
                 replaced.add(label)
             continue
         output.append(line)
-    missing = [replacements[label] for label in ("Model", "gradlab") if label in replacements and label not in replaced]
+    missing = [
+        replacements[label]
+        for label in ("Model", "gradlab")
+        if label in replacements and label not in replaced
+    ]
     if missing:
         if output and output[-1].strip():
             output.append("")
@@ -559,7 +576,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=config_dir / "youtube_token.json",
     )
     parser.add_argument("--title")
-    parser.add_argument("--video-id", help="Update metadata for this existing YouTube video instead of uploading.")
+    parser.add_argument(
+        "--video-id", help="Update metadata for this existing YouTube video instead of uploading."
+    )
     parser.add_argument(
         "--human-description",
         help=(
@@ -608,15 +627,27 @@ def build_parser() -> argparse.ArgumentParser:
         default=default_runs_dir() / "youtube_upload_result.json",
     )
     parser.add_argument("--no-browser", action="store_true")
+    parser.add_argument(
+        "--auth-only",
+        action="store_true",
+        help="Reconnect YouTube without uploading or changing videos.",
+    )
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
-    if not args.client_secret.is_file():
+    if (
+        youtube_store(args.client_secret.parent.resolve()) is None
+        and not args.client_secret.is_file()
+    ):
         raise SystemExit(f"client secret not found: {args.client_secret}")
 
     client_config = load_client_config(args.client_secret)
+    if args.auth_only:
+        authorize(client_config, args.token, no_browser=args.no_browser)
+        print("YouTube authorization saved to the configured credential backend.")
+        return
     token = access_token(client_config, args.token, no_browser=args.no_browser)
     description_provided = any(
         value is not None and value != ""
@@ -650,7 +681,9 @@ def main() -> None:
             token=token,
             video_id=args.video_id,
             title=args.title or existing_snippet.get("title", args.video_id),
-            description=description if description_provided else existing_snippet.get("description", ""),
+            description=description
+            if description_provided
+            else existing_snippet.get("description", ""),
             tags=tags,
             category_id=args.category_id or existing_snippet.get("categoryId", "20"),
             privacy_status=args.privacy_status or existing_status.get("privacyStatus", "unlisted"),

@@ -92,7 +92,7 @@ def _prepare_replay(
                     str(event.get("source") or ""),
                     str(event["kind"]),
                     json.dumps(event["payload"], sort_keys=True, separators=(",", ":")),
-                    now,
+                    float(event["created_at"]),
                     now,
                 ),
             )
@@ -149,6 +149,7 @@ def _project_queued_outcome(
             experiment_name=mlflow_experiment_name(config),
             gradlab_run_id=manifest.run_id,
             created_at_ms=created_at_ms,
+            train_config=config,
         )
         if service.run_id != service_run_id:
             raise RuntimeError("queued MLflow outcome changed the service binding")
