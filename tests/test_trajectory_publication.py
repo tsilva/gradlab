@@ -228,13 +228,13 @@ def test_active_snapshot_freezes_only_complete_verified_evaluations():
 
 
 def test_publication_defers_hourly_commit_rate_limit(monkeypatch):
-    import httpx
+    from httpx2 import Request, Response
     from huggingface_hub.errors import HfHubHTTPError
     from gradlab.trajectory_publication import DatasetPublicationHandler
 
     error = HfHubHTTPError(
         "rate limit for repository commits (128 per hour)",
-        response=httpx.Response(429, request=httpx.Request("POST", "https://huggingface.co")),
+        response=Response(429, request=Request("POST", "https://huggingface.co")),
     )
     handler = DatasetPublicationHandler()
     def fail(job):
