@@ -1,4 +1,4 @@
 interface:
-  display_name: "Upload Checkpoint"
+  display_name: "gradlab: Upload Checkpoint"
   short_description: "Publish artifacts through the durable publisher"
   default_prompt: "Use $gradlab_upload-checkpoint to publish this GradLab checkpoint through the supported durable Publication workflow."

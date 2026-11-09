@@ -5,5 +5,9 @@ minimumReleaseAge: 10080
 blockExoticSubdeps: true
 
 overrides:
+  '@sveltejs/vite-plugin-svelte@6.2.4>deepmerge': npm:@fastify/deepmerge@3.2.4
   devalue: 5.9.4
   source-map-js: 1.2.2
+
+patchedDependencies:
+  "@sveltejs/vite-plugin-svelte@6.2.4": patches/svelte-vite-plugin-6.2.4.patch

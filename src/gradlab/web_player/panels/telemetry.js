@@ -1,7 +1,7 @@
 const STATIC_DESCRIPTORS = Object.freeze({
   "reward/provider": {
-    label: "Provider output reward",
-    shortLabel: "Native R",
+    label: "Provider reward",
+    shortLabel: "Provider R",
     type: "scalar",
     unit: "step-reward",
     phase: "post-action",

@@ -153,7 +153,7 @@ def test_budget_is_shared_persistent_and_counts_attempts(tmp_path, monkeypatch):
 
 
 def test_429_honors_longest_reset_and_pauses_other_jobs(tmp_path, monkeypatch):
-    import httpx
+    from httpx2 import Request, Response
     from huggingface_hub.errors import HfHubHTTPError
 
     monkeypatch.setattr("gradlab.dataset_shards.time.time", lambda: 1000)
@@ -162,10 +162,10 @@ def test_429_honors_longest_reset_and_pauses_other_jobs(tmp_path, monkeypatch):
     def fail():
         raise HfHubHTTPError(
             "repository commits",
-            response=httpx.Response(
+            response=Response(
                 429,
                 headers={"retry-after": "4000", "ratelimit": '"api";r=0;t=100'},
-                request=httpx.Request("POST", "https://huggingface.co"),
+                request=Request("POST", "https://huggingface.co"),
             ),
         )
 

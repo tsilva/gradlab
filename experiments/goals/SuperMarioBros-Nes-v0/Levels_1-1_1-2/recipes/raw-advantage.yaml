@@ -6,7 +6,5 @@ recipe_id: raw-advantage
 description: Task-conditioned PPO for {{ goal_id }} with raw advantages.
 train:
   backend:
-    id: sb3.ppo
     config:
       advantage_normalization: none
-      normalize_advantage: false

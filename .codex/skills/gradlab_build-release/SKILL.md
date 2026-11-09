@@ -15,8 +15,8 @@ requests inspect existing state.
 ## Prepare
 
 Apply the repository specification review once for this task. Read the shared
-[$release-workflow](/Users/tsilva/.codex/skills/release-workflow/SKILL.md), which
-owns common preflight, authorization, monitoring, verification, and `$push` use.
+[$private-skills_release-workflow](/Users/tsilva/.codex/skills/private-skills/private-skills_release-workflow/SKILL.md), which
+owns common preflight, authorization, monitoring, verification, and `$private-skills_push` use.
 If unavailable, report that dependency. Read the requested path in
 [operations.md](references/operations.md) for project-specific arguments and gates.
 
@@ -65,7 +65,7 @@ the shared skill owns publication recovery. `workflow_dispatch` validates only.
 
 Follow the tag-push workflow at the exact commit. Require the wheel and sdist on
 PyPI and matching GitHub Release assets for the same version/tag. After a push,
-use `$push` for default-branch README tagline reconciliation; report push and
+use `$private-skills_push` for default-branch README tagline reconciliation; report push and
 repository-description synchronization separately. Local candidates report
 version, changed sources, artifacts/hashes, and completed gates. Actions validation
 reports the source SHA, run URL, artifact checks, and that nothing was published.

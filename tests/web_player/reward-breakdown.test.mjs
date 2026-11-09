@@ -304,3 +304,27 @@ test("recorded prefixes survive history eviction and preserve cancelling activit
   source.episode_rewards.sequence = 5001;
   assert.equal(render([selected]).status, "protocol-error");
 });
+
+
+test("tiny nonzero shares retain their sign and useful precision", () => {
+  const timePenaltyPercent = 100 * (-.000488) / 3.367512;
+  assert.equal(signedContributionLabel(timePenaltyPercent), "-0.0145%");
+  assert.equal(magnitudeShareLabel(Math.abs(timePenaltyPercent)), "0.0145%");
+  assert.equal(signedContributionLabel(.000001234), "+0.00000123%");
+  assert.equal(signedContributionLabel(-1e-12), "-1e-12%");
+  assert.equal(signedContributionLabel(0), "+0.0%");
+  assert.equal(signedContributionLabel(-0), "+0.0%");
+  assert.equal(signedContributionLabel(70.32), "+70.3%");
+  assert.equal(magnitudeShareLabel(100), "100.0%");
+  assert.equal(signedContributionLabel(NaN), "N/A");
+});
+
+test("native component label and description distinguish a zero weighted contribution", () => {
+  const result = rewardBreakdownPresentation({snapshot: snapshot(),
+    history: [point({raw: 2,final: 2,components: {native_reward: 0,progress_reward: 2}})],
+    view: {selectedSequence: 1}});
+  const native = rowById(result, "native_reward");
+  assert.equal(native.label, "Native reward contribution");
+  assert.match(native.description, /recipe's native-reward weight/);
+  assert.equal(native.impact, 0);
+});

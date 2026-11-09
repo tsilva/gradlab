@@ -32,6 +32,14 @@ prerequisite or unsupported input rather than bypassing admission or inventing
 evidence. Local files must first enter a supported public Run workflow; the
 current player publisher admits verified catalog Checkpoints.
 
+For a source-overlay Run accepted through `gradlab evaluate-local`, use
+`gradlab publish-local <run-directory> --acceptance-queue <private-queue-directory>`
+on the host holding the original Run and its private evaluation. This imports
+the original checkpoint and recipe bytes and the verified Acceptance evidence.
+The import records the original and relocated evidence digests when it moves
+the evaluation video into the configured store. A Release still uses the
+player's representative capture and the normal Publication controls.
+
 ## Admit one release
 
 1. Resolve the exact Run and Checkpoint from the public catalog. For local-only
@@ -48,6 +56,11 @@ current player publisher admits verified catalog Checkpoints.
    a conflict or uncertain response against the existing capture/job before
    submitting again. Authorization to publish the named result permits this
    admission; do not require an extra approval when the request is already clear.
+
+The Mario Level 1-3 repository can take its first v4 Release when `main` is
+the reviewed legacy checkpoint and `sft-20261102` points to that same commit.
+The publisher uses the expected parent for the new commit and leaves the SFT
+tag available as the legacy checkpoint's immutable reference.
 
 The authenticated player routes are `/api/publication/current`, `/render`,
 `/preflight`, `/preview`, `/admit`, and `/jobs/{job_id}` under the same prefix.

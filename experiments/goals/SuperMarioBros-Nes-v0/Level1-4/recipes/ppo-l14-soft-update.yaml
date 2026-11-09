@@ -6,7 +6,6 @@ recipe_id: ppo-l14-soft-update
 description: B257 soft-update PPO for stable {{ goal_id }} clears.
 train:
   backend:
-    id: sb3.ppo
     config:
       learning_rate: 1.2e-4
       learning_rate_final: 8.0e-5

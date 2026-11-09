@@ -29,9 +29,22 @@ def local_publication(run_dir, config, store, environment):
     return LocalRunPublication(run_dir, config, store, environment)
 
 
+def publication_storage_authority() -> RunAuthority:
+    names = {
+        f"GRADLAB_{scope}_R2_{field}"
+        for scope in ("CONTROL", "EVAL", "MODELS")
+        for field in (
+            "URI", "ENDPOINT_URL", "REGION", "ACCESS_KEY_ID", "SECRET_ACCESS_KEY", "PUBLIC_BASE_URL",
+        )
+    }
+    load_repository_operator_environment(Path.cwd(), requested_names=names)
+    return RunAuthority(RunStorageConfig.from_env())
+
+
 class LocalRunPublication:
     def __init__(
-        self, run_dir: Path, config: dict, store: SupervisorLedger, environment, *, authority=None
+        self, run_dir: Path, config: dict, store: SupervisorLedger, environment, *,
+        authority=None, source_overlay: dict | None = None,
     ):
         self.original_attempt_id = config.get("attempt_id") or ""
         self.run_dir = run_dir
@@ -39,20 +52,7 @@ class LocalRunPublication:
         self.recipe = json.loads((run_dir / "recipe.json").read_text())
         self.receipt = json.loads((run_dir / "local-run.json").read_text())
         if authority is None:
-            names = {
-                f"GRADLAB_{scope}_R2_{field}"
-                for scope in ("CONTROL", "EVAL", "MODELS")
-                for field in (
-                    "URI",
-                    "ENDPOINT_URL",
-                    "REGION",
-                    "ACCESS_KEY_ID",
-                    "SECRET_ACCESS_KEY",
-                    "PUBLIC_BASE_URL",
-                )
-            }
-            load_repository_operator_environment(Path.cwd(), requested_names=names)
-            authority = RunAuthority(RunStorageConfig.from_env())
+            authority = publication_storage_authority()
         self.authority = authority
         selected = config.get("tracking") or {"backend": "wandb", "delivery": "online"}
         tracking = {
@@ -89,11 +89,18 @@ class LocalRunPublication:
             raise ValueError("local publication and Run identities differ")
         recipe = self.recipe["recipe"]
         runtime = self.recipe["provenance"]["runtime"]
+        source_commit = self.recipe["provenance"].get("source_commit")
+        if source_overlay is not None:
+            if source_commit is not None or config.get("source_sha"):
+                raise ValueError("an overlay import requires a run without a recorded Git revision")
+            source_commit = source_overlay["base_commit"]
+        if not source_commit:
+            raise ValueError("run has no Git revision or verified source overlay")
         target = {"kind": "local", "max_steps": int(config["timesteps"])}
         self.manifest = RunManifest(
             **identity,
             created_at=self.receipt["started_at"],
-            source_sha=self.recipe["provenance"]["source_commit"],
+            source_sha=source_commit,
             image_digest=f"local:sha256:{canonical_json_sha256(runtime)}",
             goal_slug=recipe["goal_variant"]["goal_slug"],
             goal_sha256=recipe["goal_variant"]["effective_goal_contract_sha256"],
@@ -108,6 +115,7 @@ class LocalRunPublication:
                 "request": target,
                 "selected": target,
                 "runtime": runtime,
+                **({"source_overlay": source_overlay} if source_overlay is not None else {}),
             },
             wandb=wandb,
             tracking=tracking,
@@ -354,7 +362,10 @@ class LocalRunPublication:
         )
 
 
-def publish_local_run(run_dir: Path, *, authority: RunAuthority | None = None) -> str:
+def publish_local_run(
+    run_dir: Path, *, authority: RunAuthority | None = None,
+    source_overlay: dict | None = None,
+) -> str:
     """Durably publish a completed local-only Run without synchronizing its tracker."""
     receipt = json.loads((run_dir / "local-run.json").read_text())
     if receipt.get("status") != "complete_local":
@@ -368,7 +379,9 @@ def publish_local_run(run_dir: Path, *, authority: RunAuthority | None = None) -
     from gradlab.env_config import env_config_from_mapping
 
     environment = resolve_env_config(env_config_from_mapping(config))
-    with LocalRunPublication(run_dir, config, store, environment, authority=authority) as publication:
+    with LocalRunPublication(
+        run_dir, config, store, environment, authority=authority, source_overlay=source_overlay
+    ) as publication:
         publication.finish()
         sync_path = run_dir / "tracker-sync.json"
         sync_status = "pending"
@@ -394,7 +407,14 @@ def main(argv: list[str] | None = None) -> int:
         description="Upload a complete local-only Run's checkpoints and journal without tracker sync.",
     )
     parser.add_argument("run_dir", type=Path)
+    parser.add_argument("--acceptance-queue", type=Path, help="import an accepted private local evaluation")
     args = parser.parse_args(argv)
-    url = publish_local_run(args.run_dir.expanduser().resolve())
+    run_dir = args.run_dir.expanduser().resolve()
+    if args.acceptance_queue:
+        from gradlab.local_acceptance import publish_accepted_local_run
+
+        url = publish_accepted_local_run(run_dir, args.acceptance_queue.expanduser().resolve())
+    else:
+        url = publish_local_run(run_dir)
     print(f"Published local Run: {url}")
     return 0

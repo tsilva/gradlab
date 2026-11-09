@@ -11,8 +11,11 @@ train:
     normalize_images: true
     orthogonal_init: true
   backend:
-    id: sb3.ppo
+    id: gradlab.ppo
     config:
+      device: cpu
+      precision: fp32
+      execution_profile: sb3-parity
       n_steps: 8
       batch_size: 64
       n_epochs: 4

@@ -5,7 +5,6 @@ reward_shape: speedrun-v1
 recipe_id: ppo-train-clear-100
 description: Training-only PPO for {{ goal_id }}, targeting 100 consecutive clears.
 train:
-  checkpoint_eval_backend: none
   early_stop:
     conditions:
       clear_100:

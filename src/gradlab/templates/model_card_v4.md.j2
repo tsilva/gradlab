@@ -107,7 +107,10 @@ Evaluation used `{{ action_sampling }}` action selection for all `{{ episodes }}
 | Run | {{ run_value }} |
 | Recipe | `{{ recipe }}` |
 | Seed | `{{ seed }}` |
-| Source commit | `{{ source_commit }}` |
+| {% if source_overlay %}Source base commit{% else %}Source commit{% endif %} | `{{ source_commit }}` |
+{% if source_overlay -%}
+| Source overlay SHA-256 | `{{ source_overlay }}` |
+{% endif -%}
 | Evaluated artifact | `{{ checkpoint_artifact }}` |
 
 ## Limitations

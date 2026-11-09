@@ -12,6 +12,7 @@ This specification applies to GradLab's current publication providers and public
 - Only a curated index that spans environments may use a name that is not an environment name.
 - Each publication-enabled Run must declare a Publication Policy that selects its publishable periodic and final Checkpoints.
 - Checkpoint Publication must remain independent of evaluation status and must not imply Acceptance, Promotion, or Release.
+- Publication of an accepted source-overlay Run must preserve its original checkpoint and recipe bytes, record the base commit and overlay separately, and retain the verified evaluation's scientific evidence when relocating its video.
 - A Release for a visual or interactive Policy must include its representative replay as root `replay.mp4` when the publication provider supports that preview.
 - Public model, video, source, and telemetry surfaces for one result must link to each other and use the same stable result identity.
 - New-schema public telemetry must come from the verified GradLab journal and remain readable without private metrics-service access. Before a direct local-only Run is published, its required journal and Checkpoint artifacts must be uploaded durably; tracker sync is optional and cannot change the original `complete_local` receipt.

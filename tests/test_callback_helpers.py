@@ -39,7 +39,13 @@ from gradlab.metric_names import (
 )
 from gradlab.policy_bundle import build_recipe_document, write_canonical_json
 from gradlab.recipe_documents import compose_resolved_train_documents
-from gradlab.training_backend import GracefulStopFlag, training_backend_config_hash
+from gradlab.training_backend import (
+    GracefulStopFlag,
+    training_backend_config,
+    training_backend_config_hash,
+    training_backend_id,
+    training_backend_runtime_metadata,
+)
 
 
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -661,7 +667,7 @@ class LedgerCheckpointHelperTests(unittest.TestCase):
 
             self.assertIs(install.call_args.kwargs["action_contract"], contract)
 
-    def test_checkpoint_save_uses_exact_sb3_zip_path_for_hidden_uuid_base(self) -> None:
+    def test_checkpoint_save_uses_exact_zip_path_for_hidden_uuid_base(self) -> None:
         class FakeModel:
             def __init__(self) -> None:
                 self.saved_bases: list[str] = []
@@ -684,7 +690,7 @@ class LedgerCheckpointHelperTests(unittest.TestCase):
                 resolved.effective,
                 repo_root=Path.cwd(),
                 source_commit="a" * 40,
-                run_description="Exact SB3 checkpoint path regression.",
+                run_description="Exact checkpoint ZIP path regression.",
                 seed=7,
                 runtime_image_ref="docker:example/runtime@sha256:" + "b" * 64,
                 base_materialized_recipe=resolved.base,
@@ -696,12 +702,12 @@ class LedgerCheckpointHelperTests(unittest.TestCase):
                 train_config={
                     **train_config,
                     "run_name": "run",
-                    "run_description": "Exact SB3 checkpoint path regression.",
+                    "run_description": "Exact checkpoint ZIP path regression.",
                     "recipe_json_path": str(recipe_path),
                     "source_sha": "a" * 40,
-                    "algorithm_id": "ppo",
-                    "model_class": "stable_baselines3.ppo.ppo.PPO",
-                    "training_backend_id": "sb3.ppo",
+                    **training_backend_runtime_metadata(
+                        training_backend_id(train_config), training_backend_config(train_config)
+                    ),
                     "training_backend_config_hash": training_backend_config_hash(train_config),
                 },
                 config=resolve_env_config(env_config_from_mapping(train_config)),
