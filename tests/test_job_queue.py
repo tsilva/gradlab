@@ -402,6 +402,8 @@ class JobQueueTests(unittest.TestCase):
             repo_root=facade.repo_root,
             project_results=False,
             work_root=self.store.work_root,
+            local_source=None,
+            rom_path=None,
         )
 
 
