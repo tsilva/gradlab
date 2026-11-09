@@ -5,6 +5,7 @@
   } from "../../src/gradlab/web_player/panels/reward-inspector.js";
   import { selectedPoint } from "../../src/gradlab/web_player/panels/telemetry-panel.js";
   import { chartPoints } from "../../src/gradlab/web_player/panels/chart-status.js";
+  import { rewardReferenceLabel } from "../../src/gradlab/web_player/panels/reward-reference.js";
   let { context, services }: { context: any; services: any } = $props();
   let selected = $derived(
     selectedPoint(context.history, context.snapshot, context.view),
@@ -60,13 +61,16 @@
 </script>
 
 <section class="telemetry-block reward-table-block">
-  <button
-    type="button"
-    disabled={!Number.isInteger(context.snapshot?.transition?.step)}
-    onclick={() =>
-      services.setRewardReference(context.snapshot.transition.step)}
-    >Set return reference to cursor</button
-  >
+  <div class="reward-reference-controls">
+    <span>{rewardReferenceLabel(reference, gamma)}</span>
+    <button
+      type="button"
+      disabled={!Number.isInteger(context.snapshot?.transition?.step)}
+      onclick={() =>
+        services.setRewardReference(context.snapshot.transition.step)}
+      >Set return reference to cursor</button
+    >
+  </div>
   <div class="reward-history-scroll">
     <!-- svelte-ignore a11y_role_supports_aria_props_implicit (aria-description is the existing global ARIA description) -->
     <table
@@ -76,7 +80,7 @@
     >
       <thead
         ><tr
-          >{#each ["Step", "Native", "Shaped", "Delay", "Weight", "Contribution", "G(s)", "V(s)"] as label}<th
+          >{#each ["Step", "Provider", "Shaped", "Delay", "Weight", "Contribution", "G(s)", "V(s)"] as label}<th
               scope="col">{label}</th
             >{/each}</tr
         ></thead

@@ -80,6 +80,15 @@ The bounded live pilot requires separate compute authorization. Compare matched 
 
 ## Debugging training
 
+MLflow's native Run status describes execution. `completed`, `succeeded`, `stopped`, and
+`complete_local` project to `FINISHED`; `canceled` and `interrupted` project to
+`KILLED`; `failed` and `resumable_failure` project to `FAILED`. The `ops/state` and
+`ops/reason` tags preserve the GradLab outcome. A `FINISHED` training budget
+can still contain zero clears and no accepted policy. Check success metrics and
+the authoritative Acceptance evidence separately. Older projections may label
+intentional cancellations `FAILED`; retain the terminal receipt as authority and
+perform any projection repair through the lease-owned delivery workflow.
+
 GradLab logs the retained journal event time as each metric's UTC millisecond
 timestamp. Retries and explicit sync preserve that time. Use scientific steps
 for training/evaluation comparisons and wall time to correlate host diagnostics.

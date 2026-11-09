@@ -516,7 +516,7 @@ def test_capture_has_physical_budgets_and_recovers_inventory(tmp_path):
     resumed.close()
 
 
-def test_archive_publication_protects_generation_while_pruning(tmp_path, monkeypatch):
+def test_archive_publication_stages_generation_before_network_upload(tmp_path, monkeypatch):
     from concurrent.futures import ThreadPoolExecutor
     from threading import Event
     from gradlab.r2_store import BucketConfig, RunStorageConfig
@@ -564,7 +564,7 @@ def test_archive_publication_protects_generation_while_pruning(tmp_path, monkeyp
             assert uploading.wait(5)
             mutation = pool.submit(prune)
             assert pruning.wait(5)
-            assert not mutation.done()
+            mutation.result(timeout=5)
         finally:
             release.set()
         receipt = published.result(timeout=5)
@@ -576,6 +576,114 @@ def test_archive_publication_protects_generation_while_pruning(tmp_path, monkeyp
     assert restored["archive"]["entry_count"] > 0
     # Do not persist the now deliberately removed curriculum a second time.
     runtime.state_archive.close()
+    runtime.state_archive = None
+    runtime.archive_curriculum = None
+    runtime.close()
+
+
+@pytest.mark.parametrize("change_before_staging", [False, True])
+def test_supervisor_archive_upload_and_remote_prune_allow_local_mutation(
+    tmp_path, monkeypatch, change_before_staging
+):
+    import hashlib
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from types import SimpleNamespace
+
+    from gradlab.r2_store import BucketConfig, RunStorageConfig
+    from gradlab.run_authority import RunAuthority
+    from gradlab.run_contracts import new_attempt_id, new_run_id
+    from gradlab.run_supervisor import RunSupervisor
+
+    runtime = archive_runtime(tmp_path / "state-archive")
+    runtime.reset()
+    for _ in range(4):
+        runtime.step(np.zeros(5, dtype=np.int64))
+    runtime.curriculum_complete_rollout()
+    archive = runtime.state_archive
+    closure_path = tmp_path / "state-archive/closure.json"
+    staged_closure_sha256 = hashlib.sha256(closure_path.read_bytes()).hexdigest()
+    authority = RunAuthority(
+        RunStorageConfig(
+            control=BucketConfig(uri=f"file://{tmp_path}/control"),
+            evaluation=BucketConfig(uri=f"file://{tmp_path}/eval"),
+            models=BucketConfig(
+                uri=f"file://{tmp_path}/models", public_base_url="https://example.test"
+            ),
+        )
+    )
+    uploading, release_upload, pruning, release_prune = Event(), Event(), Event(), Event()
+    original = authority.control.put_bytes
+    original_publish = authority.publish_state_archive
+
+    def raced_publish(**kwargs):
+        nonlocal staged_closure_sha256
+        if change_before_staging:
+            archive.write_view(
+                "before-staging",
+                {},
+                referenced_entry_ids=runtime.archive_curriculum.retained_entry_ids(),
+            )
+            archive.seal(step=98, status="recoverable")
+            staged_closure_sha256 = hashlib.sha256(closure_path.read_bytes()).hexdigest()
+        return original_publish(**kwargs)
+
+    monkeypatch.setattr(authority, "publish_state_archive", raced_publish)
+
+    def gated_upload(*args, **kwargs):
+        uploading.set()
+        assert release_upload.wait(5)
+        return original(*args, **kwargs)
+
+    def gated_prune(lease, *, heartbeat=None):
+        pruning.set()
+        assert release_prune.wait(5)
+        return lease
+
+    monkeypatch.setattr(authority.control, "put_bytes", gated_upload)
+    monkeypatch.setattr(authority, "prune_state_archive", gated_prune)
+    supervisor = object.__new__(RunSupervisor)
+    supervisor.train_config = {"state_archive": {"persistence": "durable"}}
+    supervisor.lease = object()
+    supervisor.lease_misses = 0
+    supervisor._service_delivery = lambda: None
+    supervisor.run_dir = tmp_path
+    supervisor.manifest = SimpleNamespace(run_id=new_run_id(), attempt_id=new_attempt_id())
+    supervisor.state_archive_closure_sha256 = None
+    supervisor.state_archive_publication = None
+    supervisor.authority = authority
+    supervisor._emit = lambda *args, **kwargs: None
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        publication = pool.submit(supervisor._publish_state_archive)
+        try:
+            assert uploading.wait(5)
+            pool.submit(
+                archive.write_view,
+                "concurrent-upload",
+                {},
+                referenced_entry_ids=runtime.archive_curriculum.retained_entry_ids(),
+            ).result(timeout=5)
+            release_upload.set()
+            assert pruning.wait(5)
+            pool.submit(archive.seal, step=99, status="closed").result(timeout=5)
+        finally:
+            release_upload.set()
+            release_prune.set()
+        assert publication.result(timeout=5) == 1
+
+    receipt = supervisor.state_archive_publication
+    assert receipt["closure_sha256"] == staged_closure_sha256
+    assert supervisor.state_archive_closure_sha256 == staged_closure_sha256
+    assert hashlib.sha256(closure_path.read_bytes()).hexdigest() != staged_closure_sha256
+    restored = authority.restore_state_archive(
+        run_id=supervisor.manifest.run_id, destination=tmp_path / "restored"
+    )
+    assert restored == receipt
+    assert restored["status"] == "recoverable"
+    assert hashlib.sha256((tmp_path / "restored/closure.json").read_bytes()).hexdigest() == staged_closure_sha256
+    assert not list(tmp_path.glob(".archive-publication-*"))
+    archive.close()
     runtime.state_archive = None
     runtime.archive_curriculum = None
     runtime.close()

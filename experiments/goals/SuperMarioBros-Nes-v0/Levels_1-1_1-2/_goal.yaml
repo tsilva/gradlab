@@ -1,6 +1,5 @@
 defaults:
 - ../_goal-family-common@_global_
-- ../_reward-shapes-common@_global_
 - _self_
 tags:
 - "goal_id:{{ goal_id }}"

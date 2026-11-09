@@ -105,6 +105,31 @@ def level1_1_recipe_document(*, seed: int = 7) -> dict:
     )
 
 
+def test_warmup_recipe_preserves_portable_initial_policy() -> None:
+    resolved = compose_resolved_train_documents(
+        LEVEL1_3_GOAL,
+        LEVEL1_3_GOAL.parent / "recipes/ppo-sft-critic-warmup.yaml",
+        source_sha="a" * 40,
+    )
+    bind_mario_asset(resolved)
+    document = build_recipe_document(
+        resolved.effective,
+        repo_root=Path.cwd(),
+        source_commit="a" * 40,
+        run_description="Critic warmup portable recipe proof",
+        seed=12,
+        runtime_image_ref=RUNTIME,
+        base_materialized_recipe=resolved.base,
+        canonical_goal=resolved.canonical_goal,
+    )
+
+    validated = validate_recipe_document(document)
+    initialization = training_backend_config(validated["recipe"]["train_config"])["initial_policy"]
+    assert initialization["repo_id"] == "tsilva/SuperMarioBros-Nes-v0_Level1-3"
+    assert initialization["revision"] == "f9a633f9a7c5105beeb09d654b7af6e2f7c5404a"
+    assert "url" not in initialization
+
+
 def test_recipe_v4_embeds_verified_goal_and_recipe_bases() -> None:
     resolved = compose_resolved_train_documents(
         BANDIT_GOAL,
@@ -658,7 +683,7 @@ def test_recipe_materializes_the_backend_config_executed_by_the_learner() -> Non
     assert training_backend_config_hash(recipe_train_config) == training_backend_config_hash(
         executed_train_config
     )
-    assert training_backend_config(recipe_train_config)["device"] == "auto"
+    assert training_backend_config(recipe_train_config)["device"] == "cuda"
 
 
 def test_resume_approval_does_not_rebind_the_scientific_backend_config() -> None:

@@ -248,7 +248,7 @@ def test_bandit_recipe_materializes_fixed_train_and_eval_contracts() -> None:
         }
     ]
     assert train_config["env_args"] == {"autoreset_mode": "disabled"}
-    assert train_config["training_backend"]["id"] == "sb3.ppo"
+    assert train_config["training_backend"]["id"] == "gradlab.ppo"
     assert train_config["policy_model"] == {
         "schema_version": 2,
         "encoder": {"kind": "flatten"},
@@ -291,6 +291,9 @@ def test_bandit_local_demo_runs_to_cap_without_a_declared_success_signal(
     backend = dict(config["training_backend"])
     backend["id"] = backend_id
     backend_config = dict(backend["config"])
+    if backend_id == "sb3.ppo":
+        for key in ("precision", "execution_profile", "checkpoint_update_steps"):
+            backend_config.pop(key, None)
     backend_config.update({"device": "cpu", "n_epochs": 1})
     backend["config"] = backend_config
     config["training_backend"] = backend

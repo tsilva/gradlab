@@ -317,20 +317,38 @@ def test_bounded_discovery_cannot_claim_empty_inventory(campaign):
     assert study.load_state(campaign.path)["status"] == "active"
 
 
-def test_recovery_reads_a_real_generated_and_validated_recipe(campaign, monkeypatch):
+def test_recovery_reads_a_real_generated_and_validated_recipe(campaign, monkeypatch, tmp_path):
     from gradlab.policy_bundle import build_recipe_document
     from gradlab.recipe_documents import compose_resolved_train_documents
-    from tests.test_policy_bundle import GOAL, RECIPE, bind_mario_asset
 
-    root = Path.cwd()
+    root = tmp_path
+    goal = root / "experiments" / "goals" / "gradlab__bandit" / "_goal.yaml"
+    recipe = goal.parent / "recipes" / "ppo.yaml"
+    recipe.parent.mkdir(parents=True)
+    goal.write_bytes(Path("experiments/goals/gradlab__bandit/_goal.yaml").read_bytes())
+    recipe.write_text(
+        """recipe_id: ppo
+description: SB3 PPO reconciliation fixture.
+train:
+  timesteps: 256
+  policy_model:
+    schema_version: 2
+    encoder: {kind: flatten}
+    fusion: {hidden_sizes: [64, 64], activation: tanh}
+  backend:
+    id: sb3.ppo
+    config: {n_steps: 8, batch_size: 64}
+""",
+        encoding="utf-8",
+    )
     baseline = compose_resolved_train_documents(
-        GOAL, RECIPE, source_sha=campaign.state["source_sha"]
+        goal, recipe, source_sha=campaign.state["source_sha"]
     )
     state = campaign.state
     state["repo_root"] = str(root)
-    state["goal_path"] = str(GOAL)
-    state["recipe_path"] = str(RECIPE)
-    state["recipe_preimage_sha256"] = study.file_sha256(root / RECIPE)
+    state["goal_path"] = str(goal)
+    state["recipe_path"] = str(recipe)
+    state["recipe_preimage_sha256"] = study.file_sha256(recipe)
     state["source_files"] = [
         {"path": str(Path(item["path"]).relative_to(root)), "sha256": item["sha256"]}
         for item in baseline.effective["_composition"]["source_files"]
@@ -341,9 +359,8 @@ def test_recovery_reads_a_real_generated_and_validated_recipe(campaign, monkeypa
     wave = state["waves"][0]
     overrides = study.expected_recipe_overrides(state, wave)
     resolved = compose_resolved_train_documents(
-        GOAL, RECIPE, source_sha=state["source_sha"], recipe_overrides=overrides
+        goal, recipe, source_sha=state["source_sha"], recipe_overrides=overrides
     )
-    bind_mario_asset(resolved)
     for materialized in (resolved.effective, resolved.base):
         materialized["train_config"]["checkpoint_eval_backend"] = "none"
     manifest = publish_run(campaign)

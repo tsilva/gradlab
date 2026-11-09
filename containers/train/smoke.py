@@ -76,6 +76,21 @@ def smoke_breakout_render() -> None:
     print("breakout_render=canonical-stella-rgb")
 
 
+def smoke_trajectory_parquet() -> None:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    from gradlab.play_trajectory import parquet_schema
+
+    table = pa.Table.from_pylist([], schema=parquet_schema())
+    sink = pa.BufferOutputStream()
+    pq.write_table(table, sink, compression="zstd", write_page_index=True)
+    restored = pq.read_table(pa.BufferReader(sink.getvalue()))
+    if not restored.schema.equals(table.schema, check_metadata=True):
+        raise RuntimeError("Trajectory Parquet schema did not survive a round trip")
+    print("trajectory_parquet_roundtrip=ok")
+
+
 def main() -> None:
     root = Path(os.environ.get("GRADLAB_PROJECT_ROOT", "/root/gradlab"))
     print("gradlab_container_smoke=ok")
@@ -90,6 +105,7 @@ def main() -> None:
         "torch",
         "wandb",
         "mlflow-skinny",
+        "pyarrow",
     ):
         print(f"package/{package}={package_version(package)}")
 
@@ -112,6 +128,7 @@ def main() -> None:
 
     smoke_lunar_lander()
     smoke_breakout_render()
+    smoke_trajectory_parquet()
 
     game = os.environ.get("RETRO_GAME")
     if game:

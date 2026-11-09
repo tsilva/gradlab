@@ -27,6 +27,20 @@ Current research state:
 - `benchmarks/`: reproducible benchmark profiles and supporting documentation.
 - `scripts/`: active experiment utilities used by benchmarks and tooling.
 
+## Shared configurations
+
+FirstWall and TwoWalls inherit their common Breakout PPO policy, optimizer,
+reward and budget from `recipes/_presets/breakout-ppo.yaml`; each keeps its own
+checkpoint and occupancy settings. Mario mixed-state PPO inherits the common
+Mario optimizer and checkpoint schedule, overriding its policy fusion and
+advantage grouping. The Mario family owns its shared reward catalog.
+
+Classic-control PPO specializes the discrete Gymnasium CPU preset's entropy
+coefficient. Health Gathering Supreme inherits the Health Gathering goal and
+training preset, retaining its scenario identity and longer training budget.
+Recipe identities and paths remain separate; composition records every shared
+source in immutable provenance.
+
 ## Screening recipes
 
 `goals/Breakout-Atari2600-v0/TwoWalls/recipes/ppo-screening.yaml` uses the same
@@ -43,6 +57,17 @@ evaluation through the existing Player workflow. An Evaluated Goal keeps its
 frozen Acceptance criteria, evaluation seeds, and full-episode evidence checks;
 screening itself cannot establish Acceptance or Promotion. A Training-Only Goal
 remains ineligible for Acceptance. Monitoring remains a separate opt-in campaign.
+
+## Mario route discovery
+
+`goals/SuperMarioBros-Nes-v0/Level1-3/recipes/go-explore-route-diagnostic.yaml`
+searches for a complete action sequence with Go-Explore, bounded to one million
+environment transitions. Launch it with an explicit finite task duration, for
+example `--max-duration 30m`. Automatic Acceptance evaluation is disabled. Each
+checkpoint retains its portable route graph and the graph's emulator snapshots
+for subsequent replay and local PPO diagnostics. Verify a candidate route from
+the original level start before using it as a demonstration; search results do
+not establish the learned PPO policy's 100-episode Acceptance.
 
 ## Provider-owned policy signal histories
 

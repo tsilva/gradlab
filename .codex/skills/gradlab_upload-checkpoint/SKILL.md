@@ -19,7 +19,7 @@ Apply the repository specification review once for this task. Read
 Read the requested path in [operations.md](references/operations.md).
 For visual Releases, read the
 [preview contract](../gradlab_upload-youtube-video/references/release-metadata.md)
-and use `$model-card-author` for generated-card quality.
+and use `$private-skills_model-card-author` for generated-card quality.
 
 ## Act
 

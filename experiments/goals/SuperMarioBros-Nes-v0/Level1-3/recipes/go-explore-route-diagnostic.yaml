@@ -1,0 +1,63 @@
+defaults:
+- _self_
+reward_shape: speedrun-v1
+recipe_id: go-explore-route-diagnostic
+description: Bounded Level1-3 route discovery for PPO diagnostics; search results
+  do not establish learned-policy Acceptance.
+train:
+  checkpoint_freq: 250000
+  checkpoint_eval_backend: none
+  timesteps: 1000000
+  state_archive:
+    semantic_id: state-archive-v1
+    persistence: ephemeral
+    restore_semantics: continuation
+    recorder:
+      mode: backend
+      cell:
+        dimensions:
+        - signal: level_hi
+          bucket_size: 1
+        - signal: level_lo
+          bucket_size: 1
+        - signal: area_id
+          bucket_size: 1
+        - signal: area_pointer
+          bucket_size: 1
+        - signal: x_pos
+          bucket_size: 8
+        - signal: y_pos
+          bucket_size: 16
+        - signal: player_task
+          equals: 8
+        - signal: loop_command_active
+          bucket_size: 1
+        - signal: loop_correct_count
+          bucket_size: 1
+          clamp:
+          - 0
+          - 7
+        - signal: loop_pass_count
+          bucket_size: 1
+          clamp:
+          - 0
+          - 7
+        - signal: player_motion
+          equals: 0
+        - signal: player_power
+          bucket_size: 1
+    export:
+      snapshots: retained
+    curriculum: null
+  backend:
+    id: gradlab.go-explore
+    config:
+      explore_steps: 128
+      progress_guided_restore_probability: 0.5
+      success_guided_restore_probability: 0.5
+      run_duration_mean: 4.0
+      run_duration_max: 32
+      fallback_action: noop
+      progress_signal: x
+      log_interval_steps: 10000
+      compaction_interval_steps: 250000

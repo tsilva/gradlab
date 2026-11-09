@@ -365,7 +365,15 @@ def _truncation_bootstrap_value(
     config: object,
     active_task_state: str | None,
     active_info_value: tuple[int | str, ...] | None,
+    value_contract: Mapping[str, object] | None = None,
 ) -> tuple[float | None, str | None]:
+    backend = (config.get("training_backend") if isinstance(config, Mapping)
+               else getattr(config, "training_backend", None))
+    zero = (value_contract.get("truncation_bootstrap") == "zero" if value_contract is not None
+            else isinstance(backend, Mapping) and backend.get("id") == "gradlab.ppo"
+            and backend.get("config", {}).get("bootstrap_truncations") is False)
+    if zero:
+        return 0.0, None
     if policy_runtime is None or "state_value" not in policy_runtime.capabilities.introspection:
         return None, None
     if final_policy_obs is None:
@@ -1142,6 +1150,7 @@ class _PlaybackSession:
                 config=self.config,
                 active_task_state=terminal_task_state,
                 active_info_value=terminal_info_value,
+                value_contract=getattr(self, "value_contract", None),
             )
 
         next_conditioning_info = dict(info.get("reset_info", {})) if boundary else info

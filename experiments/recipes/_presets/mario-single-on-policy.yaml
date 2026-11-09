@@ -24,6 +24,7 @@ train:
     orthogonal_init: true
   backend:
     config:
+      device: cuda
       learning_rate_final: 1.0e-4
       learning_rate_schedule_timesteps: 4000000
       ent_coef: 0.01
