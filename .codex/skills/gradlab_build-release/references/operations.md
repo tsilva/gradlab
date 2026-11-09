@@ -51,7 +51,7 @@ tag-push run at the full `vX.Y.Z` commit SHA. A `workflow_dispatch` run
 validates artifacts but never publishes. Verify PyPI project `gradlab` and
 the GitHub Release for the same tag.
 
-After a successful branch/tag push, follow `$push` to reconcile the destination
+After a successful branch/tag push, follow `$private-skills_push` to reconcile the destination
 repository description with the marked tagline in its latest published
 default-branch README. Report push and metadata synchronization separately.
 

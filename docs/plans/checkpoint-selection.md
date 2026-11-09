@@ -1,6 +1,16 @@
-# Checkpoint selection ownership
+# Checkpoint selection ownership — historical plan
 
-Status: proposed implementation plan for architecture-review candidate 1. The implementation specification is published as [GitHub issue #44](https://github.com/tsilva/gradlab/issues/44), labelled `ready-for-agent`. No production implementation has started.
+Status: historical implementation plan, reviewed on 2026-09-12. The original
+proposal was architecture-review candidate 1 and described
+[GitHub issue #44](https://github.com/tsilva/gradlab/issues/44) as `ready-for-agent`
+before implementation. The [verification record](../verification/checkpoint-selection-44.md)
+subsequently documented the tested implementation at
+`b615289417bc88207f4d66936c03f6b1a426b757` on 2026-09-12.
+
+Documentation review: 2026-10-27. The proposal and implementation sequence below
+are preserved as historical design evidence, not a pending task list. The linked
+verification records what was tested then; this review did not rerun checks or
+verify current deployment or GitHub issue status.
 
 ## Outcome and scope
 
@@ -12,11 +22,12 @@ Reviewed on 2026-09-12 against clean `main` at `091403d7724a369035277bcacb629e97
 
 Root `SPECS.md`, `docs/specs/playback.md`, `CONTEXT.md`, and ADR-0001 remain authoritative. This plan introduces no new domain concept or stakeholder requirement and requires no changes to those documents.
 
-## Current ownership and friction
+## Ownership and friction before the refactor
 
-Paths below are repository-relative; symbols remain authoritative if lines move.
+Paths below are repository-relative references from the original plan; current
+source ownership must be inspected before reusing the design.
 
-| Location | Current responsibility | Planned treatment |
+| Location | Responsibility at the planning snapshot | Planned treatment |
 | --- | --- | --- |
 | `src/gradlab/web_player/sources/browser.js`: `selectCheckpoint`, `navigate`, `renderActiveBreadcrumbs` | Selection command, route/history, `activeCheckpointPendingId`, and app loading callback | Submit selection/navigation intent; render pending identity from the common owner; retain catalog data and rendering |
 | `src/gradlab/web_player/app.js`: `beginCheckpointLoad`, `finishCheckpointLoad`, `snapshotCompletesCheckpointLoad` | Command/Checkpoint identity, blocking mask, completion predicate | Replace mutable selection state and lifecycle decisions with the owner's interface; retain DOM updates |

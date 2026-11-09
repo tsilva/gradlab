@@ -19,6 +19,7 @@ from gradlab.task_kernels import IdentityTaskDefinition
 from gradlab.train import main as train_main
 from gradlab.train_config import load_materialized_train_config, validate_and_normalize_train_config
 from gradlab.local_paths import PORTABLE_DEFAULT_RUNS_DIR
+from gradlab.recipe_documents import compose_resolved_train_documents
 from gradlab.training_backend import (
     BackendContext,
     load_training_backend,
@@ -34,6 +35,18 @@ def configured_policy_model() -> dict[str, object]:
         "normalize_images": False,
         "orthogonal_init": True,
     }
+
+
+def test_checked_in_ppo_recipes_use_custom_backend() -> None:
+    root = Path(__file__).resolve().parents[1]
+    for goal in root.glob("experiments/goals/**/_goal.yaml"):
+        for recipe in goal.parent.glob("recipes/*.yaml"):
+            config = compose_resolved_train_documents(
+                goal, recipe, source_sha="a" * 40,
+            ).effective["train_config"]
+            backend = config["training_backend"]
+            if backend["id"].endswith(".ppo"):
+                assert backend["id"] == "gradlab.ppo", recipe.relative_to(root)
 
 
 def backend_config(backend_id: str = "sb3.ppo", **config) -> dict[str, object]:

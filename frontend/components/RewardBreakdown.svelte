@@ -76,7 +76,7 @@
                       class={`reward-sign ${sign(row.impact)}`}
                       aria-label={`${sign(row.impact)} impact`}
                       >{row.impact > 0 ? "+" : row.impact < 0 ? "−" : "0"}</span
-                    ><span>{row.label}</span>
+                    ><span title={row.description}>{row.label}</span>
                   </div>
                   <div class="reward-zero-bar" aria-hidden="true">
                     <span

@@ -713,12 +713,12 @@ test("hovered line-chart samples drive every legend value", () => {
   );
 });
 
-test("step reward legends use native and shaped reward labels", () => {
+test("step reward legends distinguish provider and shaped reward", () => {
   assert.deepEqual(
     ["reward/provider", "reward/shaped"].map((key) => (
       lineLegendPrefix(descriptorFor(key))
     )),
-    ["Native R = ", "Shaped R = "],
+    ["Provider R = ", "Shaped R = "],
   );
 });
 

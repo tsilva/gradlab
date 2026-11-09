@@ -6,11 +6,12 @@ export function rewardReferenceEpisode(snapshot, epoch) {
 
 export function createRewardReference(snapshot, epoch) {
   const transition = snapshot?.transition;
-  if (!Number.isInteger(transition?.step)) return null;
+  if (!Number.isInteger(transition?.step) || transition.step < 0) return null;
+  const step = Math.max(1, transition.step);
   return {
     episode: rewardReferenceEpisode(snapshot, epoch),
-    step: transition.step,
-    sample: {
+    step,
+    sample: transition.step === 0 ? null : {
       step: transition.step,
       sequence: transition.sequence,
       reward_provider: transition.reward?.provider,
@@ -38,13 +39,20 @@ export function rewardReferenceStore(storage, workspaceId) {
     get(snapshot, epoch) {
       const episode = rewardReferenceEpisode(snapshot, epoch);
       const existing = read().find(item => item?.episode === episode && Number.isInteger(item.step));
-      if (existing) return existing;
+      if (existing?.step >= 1) return existing;
+      if (existing?.step === 0) return save({ ...existing, step: 1, sample: null });
       const reference = createRewardReference(snapshot, epoch);
       if (!reference) return null;
       // A stats window may first receive an episode after it has already advanced.
-      // Its arrival timing must not choose the discount origin or invent step-zero facts.
-      return save({ ...reference, step: 0, sample: reference.step === 0 ? reference.sample : null });
+      // Its arrival timing must not choose the discount origin or invent a first reward.
+      return save({ ...reference, step: 1, sample: reference.step === 1 ? reference.sample : null });
     },
     set(snapshot, epoch) { return save(createRewardReference(snapshot, epoch)); },
   };
+}
+
+export function rewardReferenceLabel(step, gamma) {
+  const origin = Number.isInteger(step) && step >= 1 ? `step ${step}` : "unavailable";
+  const discount = Number.isFinite(gamma) && gamma >= 0 && gamma <= 1 ? gamma : "unavailable";
+  return `Reference: ${origin} · γ = ${discount}`;
 }

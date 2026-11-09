@@ -30,6 +30,11 @@ Require readiness, clean pushed source, immutable runtime, and finite duration/c
 bounds. Immediately report identities, compute/bounds, source/runtime, modes,
 public Run index, and `metrics_url` when available.
 
+For GPU launches, apply the reference's host/worker inventory check before
+submission and verify container GPU assignment and actual learner CUDA use on
+the first Run before admitting the rest of a campaign. Explicit CPU-only
+workers follow their recorded CPU contract.
+
 Keep one `gradlab experiment follow --run <id>` process per Run; resume its
 session with empty polls. For manual evaluation, freeze the selection and admit
 once through the player or `ManualEvaluationQueue`, following the reference.

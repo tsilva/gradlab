@@ -1,0 +1,15 @@
+defaults:
+- breakout-ppo@_global_
+- _self_
+train:
+  occupancy:
+    cell:
+      dimensions:
+      - signal: bricks_destroyed_normalized
+        # Track all eight quarter-wall stages across the two-wall episode.
+        bucket_size: 0.125
+        clamp: [0, 0.9999999999999999]
+    domains: [[0, 1, 2, 3, 4, 5, 6, 7]]
+    units: [two-wall completion fraction]
+    labels: [0-25% of first wall, 25-50% of first wall, 50-75% of first wall, 75-100% of first wall, 0-25% of second wall, 25-50% of second wall, 50-75% of second wall, 75-100% of second wall]
+    window_transitions: 65536

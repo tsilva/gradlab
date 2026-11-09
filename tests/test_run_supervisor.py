@@ -23,6 +23,7 @@ from gradlab.manual_evaluation import ManualEvaluationSupervisor
 from gradlab.policy_bundle import (
     build_recipe_document,
     canonical_json_sha256,
+    evaluation_contract,
     evaluation_contract_sha256,
 )
 from gradlab.r2_store import BucketConfig, RunStorageConfig
@@ -389,8 +390,56 @@ class RunSupervisorTests(unittest.TestCase):
                     "runtime_input_sha256": RUNTIME_INPUT_SHA256,
                 },
             ),
+            patch.object(supervisor.runtime, "require_cuda") as require_cuda,
         ):
             supervisor.validate_runtime()
+        require_cuda.assert_called_once_with()
+
+    def test_gpu_allocation_rejects_missing_cuda_before_materialization(self) -> None:
+        supervisor = self.supervisor()
+        with (
+            patch.dict("os.environ", {"GRADLAB_ORCHESTRATOR": "dstack"}),
+            patch.object(
+                supervisor.runtime,
+                "runtime_contract",
+                return_value={
+                    "runtime_build_source_sha": BUILD_SOURCE_SHA,
+                    "runtime_input_sha256": RUNTIME_INPUT_SHA256,
+                },
+            ),
+            patch("torch.cuda.is_available", return_value=False),
+            patch.object(supervisor, "materialize") as materialize,
+            patch.object(supervisor.runtime, "start_learner") as start,
+        ):
+            self.assertEqual(supervisor.run(), 1)
+        materialize.assert_not_called()
+        start.assert_not_called()
+        receipt = self.authority.control.get_json(
+            f"runs/{self.run_id}/attempts/{self.manifest.attempt_id}/terminal.json"
+        )
+        self.assertEqual(receipt["state"], "resumable_failure")
+        self.assertIn("CUDA is required", receipt["drain"]["failure"]["message"])
+
+    def test_explicit_cpu_allocation_needs_no_cuda(self) -> None:
+        supervisor = self.supervisor()
+        supervisor.manifest = replace(
+            supervisor.manifest,
+            compute={**supervisor.manifest.compute, "resources": {"gpu": "0"}},
+        )
+        with (
+            patch.dict("os.environ", {"GRADLAB_ORCHESTRATOR": "dstack"}),
+            patch.object(
+                supervisor.runtime,
+                "runtime_contract",
+                return_value={
+                    "runtime_build_source_sha": BUILD_SOURCE_SHA,
+                    "runtime_input_sha256": RUNTIME_INPUT_SHA256,
+                },
+            ),
+            patch.object(supervisor.runtime, "require_cuda") as require_cuda,
+        ):
+            supervisor.validate_runtime()
+        require_cuda.assert_not_called()
 
     def test_manifest_v6_requires_bounded_liveness_policy(self) -> None:
         self.manifest.validate()
@@ -535,6 +584,10 @@ class RunSupervisorTests(unittest.TestCase):
             if key.endswith("/intent.json")
         )
         self.assertEqual(intent["checkpoint_id"], checkpoint.checkpoint_id)
+        self.assertTrue(intent["execution_contract"]["record_episode"])
+        original = evaluation_contract(self.portable_recipe)
+        for field in ("episodes", "seed", "seed_protocol", "manifest", "environment", "acceptance"):
+            self.assertEqual(intent["execution_contract"][field], original[field])
         self.assertEqual(
             backend.payloads[0]["contract"],
             intent["execution_contract"],
@@ -645,7 +698,7 @@ class RunSupervisorTests(unittest.TestCase):
 
     def test_manual_vizdoom_evaluation_rejects_stale_protocol(self) -> None:
         valid = {
-            "environment": {"game": "VizdoomDefendLine-v1"},
+            "environment": {"env_provider": "env-vizdoom-turbo", "game": "VizdoomDefendLine-v1"},
             "episodes": 100,
             "evidence_policy": {"fail_fast": "disabled"},
             "acceptance": [
@@ -690,7 +743,7 @@ class RunSupervisorTests(unittest.TestCase):
 
     def test_manual_vizdoom_basic_evaluation_requires_complete_perfect_success(self) -> None:
         valid = {
-            "environment": {"game": "VizdoomBasic-v1"},
+            "environment": {"env_provider": "env-vizdoom-turbo", "game": "VizdoomBasic-v1"},
             "episodes": 100,
             "evidence_policy": {"fail_fast": "disabled"},
             "acceptance": [
@@ -1086,14 +1139,25 @@ class RunSupervisorTests(unittest.TestCase):
             777,
         )
 
-    def test_health_publication_keeps_only_the_v20_operational_surface(self) -> None:
+    def test_health_publication_keeps_operational_and_hardware_metrics(self) -> None:
         supervisor = self.supervisor()
         supervisor.store.init()
+        hardware_metrics = {
+            "system/cpu_utilization_percentage": 25.0,
+            "system/system_memory_usage_megabytes": 512.0,
+            "system/system_memory_usage_percentage": 50.0,
+            "system/gpu/0/utilization_percentage": 80.0,
+        }
 
-        supervisor._emit_health(15.0)
+        with patch.object(
+            supervisor.runtime, "hardware_metrics", return_value=hardware_metrics,
+        ) as sample:
+            supervisor._emit_health(15.0)
 
+        sample.assert_called_once_with()
+        published = supervisor.store.latest_metrics()
         self.assertEqual(
-            set(supervisor.store.latest_metrics()),
+            set(published),
             {
                 "ops/outbox/count",
                 "ops/outbox/age/seconds",
@@ -1101,7 +1165,11 @@ class RunSupervisorTests(unittest.TestCase):
                 "ops/checkpoints/count",
                 "ops/evals/count",
                 "ops/scratch/fraction",
+                *hardware_metrics,
             },
+        )
+        self.assertEqual(
+            {name: published[name] for name in hardware_metrics}, hardware_metrics,
         )
         internal = supervisor.store.state("backpressure")
         assert internal is not None

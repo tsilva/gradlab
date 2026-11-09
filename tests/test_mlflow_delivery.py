@@ -321,7 +321,11 @@ def test_direct_local_online_writer_drains_to_real_mlflow_store(
     assert delivery["high_water"] >= 1
     client = MlflowClient(tracking_uri=uri)
     experiment = client.get_experiment_by_name("gradlab-SuperMarioBros-Nes-v0")
-    assert client.get_run(delivery["service_run_id"]).info.experiment_id == experiment.experiment_id
+    run = client.get_run(delivery["service_run_id"])
+    assert run.info.experiment_id == experiment.experiment_id
+    assert run.info.status == "FINISHED"
+    assert run.data.tags["ops/state"] == "completed"
+    assert run.data.tags["ops/reason"] == "resource_exhaustion"
     assert client.get_experiment_by_name("gradlab-NES-SuperMarioBros") is None
     history = client.get_metric_history(delivery["service_run_id"], "train/return/mean")
     assert [(point.value, point.step) for point in history] == [(0.5, 64)]

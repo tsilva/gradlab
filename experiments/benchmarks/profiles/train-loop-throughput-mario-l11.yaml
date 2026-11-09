@@ -1,7 +1,7 @@
 schema_version: 1
 name: train-loop-throughput-mario-l11
 kind: train_loop_throughput
-description: Bounded SB3 on-policy throughput probe for the consolidated Mario native-vector runtime.
+description: Bounded custom PPO throughput probe for the consolidated Mario native-vector runtime.
 goal_file: experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml
 recipe_file: experiments/goals/SuperMarioBros-Nes-v0/Level1-1/recipes/ppo.yaml
 seed: 123
@@ -15,6 +15,6 @@ recipe_overrides:
 - train.checkpoint_steps=[]
 - train.checkpoint_candidates=null
 run_name: benchmark_train_loop_mario_l11
-run_description: Consolidated native-vector SB3 on-policy throughput probe for Mario Level1-1.
+run_description: Consolidated native-vector uncompiled, unfused custom PPO throughput probe for Mario Level1-1.
 required_metrics:
 - train/throughput/rate

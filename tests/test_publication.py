@@ -478,6 +478,18 @@ def test_gradlab_card_uses_faithful_metadata_and_provider_aware_quick_start() ->
     assert "eval/progress/kills/mean" in card
 
 
+def test_mario_sil_card_pins_a_compatible_checkout_and_rom_path() -> None:
+    release = manifest()
+    release["model"]["qualified_env_id"] = "env-supermariobrosnes-turbo-emu:SuperMarioBros-Nes-v0"
+    release["source"]["overlay"] = {
+        "overlay_sha256": "babe9450334e6b9cdcff31371c81668ee678c1544ad3db7dd0bbdea0b1a7f22d",
+    }
+    card = render_model_card(release, bundle())
+    assert "git checkout 3a803d249661809d5c00c28a529f4752dc6b9ca3" in card
+    assert "uv run --frozen gradlab play hf://" in card
+    assert "--rom-path ~/roms/SuperMarioBros.nes" in card
+
+
 def test_release_comparison_requires_all_four_contract_axes() -> None:
     current = manifest()
     previous = deepcopy(current)
