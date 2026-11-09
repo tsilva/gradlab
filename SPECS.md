@@ -47,6 +47,8 @@ GradLab is a public, reproducible, general-purpose reinforcement-learning resear
 
 ### Environments and Execution
 
+- Checked-in PPO recipes must use GradLab's custom PPO backend.
+- Native PPO recipes may opt into actor-only self-imitation with declared replay and update settings recorded in the Run Configuration. The self-imitation implementation must be reusable by other GradLab-owned actor-critic backends.
 - GradLab must call a capability supported only when an authoritative project registry lists it and it passes its required contract checks.
 - Supported providers must isolate parallel lanes and provide deterministic, nonduplicated episode streams without cross-lane reset or boundary effects.
 - Equivalent Providers must preserve observations, actions, rewards, discounts, events, start states, and episode boundaries.

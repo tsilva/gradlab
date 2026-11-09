@@ -13,6 +13,7 @@ from containers.train.environment_contract import Distribution, validate_distrib
 from containers.train.gpu_key import gpu_key
 from containers.train.lock_projection import projected_requirements, projection_contents, train_plan_sha256
 from containers.train.runtime_key import RUNTIME_INPUT_PATHS, overlay_key, runtime_key
+from containers.train.smoke import smoke_trajectory_parquet
 from containers.train.vizdoom_smoke import _config as vizdoom_smoke_config
 
 
@@ -21,6 +22,9 @@ DIGEST_B = "sha256:" + "b" * 64
 
 
 class TrainImageTests(unittest.TestCase):
+    def test_trajectory_parquet_smoke_uses_the_export_schema(self) -> None:
+        smoke_trajectory_parquet()
+
     def test_vizdoom_smoke_declares_the_strict_constructor_contract(self) -> None:
         for game in ("VizdoomBasic-v1", "VizdoomDeathmatch-v1"):
             with self.subTest(game=game):
@@ -349,6 +353,7 @@ class TrainImageTests(unittest.TestCase):
         self.assertIn("env-breakoutatari2600-turbo-native==0.5.15", dependencies)
         self.assertIn("box2d-py==2.3.8", dependencies)
         self.assertIn("mlflow-skinny==3.17.2", dependencies)
+        self.assertIn("pyarrow==25.0.0", dependencies)
         self.assertNotIn("wandb-workspaces==", gpu + dependencies)
         self.assertIn("torch==2.13.0", gpu)
         gpu_lines = set(gpu.splitlines())

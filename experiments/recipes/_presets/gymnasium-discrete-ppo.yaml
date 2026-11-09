@@ -9,8 +9,10 @@ train:
     normalize_images: false
     orthogonal_init: true
   backend:
-    id: sb3.ppo
+    id: gradlab.ppo
     config:
+      precision: fp32
+      execution_profile: sb3-parity
       device: cpu
       ent_coef: 0.01
       clip_range: 0.2

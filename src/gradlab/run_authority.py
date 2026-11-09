@@ -3,6 +3,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import os
 import re
 import threading
 import tempfile
@@ -1005,22 +1006,52 @@ class RunAuthority:
             if heartbeat is not None:
                 heartbeat()
 
+        # Snapshot a verified generation while local writers are excluded. Network
+        # requests must use this immutable staging area, not hold up the learner.
         beat()
-        with archive_lock(archive_root, exclusive=False):
-            beat()
-            closure_path = archive_root / "closure.json"
-            if not closure_path.is_file():
-                raise FileNotFoundError(f"state archive has no closure: {closure_path}")
-            closure = json.loads(closure_path.read_text(encoding="utf-8"))
-            if (
-                not isinstance(closure, Mapping)
-                or closure.get("semantic_id") != "state-archive-v1"
-                or int(closure.get("schema_version", 0)) != 1
-            ):
-                raise ValueError("state archive closure schema is unsupported")
-            raw_files = closure.get("files")
-            if isinstance(raw_files, str | bytes) or not isinstance(raw_files, Sequence):
-                raise ValueError("state archive closure files must be a sequence")
+        with tempfile.TemporaryDirectory(
+            prefix=".archive-publication-", dir=archive_root.parent
+        ) as staging:
+            staged_root = Path(staging)
+            with archive_lock(archive_root, exclusive=False):
+                closure_path = archive_root / "closure.json"
+                if not closure_path.is_file():
+                    raise FileNotFoundError(f"state archive has no closure: {closure_path}")
+                closure_payload = closure_path.read_bytes()
+                closure_sha256 = hashlib.sha256(closure_payload).hexdigest()
+                closure = json.loads(closure_payload)
+                if (
+                    not isinstance(closure, Mapping)
+                    or closure.get("semantic_id") != "state-archive-v1"
+                    or int(closure.get("schema_version", 0)) != 1
+                ):
+                    raise ValueError("state archive closure schema is unsupported")
+                raw_files = closure.get("files")
+                if isinstance(raw_files, str | bytes) or not isinstance(raw_files, Sequence):
+                    raise ValueError("state archive closure files must be a sequence")
+                staged_paths: set[str] = set()
+                for raw_file in raw_files:
+                    if not isinstance(raw_file, Mapping):
+                        raise ValueError("state archive closure file entry must be an object")
+                    relative = Path(str(raw_file["path"]))
+                    if (
+                        relative.is_absolute()
+                        or ".." in relative.parts
+                        or relative.as_posix() in staged_paths
+                    ):
+                        raise ValueError("state archive closure contains an unsafe or duplicate path")
+                    staged_paths.add(relative.as_posix())
+                    source = archive_root / relative
+                    destination = staged_root / relative
+                    destination.parent.mkdir(parents=True, exist_ok=True)
+                    # Entries/blobs are immutable; views use atomic replacement. A
+                    # same-filesystem link pins the staged inode through pruning
+                    # without duplicating the configured archive byte budget.
+                    os.link(source, destination)
+                    payload = destination.read_bytes()
+                    digest = hashlib.sha256(payload).hexdigest()
+                    if digest != str(raw_file["sha256"]) or len(payload) != int(raw_file["size_bytes"]):
+                        raise ValueError(f"state archive file failed closure verification: {relative}")
             prior_objects: dict[str, str] = {}
             beat()
             prior = self.state_archive_closure(run_id=run_id)
@@ -1044,7 +1075,7 @@ class RunAuthority:
                 ):
                     raise ValueError("state archive closure contains an unsafe or duplicate path")
                 seen_paths.add(relative.as_posix())
-                source = archive_root / relative
+                source = staged_root / relative
                 payload = source.read_bytes()
                 digest = hashlib.sha256(payload).hexdigest()
                 if digest != str(raw_file["sha256"]) or len(payload) != int(raw_file["size_bytes"]):
@@ -1098,6 +1129,7 @@ class RunAuthority:
                 "generation_key": generation_key,
                 "generation_sha256": generation_sha256,
                 "inventory_sha256": str(closure["inventory_sha256"]),
+                "closure_sha256": closure_sha256,
                 "file_count": len(objects),
                 "size_bytes": sum(int(row["size_bytes"]) for row in objects),
                 "archive": dict(closure["archive"]),

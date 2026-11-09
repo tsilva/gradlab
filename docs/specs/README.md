@@ -1,6 +1,6 @@
 # Scoped Specifications
 
-Root [`SPECS.md`](../../SPECS.md) is authoritative for project-wide user product requirements. A scoped specification below is authoritative only for its named capability and must remain consistent with the root requirements and the ubiquitous language in [`CONTEXT.md`](../../CONTEXT.md).
+Root [`SPECS.md`](../../SPECS.md) records essential product commitments, including important core-feature requirements. The scoped specifications below own detailed contracts for their named capabilities and must remain consistent with root commitments and the ubiquitous language in [`CONTEXT.md`](../../CONTEXT.md). Root and scoped specifications share the `$private-skills_specs-author` read/reuse and decision-based approval policy; clear user decisions authorize their recording, while unresolved substantive changes require clarification. Preserve existing requirements in their current locations unless a relevant change calls for reorganization.
 
 - [`publication.md`](publication.md) — current publication-provider and public-index requirements
 - [`playback.md`](playback.md) — current playback discovery, inspection, and diagnostic requirements

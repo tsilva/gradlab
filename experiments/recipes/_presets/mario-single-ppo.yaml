@@ -3,8 +3,10 @@ defaults:
 - _self_
 train:
   backend:
-    id: sb3.ppo
+    id: gradlab.ppo
     config:
+      precision: fp32
+      execution_profile: sb3-parity
       n_steps: 512
       batch_size: 512
       n_epochs: 10

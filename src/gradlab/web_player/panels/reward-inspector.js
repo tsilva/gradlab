@@ -35,6 +35,6 @@ export function formatRewardCell(value, digits = 3) {
 }
 
 export const REWARD_LABELS = Object.freeze({
-  "reward/provider": "Native reward",
+  "reward/provider": "Provider reward",
   "reward/shaped": "Shaped reward",
 });

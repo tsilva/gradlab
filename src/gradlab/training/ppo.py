@@ -19,6 +19,10 @@ GRADLAB_PPO_DEFAULT_CONFIG: dict[str, Any] = {
     "precision": "fp32",
     "execution_profile": "max-throughput",
     "checkpoint_update_steps": [],
+    "initial_policy": None,
+    "critic_only": False,
+    "bootstrap_truncations": True,
+    "sil": None,
 }
 
 
@@ -49,13 +53,40 @@ def _normalize_gradlab_ppo(config: Mapping[str, Any], *, label: str) -> dict[str
         {
             key: value
             for key, value in config.items()
-            if key not in {"precision", "execution_profile", "checkpoint_update_steps"}
+            if key
+            not in {
+                "precision",
+                "execution_profile",
+                "checkpoint_update_steps",
+                "initial_policy",
+                "critic_only",
+                "bootstrap_truncations",
+                "sil",
+            }
         },
         label=label,
     )
     normalized["precision"] = precision
     normalized["execution_profile"] = execution_profile
     normalized["checkpoint_update_steps"] = list(checkpoint_steps)
+    from gradlab.training.ppo_initialization import normalize_initial_policy
+
+    if "initial_policy" in config:
+        normalized["initial_policy"] = normalize_initial_policy(
+            config["initial_policy"], label=f"{label}.initial_policy"
+        )
+    for key in ("critic_only", "bootstrap_truncations"):
+        value = config.get(key, GRADLAB_PPO_DEFAULT_CONFIG[key])
+        if not isinstance(value, bool):
+            raise ValueError(f"{label}.{key} must be boolean")
+        if key in config:
+            normalized[key] = value
+    if config.get("sil") is not None:
+        from gradlab.training.sil import normalize_sil
+
+        sil = normalize_sil(config["sil"], label=f"{label}.sil")
+        if sil is not None:
+            normalized["sil"] = sil
     return normalized
 
 
@@ -79,6 +110,26 @@ class GradLabPPOBackend:
             raise ValueError("checkpoint_update_steps requires checkpoint_freq=0")
         if common_config.get("policy_model") is None:
             raise ValueError("gradlab.ppo requires train_config.policy_model")
+        if backend_config.get("critic_only", False):
+            if common_config["policy_model"].get("share_features_extractor", True):
+                raise ValueError("critic_only requires policy_model.share_features_extractor=false")
+            if backend_config["vf_coef"] <= 0:
+                raise ValueError("critic_only requires a positive vf_coef")
+        if backend_config.get("sil") is not None:
+            if common_config["policy_model"].get("share_features_extractor", True):
+                raise ValueError("actor-only SIL requires policy_model.share_features_extractor=false")
+            if backend_config.get("critic_only"):
+                raise ValueError("SIL is incompatible with critic_only")
+            if backend_config.get("resume"):
+                raise ValueError("SIL training resume requires replay and optimizer restoration")
+            if backend_config.get("bootstrap_truncations", True):
+                raise ValueError("SIL requires bootstrap_truncations=false for matching return targets")
+            if backend_config.get("gamma_final") not in (None, backend_config["gamma"]):
+                raise ValueError("SIL requires a constant gamma for replay targets")
+            if backend_config["precision"] != "fp32":
+                raise ValueError("SIL currently requires fp32")
+            if common_config.get("env_provider") == "env-gradoom-turbo-torch":
+                raise ValueError("SIL currently requires a host observation runtime")
 
     def run(self, context: BackendContext):
         from gradlab.training.ppo_engine import run_gradlab_ppo

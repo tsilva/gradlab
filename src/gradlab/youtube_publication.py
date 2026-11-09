@@ -676,7 +676,13 @@ def create_publication_thumbnail(
         title_font = ImageFont.truetype(font_path, 52) if font_path else ImageFont.load_default()
         body_font = ImageFont.truetype(font_path, 34) if font_path else ImageFont.load_default()
         small_font = ImageFont.truetype(font_path, 27) if font_path else ImageFont.load_default()
-        draw.text((48, 28), str(task), fill=(255, 255, 255, 255), font=title_font)
+        title = str(task)
+        available_width = frame.width - 96
+        title_width = draw.textlength(title, font=title_font)
+        if font_path and title_width > available_width:
+            title_size = max(1, int(52 * available_width / title_width))
+            title_font = ImageFont.truetype(font_path, title_size)
+        draw.text((48, 28), title, fill=(255, 255, 255, 255), font=title_font)
         draw.text(
             (48, 92),
             f"{trainer_algorithm}  •  {step}",

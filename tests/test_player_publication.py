@@ -373,3 +373,54 @@ def test_full_digest_prefix_collision_fails_closed(monkeypatch: pytest.MonkeyPat
             identity=identity,
             token="secret",
         )
+
+
+@pytest.mark.parametrize(
+    ("repo_id", "head", "archive_matches", "has_release_tag", "allowed"),
+    [
+        ("tsilva/SuperMarioBros-Nes-v0_Level1-3", True, True, False, True),
+        ("tsilva/another-repo", True, True, False, False),
+        ("tsilva/SuperMarioBros-Nes-v0_Level1-3", False, True, False, False),
+        ("tsilva/SuperMarioBros-Nes-v0_Level1-3", True, False, False, False),
+        ("tsilva/SuperMarioBros-Nes-v0_Level1-3", True, True, True, False),
+    ],
+)
+def test_legacy_mario_checkpoint_requires_reviewed_head_and_archive(
+    monkeypatch: pytest.MonkeyPatch,
+    repo_id: str,
+    head: bool,
+    archive_matches: bool,
+    has_release_tag: bool,
+    allowed: bool,
+) -> None:
+    reviewed = "f9a633f9a7c5105beeb09d654b7af6e2f7c5404a"
+    other = "a" * 40
+    identity = SimpleNamespace(
+        canonical_environment_id="SuperMarioBros-Nes-v0",
+        goal_id="Level1-3",
+    )
+    tags = [
+        SimpleNamespace(name="sft-20261102", target_commit=reviewed if archive_matches else other)
+    ]
+    if has_release_tag:
+        tags.append(SimpleNamespace(name="v1", target_commit=other))
+    api = SimpleNamespace(
+        model_info=lambda **_kwargs: SimpleNamespace(sha=reviewed if head else other),
+        list_repo_refs=lambda **_kwargs: SimpleNamespace(tags=tags),
+    )
+    monkeypatch.setattr(
+        "gradlab.player_publication._remote_release_manifest", lambda *_args, **_kwargs: None
+    )
+    if allowed:
+        assert assert_goal_repository_compatible(
+            api, repo_id=repo_id, identity=identity, token=False, expected_parent=reviewed
+        ) == []
+    else:
+        with pytest.raises(ValueError, match="without a current v4 release manifest"):
+            assert_goal_repository_compatible(api, repo_id=repo_id, identity=identity, token=False)
+
+    with pytest.raises(ValueError, match="main changed"):
+        assert_goal_repository_compatible(
+            api, repo_id=repo_id, identity=identity, token=False,
+            expected_parent=other if head else reviewed,
+        )

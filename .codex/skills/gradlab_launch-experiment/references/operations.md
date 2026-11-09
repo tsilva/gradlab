@@ -57,6 +57,46 @@ identity, resolved tracking/evaluation modes, `metrics_url` when available, and
 the public Run index. A missing URL is expected for local-only or pending service
 binding; it is not evidence of a failed launch.
 
+### GPU readiness and campaign admission
+
+For a GPU target, verify the host driver and container toolkit through the
+operator inventory's existing access route (`nvidia-smi` and
+`nvidia-container-cli info` for NVIDIA). Compare the live device with the
+worker's cached GPU vendor/count and the coordinator's resource inventory.
+dstack-shim can retain a pre-driver-repair `host_info.json` that reports no GPUs
+while the coordinator still advertises a healthy GPU fleet. A passing operator
+preflight or host-only CUDA check does not establish worker readiness. A missing
+or inconsistent GPU blocks submission; never substitute CPU execution.
+
+After a driver/kernel repair, confirm that worker inventory was refreshed.
+In authorized repair mode, preserve active work and queue identities, prevent
+pending work from dispatching during the refresh, wait for affected learners to
+stop, and use the installed worker service's existing inventory-regeneration
+procedure. Verify the fresh inventory before restoring dispatch. Do not edit
+cached GPU counts, change the fleet allocation, or weaken image cleanup rules.
+Observe mode reports the required repair without performing it.
+
+Admit the first intended Run on each unverified GPU worker, then verify its
+container has the requested GPU device assignment, PyTorch can perform a small
+CUDA tensor operation inside that container, and the actual learner reports
+`using torch device: cuda`. Host availability and `torch.cuda.is_available()`
+alone do not prove that the learner uses CUDA. Keep the probe within the
+existing task allocation; do not launch a second training workload. Only expand
+the campaign after these checks pass; repeat them after a worker/driver/runtime
+change. Retain evidence beside the private Run receipts, with host-specific
+recovery notes in the operator-local inventory. A scheduling request needs this
+startup verification, not completion of every training Run.
+
+If a GPU-designated learner starts on CPU, stop new admissions and delegate
+read-only diagnosis under the entry skill's recovery policy. Preserve the
+Attempt and its evidence. When repair is authorized, stop affected work and
+verify resource release before recovery. Inspect the supported retry mode:
+an Attempt that published a final Checkpoint can be drain-only, which will not
+restart learning. When actual GPU training still needs a fresh Run, retain the
+invalid Run as superseded evidence, use a distinct submission identity, and
+resolve any interrupted submission against durable manifests before admission.
+Keep all recovery within the authorized compute and duration bounds.
+
 ## Follow and verify completion
 
 Start one yielded long-lived monitor per Run and retain its session handle:
@@ -121,6 +161,26 @@ queued for later lease acquisition without turning this into training monitoring
 
 Use the immutable Run's exact-source runtime. Do not add legacy reader probing
 to accommodate an older Run; any backport needs an evidence-proven repair.
+
+### Evaluate a completed local source-overlay Run
+
+Run the command on the host with the original completed Run, source tree, and
+recorded Python environment. Pass the recorded input receipt, which binds the
+baseline receipt and overlay digests, and independently verify the requested
+checkpoint hash. For ROM-backed runs, pass the original ROM via `--rom-path`.
+
+```bash
+gradlab evaluate-local <run-directory> --source <source-tree> \
+  --baseline-receipt <baseline.json> --input-receipt <inputs.json> \
+  --checkpoint-sha256 <sha256> --queue-dir <private-queue-directory>
+```
+
+This imports the Run into file-backed storage under the private queue and runs
+its final Checkpoint through the standard Acceptance verifier on CPU. It
+preserves the saved recipe and original Run. Inspect the job with
+`gradlab jobs --queue-dir <private-queue-directory> show <job-id>` and verify its
+subject's terminal Acceptance verdict. The private catalog and evidence do not
+constitute a public Checkpoint or Hugging Face Release.
 
 ## Recovery and final report
 

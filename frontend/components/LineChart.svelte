@@ -11,6 +11,7 @@
   import { selectedRange } from "../../src/gradlab/web_player/chart-range.js";
   import { rewardContribution } from "../../src/gradlab/web_player/panels/reward-discount.js";
   import { REWARD_LABELS } from "../../src/gradlab/web_player/panels/reward-inspector.js";
+  import { rewardReferenceLabel } from "../../src/gradlab/web_player/panels/reward-reference.js";
   import {
     lineLegendPresentation,
     lineLegendPresentationAtIndex,
@@ -232,6 +233,7 @@
   style="position:relative"
 >
   {#if reward}<div class="reward-reference-controls">
+      <span>{rewardReferenceLabel(reference, gamma)}</span>
       <button
         type="button"
         disabled={!Number.isInteger(context.snapshot?.transition?.step)}
@@ -263,7 +265,7 @@
   ></canvas>
   <div class="legend" class:reward-history-legend={reward} hidden={!showLegend}>
     {#if reward}
-      {#each [["Native reward", "seriesViolet"], ["Shaped reward", "seriesTeal"], ["Discounted contribution", "seriesAmber"]] as [label, color], index}<span
+      {#each [[REWARD_LABELS["reward/provider"], "seriesViolet"], [REWARD_LABELS["reward/shaped"], "seriesTeal"], ["Discounted contribution", "seriesAmber"]] as [label, color], index}<span
           class:discounted-series={index === 2}
           style:--legend-color={themeColor(color)}>{label}</span
         >{/each}

@@ -230,6 +230,13 @@ class RunManifest(_CurrentContract):
                 raise ValueError("local-process runtime digest mismatch")
         elif re.fullmatch(r"docker:[^\s]+@sha256:[0-9a-f]{64}", image) is None:
             raise ValueError("image_digest must be a docker: immutable image reference")
+        source_overlay = self.compute.get("source_overlay") if local_process else None
+        if source_overlay is not None:
+            from gradlab.source_overlay import validate_source_overlay
+
+            if not isinstance(source_overlay, dict):
+                raise ValueError("source overlay must be an object")
+            validate_source_overlay(source_overlay, base_commit=source_sha)
         _require_text(self.goal_slug, "goal_slug")
         _require_sha256(self.goal_sha256, "goal_sha256")
         _require_text(self.recipe_slug, "recipe_slug")
@@ -262,6 +269,8 @@ class RunManifest(_CurrentContract):
         ):
             if not isinstance(value, Mapping):
                 raise ValueError(f"{label} must be a mapping")
+        if not local_process and self.compute.get("source_overlay") is not None:
+            raise ValueError("source overlays require a local-process run")
         from gradlab.tracking_config import validate_tracking
 
         selected_tracking = validate_tracking(

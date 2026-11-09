@@ -11,7 +11,7 @@ from gradlab.json_utils import canonical_json_sha256
 from gradlab.metric_names import LEADER_CHECKPOINT_STEP, metric_definition, metric_display_label
 from gradlab.modal_eval_protocol import normalize_attempt_result
 from gradlab.policy_bundle import evaluation_contract, evaluation_contract_sha256
-from gradlab.run_contracts import CheckpointManifest, EvalIntent, EvalResult
+from gradlab.run_contracts import CheckpointManifest, EvalIntent, EvalResult, RunManifest
 
 
 EVALUATION_EQUIVALENCE_FIELDS = (
@@ -207,7 +207,7 @@ def validate_publication_evidence(evidence: Mapping[str, Any]) -> dict[str, Any]
             },
         }
     )
-    return {
+    validated = {
         "evaluation": publication,
         "recipe": deepcopy(dict(recipe)),
         "intent": deepcopy(dict(intent_value)),
@@ -215,6 +215,17 @@ def validate_publication_evidence(evidence: Mapping[str, Any]) -> dict[str, Any]
         "verified_result": deepcopy(dict(verified_value)),
         "checkpoint_manifest": deepcopy(dict(checkpoint_value)),
     }
+    if (run := evidence.get("run_manifest")) is not None:
+        manifest = RunManifest.from_dict(run)
+        if (
+            manifest.run_id != checkpoint.run_id
+            or manifest.recipe_sha256 != checkpoint.recipe_sha256
+            or manifest.goal_sha256 != checkpoint.goal_sha256
+            or manifest.environment_sha256 != checkpoint.environment_sha256
+        ):
+            raise ValueError("publication Run manifest does not bind the checkpoint")
+        validated["run_manifest"] = manifest.to_dict()
+    return validated
 
 
 def build_evaluation_evidence_document(evidence: Mapping[str, Any]) -> dict[str, Any]:
@@ -242,6 +253,14 @@ def build_evaluation_evidence_document(evidence: Mapping[str, Any]) -> dict[str,
     )
     if not acceptance or not all(row["passed"] for row in acceptance):
         raise ValueError("accepted publication evidence does not pass every acceptance rule")
+    provenance: dict[str, Any] = {"origin": "gradlab-verified-evaluation"}
+    run = validated.get("run_manifest") or {}
+    overlay = (run.get("compute") or {}).get("source_overlay")
+    if overlay:
+        provenance["source_overlay"] = {
+            key: overlay[key]
+            for key in ("base_commit", "overlay_sha256", "overlay_files", "input_receipt_sha256")
+        }
     return {
         "document_type": EVALUATION_EVIDENCE_DOCUMENT_TYPE,
         "format_version": EVALUATION_EVIDENCE_FORMAT_VERSION,
@@ -285,7 +304,7 @@ def build_evaluation_evidence_document(evidence: Mapping[str, Any]) -> dict[str,
             "checkpoint_sha256": checkpoint.sha256,
             "evaluation_contract_sha256": evaluation_contract_sha256(recipe),
         },
-        "provenance": {"origin": "gradlab-verified-evaluation"},
+        "provenance": provenance,
     }
 
 
