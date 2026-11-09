@@ -1,0 +1,36 @@
+diff --git a/src/utils/options.js b/src/utils/options.js
+--- a/src/utils/options.js
++++ b/src/utils/options.js
+@@ -22,7 +22,7 @@
+ 
+ import path from 'node:path';
+ import { addExtraPreprocessors } from './preprocess.js';
+-import deepmerge from 'deepmerge';
++import createDeepmerge from 'deepmerge';
+ import {
+ 	crawlFrameworkPkgs,
+ 	isDepExcluded,
+@@ -170,6 +170,11 @@
+ 	return merged;
+ }
+ 
++const mergeConfig = createDeepmerge({
++	symbols: true,
++	mergeArray: () => (_target, source) => source
++});
++
+ /**
+  * @template T
+  * @param  {(Partial<T> | undefined)[]} configs
+@@ -179,10 +184,7 @@
+ 	/** @type {Partial<T>} */
+ 	let result = {};
+ 	for (const config of configs.filter((x) => x != null)) {
+-		result = deepmerge(result, /** @type {Partial<T>} */ (config), {
+-			// replace arrays
+-			arrayMerge: (target, source) => source ?? target
+-		});
++		result = mergeConfig(result, /** @type {Partial<T>} */ (config));
+ 	}
+ 	return /** @type {T} */ result;
+ }
