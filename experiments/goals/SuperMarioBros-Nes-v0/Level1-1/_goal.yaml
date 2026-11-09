@@ -1,5 +1,4 @@
 defaults:
 # Shared Mario goal contract supplies the environment contract and early-stop/eval defaults.
 - ../_goal-common@_global_
-- ../_reward-shapes-common@_global_
 - _self_

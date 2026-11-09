@@ -1,0 +1,7 @@
+defaults:
+- _self_
+train:
+  # Retain the Goal's Acceptance contract for explicit post-training evaluation.
+  checkpoint_eval_backend: none
+  checkpoint_monitoring:
+    enabled: false

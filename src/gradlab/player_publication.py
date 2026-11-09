@@ -75,6 +75,9 @@ REQUEST_FORMAT_VERSION = 3
 REQUEST_ROOT_NAME = "player_publications"
 YOUTUBE_PLACEHOLDER_URL = "https://www.youtube.com/watch?v=00000000000"
 PRIVACY_VALUES = frozenset({"public", "unlisted", "private"})
+_MARIO_SFT_REPO = "tsilva/SuperMarioBros-Nes-v0_Level1-3"
+_MARIO_SFT_TAG = "sft-20261102"
+_MARIO_SFT_COMMIT = "f9a633f9a7c5105beeb09d654b7af6e2f7c5404a"
 
 
 class PublicationConflict(ValueError):
@@ -308,19 +311,37 @@ def assert_goal_repository_compatible(
     repo_id: str,
     identity: Any,
     token: str | bool | None,
+    expected_parent: str | None = None,
 ) -> list[dict[str, Any]]:
     try:
-        api.model_info(repo_id=repo_id)
+        info = api.model_info(repo_id=repo_id)
     except HfHubHTTPError as exc:
-        if getattr(exc.response, "status_code", None) == 404:
+        if expected_parent is None and getattr(exc.response, "status_code", None) == 404:
             return []
         raise
     except Exception as exc:
-        if type(exc).__name__ == "RepositoryNotFoundError":
+        if expected_parent is None and type(exc).__name__ == "RepositoryNotFoundError":
             return []
         raise
-    manifest = _remote_release_manifest(repo_id, token=token)
+    head = str(getattr(info, "sha", "") or "")
+    if expected_parent is not None and head != expected_parent:
+        raise ValueError("Hugging Face main changed during publication admission")
+    manifest = _remote_release_manifest(repo_id, token=token, revision=head or "main")
     if manifest is None:
+        # Bind the pre-v4 exception to the reviewed commit and require the
+        # archive tag that preserves the original SFT checkpoint.
+        if (
+            repo_id == _MARIO_SFT_REPO
+            and identity.canonical_environment_id == "SuperMarioBros-Nes-v0"
+            and identity.goal_id == "Level1-3"
+            and head == _MARIO_SFT_COMMIT
+        ):
+            refs = api.list_repo_refs(repo_id=repo_id, repo_type="model")
+            tags = {tag.name: tag.target_commit for tag in refs.tags}
+            if tags.get(_MARIO_SFT_TAG) == head and not any(
+                re.fullmatch(r"v[1-9][0-9]*", tag) for tag in tags
+            ):
+                return []
         raise ValueError(
             "computed goal repository already exists without a current v4 release manifest"
         )
@@ -442,11 +463,13 @@ def generated_metadata(
     model_tag_url = f"https://huggingface.co/{repo_id}/tree/{release_version}"
     source_commit = str(source_value.get("commit") or "")
     recipe_name = str(source_value.get("recipe") or "")
+    overlay_sha = (source_value.get("overlay") or {}).get("overlay_sha256")
+    source_label = "Source base" if overlay_sha else "Source/recipe"
     r2_manifest = str(
         source_value.get("model_document_url") or evaluation.get("checkpoint_artifact") or ""
     )
-    if r2_manifest.endswith("/model.zip"):
-        r2_manifest = r2_manifest[: -len("model.zip")] + "manifest.json"
+    if r2_manifest.endswith(("/model.zip", "/model.json")):
+        r2_manifest = r2_manifest.rsplit("/", 1)[0] + "/manifest.json"
     description = "\n".join(
         [
             f"{trainer} {algorithm} research release for {goal_title}.",
@@ -463,7 +486,8 @@ def generated_metadata(
             f"Immutable model: {model_tag_url}",
             run_link,
             f"R2 manifest: {r2_manifest}",
-            f"Source/recipe: https://github.com/tsilva/gradlab/tree/{source_commit} ({recipe_name})",
+            f"{source_label}: https://github.com/tsilva/gradlab/tree/{source_commit} ({recipe_name})",
+            *([f"Source overlay SHA-256: {overlay_sha}"] if overlay_sha else []),
             "GitHub: https://github.com/tsilva/gradlab",
             "Collection: {{COLLECTION_URL}}",
             "Playlist: {{PLAYLIST_URL}}",
@@ -565,7 +589,10 @@ def prepare_release_bundle(
         evaluation_document,
         algorithm_id=str(bundle.model["policy"].get("algorithm_id") or ""),
     )
-    source = publication_source_from_policy_bundle(bundle, evaluation)
+    overlay = (evaluation_evidence_document.get("provenance") or {}).get("source_overlay")
+    source = publication_source_from_policy_bundle(
+        bundle, evaluation, **({"source_overlay": overlay} if overlay else {})
+    )
     expected_evidence = {
         "checkpoint_sha256": bundle.checkpoint_sha256,
         "recipe_sha256": bundle.recipe_sha256,
@@ -731,11 +758,14 @@ class PlayerPublicationService:
         identity = publication_identity_from_policy_bundle(goal.get("goal_id"), bundle)
         repo_id = build_model_repo_id(identity)
         api = self.hf_api_factory()
-        version, _parent = next_release_version(api, repo_id)
+        version, parent_commit = next_release_version(api, repo_id)
         previous = assert_goal_repository_compatible(
-            api, repo_id=repo_id, identity=identity, token=False
+            api, repo_id=repo_id, identity=identity, token=False, expected_parent=parent_commit
         )
-        source = publication_source_from_policy_bundle(bundle, normalized_evaluation)
+        overlay = (evidence_document.get("provenance") or {}).get("source_overlay")
+        source = publication_source_from_policy_bundle(
+            bundle, normalized_evaluation, **({"source_overlay": overlay} if overlay else {})
+        )
         checkpoint_manifest = _required_mapping(
             evidence.get("checkpoint_manifest"), label="checkpoint manifest"
         )
@@ -844,6 +874,7 @@ class PlayerPublicationService:
                 rejected.append(f"{idempotency_key}: incomplete intent/raw join")
                 continue
             evidence = {
+                "run_manifest": authority.manifest(run_id),
                 "checkpoint_manifest": checkpoint.to_dict(),
                 "recipe": deepcopy(bundle.recipe),
                 "intent": deepcopy(dict(intent)),
@@ -925,14 +956,18 @@ class PlayerPublicationService:
             )
         hf_credential = resolve_huggingface_credential()
         api = self.hf_api_factory(token=hf_credential.token)
+        version, parent_commit = next_release_version(api, repo_id)
         previous_manifests = assert_goal_repository_compatible(
             api,
             repo_id=repo_id,
             identity=identity,
             token=hf_credential.token,
+            expected_parent=parent_commit,
         )
-        version, parent_commit = next_release_version(api, repo_id)
-        source = publication_source_from_policy_bundle(bundle, normalized_evaluation)
+        overlay = (evaluation_evidence_document.get("provenance") or {}).get("source_overlay")
+        source = publication_source_from_policy_bundle(
+            bundle, normalized_evaluation, **({"source_overlay": overlay} if overlay else {})
+        )
         checkpoint_manifest = _required_mapping(
             evidence.get("checkpoint_manifest"), label="checkpoint manifest"
         )

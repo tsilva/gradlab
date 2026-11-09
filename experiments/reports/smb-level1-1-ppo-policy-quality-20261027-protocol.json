@@ -1,0 +1,1931 @@
+{
+  "approved_change": "Continue after failures to complete all 100 episodes; preserve original Acceptance protocol.",
+  "assessment_contract": {
+    "acceptance": [
+      {
+        "metric": "eval/success/min",
+        "operator": ">=",
+        "threshold": 1.0
+      }
+    ],
+    "action_sampling": "stochastic",
+    "asset": {
+      "filename": "rom.nes",
+      "game": "SuperMarioBros-Nes-v0",
+      "provider_rom_identity": "facee9c577a5262dbe33ac4930bb0b58c8c037f7",
+      "provider_rom_identity_algorithm": "sha1-provider-body-v1",
+      "schema_version": 2,
+      "sha256": "f61548fdf1670cffefcc4f0b7bdcdd9eaba0c226e3b74f8666071496988248de",
+      "size_bytes": 40976
+    },
+    "deterministic": false,
+    "environment": {
+      "env_args": {
+        "frame_stack": 4,
+        "info": "data",
+        "info_filter": "all",
+        "inttype": "stable",
+        "noop_reset_max": 0,
+        "num_threads": 16,
+        "obs_copy": "safe_view",
+        "obs_grayscale": true,
+        "obs_layout": "chw",
+        "obs_type": "image",
+        "players": 1,
+        "record": false,
+        "render_mode": "rgb_array",
+        "rom_path": null,
+        "scenario": "scenario",
+        "use_fire_reset": false,
+        "use_restricted_actions": "basic"
+      },
+      "env_provider": "env-supermariobrosnes-turbo-emu",
+      "frame_skip": 4,
+      "game": "SuperMarioBros-Nes-v0",
+      "max_pool_frames": false,
+      "obs_crop": [
+        32,
+        0,
+        0,
+        0
+      ],
+      "obs_crop_fill": 0,
+      "obs_crop_mode": "mask",
+      "obs_resize": [
+        84,
+        84
+      ],
+      "obs_resize_algorithm": "area",
+      "state": "Level1-1",
+      "sticky_action_prob": 0.0,
+      "task": {
+        "action": {
+          "set": "native"
+        },
+        "events": {
+          "level_change": {
+            "operation": "change",
+            "signal": "level"
+          },
+          "life_loss": {
+            "operation": "decrease",
+            "signal": "lives"
+          },
+          "stalled": {
+            "operation": "unchanged_for",
+            "signal": "x",
+            "steps": 300
+          }
+        },
+        "id": "mario",
+        "reward": {
+          "completion_reward": 0.0,
+          "death_penalty": 25.0,
+          "progress_reward_boost_scale": 0.0,
+          "progress_reward_boost_start_x": 0.0,
+          "progress_reward_cap": 30.0,
+          "progress_reward_scale": 1.0,
+          "reward_clip": false,
+          "reward_mode": "additive",
+          "reward_scale": 1.0,
+          "score_progress_clipped": false,
+          "terminal_reward": 50.0,
+          "time_penalty": 0.001,
+          "use_native_reward": false
+        },
+        "signals": {
+          "area_id": "area_id",
+          "area_pointer": "area_pointer",
+          "level": [
+            "levelHi",
+            "levelLo"
+          ],
+          "level_hi": "levelHi",
+          "level_lo": "levelLo",
+          "lives": "lives",
+          "loop_command_active": "loop_command_active",
+          "loop_correct_count": "loop_correct_count",
+          "loop_pass_count": "loop_pass_count",
+          "player_motion": "player_motion",
+          "player_power": "player_power",
+          "player_task": "player_task",
+          "score": "score",
+          "x": [
+            "xscrollHi",
+            "xscrollLo"
+          ],
+          "x_pos": "x_pos",
+          "y_pos": "y_pos"
+        },
+        "termination": {
+          "failure": [
+            "life_loss"
+          ],
+          "max_episode_steps": 4500,
+          "success": [
+            "level_change"
+          ],
+          "timeout": [
+            "stalled"
+          ]
+        }
+      }
+    },
+    "episodes": 100,
+    "evidence_policy": {
+      "aggregate_validation": "supervisor-recomputed-v1",
+      "complete_metrics_prefix": "eval",
+      "fail_fast": "disabled",
+      "partial_rejection_metrics": false,
+      "version": 1
+    },
+    "manifest": {
+      "declared_starts": [
+        "Level1-1"
+      ],
+      "episodes": [
+        {
+          "episode_id": "lane-00-episode-000",
+          "lane": 0,
+          "lane_episode_ordinal": 0,
+          "seed": 10000,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-00-episode-001",
+          "lane": 0,
+          "lane_episode_ordinal": 1,
+          "seed": 2886715531,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-00-episode-002",
+          "lane": 0,
+          "lane_episode_ordinal": 2,
+          "seed": 4017448375,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-00-episode-003",
+          "lane": 0,
+          "lane_episode_ordinal": 3,
+          "seed": 2654334910,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-00-episode-004",
+          "lane": 0,
+          "lane_episode_ordinal": 4,
+          "seed": 1273924138,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-00-episode-005",
+          "lane": 0,
+          "lane_episode_ordinal": 5,
+          "seed": 3022002715,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-00-episode-006",
+          "lane": 0,
+          "lane_episode_ordinal": 6,
+          "seed": 2765627144,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-01-episode-000",
+          "lane": 1,
+          "lane_episode_ordinal": 0,
+          "seed": 10001,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-01-episode-001",
+          "lane": 1,
+          "lane_episode_ordinal": 1,
+          "seed": 2230216327,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-01-episode-002",
+          "lane": 1,
+          "lane_episode_ordinal": 2,
+          "seed": 216363186,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-01-episode-003",
+          "lane": 1,
+          "lane_episode_ordinal": 3,
+          "seed": 1333920412,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-01-episode-004",
+          "lane": 1,
+          "lane_episode_ordinal": 4,
+          "seed": 1081653039,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-01-episode-005",
+          "lane": 1,
+          "lane_episode_ordinal": 5,
+          "seed": 3298798852,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-01-episode-006",
+          "lane": 1,
+          "lane_episode_ordinal": 6,
+          "seed": 2494883839,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-02-episode-000",
+          "lane": 2,
+          "lane_episode_ordinal": 0,
+          "seed": 10002,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-02-episode-001",
+          "lane": 2,
+          "lane_episode_ordinal": 1,
+          "seed": 2661706562,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-02-episode-002",
+          "lane": 2,
+          "lane_episode_ordinal": 2,
+          "seed": 626807980,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-02-episode-003",
+          "lane": 2,
+          "lane_episode_ordinal": 3,
+          "seed": 3008095390,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-02-episode-004",
+          "lane": 2,
+          "lane_episode_ordinal": 4,
+          "seed": 3094505872,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-02-episode-005",
+          "lane": 2,
+          "lane_episode_ordinal": 5,
+          "seed": 1228365983,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-02-episode-006",
+          "lane": 2,
+          "lane_episode_ordinal": 6,
+          "seed": 3279571120,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-03-episode-000",
+          "lane": 3,
+          "lane_episode_ordinal": 0,
+          "seed": 10003,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-03-episode-001",
+          "lane": 3,
+          "lane_episode_ordinal": 1,
+          "seed": 1743777803,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-03-episode-002",
+          "lane": 3,
+          "lane_episode_ordinal": 2,
+          "seed": 265662547,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-03-episode-003",
+          "lane": 3,
+          "lane_episode_ordinal": 3,
+          "seed": 2016353122,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-03-episode-004",
+          "lane": 3,
+          "lane_episode_ordinal": 4,
+          "seed": 2734418559,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-03-episode-005",
+          "lane": 3,
+          "lane_episode_ordinal": 5,
+          "seed": 320999963,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-03-episode-006",
+          "lane": 3,
+          "lane_episode_ordinal": 6,
+          "seed": 4211052995,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-04-episode-000",
+          "lane": 4,
+          "lane_episode_ordinal": 0,
+          "seed": 10004,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-04-episode-001",
+          "lane": 4,
+          "lane_episode_ordinal": 1,
+          "seed": 2562616457,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-04-episode-002",
+          "lane": 4,
+          "lane_episode_ordinal": 2,
+          "seed": 1993135890,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-04-episode-003",
+          "lane": 4,
+          "lane_episode_ordinal": 3,
+          "seed": 2198589623,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-04-episode-004",
+          "lane": 4,
+          "lane_episode_ordinal": 4,
+          "seed": 4227140271,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-04-episode-005",
+          "lane": 4,
+          "lane_episode_ordinal": 5,
+          "seed": 4001604532,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-05-episode-000",
+          "lane": 5,
+          "lane_episode_ordinal": 0,
+          "seed": 10005,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-05-episode-001",
+          "lane": 5,
+          "lane_episode_ordinal": 1,
+          "seed": 4123635483,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-05-episode-002",
+          "lane": 5,
+          "lane_episode_ordinal": 2,
+          "seed": 532524708,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-05-episode-003",
+          "lane": 5,
+          "lane_episode_ordinal": 3,
+          "seed": 409885671,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-05-episode-004",
+          "lane": 5,
+          "lane_episode_ordinal": 4,
+          "seed": 3404310303,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-05-episode-005",
+          "lane": 5,
+          "lane_episode_ordinal": 5,
+          "seed": 304915127,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-06-episode-000",
+          "lane": 6,
+          "lane_episode_ordinal": 0,
+          "seed": 10006,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-06-episode-001",
+          "lane": 6,
+          "lane_episode_ordinal": 1,
+          "seed": 3653487480,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-06-episode-002",
+          "lane": 6,
+          "lane_episode_ordinal": 2,
+          "seed": 2720943209,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-06-episode-003",
+          "lane": 6,
+          "lane_episode_ordinal": 3,
+          "seed": 1035256216,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-06-episode-004",
+          "lane": 6,
+          "lane_episode_ordinal": 4,
+          "seed": 229630046,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-06-episode-005",
+          "lane": 6,
+          "lane_episode_ordinal": 5,
+          "seed": 2394751708,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-07-episode-000",
+          "lane": 7,
+          "lane_episode_ordinal": 0,
+          "seed": 10007,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-07-episode-001",
+          "lane": 7,
+          "lane_episode_ordinal": 1,
+          "seed": 919989979,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-07-episode-002",
+          "lane": 7,
+          "lane_episode_ordinal": 2,
+          "seed": 3284827010,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-07-episode-003",
+          "lane": 7,
+          "lane_episode_ordinal": 3,
+          "seed": 4222995511,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-07-episode-004",
+          "lane": 7,
+          "lane_episode_ordinal": 4,
+          "seed": 370488142,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-07-episode-005",
+          "lane": 7,
+          "lane_episode_ordinal": 5,
+          "seed": 1611817533,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-08-episode-000",
+          "lane": 8,
+          "lane_episode_ordinal": 0,
+          "seed": 10008,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-08-episode-001",
+          "lane": 8,
+          "lane_episode_ordinal": 1,
+          "seed": 3036578831,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-08-episode-002",
+          "lane": 8,
+          "lane_episode_ordinal": 2,
+          "seed": 3794896059,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-08-episode-003",
+          "lane": 8,
+          "lane_episode_ordinal": 3,
+          "seed": 3462309372,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-08-episode-004",
+          "lane": 8,
+          "lane_episode_ordinal": 4,
+          "seed": 1085653819,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-08-episode-005",
+          "lane": 8,
+          "lane_episode_ordinal": 5,
+          "seed": 553934919,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-09-episode-000",
+          "lane": 9,
+          "lane_episode_ordinal": 0,
+          "seed": 10009,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-09-episode-001",
+          "lane": 9,
+          "lane_episode_ordinal": 1,
+          "seed": 4214756102,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-09-episode-002",
+          "lane": 9,
+          "lane_episode_ordinal": 2,
+          "seed": 3726171367,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-09-episode-003",
+          "lane": 9,
+          "lane_episode_ordinal": 3,
+          "seed": 310976633,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-09-episode-004",
+          "lane": 9,
+          "lane_episode_ordinal": 4,
+          "seed": 953182225,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-09-episode-005",
+          "lane": 9,
+          "lane_episode_ordinal": 5,
+          "seed": 3105643036,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-10-episode-000",
+          "lane": 10,
+          "lane_episode_ordinal": 0,
+          "seed": 10010,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-10-episode-001",
+          "lane": 10,
+          "lane_episode_ordinal": 1,
+          "seed": 507864777,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-10-episode-002",
+          "lane": 10,
+          "lane_episode_ordinal": 2,
+          "seed": 1785782384,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-10-episode-003",
+          "lane": 10,
+          "lane_episode_ordinal": 3,
+          "seed": 2602946641,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-10-episode-004",
+          "lane": 10,
+          "lane_episode_ordinal": 4,
+          "seed": 151110894,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-10-episode-005",
+          "lane": 10,
+          "lane_episode_ordinal": 5,
+          "seed": 2518382704,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-11-episode-000",
+          "lane": 11,
+          "lane_episode_ordinal": 0,
+          "seed": 10011,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-11-episode-001",
+          "lane": 11,
+          "lane_episode_ordinal": 1,
+          "seed": 1048481742,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-11-episode-002",
+          "lane": 11,
+          "lane_episode_ordinal": 2,
+          "seed": 2490888136,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-11-episode-003",
+          "lane": 11,
+          "lane_episode_ordinal": 3,
+          "seed": 1775984019,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-11-episode-004",
+          "lane": 11,
+          "lane_episode_ordinal": 4,
+          "seed": 3592086840,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-11-episode-005",
+          "lane": 11,
+          "lane_episode_ordinal": 5,
+          "seed": 1955828906,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-12-episode-000",
+          "lane": 12,
+          "lane_episode_ordinal": 0,
+          "seed": 10012,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-12-episode-001",
+          "lane": 12,
+          "lane_episode_ordinal": 1,
+          "seed": 3538680844,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-12-episode-002",
+          "lane": 12,
+          "lane_episode_ordinal": 2,
+          "seed": 3647878995,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-12-episode-003",
+          "lane": 12,
+          "lane_episode_ordinal": 3,
+          "seed": 2175287725,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-12-episode-004",
+          "lane": 12,
+          "lane_episode_ordinal": 4,
+          "seed": 2489374989,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-12-episode-005",
+          "lane": 12,
+          "lane_episode_ordinal": 5,
+          "seed": 2043275421,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-13-episode-000",
+          "lane": 13,
+          "lane_episode_ordinal": 0,
+          "seed": 10013,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-13-episode-001",
+          "lane": 13,
+          "lane_episode_ordinal": 1,
+          "seed": 2200963165,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-13-episode-002",
+          "lane": 13,
+          "lane_episode_ordinal": 2,
+          "seed": 2085430053,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-13-episode-003",
+          "lane": 13,
+          "lane_episode_ordinal": 3,
+          "seed": 2277638916,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-13-episode-004",
+          "lane": 13,
+          "lane_episode_ordinal": 4,
+          "seed": 3274217371,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-13-episode-005",
+          "lane": 13,
+          "lane_episode_ordinal": 5,
+          "seed": 1748401556,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-14-episode-000",
+          "lane": 14,
+          "lane_episode_ordinal": 0,
+          "seed": 10014,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-14-episode-001",
+          "lane": 14,
+          "lane_episode_ordinal": 1,
+          "seed": 3688821515,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-14-episode-002",
+          "lane": 14,
+          "lane_episode_ordinal": 2,
+          "seed": 2525182705,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-14-episode-003",
+          "lane": 14,
+          "lane_episode_ordinal": 3,
+          "seed": 553484844,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-14-episode-004",
+          "lane": 14,
+          "lane_episode_ordinal": 4,
+          "seed": 1538687621,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-14-episode-005",
+          "lane": 14,
+          "lane_episode_ordinal": 5,
+          "seed": 1011248835,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-15-episode-000",
+          "lane": 15,
+          "lane_episode_ordinal": 0,
+          "seed": 10015,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-15-episode-001",
+          "lane": 15,
+          "lane_episode_ordinal": 1,
+          "seed": 714677743,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-15-episode-002",
+          "lane": 15,
+          "lane_episode_ordinal": 2,
+          "seed": 4052648488,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-15-episode-003",
+          "lane": 15,
+          "lane_episode_ordinal": 3,
+          "seed": 2294495705,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-15-episode-004",
+          "lane": 15,
+          "lane_episode_ordinal": 4,
+          "seed": 3506516658,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-15-episode-005",
+          "lane": 15,
+          "lane_episode_ordinal": 5,
+          "seed": 3656531506,
+          "start_state": "Level1-1"
+        }
+      ],
+      "lane_quotas": [
+        7,
+        7,
+        7,
+        7,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6
+      ],
+      "version": 1
+    },
+    "n_envs": 16,
+    "protocol_version": 3,
+    "seed": 10000,
+    "seed_protocol": "vector-lane-v1",
+    "watchdog_steps": 4500
+  },
+  "base_evaluation_contract": {
+    "acceptance": [
+      {
+        "metric": "eval/success/min",
+        "operator": ">=",
+        "threshold": 1.0
+      }
+    ],
+    "action_sampling": "stochastic",
+    "asset": {
+      "filename": "rom.nes",
+      "game": "SuperMarioBros-Nes-v0",
+      "provider_rom_identity": "facee9c577a5262dbe33ac4930bb0b58c8c037f7",
+      "provider_rom_identity_algorithm": "sha1-provider-body-v1",
+      "schema_version": 2,
+      "sha256": "f61548fdf1670cffefcc4f0b7bdcdd9eaba0c226e3b74f8666071496988248de",
+      "size_bytes": 40976
+    },
+    "deterministic": false,
+    "environment": {
+      "env_args": {
+        "frame_stack": 4,
+        "info": "data",
+        "info_filter": "all",
+        "inttype": "stable",
+        "noop_reset_max": 0,
+        "num_threads": 16,
+        "obs_copy": "safe_view",
+        "obs_grayscale": true,
+        "obs_layout": "chw",
+        "obs_type": "image",
+        "players": 1,
+        "record": false,
+        "render_mode": "rgb_array",
+        "rom_path": null,
+        "scenario": "scenario",
+        "use_fire_reset": false,
+        "use_restricted_actions": "basic"
+      },
+      "env_provider": "env-supermariobrosnes-turbo-emu",
+      "frame_skip": 4,
+      "game": "SuperMarioBros-Nes-v0",
+      "max_pool_frames": false,
+      "obs_crop": [
+        32,
+        0,
+        0,
+        0
+      ],
+      "obs_crop_fill": 0,
+      "obs_crop_mode": "mask",
+      "obs_resize": [
+        84,
+        84
+      ],
+      "obs_resize_algorithm": "area",
+      "state": "Level1-1",
+      "sticky_action_prob": 0.0,
+      "task": {
+        "action": {
+          "set": "native"
+        },
+        "events": {
+          "level_change": {
+            "operation": "change",
+            "signal": "level"
+          },
+          "life_loss": {
+            "operation": "decrease",
+            "signal": "lives"
+          },
+          "stalled": {
+            "operation": "unchanged_for",
+            "signal": "x",
+            "steps": 300
+          }
+        },
+        "id": "mario",
+        "reward": {
+          "completion_reward": 0.0,
+          "death_penalty": 25.0,
+          "progress_reward_boost_scale": 0.0,
+          "progress_reward_boost_start_x": 0.0,
+          "progress_reward_cap": 30.0,
+          "progress_reward_scale": 1.0,
+          "reward_clip": false,
+          "reward_mode": "additive",
+          "reward_scale": 1.0,
+          "score_progress_clipped": false,
+          "terminal_reward": 50.0,
+          "time_penalty": 0.001,
+          "use_native_reward": false
+        },
+        "signals": {
+          "area_id": "area_id",
+          "area_pointer": "area_pointer",
+          "level": [
+            "levelHi",
+            "levelLo"
+          ],
+          "level_hi": "levelHi",
+          "level_lo": "levelLo",
+          "lives": "lives",
+          "loop_command_active": "loop_command_active",
+          "loop_correct_count": "loop_correct_count",
+          "loop_pass_count": "loop_pass_count",
+          "player_motion": "player_motion",
+          "player_power": "player_power",
+          "player_task": "player_task",
+          "score": "score",
+          "x": [
+            "xscrollHi",
+            "xscrollLo"
+          ],
+          "x_pos": "x_pos",
+          "y_pos": "y_pos"
+        },
+        "termination": {
+          "failure": [
+            "life_loss"
+          ],
+          "max_episode_steps": 4500,
+          "success": [
+            "level_change"
+          ],
+          "timeout": [
+            "stalled"
+          ]
+        }
+      }
+    },
+    "episodes": 100,
+    "evidence_policy": {
+      "aggregate_validation": "supervisor-recomputed-v1",
+      "complete_metrics_prefix": "eval",
+      "fail_fast": "first_failed_episode",
+      "partial_rejection_metrics": false,
+      "version": 1
+    },
+    "manifest": {
+      "declared_starts": [
+        "Level1-1"
+      ],
+      "episodes": [
+        {
+          "episode_id": "lane-00-episode-000",
+          "lane": 0,
+          "lane_episode_ordinal": 0,
+          "seed": 10000,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-00-episode-001",
+          "lane": 0,
+          "lane_episode_ordinal": 1,
+          "seed": 2886715531,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-00-episode-002",
+          "lane": 0,
+          "lane_episode_ordinal": 2,
+          "seed": 4017448375,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-00-episode-003",
+          "lane": 0,
+          "lane_episode_ordinal": 3,
+          "seed": 2654334910,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-00-episode-004",
+          "lane": 0,
+          "lane_episode_ordinal": 4,
+          "seed": 1273924138,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-00-episode-005",
+          "lane": 0,
+          "lane_episode_ordinal": 5,
+          "seed": 3022002715,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-00-episode-006",
+          "lane": 0,
+          "lane_episode_ordinal": 6,
+          "seed": 2765627144,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-01-episode-000",
+          "lane": 1,
+          "lane_episode_ordinal": 0,
+          "seed": 10001,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-01-episode-001",
+          "lane": 1,
+          "lane_episode_ordinal": 1,
+          "seed": 2230216327,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-01-episode-002",
+          "lane": 1,
+          "lane_episode_ordinal": 2,
+          "seed": 216363186,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-01-episode-003",
+          "lane": 1,
+          "lane_episode_ordinal": 3,
+          "seed": 1333920412,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-01-episode-004",
+          "lane": 1,
+          "lane_episode_ordinal": 4,
+          "seed": 1081653039,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-01-episode-005",
+          "lane": 1,
+          "lane_episode_ordinal": 5,
+          "seed": 3298798852,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-01-episode-006",
+          "lane": 1,
+          "lane_episode_ordinal": 6,
+          "seed": 2494883839,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-02-episode-000",
+          "lane": 2,
+          "lane_episode_ordinal": 0,
+          "seed": 10002,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-02-episode-001",
+          "lane": 2,
+          "lane_episode_ordinal": 1,
+          "seed": 2661706562,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-02-episode-002",
+          "lane": 2,
+          "lane_episode_ordinal": 2,
+          "seed": 626807980,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-02-episode-003",
+          "lane": 2,
+          "lane_episode_ordinal": 3,
+          "seed": 3008095390,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-02-episode-004",
+          "lane": 2,
+          "lane_episode_ordinal": 4,
+          "seed": 3094505872,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-02-episode-005",
+          "lane": 2,
+          "lane_episode_ordinal": 5,
+          "seed": 1228365983,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-02-episode-006",
+          "lane": 2,
+          "lane_episode_ordinal": 6,
+          "seed": 3279571120,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-03-episode-000",
+          "lane": 3,
+          "lane_episode_ordinal": 0,
+          "seed": 10003,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-03-episode-001",
+          "lane": 3,
+          "lane_episode_ordinal": 1,
+          "seed": 1743777803,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-03-episode-002",
+          "lane": 3,
+          "lane_episode_ordinal": 2,
+          "seed": 265662547,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-03-episode-003",
+          "lane": 3,
+          "lane_episode_ordinal": 3,
+          "seed": 2016353122,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-03-episode-004",
+          "lane": 3,
+          "lane_episode_ordinal": 4,
+          "seed": 2734418559,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-03-episode-005",
+          "lane": 3,
+          "lane_episode_ordinal": 5,
+          "seed": 320999963,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-03-episode-006",
+          "lane": 3,
+          "lane_episode_ordinal": 6,
+          "seed": 4211052995,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-04-episode-000",
+          "lane": 4,
+          "lane_episode_ordinal": 0,
+          "seed": 10004,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-04-episode-001",
+          "lane": 4,
+          "lane_episode_ordinal": 1,
+          "seed": 2562616457,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-04-episode-002",
+          "lane": 4,
+          "lane_episode_ordinal": 2,
+          "seed": 1993135890,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-04-episode-003",
+          "lane": 4,
+          "lane_episode_ordinal": 3,
+          "seed": 2198589623,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-04-episode-004",
+          "lane": 4,
+          "lane_episode_ordinal": 4,
+          "seed": 4227140271,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-04-episode-005",
+          "lane": 4,
+          "lane_episode_ordinal": 5,
+          "seed": 4001604532,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-05-episode-000",
+          "lane": 5,
+          "lane_episode_ordinal": 0,
+          "seed": 10005,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-05-episode-001",
+          "lane": 5,
+          "lane_episode_ordinal": 1,
+          "seed": 4123635483,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-05-episode-002",
+          "lane": 5,
+          "lane_episode_ordinal": 2,
+          "seed": 532524708,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-05-episode-003",
+          "lane": 5,
+          "lane_episode_ordinal": 3,
+          "seed": 409885671,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-05-episode-004",
+          "lane": 5,
+          "lane_episode_ordinal": 4,
+          "seed": 3404310303,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-05-episode-005",
+          "lane": 5,
+          "lane_episode_ordinal": 5,
+          "seed": 304915127,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-06-episode-000",
+          "lane": 6,
+          "lane_episode_ordinal": 0,
+          "seed": 10006,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-06-episode-001",
+          "lane": 6,
+          "lane_episode_ordinal": 1,
+          "seed": 3653487480,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-06-episode-002",
+          "lane": 6,
+          "lane_episode_ordinal": 2,
+          "seed": 2720943209,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-06-episode-003",
+          "lane": 6,
+          "lane_episode_ordinal": 3,
+          "seed": 1035256216,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-06-episode-004",
+          "lane": 6,
+          "lane_episode_ordinal": 4,
+          "seed": 229630046,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-06-episode-005",
+          "lane": 6,
+          "lane_episode_ordinal": 5,
+          "seed": 2394751708,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-07-episode-000",
+          "lane": 7,
+          "lane_episode_ordinal": 0,
+          "seed": 10007,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-07-episode-001",
+          "lane": 7,
+          "lane_episode_ordinal": 1,
+          "seed": 919989979,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-07-episode-002",
+          "lane": 7,
+          "lane_episode_ordinal": 2,
+          "seed": 3284827010,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-07-episode-003",
+          "lane": 7,
+          "lane_episode_ordinal": 3,
+          "seed": 4222995511,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-07-episode-004",
+          "lane": 7,
+          "lane_episode_ordinal": 4,
+          "seed": 370488142,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-07-episode-005",
+          "lane": 7,
+          "lane_episode_ordinal": 5,
+          "seed": 1611817533,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-08-episode-000",
+          "lane": 8,
+          "lane_episode_ordinal": 0,
+          "seed": 10008,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-08-episode-001",
+          "lane": 8,
+          "lane_episode_ordinal": 1,
+          "seed": 3036578831,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-08-episode-002",
+          "lane": 8,
+          "lane_episode_ordinal": 2,
+          "seed": 3794896059,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-08-episode-003",
+          "lane": 8,
+          "lane_episode_ordinal": 3,
+          "seed": 3462309372,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-08-episode-004",
+          "lane": 8,
+          "lane_episode_ordinal": 4,
+          "seed": 1085653819,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-08-episode-005",
+          "lane": 8,
+          "lane_episode_ordinal": 5,
+          "seed": 553934919,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-09-episode-000",
+          "lane": 9,
+          "lane_episode_ordinal": 0,
+          "seed": 10009,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-09-episode-001",
+          "lane": 9,
+          "lane_episode_ordinal": 1,
+          "seed": 4214756102,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-09-episode-002",
+          "lane": 9,
+          "lane_episode_ordinal": 2,
+          "seed": 3726171367,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-09-episode-003",
+          "lane": 9,
+          "lane_episode_ordinal": 3,
+          "seed": 310976633,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-09-episode-004",
+          "lane": 9,
+          "lane_episode_ordinal": 4,
+          "seed": 953182225,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-09-episode-005",
+          "lane": 9,
+          "lane_episode_ordinal": 5,
+          "seed": 3105643036,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-10-episode-000",
+          "lane": 10,
+          "lane_episode_ordinal": 0,
+          "seed": 10010,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-10-episode-001",
+          "lane": 10,
+          "lane_episode_ordinal": 1,
+          "seed": 507864777,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-10-episode-002",
+          "lane": 10,
+          "lane_episode_ordinal": 2,
+          "seed": 1785782384,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-10-episode-003",
+          "lane": 10,
+          "lane_episode_ordinal": 3,
+          "seed": 2602946641,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-10-episode-004",
+          "lane": 10,
+          "lane_episode_ordinal": 4,
+          "seed": 151110894,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-10-episode-005",
+          "lane": 10,
+          "lane_episode_ordinal": 5,
+          "seed": 2518382704,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-11-episode-000",
+          "lane": 11,
+          "lane_episode_ordinal": 0,
+          "seed": 10011,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-11-episode-001",
+          "lane": 11,
+          "lane_episode_ordinal": 1,
+          "seed": 1048481742,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-11-episode-002",
+          "lane": 11,
+          "lane_episode_ordinal": 2,
+          "seed": 2490888136,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-11-episode-003",
+          "lane": 11,
+          "lane_episode_ordinal": 3,
+          "seed": 1775984019,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-11-episode-004",
+          "lane": 11,
+          "lane_episode_ordinal": 4,
+          "seed": 3592086840,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-11-episode-005",
+          "lane": 11,
+          "lane_episode_ordinal": 5,
+          "seed": 1955828906,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-12-episode-000",
+          "lane": 12,
+          "lane_episode_ordinal": 0,
+          "seed": 10012,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-12-episode-001",
+          "lane": 12,
+          "lane_episode_ordinal": 1,
+          "seed": 3538680844,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-12-episode-002",
+          "lane": 12,
+          "lane_episode_ordinal": 2,
+          "seed": 3647878995,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-12-episode-003",
+          "lane": 12,
+          "lane_episode_ordinal": 3,
+          "seed": 2175287725,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-12-episode-004",
+          "lane": 12,
+          "lane_episode_ordinal": 4,
+          "seed": 2489374989,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-12-episode-005",
+          "lane": 12,
+          "lane_episode_ordinal": 5,
+          "seed": 2043275421,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-13-episode-000",
+          "lane": 13,
+          "lane_episode_ordinal": 0,
+          "seed": 10013,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-13-episode-001",
+          "lane": 13,
+          "lane_episode_ordinal": 1,
+          "seed": 2200963165,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-13-episode-002",
+          "lane": 13,
+          "lane_episode_ordinal": 2,
+          "seed": 2085430053,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-13-episode-003",
+          "lane": 13,
+          "lane_episode_ordinal": 3,
+          "seed": 2277638916,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-13-episode-004",
+          "lane": 13,
+          "lane_episode_ordinal": 4,
+          "seed": 3274217371,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-13-episode-005",
+          "lane": 13,
+          "lane_episode_ordinal": 5,
+          "seed": 1748401556,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-14-episode-000",
+          "lane": 14,
+          "lane_episode_ordinal": 0,
+          "seed": 10014,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-14-episode-001",
+          "lane": 14,
+          "lane_episode_ordinal": 1,
+          "seed": 3688821515,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-14-episode-002",
+          "lane": 14,
+          "lane_episode_ordinal": 2,
+          "seed": 2525182705,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-14-episode-003",
+          "lane": 14,
+          "lane_episode_ordinal": 3,
+          "seed": 553484844,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-14-episode-004",
+          "lane": 14,
+          "lane_episode_ordinal": 4,
+          "seed": 1538687621,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-14-episode-005",
+          "lane": 14,
+          "lane_episode_ordinal": 5,
+          "seed": 1011248835,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-15-episode-000",
+          "lane": 15,
+          "lane_episode_ordinal": 0,
+          "seed": 10015,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-15-episode-001",
+          "lane": 15,
+          "lane_episode_ordinal": 1,
+          "seed": 714677743,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-15-episode-002",
+          "lane": 15,
+          "lane_episode_ordinal": 2,
+          "seed": 4052648488,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-15-episode-003",
+          "lane": 15,
+          "lane_episode_ordinal": 3,
+          "seed": 2294495705,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-15-episode-004",
+          "lane": 15,
+          "lane_episode_ordinal": 4,
+          "seed": 3506516658,
+          "start_state": "Level1-1"
+        },
+        {
+          "episode_id": "lane-15-episode-005",
+          "lane": 15,
+          "lane_episode_ordinal": 5,
+          "seed": 3656531506,
+          "start_state": "Level1-1"
+        }
+      ],
+      "lane_quotas": [
+        7,
+        7,
+        7,
+        7,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6,
+        6
+      ],
+      "version": 1
+    },
+    "n_envs": 16,
+    "protocol_version": 3,
+    "seed": 10000,
+    "seed_protocol": "vector-lane-v1",
+    "watchdog_steps": 4500
+  },
+  "created_at": "2026-10-27T15:42:14.748942+00:00",
+  "protocol": "full-policy-assessment-v1",
+  "purpose": "Compare all six final frozen policies on the same complete 100-episode manifest. Non-Acceptance assessment; no Promotion.",
+  "resources": {
+    "concurrency": 1,
+    "cpu": 8,
+    "device": "cpu",
+    "max_campaign_seconds": 7800,
+    "max_checkpoint_seconds": 1200,
+    "memory": "40g",
+    "torch_threads": 1
+  },
+  "runtime_image": "docker:ghcr.io/tsilva/gradlab/gradlab-train@sha256:e5b0b2978a608984c6d499d272de11081c6b8b07a7c9354a9bdcc865071cc1a3",
+  "schema_version": 1,
+  "selected": [
+    {
+      "backend": "gradlab.ppo",
+      "catalog_selection_fence": "073e1a15669350e82af9e40d848a412a36e2b4ddc9f3c891abf72d1ac31193f6",
+      "checkpoint": {
+        "checkpoint_id": "checkpoint-7249920-8bc9528f93265918",
+        "created_at": "2026-10-27T12:42:27.102874Z",
+        "environment_sha256": "c0b9f1dd5a13155b90cc1e763e67f8b05feb402f3db6a4a9ff9ff3b4b8a9eb51",
+        "evaluation_contract_sha256": "6d1bd47f1fe0b75232e5f91ae57d558ca569411cb9d2ae432c2953cd494bf1bf",
+        "goal_sha256": "19e4af09671b83a38f64c26a278e4b6fe4a5f25c48bc62d859e2f54e93736259",
+        "model_document_sha256": "ab1ccaf7a957b563c6bc66d575ab5d3dc3c42fe102ec5cb90a0f67095d37e514",
+        "model_document_url": "https://pub-fc35c0b186ce4aad8eea5e93d38c99db.r2.dev/runs/gradlab-ec4d2161868a2e4415e6bbac095f645b/checkpoints/7249920-8bc9528f93265918d28d33074e677e98d0a38f9ecd91d448bdfc6de9b153ab94/model.json",
+        "public_url": "https://pub-fc35c0b186ce4aad8eea5e93d38c99db.r2.dev/runs/gradlab-ec4d2161868a2e4415e6bbac095f645b/checkpoints/7249920-8bc9528f93265918d28d33074e677e98d0a38f9ecd91d448bdfc6de9b153ab94/model.zip",
+        "purpose": "final",
+        "recipe_document_sha256": "f0fda155a0a9b581f599912790ae8486d2006f4bee240708a2f53bd2340a160d",
+        "recipe_document_url": "https://pub-fc35c0b186ce4aad8eea5e93d38c99db.r2.dev/runs/gradlab-ec4d2161868a2e4415e6bbac095f645b/checkpoints/7249920-8bc9528f93265918d28d33074e677e98d0a38f9ecd91d448bdfc6de9b153ab94/recipe.json",
+        "recipe_sha256": "f0fda155a0a9b581f599912790ae8486d2006f4bee240708a2f53bd2340a160d",
+        "recovery_sidecar_key": "runs/gradlab-ec4d2161868a2e4415e6bbac095f645b/checkpoints/checkpoint-7249920-8bc9528f93265918/recovery-sidecar.json",
+        "run_id": "gradlab-ec4d2161868a2e4415e6bbac095f645b",
+        "schema_version": 2,
+        "sha256": "8bc9528f93265918d28d33074e677e98d0a38f9ecd91d448bdfc6de9b153ab94",
+        "size_bytes": 20445908,
+        "step": 7249920
+      },
+      "label": "01-gradlab.ppo-12",
+      "manifest_url": "https://pub-fc35c0b186ce4aad8eea5e93d38c99db.r2.dev/runs/gradlab-ec4d2161868a2e4415e6bbac095f645b/checkpoints/7249920-8bc9528f93265918d28d33074e677e98d0a38f9ecd91d448bdfc6de9b153ab94/manifest.json",
+      "run_id": "gradlab-ec4d2161868a2e4415e6bbac095f645b",
+      "seed": 12
+    },
+    {
+      "backend": "sb3.ppo",
+      "catalog_selection_fence": "cf50bd7e46c6f2e27695dd285eb6caa72f24f4b3eee91e21c2f1347f42dcc128",
+      "checkpoint": {
+        "checkpoint_id": "checkpoint-8003584-2378332bc13debfc",
+        "created_at": "2026-10-27T13:05:03.357159Z",
+        "environment_sha256": "c0b9f1dd5a13155b90cc1e763e67f8b05feb402f3db6a4a9ff9ff3b4b8a9eb51",
+        "evaluation_contract_sha256": "6d1bd47f1fe0b75232e5f91ae57d558ca569411cb9d2ae432c2953cd494bf1bf",
+        "goal_sha256": "19e4af09671b83a38f64c26a278e4b6fe4a5f25c48bc62d859e2f54e93736259",
+        "model_document_sha256": "384d85cf122cdffec6229586c0910b969a15aa808e020ab1159e4fcd7cd96878",
+        "model_document_url": "https://pub-fc35c0b186ce4aad8eea5e93d38c99db.r2.dev/runs/gradlab-cee45848f88ad68077142ce1ec618e3b/checkpoints/8003584-2378332bc13debfc53034059dd8a0e0058d694b32da333ce230d3cc4d22ee29a/model.json",
+        "public_url": "https://pub-fc35c0b186ce4aad8eea5e93d38c99db.r2.dev/runs/gradlab-cee45848f88ad68077142ce1ec618e3b/checkpoints/8003584-2378332bc13debfc53034059dd8a0e0058d694b32da333ce230d3cc4d22ee29a/model.zip",
+        "purpose": "final",
+        "recipe_document_sha256": "fb6ac419776db8bf1c168ddd895e69c4779cff2bc21caea378e7b26b398491e5",
+        "recipe_document_url": "https://pub-fc35c0b186ce4aad8eea5e93d38c99db.r2.dev/runs/gradlab-cee45848f88ad68077142ce1ec618e3b/checkpoints/8003584-2378332bc13debfc53034059dd8a0e0058d694b32da333ce230d3cc4d22ee29a/recipe.json",
+        "recipe_sha256": "fb6ac419776db8bf1c168ddd895e69c4779cff2bc21caea378e7b26b398491e5",
+        "recovery_sidecar_key": "runs/gradlab-cee45848f88ad68077142ce1ec618e3b/checkpoints/checkpoint-8003584-2378332bc13debfc/recovery-sidecar.json",
+        "run_id": "gradlab-cee45848f88ad68077142ce1ec618e3b",
+        "schema_version": 2,
+        "sha256": "2378332bc13debfc53034059dd8a0e0058d694b32da333ce230d3cc4d22ee29a",
+        "size_bytes": 21052835,
+        "step": 8003584
+      },
+      "label": "02-sb3.ppo-12",
+      "manifest_url": "https://pub-fc35c0b186ce4aad8eea5e93d38c99db.r2.dev/runs/gradlab-cee45848f88ad68077142ce1ec618e3b/checkpoints/8003584-2378332bc13debfc53034059dd8a0e0058d694b32da333ce230d3cc4d22ee29a/manifest.json",
+      "run_id": "gradlab-cee45848f88ad68077142ce1ec618e3b",
+      "seed": 12
+    },
+    {
+      "backend": "sb3.ppo",
+      "catalog_selection_fence": "a7d06e9ae4d20f838b49ebc435aac4ec7ae6a018d160d15dc8242379035d0514",
+      "checkpoint": {
+        "checkpoint_id": "checkpoint-7823360-f7587bfeca695e01",
+        "created_at": "2026-10-27T13:26:34.494483Z",
+        "environment_sha256": "c0b9f1dd5a13155b90cc1e763e67f8b05feb402f3db6a4a9ff9ff3b4b8a9eb51",
+        "evaluation_contract_sha256": "6d1bd47f1fe0b75232e5f91ae57d558ca569411cb9d2ae432c2953cd494bf1bf",
+        "goal_sha256": "19e4af09671b83a38f64c26a278e4b6fe4a5f25c48bc62d859e2f54e93736259",
+        "model_document_sha256": "64937dae2483f0da32440df1e83ae338dd7be1ad79dab84c0da2fb7eedc38c5e",
+        "model_document_url": "https://pub-fc35c0b186ce4aad8eea5e93d38c99db.r2.dev/runs/gradlab-a37c0921573cd00eb3bcc5462ed0b644/checkpoints/7823360-f7587bfeca695e011e4a6a2b4bc144dd6ebf70f0933f0a8fe073a5c22e860256/model.json",
+        "public_url": "https://pub-fc35c0b186ce4aad8eea5e93d38c99db.r2.dev/runs/gradlab-a37c0921573cd00eb3bcc5462ed0b644/checkpoints/7823360-f7587bfeca695e011e4a6a2b4bc144dd6ebf70f0933f0a8fe073a5c22e860256/model.zip",
+        "purpose": "final",
+        "recipe_document_sha256": "ed77218106f819c2573356e4bafc418f04417df5e12a7e1cdc4dbb6c36ae2fb6",
+        "recipe_document_url": "https://pub-fc35c0b186ce4aad8eea5e93d38c99db.r2.dev/runs/gradlab-a37c0921573cd00eb3bcc5462ed0b644/checkpoints/7823360-f7587bfeca695e011e4a6a2b4bc144dd6ebf70f0933f0a8fe073a5c22e860256/recipe.json",
+        "recipe_sha256": "ed77218106f819c2573356e4bafc418f04417df5e12a7e1cdc4dbb6c36ae2fb6",
+        "recovery_sidecar_key": "runs/gradlab-a37c0921573cd00eb3bcc5462ed0b644/checkpoints/checkpoint-7823360-f7587bfeca695e01/recovery-sidecar.json",
+        "run_id": "gradlab-a37c0921573cd00eb3bcc5462ed0b644",
+        "schema_version": 2,
+        "sha256": "f7587bfeca695e011e4a6a2b4bc144dd6ebf70f0933f0a8fe073a5c22e860256",
+        "size_bytes": 21052835,
+        "step": 7823360
+      },
+      "label": "03-sb3.ppo-13",
+      "manifest_url": "https://pub-fc35c0b186ce4aad8eea5e93d38c99db.r2.dev/runs/gradlab-a37c0921573cd00eb3bcc5462ed0b644/checkpoints/7823360-f7587bfeca695e011e4a6a2b4bc144dd6ebf70f0933f0a8fe073a5c22e860256/manifest.json",
+      "run_id": "gradlab-a37c0921573cd00eb3bcc5462ed0b644",
+      "seed": 13
+    },
+    {
+      "backend": "gradlab.ppo",
+      "catalog_selection_fence": "e7fa6997402526fe788a1863d7b46f514eea5adcf931ad676b57fbc8cb5d8b9e",
+      "checkpoint": {
+        "checkpoint_id": "checkpoint-4669440-beffe4e7c35a6245",
+        "created_at": "2026-10-27T13:40:00.633056Z",
+        "environment_sha256": "c0b9f1dd5a13155b90cc1e763e67f8b05feb402f3db6a4a9ff9ff3b4b8a9eb51",
+        "evaluation_contract_sha256": "6d1bd47f1fe0b75232e5f91ae57d558ca569411cb9d2ae432c2953cd494bf1bf",
+        "goal_sha256": "19e4af09671b83a38f64c26a278e4b6fe4a5f25c48bc62d859e2f54e93736259",
+        "model_document_sha256": "137e50acad799391c7f7274dbe1d3d0a50a117359235bd61af954ebf07ce8a3c",
+        "model_document_url": "https://pub-fc35c0b186ce4aad8eea5e93d38c99db.r2.dev/runs/gradlab-90db263ea7faf0fc0fa16e9a6bca45bf/checkpoints/4669440-beffe4e7c35a624510a376cd6ca7adc59d372a76728b357028a6a0bb35ddc3a5/model.json",
+        "public_url": "https://pub-fc35c0b186ce4aad8eea5e93d38c99db.r2.dev/runs/gradlab-90db263ea7faf0fc0fa16e9a6bca45bf/checkpoints/4669440-beffe4e7c35a624510a376cd6ca7adc59d372a76728b357028a6a0bb35ddc3a5/model.zip",
+        "purpose": "final",
+        "recipe_document_sha256": "dd4952a12e64fc51fd37bdd6fecff3a534349927a766d15f7e22330f4c312a91",
+        "recipe_document_url": "https://pub-fc35c0b186ce4aad8eea5e93d38c99db.r2.dev/runs/gradlab-90db263ea7faf0fc0fa16e9a6bca45bf/checkpoints/4669440-beffe4e7c35a624510a376cd6ca7adc59d372a76728b357028a6a0bb35ddc3a5/recipe.json",
+        "recipe_sha256": "dd4952a12e64fc51fd37bdd6fecff3a534349927a766d15f7e22330f4c312a91",
+        "recovery_sidecar_key": "runs/gradlab-90db263ea7faf0fc0fa16e9a6bca45bf/checkpoints/checkpoint-4669440-beffe4e7c35a6245/recovery-sidecar.json",
+        "run_id": "gradlab-90db263ea7faf0fc0fa16e9a6bca45bf",
+        "schema_version": 2,
+        "sha256": "beffe4e7c35a624510a376cd6ca7adc59d372a76728b357028a6a0bb35ddc3a5",
+        "size_bytes": 20445896,
+        "step": 4669440
+      },
+      "label": "04-gradlab.ppo-13",
+      "manifest_url": "https://pub-fc35c0b186ce4aad8eea5e93d38c99db.r2.dev/runs/gradlab-90db263ea7faf0fc0fa16e9a6bca45bf/checkpoints/4669440-beffe4e7c35a624510a376cd6ca7adc59d372a76728b357028a6a0bb35ddc3a5/manifest.json",
+      "run_id": "gradlab-90db263ea7faf0fc0fa16e9a6bca45bf",
+      "seed": 13
+    },
+    {
+      "backend": "gradlab.ppo",
+      "catalog_selection_fence": "217fd81333d2f6638782e0ac1fb11e7ab05b877f11247d33a054ebe1ae19de4b",
+      "checkpoint": {
+        "checkpoint_id": "checkpoint-5414912-e1479d525c9cd264",
+        "created_at": "2026-10-27T13:57:25.286329Z",
+        "environment_sha256": "c0b9f1dd5a13155b90cc1e763e67f8b05feb402f3db6a4a9ff9ff3b4b8a9eb51",
+        "evaluation_contract_sha256": "6d1bd47f1fe0b75232e5f91ae57d558ca569411cb9d2ae432c2953cd494bf1bf",
+        "goal_sha256": "19e4af09671b83a38f64c26a278e4b6fe4a5f25c48bc62d859e2f54e93736259",
+        "model_document_sha256": "06640a24af2bc3af96a9c73d5bd3fe2bdfe111f264b3ca9dac5296e1509a46f1",
+        "model_document_url": "https://pub-fc35c0b186ce4aad8eea5e93d38c99db.r2.dev/runs/gradlab-704609e56cee40a96c79859d38e3cf20/checkpoints/5414912-e1479d525c9cd2643c8e7c95d4f17d2870fbb26c79925f434ca92e7fdb32d038/model.json",
+        "public_url": "https://pub-fc35c0b186ce4aad8eea5e93d38c99db.r2.dev/runs/gradlab-704609e56cee40a96c79859d38e3cf20/checkpoints/5414912-e1479d525c9cd2643c8e7c95d4f17d2870fbb26c79925f434ca92e7fdb32d038/model.zip",
+        "purpose": "final",
+        "recipe_document_sha256": "8ac6f90e54a94f99d860738210ee47e25e541b8baeb2e7da0f26fc8127c18b4a",
+        "recipe_document_url": "https://pub-fc35c0b186ce4aad8eea5e93d38c99db.r2.dev/runs/gradlab-704609e56cee40a96c79859d38e3cf20/checkpoints/5414912-e1479d525c9cd2643c8e7c95d4f17d2870fbb26c79925f434ca92e7fdb32d038/recipe.json",
+        "recipe_sha256": "8ac6f90e54a94f99d860738210ee47e25e541b8baeb2e7da0f26fc8127c18b4a",
+        "recovery_sidecar_key": "runs/gradlab-704609e56cee40a96c79859d38e3cf20/checkpoints/checkpoint-5414912-e1479d525c9cd264/recovery-sidecar.json",
+        "run_id": "gradlab-704609e56cee40a96c79859d38e3cf20",
+        "schema_version": 2,
+        "sha256": "e1479d525c9cd2643c8e7c95d4f17d2870fbb26c79925f434ca92e7fdb32d038",
+        "size_bytes": 20445897,
+        "step": 5414912
+      },
+      "label": "05-gradlab.ppo-14",
+      "manifest_url": "https://pub-fc35c0b186ce4aad8eea5e93d38c99db.r2.dev/runs/gradlab-704609e56cee40a96c79859d38e3cf20/checkpoints/5414912-e1479d525c9cd2643c8e7c95d4f17d2870fbb26c79925f434ca92e7fdb32d038/manifest.json",
+      "run_id": "gradlab-704609e56cee40a96c79859d38e3cf20",
+      "seed": 14
+    },
+    {
+      "backend": "sb3.ppo",
+      "catalog_selection_fence": "aff39e4a890bd996126877d402d403ce7d6a25dbc0976bf901ddca5f379e7c64",
+      "checkpoint": {
+        "checkpoint_id": "checkpoint-5890048-6037633553262408",
+        "created_at": "2026-10-27T15:32:51.360488Z",
+        "environment_sha256": "c0b9f1dd5a13155b90cc1e763e67f8b05feb402f3db6a4a9ff9ff3b4b8a9eb51",
+        "evaluation_contract_sha256": "6d1bd47f1fe0b75232e5f91ae57d558ca569411cb9d2ae432c2953cd494bf1bf",
+        "goal_sha256": "19e4af09671b83a38f64c26a278e4b6fe4a5f25c48bc62d859e2f54e93736259",
+        "model_document_sha256": "f9b0b8653e2fb71566e39c039478887aabed6740f1414751aeee59d72f09c27f",
+        "model_document_url": "https://pub-fc35c0b186ce4aad8eea5e93d38c99db.r2.dev/runs/gradlab-8ce2a26b50cd036e0d2824a67c805916/checkpoints/5890048-60376335532624080ecd2b47e7445fb8be540c2cc5bf385739bddacf25ddaead/model.json",
+        "public_url": "https://pub-fc35c0b186ce4aad8eea5e93d38c99db.r2.dev/runs/gradlab-8ce2a26b50cd036e0d2824a67c805916/checkpoints/5890048-60376335532624080ecd2b47e7445fb8be540c2cc5bf385739bddacf25ddaead/model.zip",
+        "purpose": "final",
+        "recipe_document_sha256": "c06ad5db4a0411092c28dbcf06a3c2fb7b02e68ab5b1acb15721b7b76de1c135",
+        "recipe_document_url": "https://pub-fc35c0b186ce4aad8eea5e93d38c99db.r2.dev/runs/gradlab-8ce2a26b50cd036e0d2824a67c805916/checkpoints/5890048-60376335532624080ecd2b47e7445fb8be540c2cc5bf385739bddacf25ddaead/recipe.json",
+        "recipe_sha256": "c06ad5db4a0411092c28dbcf06a3c2fb7b02e68ab5b1acb15721b7b76de1c135",
+        "recovery_sidecar_key": "runs/gradlab-8ce2a26b50cd036e0d2824a67c805916/checkpoints/checkpoint-5890048-6037633553262408/recovery-sidecar.json",
+        "run_id": "gradlab-8ce2a26b50cd036e0d2824a67c805916",
+        "schema_version": 2,
+        "sha256": "60376335532624080ecd2b47e7445fb8be540c2cc5bf385739bddacf25ddaead",
+        "size_bytes": 21052824,
+        "step": 5890048
+      },
+      "label": "06-sb3.ppo-14",
+      "manifest_url": "https://pub-fc35c0b186ce4aad8eea5e93d38c99db.r2.dev/runs/gradlab-8ce2a26b50cd036e0d2824a67c805916/checkpoints/5890048-60376335532624080ecd2b47e7445fb8be540c2cc5bf385739bddacf25ddaead/manifest.json",
+      "run_id": "gradlab-8ce2a26b50cd036e0d2824a67c805916",
+      "seed": 14
+    }
+  ],
+  "source_sha": "2069964e7ce38de8f87392de084145e6af8f87d3",
+  "study": "smb-final-policy-quality-20261027"
+}

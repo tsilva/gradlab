@@ -16,7 +16,7 @@ reward_shapes:
       death_penalty: 25.0
       completion_reward: 0.0
       score_progress_clipped: false
-    speedrun-v1:
+    speedrun-v1: &speedrun_reward
       reward_mode: additive
       use_native_reward: false
       reward_clip: false
@@ -30,3 +30,7 @@ reward_shapes:
       death_penalty: 25.0
       completion_reward: 0.0
       score_progress_clipped: false
+    sft-ppo-v1:
+      <<: *speedrun_reward
+      completion_reward: 1000.0
+      reward_scale: 0.001

@@ -24,12 +24,15 @@ _CALL_ID = re.compile(r"[0-9a-f]{64}\Z")
 class TrainingContainerEvalBackend:
     """Queue attempts on disk and run at most ``max_workers`` CPU children."""
 
-    def __init__(self, root: Path, *, max_workers: int = 1) -> None:
+    def __init__(
+        self, root: Path, *, max_workers: int = 1, worker_source: Path | None = None,
+    ) -> None:
         if max_workers < 1:
             raise ValueError("training-container evaluation requires a positive worker limit")
         self.root = Path(root)
         self.root.mkdir(parents=True, exist_ok=True)
         self.max_workers = int(max_workers)
+        self.worker_source = worker_source or Path(__file__).resolve().parents[1]
         self.processes: dict[str, subprocess.Popen[bytes]] = {}
 
     def _directory(self, handle: EvalHandle) -> Path:
@@ -69,12 +72,14 @@ class TrainingContainerEvalBackend:
                     if key in os.environ
                 }
                 environment.update(
-                    PYTHONPATH=str(Path(__file__).resolve().parents[1]),
+                    PYTHONPATH=str(self.worker_source),
                     CUDA_VISIBLE_DEVICES="",
                     OMP_NUM_THREADS="1",
                     MKL_NUM_THREADS="1",
                     OPENBLAS_NUM_THREADS="1",
                     NUMEXPR_NUM_THREADS="1",
+                    PYTHONDONTWRITEBYTECODE="1",
+                    PYTHONPYCACHEPREFIX=str(directory / "pycache"),
                 )
                 with (directory / "worker.log").open("ab") as output:
                     process = subprocess.Popen(

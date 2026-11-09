@@ -2,17 +2,23 @@
 
 ## Product Specifications
 
-At the start of substantive repository work, use `$specs-author` to read the entire root `SPECS.md` once per ongoing task. Reuse unchanged contents across follow-ups and composed skills. Reread when the file or repository association changes, or new stakeholder intent requires a fresh comparison. Before finishing, always check for new or changed stakeholder intent; reread if the file or intent changed. Purely conversational follow-ups do not require another full read.
-
-- Treat `SPECS.md` as the persistent source of stakeholder requirements that cannot be inferred reliably from code or remembered conversations.
-- Apply the scope test to proposed and existing requirements: root `SPECS.md` contains only project-wide intent; scoped intent belongs in its nearest authoritative specification and must not be broadened to fit the root.
-- If the task, repository, or user request contradicts, omits, or ambiguously interprets the specification, tell the user. Continue safe exploration and work that does not depend on resolving the issue, but never silently choose an interpretation.
-- Never edit `SPECS.md` from inference. Propose the exact change, explain why it reflects stakeholder intent, and edit the file only after the user explicitly approves that exact change.
-- Keep `SPECS.md` complete, concise, and compacted. It must contain stakeholder intent rather than implementation, architecture, operations, or transient project detail.
+When specifications exist, use `$private-skills_specs-author` for substantive work and
+specification changes. Follow its shared read/reuse cadence, provisional-scenario
+guidance, proportional detail, decision-based approval, and closing intent check.
+The maintained procedure is `/Users/tsilva/.codex/skills/private-skills/private-skills_specs-author/SKILL.md`.
 
 ## Scoped Specifications
 
-Before changing publication, playback, queued execution, or Go-Explore behavior, read the matching authoritative scoped specification indexed by `docs/specs/README.md`. Treat each scoped requirement as user product intent for that capability, preserve its original presumption of immutability until the user explicitly evolves it, and keep it consistent with root `SPECS.md` and `CONTEXT.md`.
+Before changing a capability with an authoritative scoped specification, consult the matching file indexed by `docs/specs/README.md` under the shared task-level read/reuse cadence. Preserve existing commitments and keep scoped requirements consistent with root `SPECS.md` and `CONTEXT.md`; apply the same `$private-skills_specs-author` decision-based approval policy to root and scoped changes.
+
+## Agent Service Access
+
+Use `~/.config/infisical/run-agent-vault gradlab-huggingface -- COMMAND` for standalone Hugging Face
+commands. The launcher uses the dedicated `local-gradlab-huggingface` Agent Vault
+bundle and supplies only the `HF_TOKEN` placeholder and a scoped proxy session.
+The Gradlab Infisical `dev` folder `/agents/huggingface` remains the source for
+trusted administrative rotation. See [agent service access](docs/agents/workflows.md#agent-service-access)
+for checks and transfer limitations.
 
 ## GPU Instances
 
@@ -45,9 +51,9 @@ When changing dstack host behavior, preserve the root-owned runtime-image cleanu
 
 ## Publication and Package Releases
 
-- For Checkpoint Publication or accepted Policy Releases, use `$gradlab_upload-checkpoint` in `.codex/skills/gradlab_upload-checkpoint`; use `$model-card-author` for generated-card quality.
+- For Checkpoint Publication or accepted Policy Releases, use `$gradlab_upload-checkpoint` in `.codex/skills/gradlab_upload-checkpoint`; use `$private-skills_model-card-author` for generated-card quality.
 - For standalone YouTube maintenance, use `$gradlab_upload-youtube-video` in `.codex/skills/gradlab_upload-youtube-video`. Its `references/release-metadata.md` owns preview policy; checkpoint-release previews use the durable publisher.
-- For GradLab Python releases, use `$gradlab_build-release` in `.codex/skills/gradlab_build-release`, which composes the shared `$release-workflow`. The project launcher prepares metadata and pushes the release tag; GitHub Actions owns source validation, all release builds, artifact audits, and trusted publication. Normal release or validation requests do not build locally.
+- For GradLab Python releases, use `$gradlab_build-release` in `.codex/skills/gradlab_build-release`, which composes the shared `$private-skills_release-workflow`. The project launcher prepares metadata and pushes the release tag; GitHub Actions owns source validation, all release builds, artifact audits, and trusted publication. Normal release or validation requests do not build locally.
 
 ## Dependencies
 

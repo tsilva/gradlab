@@ -47,6 +47,8 @@ GradLab is a public, reproducible, general-purpose reinforcement-learning resear
 
 ### Environments and Execution
 
+- Checked-in PPO recipes must use GradLab's custom PPO backend.
+- Native PPO recipes may opt into actor-only self-imitation with declared replay and update settings recorded in the Run Configuration. The self-imitation implementation must be reusable by other GradLab-owned actor-critic backends.
 - GradLab must call a capability supported only when an authoritative project registry lists it and it passes its required contract checks.
 - Supported providers must isolate parallel lanes and provide deterministic, nonduplicated episode streams without cross-lane reset or boundary effects.
 - Equivalent Providers must preserve observations, actions, rewards, discounts, events, start states, and episode boundaries.
@@ -54,7 +56,8 @@ GradLab is a public, reproducible, general-purpose reinforcement-learning resear
 - Every Run must declare its reward transforms and their order, and providers must not apply undeclared or duplicate transforms.
 - Every supported environment must work through common training, evaluation, Publication, and Playback workflows.
 - Equivalent Run contracts must work on local and cost-limited cloud compute without provider-specific research code.
-- Checkpoint evaluation must default to Modal, allow an explicitly selected training-container backend, and allow an explicit disabled mode.
+- Checkpoint evaluation must support Modal, an explicitly selected training-container backend, and an explicit disabled mode. Defaults belong to recipes or execution configuration and must resolve into the recorded Run Configuration.
+- Screening recipes must default to disabled automatic Checkpoint evaluation while preserving Checkpoints, Run provenance, and the Evaluated Goal's contract for separate Acceptance evaluation. Screening measures must not establish Acceptance or Promotion.
 - A Run with Checkpoint evaluation disabled must not establish Acceptance or Promotion.
 - Every supported execution system must provide the common lifecycle for each execution mode that it declares.
 - The common lifecycle must cover progress, outcome measures, Checkpoints, graceful stopping, and final artifacts.

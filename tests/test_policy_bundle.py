@@ -39,7 +39,12 @@ from gradlab.recipe_documents import (
     prepare_checkpoint_eval_mode,
 )
 from gradlab.train_config import validate_and_normalize_train_config
-from gradlab.training_backend import training_backend_config, training_backend_config_hash
+from gradlab.training_backend import (
+    training_backend_config,
+    training_backend_config_hash,
+    training_backend_id,
+    training_backend_runtime_metadata,
+)
 from gradlab.state_archive import StateArchive, state_archive_artifact_summary
 
 
@@ -72,6 +77,15 @@ def bind_mario_asset(resolved) -> None:
     resolved.base["train_config"]["rom_asset_manifest"] = deepcopy(MARIO_ASSET)
 
 
+def backend_metadata(train_config: dict) -> dict[str, str]:
+    return {
+        **training_backend_runtime_metadata(
+            training_backend_id(train_config), training_backend_config(train_config),
+        ),
+        "training_backend_config_hash": training_backend_config_hash(train_config),
+    }
+
+
 def level1_1_recipe_document(*, seed: int = 7) -> dict:
     resolved = compose_resolved_train_documents(
         GOAL,
@@ -89,6 +103,31 @@ def level1_1_recipe_document(*, seed: int = 7) -> dict:
         base_materialized_recipe=resolved.base,
         canonical_goal=resolved.canonical_goal,
     )
+
+
+def test_warmup_recipe_preserves_portable_initial_policy() -> None:
+    resolved = compose_resolved_train_documents(
+        LEVEL1_3_GOAL,
+        LEVEL1_3_GOAL.parent / "recipes/ppo-sft-critic-warmup.yaml",
+        source_sha="a" * 40,
+    )
+    bind_mario_asset(resolved)
+    document = build_recipe_document(
+        resolved.effective,
+        repo_root=Path.cwd(),
+        source_commit="a" * 40,
+        run_description="Critic warmup portable recipe proof",
+        seed=12,
+        runtime_image_ref=RUNTIME,
+        base_materialized_recipe=resolved.base,
+        canonical_goal=resolved.canonical_goal,
+    )
+
+    validated = validate_recipe_document(document)
+    initialization = training_backend_config(validated["recipe"]["train_config"])["initial_policy"]
+    assert initialization["repo_id"] == "tsilva/SuperMarioBros-Nes-v0_Level1-3"
+    assert initialization["revision"] == "f9a633f9a7c5105beeb09d654b7af6e2f7c5404a"
+    assert "url" not in initialization
 
 
 def test_recipe_v4_embeds_verified_goal_and_recipe_bases() -> None:
@@ -365,10 +404,7 @@ def test_atomic_bundle_install_commits_only_a_complete_replayable_bundle(
         "run_description": "Atomic bundle regression.",
         "runtime_image_ref": RUNTIME,
         "source_sha": "a" * 40,
-        "algorithm_id": "ppo",
-        "model_class": "stable_baselines3.ppo.ppo.PPO",
-        "training_backend_id": "sb3.ppo",
-        "training_backend_config_hash": training_backend_config_hash(train_config),
+        **backend_metadata(train_config),
     }
 
     install_model_bundle(
@@ -383,6 +419,11 @@ def test_atomic_bundle_install_commits_only_a_complete_replayable_bundle(
     bundle = load_policy_bundle_from_checkpoint(model_path)
     assert bundle is not None
     assert bundle.model["checkpoint"]["step"] == 100
+    assert bundle.model["policy"]["training_backend_id"] == training_backend_id(train_config)
+    assert (
+        bundle.model["policy"]["training_backend_config_hash"]
+        == training_backend_config_hash(train_config)
+    )
     assert bundle.checkpoint_path.read_bytes() == b"checkpoint"
     assert set(bundle.model["provenance"]["training_metadata"]) == {"versions"}
     assert bundle.recipe["recipe"]["environment"] == recipe_document["recipe"]["environment"]
@@ -458,10 +499,7 @@ def test_bundle_metadata_reconstructs_provider_action_contract(
             {
                 "kind": "checkpoint",
                 "checkpoint_step": 100,
-                "algorithm_id": "ppo",
-                "model_class": "stable_baselines3.ppo.ppo.PPO",
-                "training_backend_id": train_config["training_backend"]["id"],
-                "training_backend_config_hash": training_backend_config_hash(train_config),
+                **backend_metadata(train_config),
                 "training_metadata": {"versions": {}},
             },
         ),
@@ -485,12 +523,7 @@ def write_bundle(root: Path) -> None:
     metadata = {
         "kind": "checkpoint",
         "checkpoint_step": 500_000,
-        "algorithm_id": "ppo",
-        "model_class": "stable_baselines3.ppo.ppo.PPO",
-        "training_backend_id": "sb3.ppo",
-        "training_backend_config_hash": training_backend_config_hash(
-            recipe_document["recipe"]["train_config"]
-        ),
+        **backend_metadata(recipe_document["recipe"]["train_config"]),
         "repo_git_commit": "a" * 40,
     }
     write_canonical_json(
@@ -650,7 +683,7 @@ def test_recipe_materializes_the_backend_config_executed_by_the_learner() -> Non
     assert training_backend_config_hash(recipe_train_config) == training_backend_config_hash(
         executed_train_config
     )
-    assert training_backend_config(recipe_train_config)["device"] == "auto"
+    assert training_backend_config(recipe_train_config)["device"] == "cuda"
 
 
 def test_resume_approval_does_not_rebind_the_scientific_backend_config() -> None:
@@ -827,12 +860,7 @@ def test_model_v3_records_durable_state_archive_summary(tmp_path: Path) -> None:
     metadata = {
         "kind": "checkpoint",
         "checkpoint_step": 500_000,
-        "algorithm_id": "ppo",
-        "model_class": "stable_baselines3.ppo.ppo.PPO",
-        "training_backend_id": "sb3.ppo",
-        "training_backend_config_hash": training_backend_config_hash(
-            recipe_document["recipe"]["train_config"]
-        ),
+        **backend_metadata(recipe_document["recipe"]["train_config"]),
         "state_archive_preflight_sha256": "c" * 64,
         "state_archive_summary": state_archive_artifact_summary(runtime),
     }
@@ -884,6 +912,31 @@ def test_bundle_rejects_checkpoint_and_recipe_hash_mismatches(tmp_path: Path) ->
     recipe["recipe"]["description"] = "changed"
     write_canonical_json(tmp_path / "recipe.json", recipe)
     with pytest.raises(PolicyDocumentError, match="effective_sha256"):
+        load_policy_bundle(tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("field", "message"),
+    (
+        ("training_backend_id", "training backend disagrees"),
+        ("training_backend_config_hash", "training backend config hash disagrees"),
+    ),
+)
+def test_bundle_rejects_backend_provenance_mismatches(
+    tmp_path: Path, field: str, message: str,
+) -> None:
+    write_bundle(tmp_path)
+    assert load_policy_bundle(tmp_path) is not None
+    model_path = tmp_path / "model.json"
+    model = json.loads(model_path.read_text(encoding="utf-8"))
+    if field == "training_backend_id":
+        current = model["policy"][field]
+        model["policy"][field] = "sb3.ppo" if current != "sb3.ppo" else "gradlab.ppo"
+    else:
+        model["policy"][field] = "0" * 64
+    write_canonical_json(model_path, model)
+
+    with pytest.raises(PolicyDocumentError, match=message):
         load_policy_bundle(tmp_path)
 
 

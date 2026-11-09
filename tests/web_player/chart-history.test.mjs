@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { setImmediate } from 'node:timers/promises';
 import { chartHarness, full, flush } from './helpers/chart-history.mjs';
 
 test('a new range immediately clears the old plot and late work cannot replace the latest selection', async () => {
@@ -202,16 +203,16 @@ test('the browser adapter preserves query identity and distinguishes transient H
     now: () => 0, setTimeout: (callback, delay) => { timers.push({ callback, delay }); return 1; }, clearTimeout() {},
   } });
   history.updateContext({ epoch: 2, episodeId: 'episode-a', episode: 1, lastStep: 10 });
-  history.selectRange({ first: 2, last: 9 }); history.setDemand(true); await flush();
+  history.selectRange({ first: 2, last: 9 }); history.setDemand(true); await setImmediate();
   assert.equal(history.read().status, 'recovering');
-  assert.equal(timers[0].delay, 1000); timers.shift().callback(); await flush();
+  assert.equal(timers[0].delay, 1000); timers.shift().callback(); await setImmediate();
   assert.equal(history.read().status, 'ready');
   assert.deepEqual(Object.fromEntries(calls[0].url.searchParams), {
     epoch: '2', episode_id: 'episode-a', format: 'chart-columns-v1', first: '2', last: '9',
   });
   assert.equal(calls[0].options.headers.Authorization, 'Bearer fixture-token');
   assert.ok(calls[0].options.signal instanceof AbortSignal);
-  history.retry(); await flush();
+  history.retry(); await setImmediate();
   assert.equal(calls[2].url.searchParams.get('base'), 'a');
   assert.equal(history.read().status, 'error');
   assert.equal(timers.length, 0);

@@ -27,6 +27,31 @@ critic calibration is unavailable, including after the schedule reaches its endp
 
 No checked-in recipe enables gamma scheduling by default.
 
+## Actor-only self-imitation
+
+Native `gradlab.ppo` recipes can set `train.backend.config.sil.enabled: true`.
+SIL collects the run's own complete episodes and replays eligible decisions after
+the base optimizer update, before checkpointing. It weights each replay action
+by the positive difference between its stored discounted return and the current
+critic estimate. The separate SIL optimizer updates actor parameters. Use an
+independent actor and critic feature extractor with FP32, constant gamma, and
+`bootstrap_truncations: false`. The current integration accepts a single host
+observation array and a discrete policy action space. Exact training resume with
+SIL requires replay and optimizer restoration, so the backend rejects it.
+
+The block configures learning rate, attempted updates per rollout, minibatch
+and candidate pool sizes, recent and successful replay limits, the success
+sampling fraction, and the maximum collected length per lane episode. The replay
+seed defaults to the training seed. If a provider exposes an action eligibility
+signal, set `control_signal` and its integer `control_value` together. Return
+targets still include rewards on every step. Absent or disabled SIL uses the
+base update. The Mario Level1-3 `ppo-sil-actor-only` recipe records the original
+seed 1801 absolute training budget for reproduction.
+
+```sh
+gradlab train SuperMarioBros-Nes-v0/Level1-3/ppo-sil-actor-only --seed 1801 --no-wandb
+```
+
 ## Checkpoint schedules
 
 Checkpoint cadence is a Run choice: goals provide frequency defaults, and recipes or launch

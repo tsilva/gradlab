@@ -1,0 +1,90 @@
+name: GradLab regression checks
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/gradlab-python-checks.yml
+      - src/gradlab/**
+      - tests/**
+      - experiments/goals/**
+      - experiments/recipes/**
+      - experiments/*.yaml
+      - METRICS.md
+      - pyproject.toml
+      - uv.lock
+      - uv-tool.toml
+      - hatch_build.py
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/gradlab-python-checks.yml
+      - src/gradlab/**
+      - tests/**
+      - experiments/goals/**
+      - experiments/recipes/**
+      - experiments/*.yaml
+      - METRICS.md
+      - pyproject.toml
+      - uv.lock
+      - uv-tool.toml
+      - hatch_build.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gradlab-regressions-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_CONFIG_FILE: ${{ github.workspace }}/uv-tool.toml
+  CUDA_VISIBLE_DEVICES: ""
+  MLFLOW_DISABLE_AGENT_HINT: "1"
+
+jobs:
+  regression-checks:
+    name: CPU regression and lifecycle checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"
+      - name: Set up uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          enable-cache: true
+          prune-cache: true
+      - name: Install native dependency build prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes swig
+      - name: Install locked development environment
+        run: |
+          uv lock --check
+          uv sync --frozen --group dev
+      - name: Validate configuration
+        run: uv run --no-sync gradlab validate
+      - name: Test screening, checkpoint provenance, and Acceptance
+        run: >-
+          uv run --no-sync pytest -q
+          tests/test_screening_recipes.py
+          tests/test_breakout_two_walls_recipe.py
+          tests/test_policy_bundle.py
+          tests/test_checkpoint_acceptance.py
+          tests/test_run_supervisor.py
+          tests/test_manual_mlflow.py
+          tests/test_job_queue.py
+          tests/test_hardware_metrics.py
+      - name: Certify lifecycle determinism
+        run: |
+          set -euo pipefail
+          evidence="$(mktemp -d)"
+          uv run --no-sync gradlab experiment certify --tier simulated --json | tee "$evidence/first.json"
+          uv run --no-sync gradlab experiment certify --tier simulated --json | tee "$evidence/second.json"
+          cmp "$evidence/first.json" "$evidence/second.json"
