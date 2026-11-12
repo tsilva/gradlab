@@ -261,9 +261,13 @@ class MetricsDocumentationTests(unittest.TestCase):
                     name = name.replace(f"{{{placeholder}}}", replacement, 1)
                 scalar_names.add(name)
 
-        # Keep the scientific budget intact; host diagnostics have a separate bound.
-        self.assertLessEqual(sum(not d.name.startswith("system/") for d in metric_names.METRIC_DEFINITIONS), 108)
-        self.assertLessEqual(sum(not n.startswith("system/") for n in scalar_names), 97)
+        # Preserve the base budget and bound optional SIL and prototype diagnostics separately.
+        separate = ("system/", "train/sil/", "diagnostic/")
+        self.assertLessEqual(sum(not d.name.startswith(separate) for d in metric_names.METRIC_DEFINITIONS), 108)
+        self.assertLessEqual(sum(not n.startswith(separate) for n in scalar_names), 97)
+        for prefix, limit in (("train/sil/", 9), ("diagnostic/", 14)):
+            self.assertLessEqual(sum(d.name.startswith(prefix) for d in metric_names.METRIC_DEFINITIONS), limit)
+            self.assertLessEqual(sum(n.startswith(prefix) for n in scalar_names), limit)
         self.assertEqual(sum(n.startswith("system/") for n in scalar_names), 8)
         self.assertEqual(
             len(
@@ -288,6 +292,7 @@ class MetricsDocumentationTests(unittest.TestCase):
             "evaluations",
             "events",
             "fraction",
+            "ratio",
             "metadata",
             "nats",
             "return",
@@ -301,6 +306,7 @@ class MetricsDocumentationTests(unittest.TestCase):
             "timestamp",
             "trajectories",
             "transitions",
+            "updates",
             "value",
             "visits",
             "transitions/second",
@@ -314,7 +320,7 @@ class MetricsDocumentationTests(unittest.TestCase):
             with self.subTest(metric=definition.name):
                 self.assertRegex(
                     definition.name,
-                    r"^(train|eval|leader|ops|system)/",
+                    r"^(train|eval|leader|ops|system|diagnostic)/",
                 )
                 self.assertNotIn("//", definition.name)
                 self.assertIn(definition.unit, allowed_units)

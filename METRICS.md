@@ -816,7 +816,9 @@ unevaluated for future explicit user action. dstack process exit alone is never 
 
 ## Naming and publication rules
 
-Use short paths rooted in `train`, `eval`, `leader`, or `ops`. Keep a subject and its statistic or
+Use short paths rooted in `train`, `eval`, `leader`, or `ops`. Host measurements use
+`system`, and standalone prototype or initialization diagnostics use `diagnostic`;
+neither supplies Acceptance evidence. Keep a subject and its statistic or
 unit, adding a group or dimension only when it distinguishes meaning. Statistics use `/min`, `/max`,
 `/mean`, `/std`, `/count`, and `/fraction`; timings use `/seconds`, sizes `/bytes`, and throughput
 `/rate`. Genuine compound subjects use snake_case, such as `value_loss` or `episode_steps`.

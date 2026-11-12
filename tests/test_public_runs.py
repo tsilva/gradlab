@@ -17,7 +17,12 @@ from gradlab.r2_store import PUBLIC_OBJECT_USER_AGENT
 from gradlab.recipe_documents import compose_resolved_train_documents
 from gradlab.run_authority import RunAuthority
 from gradlab.run_contracts import PromotionReceipt, new_run_id, utc_now
-from gradlab.training_backend import training_backend_config_hash
+from gradlab.training_backend import (
+    training_backend_config,
+    training_backend_config_hash,
+    training_backend_id,
+    training_backend_runtime_metadata,
+)
 
 
 GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml")
@@ -90,8 +95,10 @@ def _policy_checkpoint(root: Path) -> Path:
         "kind": "checkpoint",
         "checkpoint_step": 250_000,
         "algorithm_id": "ppo",
-        "model_class": "stable_baselines3.ppo.ppo.PPO",
-        "training_backend_id": "sb3.ppo",
+        **training_backend_runtime_metadata(
+            training_backend_id(recipe["recipe"]["train_config"]),
+            training_backend_config(recipe["recipe"]["train_config"]),
+        ),
         "training_backend_config_hash": training_backend_config_hash(
             recipe["recipe"]["train_config"]
         ),

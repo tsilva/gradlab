@@ -47,7 +47,10 @@ def test_every_checked_in_recipe_defaults_to_mlflow(recipe: Path) -> None:
     document = compose_train_document(goal, recipe)
     tracking = document["train_config"]["tracking"]
     assert tracking["backend"] == "mlflow"
-    assert tracking["sources"]["backend"] == "experiments/tracking.yaml"
+    assert tracking["sources"]["backend"] in {
+        "experiments/tracking.yaml",
+        "experiments/recipes/_presets/mario-training-clear-80.yaml",
+    }
 
 
 def test_tracking_precedence_and_scientific_identity(tmp_path: Path) -> None:

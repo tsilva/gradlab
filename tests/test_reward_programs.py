@@ -52,17 +52,25 @@ def test_mario_reward_shape_defaults_and_cli_override_materialize_both_phases() 
     assert "reward_shapes" not in selected["goal"]
 
 
-def test_all_mario_recipes_select_the_speedrun_default() -> None:
+def test_mario_recipes_select_the_speedrun_default_or_declared_sft_variant() -> None:
     goal_root = Path("experiments/goals/SuperMarioBros-Nes-v0")
     recipes = sorted(goal_root.glob("*/recipes/*.yaml"))
     assert recipes
+    sft_variants = {
+        "Level1-3/recipes/ppo-sft-critic-warmup.yaml",
+        "Level1-3/recipes/ppo-sil-actor-only.yaml",
+        "Level1-3/recipes/ppo-sil-train-clear-80.yaml",
+        "Level2-2/recipes/ppo-sil-train-clear-80.yaml",
+    }
+    assert sft_variants <= {recipe.relative_to(goal_root).as_posix() for recipe in recipes}
 
     for recipe in recipes:
         goal = recipe.parent.parent / "_goal.yaml"
         document = compose_train_document(goal, recipe)
         config = document["train_config"]
-        assert config["reward_shape"] == "speedrun-v1", recipe
-        assert config["reward_shape_is_default"] is True, recipe
+        is_sft = recipe.relative_to(goal_root).as_posix() in sft_variants
+        assert config["reward_shape"] == ("sft-ppo-v1" if is_sft else "speedrun-v1"), recipe
+        assert config["reward_shape_is_default"] is (not is_sft), recipe
         assert config["task"]["reward"]["reward_mode"] == "additive", recipe
         assert config["task"]["reward"]["time_penalty"] == 0.001, recipe
         assert (

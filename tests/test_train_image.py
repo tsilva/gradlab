@@ -353,7 +353,7 @@ class TrainImageTests(unittest.TestCase):
         self.assertIn("env-breakoutatari2600-turbo-native==0.5.15", dependencies)
         self.assertIn("box2d-py==2.3.8", dependencies)
         self.assertIn("mlflow-skinny==3.17.2", dependencies)
-        self.assertIn("pyarrow==25.0.0", dependencies)
+        self.assertIn("pyarrow==25.0.1", dependencies)
         self.assertNotIn("wandb-workspaces==", gpu + dependencies)
         self.assertIn("torch==2.13.0", gpu)
         gpu_lines = set(gpu.splitlines())

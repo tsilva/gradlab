@@ -35,6 +35,7 @@ def transport():
             "gradlab.local_metrics.WandbProjector.start_live", return_value=projector
         ) as start,
         mock.patch("gradlab.local_metrics.resolve_env_config"),
+        mock.patch("gradlab.local_metrics.HardwareSampler.sample", return_value={}),
         mock.patch("gradlab.local_metrics.local_publication", return_value=nullcontext(None)),
         mock.patch("gradlab.local_metrics.MetricsWriter.confirm") as verify,
     ):
