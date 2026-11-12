@@ -128,6 +128,9 @@ def gateway_endpoint(role: str, values: Mapping[str, str] | None = None) -> str:
     validate_session(values)
     if role not in ROLES:
         raise TrainingVaultError("Unreviewed R2 role")
+    bucket = {"CONTROL": "control-private", "EVAL": "eval-private", "MODELS": "models-public"}[role]
+    if values.get(f"GRADLAB_{role}_R2_URI") != "s3://" + bucket:
+        raise TrainingVaultError("Training Vault requires the reviewed R2 bucket; no storage fallback")
     endpoint = values.get(f"GRADLAB_{role}_R2_ENDPOINT_URL", "")
     parsed = urlsplit(endpoint)
     if (parsed.scheme != "http" or parsed.hostname != "127.0.0.1"

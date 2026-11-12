@@ -29,6 +29,8 @@ for each of control, evaluation and models storage, and the selected coordinator
 token. Its native development Hugging Face binding remains separate. Training's
 Vault project and bundle IDs are explicitly pinned; native source metadata does
 not configure service permissions.
+Vault mode requires the original S3 buckets. Local paths, swapped roles and
+unreviewed prefixes fail before the storage client starts.
 
 | Service | Operator | Supervisor | Credential handling |
 | --- | --- | --- | --- |

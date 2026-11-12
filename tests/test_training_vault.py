@@ -43,6 +43,9 @@ def test_r2_configuration_selects_unsigned_broker_transport_with_only_markers(se
     {"HTTPS_PROXY": "http://x-agent-vault:agv_syntheticCapability@8.8.8.8:17323"},
     {"http_proxy": "http://different.invalid"}, {vault.CA_PIN: "changed"},
     {"GRADLAB_CONTROL_R2_ENDPOINT_URL": "https://unreviewed.invalid"},
+    {"GRADLAB_CONTROL_R2_URI": "file:///tmp/unreviewed-store"},
+    {"GRADLAB_CONTROL_R2_URI": "s3://models-public"},
+    {"GRADLAB_CONTROL_R2_URI": "s3://control-private/unreviewed-prefix"},
 ])
 def test_invalid_training_session_never_selects_direct_credentials(session, change):
     with pytest.raises(vault.TrainingVaultError):
