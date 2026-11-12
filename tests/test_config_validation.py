@@ -472,13 +472,13 @@ class ConfigValidationTests(unittest.TestCase):
                     },
                 )
 
-        self.assertEqual(actor_critic_recipes, 56)
+        self.assertEqual(actor_critic_recipes, 86)
 
-    def test_every_mario_recipe_disables_eval_and_stops_at_perfect_clear_window(self) -> None:
+    def test_every_mario_recipe_disables_eval_and_preserves_its_clear_contract(self) -> None:
         mario_root = Path("experiments/goals/SuperMarioBros-Nes-v0")
         recipes = sorted(mario_root.glob("*/recipes/*.yaml"))
 
-        self.assertEqual(len(recipes), 28)
+        self.assertEqual(len(recipes), 58)
         for recipe_path in recipes:
             with self.subTest(recipe=recipe_path):
                 goal_path = recipe_path.parent.parent / "_goal.yaml"
@@ -486,6 +486,12 @@ class ConfigValidationTests(unittest.TestCase):
                 train_config = document["train_config"]
                 self.assertEqual(train_config["checkpoint_eval_backend"], "none")
                 self.assertNotIn("stop_on_acceptance", train_config)
+                if recipe_path.stem in {"ppo-train-clear-80", "ppo-sil-train-clear-80"}:
+                    conditions = train_config["early_stop"]["conditions"]
+                    self.assertEqual(conditions["clear_100"]["action"], "observe")
+                    self.assertEqual(conditions["clear_80"]["threshold"], 0.8)
+                    self.assertEqual(conditions["clear_80"]["action"], "stop")
+                    continue
                 if recipe_path.name == "ppo-sil-actor-only.yaml":
                     self.assertIsNone(train_config["early_stop"])
                     self.assertEqual(train_config["timesteps"], 9_310_208)
@@ -608,7 +614,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(report.counts["json_files"], 0)
         self.assertGreaterEqual(report.counts["yaml_files"], 15)
         self.assertGreaterEqual(report.counts["goals"], 1)
-        self.assertEqual(report.counts["train_recipes"], 60)
+        self.assertEqual(report.counts["train_recipes"], 90)
         self.assertGreaterEqual(report.counts["env_configs"], 0)
         self.assertEqual(report.counts["benchmark_profiles"], 4)
         self.assertEqual(report.counts["workspace_manifests"], 1)
@@ -1131,7 +1137,7 @@ class ConfigValidationTests(unittest.TestCase):
             path for path in root.glob("*/_goal.yaml") if path.parent.name != "EndToEnd"
         )
 
-        self.assertEqual(len(goal_paths), 17)
+        self.assertEqual(len(goal_paths), 32)
         for goal_path in goal_paths:
             document = load_goal_contract(goal_path)
             for phase in ("train", "eval"):

@@ -1,0 +1,46 @@
+defaults:
+- mario-single-ppo@_global_
+- _self_
+# The Level1-3 actor-only SIL scientific settings, with a finite screen budget.
+# Replay is populated solely by this learner's completed training episodes.
+train:
+  timesteps: 16777216
+  checkpoint_freq: 0
+  checkpoint_steps: [921600, 1970176, 3018752, 5115904, 9310208]
+  checkpoint_candidates: null
+  policy_model:
+    share_features_extractor: false
+  backend:
+    id: gradlab.ppo
+    config:
+      precision: fp32
+      execution_profile: sb3-parity
+      device: cuda
+      bootstrap_truncations: false
+      gamma: 0.999
+      gae_lambda: 1.0
+      learning_rate: 1.0e-4
+      learning_rate_final: 1.0e-4
+      n_steps: 256
+      batch_size: 256
+      n_epochs: 4
+      normalize_advantage: true
+      clip_range: 0.1
+      target_kl: 0.01
+      ent_coef: 0.01
+      ent_coef_final: 0.01
+      ent_coef_schedule_timesteps: 16777216
+      vf_coef: 0.5
+      sil:
+        enabled: true
+        learning_rate: 1.0e-4
+        updates_per_rollout: 16
+        batch_size: 256
+        candidate_pool_size: 2048
+        recent_capacity_transitions: 65536
+        success_capacity_transitions: 65536
+        success_capacity_episodes: 32
+        success_sample_fraction: 0.5
+        replay_seed: 73411
+        control_signal: player_task
+        control_value: 8

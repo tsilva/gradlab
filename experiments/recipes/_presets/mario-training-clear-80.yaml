@@ -1,0 +1,24 @@
+defaults:
+- _self_
+# A single canonical target start supplies a mature rolling fraction. Keep the
+# inherited perfect-window diagnostic observational so clear_80 owns stopping.
+tracking:
+  backend: mlflow
+  delivery: online
+train:
+  checkpoint_eval_backend: none
+  checkpoint_monitoring:
+    enabled: false
+  early_stop:
+    conditions:
+      clear_100:
+        action: observe
+      clear_80:
+        metric: train/success/min
+        trigger: threshold
+        operator: '>='
+        progress_baseline: 0.0
+        threshold: 0.8
+        patience_steps: 0
+        outcome: success
+        action: stop

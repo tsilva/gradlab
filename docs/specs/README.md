@@ -7,6 +7,7 @@ Root [`SPECS.md`](../../SPECS.md) records essential product commitments, includi
 - [`queued-execution.md`](queued-execution.md) — current local-queue, training-container, and lifecycle-certification requirements
 - [`go-explore.md`](go-explore.md) — current Go-Explore checkpoint requirements
 - [`training-datasets.md`](training-datasets.md) — Checkpoint Monitoring, complete evaluation trajectories, durable R2/media delivery, and explicit dataset Publication
+- [`mario-recipe-campaign.md`](mario-recipe-campaign.md) — fresh per-level Mario recipe qualification at 80/100 genuine training clears, with Level8-4 deferred
 
 ## License
 

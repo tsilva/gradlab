@@ -195,6 +195,13 @@ statistics reduce eligible observations during warm-up. A per-start recent succe
 until that start fills its window; all-start recent success aggregates are withheld until every
 configured start fills its window. The window size lives once in config rather than being duplicated in every
 metric path. `train/episodes/count` and per-start successful episode counts accumulate since reducer initialization.
+For a single canonical Mario level start, `train/success/min` is that start's
+latest full-window clear fraction. The minimum reduces across starts, rather
+than across binary episode outcomes: `>= 0.8` with window size 100 means at least
+80 genuine target-origin clears in the latest 100 completed target episodes;
+`>= 1.0` means 100 consecutive clears. Archive-origin episodes and SIL replay
+updates do not enter this success window. `train/episodes/count` includes other
+origins, so it alone cannot establish maturity or the campaign denominator.
 Recent unsuccessful-event fractions retain one representation; counts can be reconstructed from the
 same sample using `round(fraction * min(episodes_count, window_size))`.
 

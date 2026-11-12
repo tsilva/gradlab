@@ -201,6 +201,16 @@ def resolve_huggingface_credential(
     environment: Mapping[str, str] | None = None,
 ) -> HuggingFaceCredential:
     values = os.environ if environment is None else environment
+    if "GRADLAB_HUGGINGFACE_TRANSPORT" in values:
+        from gradlab.huggingface_vault import MARKER, validate_session
+
+        try:
+            validate_session(values)
+        except Exception:
+            raise CredentialSecurityError(
+                "Hugging Face Vault session invalid; no credential fallback is permitted"
+            ) from None
+        return HuggingFaceCredential(MARKER, "agent-vault")
     environment_token = str(values.get("HF_TOKEN") or "").strip()
     if environment_token:
         return HuggingFaceCredential(environment_token, "environment")

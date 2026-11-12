@@ -13,12 +13,22 @@ Before changing a capability with an authoritative scoped specification, consult
 
 ## Agent Service Access
 
-Use `~/.config/infisical/run-agent-vault gradlab-huggingface -- COMMAND` for standalone Hugging Face
-commands. The launcher uses the dedicated `local-gradlab-huggingface` Agent Vault
-bundle and supplies only the `HF_TOKEN` placeholder and a scoped proxy session.
+For agent-operated standalone Hugging Face maintenance, use
+`python3 -I -S -B scripts/huggingface_vault.py check`, or its `hf` mode for the
+reviewed Hub file commands. It uses native Infisical 0.45.6, the dedicated
+`local-gradlab-huggingface` bundle, a public `HF_TOKEN` placeholder, a fresh
+scoped session and an OS sandbox. It validates protected source/runtime/SDK
+pins and rejects raw-token, endpoint, cache, scheduler and login overrides.
+Changed pins require trusted review and fake-first testing. The publisher's
+credential resolver fails closed when Vault mode is selected; it cannot fall
+back to a cached token. Do not substitute the older unsandboxed global launcher.
 The Gradlab Infisical `dev` folder `/agents/huggingface` remains the source for
 trusted administrative rotation. See [agent service access](docs/agents/workflows.md#agent-service-access)
 for checks and transfer limitations.
+This standalone route does not replace durable Checkpoint/Release Publication
+or migrate YouTube, R2, training, operator or Modal access. Do not start their
+ordinary credential launchers as a fallback. Publication content and operations
+still require their existing review and authorization.
 
 ## GPU Instances
 

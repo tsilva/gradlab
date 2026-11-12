@@ -1,0 +1,3 @@
+defaults:
+- ../_goal-common@_global_
+- _self_

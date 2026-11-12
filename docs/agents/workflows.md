@@ -51,15 +51,18 @@ intent again before finishing as required by the specification policy.
 
 ## Agent service access
 
-The local `gradlab-huggingface` launcher selects the dedicated Agent Vault bundle
+The opt-in `scripts/huggingface_vault.py` launcher selects the dedicated Agent Vault bundle
 `local-gradlab-huggingface` for `huggingface.co`. The child sees the exact
 `HF_TOKEN=hf_gradlab_proxy_placeholder`, a scoped proxy session, and process-local
 CA trust. The launcher pins the Infisical instance and proxy CA, clears the
-inherited environment, and requests a 30-minute session. It provides proxy
-routing without OS sandboxing.
+inherited environment, and requests a 30-minute session with Infisical 0.45.6.
+The child runs inside a macOS sandbox that denies direct upstream networking,
+private credential files, Keychain access, credential helpers and writes outside
+its disposable workspace. No global CLI, app or model default is changed.
 
 ```sh
-~/.config/infisical/run-agent-vault gradlab-huggingface -- hf auth whoami
+python3 -I -S -B scripts/huggingface_vault.py check
+python3 -I -S -B scripts/huggingface_vault.py hf auth whoami
 ```
 
 The original Gradlab Secret Manager `dev` folder `/agents/huggingface` holds the
@@ -69,7 +72,33 @@ credential scoped to the reviewed repository operations. Collection permissions
 apply across the account and require separate review. The publishing workflow
 must still honor its publication approvals.
 
-The current checks cover fake credential rejection, unmatched-host denial and
-real Hub CLI identity. Large-file, LFS and Xet transfers need separate validation
-because their clients may use other hosts and temporary credentials. The local
-operator and training credential launchers are separate.
+Trusted setup stores a metadata-only profile at
+`~/.config/infisical/huggingface-clients/gradlab.json`, with owner-only directory
+and file permissions. It pins the native source binding, exact repository files,
+runtime, SDK sources, public CA and local proxy. Ordinary commands cannot approve
+their own source changes or retrieve the service key. A changed binding or failed
+authentication stops without raw-key or cache fallback.
+
+The `check` mode runs the actual publication credential resolver and installed
+Hub SDK identity call. The `hf` mode invokes the installed CLI for `auth whoami`,
+`repo-files ls` and explicit small-file/folder `upload` operations. It returns only
+a sanitized success/failure summary. Upload needs an explicit repository and
+local payload; review the entire content and operation before use. Payloads must
+be inside the checkout; private working notes, credentials and repository internals
+are excluded. An explicitly prepared private payload may live under
+`.internal/huggingface-vault/payloads/`. The tool does not authorize uploading a
+Policy or Checkpoint outside the durable Publication workflow.
+
+Native fake tests exercised the actual SDK and CLI upload, verified the received
+bytes and substituted header, tested a rejected upstream that reflected the fake
+key, and proved direct-network/private-file/helper denial and no cached-token
+fallback. A real read-only identity check passed; no live upload was performed.
+Run the offline guard tests with `pytest tests/test_huggingface_vault.py
+tests/test_publication_credentials.py` in the locked development environment.
+
+Large-file LFS and Xet transfers remain unsupported and fail before their upload
+or token-exchange requests. They need separate compatibility work; do not enable
+direct networking or raw credentials. The older global launcher remains installed
+without OS sandboxing and is not an agent fallback. Complete durable releases
+also require separately reviewed YouTube and R2 routes. Operator, training and
+Modal credential launchers remain separate and must not be used as a shortcut.
