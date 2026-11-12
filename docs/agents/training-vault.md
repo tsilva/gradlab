@@ -54,8 +54,10 @@ Each launch or retry creates a separate seven-hour worker session. A unique
 per-Attempt reference transfers only that capability through dstack's encrypted
 secret store before immutable manifest admission. Manifests contain its ID,
 expiry, proxy address and reference, never the token. `resume-submit` reuses
-the admitted reference; retry creates a fresh session. A failed submission
-retains its admitted capability for recovery until expiry.
+the admitted reference; retry creates a fresh session. Once child startup is
+attempted, a failed or interrupted submission retains its finite worker
+capability for recovery: a lost acknowledgement must not revoke an admitted
+worker's access. Failures before child startup revoke the unused session.
 
 The supervisor revokes its session after finalization, including failures.
 Native proxy refresh can briefly retain a revoked session; the dedicated proxy

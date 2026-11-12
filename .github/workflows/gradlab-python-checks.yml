@@ -79,6 +79,7 @@ jobs:
           tests/test_checkpoint_acceptance.py
           tests/test_run_supervisor.py
           tests/test_training_vault.py
+          tests/test_training_vault_launcher.py
           tests/test_r2_signing_gateway.py
           tests/test_r2_store_config.py
           tests/test_dstack_backend.py

@@ -195,7 +195,7 @@ def main(args):
     p = profile()
     owned_forward = None
     worker = None
-    bound = False
+    child_start_attempted = False
     try:
         owned_forward = forward(p)
         from urllib.parse import urlsplit
@@ -245,6 +245,10 @@ def main(args):
         clean = {"HOME": str(Path.home()), "PATH": str(ROOT / ".venv/bin") + ":" + str(Path.home()/".local/bin") + ":/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin"}
         if worker is not None:
             clean[WORKER_CAPABILITY] = env[WORKER_CAPABILITY]
+        # Admission can succeed even when its acknowledgement is lost. Once
+        # starting the child is attempted, retain the finite worker session;
+        # the supervisor or expiry owns its cleanup, not this client's exit.
+        child_start_attempted = True
         process = subprocess.Popen(command, cwd=ROOT, env=clean, stdin=subprocess.DEVNULL,
                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         for line in process.stdout:
@@ -255,7 +259,6 @@ def main(args):
                 except ValueError:
                     row = {}
                 if row.get("event") == "vault_session_bound":
-                    bound = True
                     continue
             # Provider errors may include a proxy URL. Never expose capabilities.
             safe = re.sub(r"https?://[^\s/]+@", "http://<vault-session>@", line)
@@ -266,7 +269,7 @@ def main(args):
             print("Training Vault command failed; provider details withheld", file=sys.stderr)
             raise SystemExit(process.returncode)
     finally:
-        if worker is not None and not bound:
+        if worker is not None and not child_start_attempted:
             native(p, ["agent-vault", "sessions", "revoke", worker["id"]])
         if owned_forward is not None:
             subprocess.run(["ssh", "-O", "cancel", "-L", owned_forward, p["ssh_host"]],
