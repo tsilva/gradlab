@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import gzip
 import hashlib
 import json
 import os
@@ -30,6 +31,8 @@ SOURCE_PROJECT = "8e69bfc0-24e8-4234-9ece-78e425ac4a8f"
 CLI = Path.home() / ".config/infisical/cli/0.45.6/infisical"
 CLI_SHA256 = "4f98044ecc959c7f71ce608c23092163c68a67c0aa8720dc46c552702207af6b"
 LINUX_SHA256 = "df0eb7cfd3ccaa3f7ec30b31e0ba0931ef8e876bc63220ff74810653e0027fcf"
+LINUX_ARCHIVE_SHA256 = "b427391e76113e351fa0509d6493cb400577dec26b28afb462c2c2f9c5a37d4d"
+LINUX_ARCHIVE_URL = "https://github.com/Infisical/cli/releases/download/v0.45.6/cli_0.45.6_linux_amd64.tar.gz"
 EVIDENCE = ROOT / ".internal/evidence/training-vault-migration-20261112"
 PRIVATE = Path.home() / ".config/gradlab/agent-vault"
 OPERATOR = Path.home() / ".config/gradlab/operator.toml"
@@ -229,6 +232,8 @@ def provision():
             {"type": "passthrough"}, worker=False)
     service("gradlab-training-runtime-artifact", "*.blob.core.windows.net", ["GET"], ["/"],
             {"type": "passthrough"}, worker=False)
+    service("gradlab-training-github-git", "github.com", ["GET", "POST"], ["/tsilva/gradlab.git"],
+            {"type": "passthrough"}, worker=False)
     response = admin.api("POST", "proxies", {"projectId": PROJECT, "name": PROXY_NAME,
                                               "trafficPolicy": "service-hosts", "allowedHosts": None, "pollInterval": 10})
     proxy = response["proxy"]
@@ -267,20 +272,37 @@ def deploy(catalog, operator):
     broker_profile = {"version": 1, "files": {k: hashlib.sha256(v).hexdigest() for k, v in files.items()},
                       "proxy_id": catalog["proxy_id"], "token_sha256": catalog["token_sha256"]}
     files["profile.json"] = (json.dumps(broker_profile, indent=2) + "\n").encode()
-    installer = '''import base64,json,os,pathlib,stat,sys
+    installer = '''import base64,gzip,hashlib,io,json,os,pathlib,sys,tarfile,urllib.request
 p=pathlib.Path("/opt/gradlab-training-vault")
 if os.geteuid()!=0 or p.exists(): raise SystemExit(1)
 packet=json.load(sys.stdin)
-if set(packet)!={"infisical","gateway.py","broker.py","upstream-ca.pem","profile.json"}: raise SystemExit(1)
+if set(packet)!={"gateway.py","broker.py","upstream-ca.pem","profile.json","cli_url","archive_sha256","binary_sha256"}: raise SystemExit(1)
+url=packet.pop("cli_url"); archive_sha=packet.pop("archive_sha256"); binary_sha=packet.pop("binary_sha256")
+if url!="https://github.com/Infisical/cli/releases/download/v0.45.6/cli_0.45.6_linux_amd64.tar.gz": raise SystemExit(1)
+with urllib.request.urlopen(url,timeout=120) as r: archive=r.read(100*1024*1024)
+if hashlib.sha256(archive).hexdigest()!=archive_sha: raise SystemExit(1)
+with tarfile.open(fileobj=io.BytesIO(archive),mode="r:gz") as t:
+ member=t.getmember("infisical")
+ if not member.isfile() or member.size>300*1024*1024: raise SystemExit(1)
+ binary=t.extractfile(member).read()
+if hashlib.sha256(binary).hexdigest()!=binary_sha: raise SystemExit(1)
 p.mkdir(mode=0o700)
+fd=os.open(p/"infisical",os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o700)
+with os.fdopen(fd,"wb") as h: h.write(binary)
 for name,data in packet.items():
  f=p/name
- fd=os.open(f,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o700 if name=="infisical" else 0o600)
- with os.fdopen(fd,"wb") as h: h.write(base64.b64decode(data,validate=True))
+ fd=os.open(f,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+ with os.fdopen(fd,"wb") as h: h.write(gzip.decompress(base64.b64decode(data,validate=True)))
+profile=json.loads((p/"profile.json").read_text())
+if any(hashlib.sha256((p/n).read_bytes()).hexdigest()!=v for n,v in profile["files"].items()): raise SystemExit(1)
 print("broker_runtime_installed")
 '''
     import shlex
-    packet = json.dumps({name: base64.b64encode(data).decode() for name, data in files.items()}).encode()
+    payload = {name: base64.b64encode(gzip.compress(data, compresslevel=1)).decode()
+               for name, data in files.items() if name != "infisical"}
+    payload.update({"cli_url": LINUX_ARCHIVE_URL, "archive_sha256": LINUX_ARCHIVE_SHA256,
+                    "binary_sha256": LINUX_SHA256})
+    packet = json.dumps(payload).encode()
     ssh(["sudo", "-n", "python3", "-c", shlex.quote(installer)], packet=packet, timeout=180)
     catalog["broker_source_pins"] = broker_profile["files"]
     (PRIVATE / "catalog.json").write_text(json.dumps(catalog, indent=2) + "\n")

@@ -151,6 +151,22 @@ def check_storage():
                       "hashes_verified": True, "probe_objects_removed": True}))
 
 
+def inventory():
+    from gradlab.dstack_backend import DstackBackend
+    from gradlab.operator_credentials import resolve_dstack_token
+    from gradlab.operator_environment import load_repository_operator_environment
+
+    report = load_repository_operator_environment(ROOT)
+    fleet = report.dstack.fleet()
+    coordinator = report.dstack.coordinator(fleet.coordinator_id)
+    token, _ = resolve_dstack_token(coordinator)
+    backend = DstackBackend(project=coordinator.project, server_url=coordinator.server_url, token=token)
+    result = backend._command(["offer", "--project", coordinator.project, "--json", "--fleet", fleet.name,
+                               "--reuse", "--cpu", "12..", "--memory", "40GB..", "--gpu", "1", "--disk", "50GB.."])
+    offers = json.loads(result.stdout)["offers"]
+    print(json.dumps({"fleet": fleet.name, "offers": offers}))
+
+
 def child(args):
     site = ROOT / ".venv/lib/python3.14/site-packages"
     sys.path[:0] = [str(ROOT / "src"), str(site)]
@@ -160,6 +176,8 @@ def child(args):
     validate_session()
     if args == ["check"]:
         check_storage()
+    elif args == ["inventory"]:
+        inventory()
     else:
         import runpy
         sys.argv = ["gradlab", *args]
@@ -170,7 +188,7 @@ def main(args):
     if args[:1] == ["--child"]:
         child(args[1:])
         return
-    if args != ["check"] and (len(args) < 2 or args[0] != "experiment" or args[1] not in {
+    if args not in (["check"], ["inventory"]) and (len(args) < 2 or args[0] != "experiment" or args[1] not in {
         "operator-preflight", "launch", "status", "follow", "logs", "cancel", "retry", "resume-submit",
     }):
         raise LaunchError("Use check or a reviewed experiment lifecycle operation")
@@ -189,7 +207,14 @@ def main(args):
             "GRADLAB_VAULT_CA_SHA256": p["ca_sha256"],
             "GRADLAB_VAULT_CA_B64": base64.b64encode(ca_pem).decode(),
             "SSL_CERT_FILE": p["ca_file"], "REQUESTS_CA_BUNDLE": p["ca_file"], "CURL_CA_BUNDLE": p["ca_file"],
+            "GIT_SSL_CAINFO": p["ca_file"],
             "GRADLAB_VAULT_COORDINATOR_ID": p["coordinator_id"],
+            # Keep Git's approved HTTPS/gh authentication command-scoped.
+            # The stored SSH remote and global Git configuration are unchanged.
+            "GIT_CONFIG_COUNT": "3",
+            "GIT_CONFIG_KEY_0": "url.https://github.com/.insteadOf", "GIT_CONFIG_VALUE_0": "git@github.com:",
+            "GIT_CONFIG_KEY_1": "credential.helper", "GIT_CONFIG_VALUE_1": "",
+            "GIT_CONFIG_KEY_2": "credential.https://github.com.helper", "GIT_CONFIG_VALUE_2": "!gh auth git-credential",
         }
         sys.path.insert(0, str(ROOT / "src"))
         from gradlab.training_vault import MARKERS, WORKER_CAPABILITY, WORKER_CONTEXT

@@ -35,6 +35,20 @@ class FakeServices(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
+    def do_GET(self):
+        if self.path.startswith("/repo.git/info/refs"):
+            body = ("a" * 40 + "\trefs/heads/main\n").encode()
+        elif self.path == "/repo.git/HEAD":
+            body = b"ref: refs/heads/main\n"
+        else:
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_POST(self):
         self.rfile.read(int(self.headers.get("Content-Length", 0)))
         authorized = self.headers.get("Authorization") == "Bearer " + FAKE_DSTACK
@@ -158,6 +172,10 @@ def child():
     PHASE = "mlflow-actual-client"
     from mlflow.tracking import MlflowClient
     assert not MlflowClient(tracking_uri="http://127.0.0.1:19405").search_experiments()
+    PHASE = "git-actual-client"
+    git = subprocess.run(["git", "-c", "credential.helper=", "ls-remote", "http://127.0.0.1:19406/repo.git"],
+                         capture_output=True, text=True, timeout=20)
+    assert git.returncode == 0 and "refs/heads/main" in git.stdout
     PHASE = "error-redaction"
     bucket = R2Bucket(BucketConfig.from_env("GRADLAB_MODELS_R2", public=True))
     try:
@@ -235,7 +253,7 @@ def main():
             thread.start()
             servers.append(server)
             threads.append(thread)
-        for port in (19404, 19405):
+        for port in (19404, 19405, 19406):
             server = ThreadingHTTPServer(("127.0.0.1", port), FakeServices)
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
@@ -258,10 +276,11 @@ def main():
             ("fake-training-dstack", ["/api/runs"], {"type": "bearer", "value": FAKE_DSTACK}, "127.0.0.1:19404"),
             ("fake-training-mlflow", ["/api/2.0/mlflow"], {"type": "passthrough"}, "127.0.0.1:19405"),
             ("fake-training-revoke", ["/api/v1/agent-vault/session/revoke"], {"type": "passthrough"}, "app.infisical.com"),
+            ("fake-training-git", ["/repo.git"], {"type": "passthrough"}, "127.0.0.1:19406"),
         ):
             PHASE = "create-" + name
             service = admin.create_service([bundle["id"]] if name.endswith("dstack") else [bundle["id"], worker_bundle["id"]], {
-                "type": "http", "name": name, "hostPattern": host, "allowedMethods": ["POST"],
+                "type": "http", "name": name, "hostPattern": host, "allowedMethods": ["GET", "POST"] if name.endswith("git") else ["POST"],
                 "allowedPathPrefixes": paths, "credential": credential,
             })
             services.append(service["id"])
@@ -321,6 +340,7 @@ def main():
                  "bucket_path_and_host_denial": True, "reflected_upstream_key_redacted": True,
                  "source_credentials_retrieved": False, "fake_upstream_requests": FakeUpstream.requests,
                  "dstack_native_bearer_actual_cli": True, "mlflow_actual_client": True,
+                 "git_actual_client": True,
                  "supervisor_session_self_revoke": True,
                  "worker_survives_creator_exit": True, "worker_cannot_reach_dstack": True,
                  "revoked_capability_denied": True,

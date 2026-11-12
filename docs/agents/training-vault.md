@@ -7,6 +7,7 @@ Only the trusted proxy and signing gateway handle the original service keys.
 
 ```sh
 python3 -I -S -B scripts/training_vault.py check
+python3 -I -S -B scripts/training_vault.py inventory
 python3 -I -S -B scripts/training_vault.py experiment operator-preflight --recipe-file RECIPE --json
 python3 -I -S -B scripts/training_vault.py experiment launch --recipe-file RECIPE --seed SEED --compute local --max-duration DURATION --existing-runtime-only --json
 python3 -I -S -B scripts/training_vault.py experiment follow --run RUN_ID
@@ -17,6 +18,8 @@ The launcher also supports `status`, `logs`, `cancel`, `retry` and
 rules. The check writes synthetic objects to each original bucket, verifies
 hashes, metadata, list visibility and conditional mutations, and deletes its
 objects. It does not admit training. Do not print proxy URLs or presigned URLs.
+`inventory` reads coordinator offers for the configured fleet at the reviewed
+12-CPU, 40-GB, one-GPU, 50-GB resource floor; it never allocates an instance.
 
 ## Bindings
 
