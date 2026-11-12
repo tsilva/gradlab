@@ -124,7 +124,7 @@ jobs:
         run: uv run ruff check .
 
       - name: Run Python tests
-        run: uv run pytest -q --maxfail=1
+        run: uv run pytest -q ${{ github.event_name == 'push' && '--maxfail=1' || '' }}
 
       - name: Validate configuration
         run: uv run gradlab validate
