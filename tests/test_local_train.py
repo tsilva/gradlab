@@ -112,7 +112,9 @@ def test_turbo_demo_uses_the_standard_mario_ppo_contract() -> None:
 
     assert config["timesteps"] == 98_304
     assert config["n_envs"] == 16
-    assert backend["id"] == "sb3.ppo"
+    assert backend["id"] == "gradlab.ppo"
+    assert backend["config"]["precision"] == "fp32"
+    assert backend["config"]["execution_profile"] == "sb3-parity"
     assert backend["config"]["batch_size"] == 512
     assert config["checkpoint_eval_backend"] == "none"
     assert config["early_stop"]["conditions"]["clear_100"]["outcome"] == "success"
