@@ -40,34 +40,51 @@ def default_capture_root() -> Path:
     return default_runs_dir() / "player_publications" / "captures"
 
 
-def player_source_provenance(repo_root: Path | str) -> dict[str, Any]:
+def player_source_provenance(repo_root: Path | str | None = None) -> dict[str, Any]:
+    package_root = Path(__file__).resolve().parent
+    if repo_root is None:
+        candidate = package_root.parents[1]
+        repo_root = (
+            candidate if candidate / "src" / "gradlab" == package_root else package_root
+        )
     root = Path(repo_root).resolve()
+    source_root = root / "src" / "gradlab"
+    checkout_layout = source_root.is_dir()
+    if not checkout_layout:
+        if root != package_root or not (package_root / "__init__.py").is_file():
+            raise ValueError("player source tree identity is unavailable")
+        source_root = package_root
+
     commit = ""
     dirty = False
-    try:
-        commit_result = subprocess.run(
-            ["git", "rev-parse", "HEAD"],
-            cwd=root,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        commit = commit_result.stdout.strip().lower()
-        dirty_result = subprocess.run(
-            ["git", "status", "--porcelain", "--untracked-files=no", "--", "src/gradlab"],
-            cwd=root,
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        dirty = bool(dirty_result.stdout.strip())
-    except (FileNotFoundError, subprocess.CalledProcessError):
-        pass
+    if checkout_layout:
+        try:
+            commit_result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            commit = commit_result.stdout.strip().lower()
+            dirty_result = subprocess.run(
+                ["git", "status", "--porcelain", "--untracked-files=no", "--", "src/gradlab"],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            dirty = bool(dirty_result.stdout.strip())
+        except (FileNotFoundError, subprocess.CalledProcessError):
+            pass
     digest = hashlib.sha256()
-    source_root = root / "src" / "gradlab"
     if source_root.is_dir():
         for path in sorted(source_root.rglob("*")):
-            if not path.is_file() or "__pycache__" in path.parts:
+            if (
+                not path.is_file()
+                or "__pycache__" in path.parts
+                or path.suffix in {".pyc", ".pyo"}
+            ):
                 continue
             relative = path.relative_to(root).as_posix().encode("utf-8")
             digest.update(len(relative).to_bytes(4, "big"))

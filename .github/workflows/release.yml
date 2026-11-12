@@ -63,6 +63,16 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
+      - name: Verify reviewed release notes
+        if: github.event_name == 'push'
+        env:
+          RELEASE_VERSION: ${{ github.ref_name }}
+          RELEASE_SOURCE: ${{ steps.source.outputs.sha }}
+        run: >-
+          python3 scripts/release_payload.py extract
+          --tag "$RELEASE_VERSION" --version "${RELEASE_VERSION#v}"
+          --source "$RELEASE_SOURCE" --output "$RUNNER_TEMP/release-notes.md"
+
       - name: Set up uv
         uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
 
@@ -171,6 +181,22 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Checkout release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ needs.build.outputs.source-sha }}
+
+      - name: Extract reviewed release notes
+        env:
+          RELEASE_VERSION: ${{ needs.build.outputs.version }}
+          RELEASE_SOURCE: ${{ needs.build.outputs.source-sha }}
+        run: >-
+          python3 scripts/release_payload.py extract
+          --tag "$GITHUB_REF_NAME" --version "$RELEASE_VERSION"
+          --source "$RELEASE_SOURCE" --output "$RUNNER_TEMP/release-notes.md"
+
       - name: Download audited distributions
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -185,5 +211,5 @@ jobs:
           dist/*
           --repo "${GITHUB_REPOSITORY}"
           --verify-tag
-          --generate-notes
-          --title "${GITHUB_REF_NAME}"
+          --notes-file "$RUNNER_TEMP/release-notes.md"
+          --title "$(cat "$RUNNER_TEMP/release-notes.md.title")"

@@ -111,6 +111,50 @@ class ReleaseOperatorTests(unittest.TestCase):
             launcher.main()
         validate.assert_called_once_with()
 
+    def test_publication_requires_explicit_release_notes(self):
+        args = launcher.parse_args([])
+        with patch.object(launcher, 'parse_args', return_value=args), \
+             patch.object(launcher, 'ensure_clean') as clean:
+            with self.assertRaisesRegex(SystemExit, '--notes-file'):
+                launcher.main()
+        clean.assert_not_called()
+
+    def test_prepared_publication_does_not_prepare_another_version(self):
+        args = launcher.parse_args(['--publish-prepared', 'v1.2.3'])
+        with patch.object(launcher, 'parse_args', return_value=args), \
+             patch.object(launcher, 'publish_prepared') as publish, \
+             patch.object(launcher, 'prepare_version') as prepare:
+            launcher.main()
+        publish.assert_called_once_with('v1.2.3')
+        prepare.assert_not_called()
+
+    def test_prepared_publication_rejects_version_mutation_flags(self):
+        for flags in (['--to', '1.2.3'], ['--dry-run-push'], ['--notes-file', 'notes.md']):
+            with self.subTest(flags=flags), self.assertRaises(SystemExit):
+                launcher.parse_args(['--publish-prepared', 'v1.2.3', *flags])
+
+    def test_prepared_publication_stops_if_remote_main_advanced(self):
+        with patch.object(launcher, 'ensure_clean'), \
+             patch.object(launcher, 'current_version', return_value='1.2.3'), \
+             patch.object(launcher, 'upstream_ref', return_value='origin/main'), \
+             patch.object(launcher, 'require_gradlab_remote'), \
+             patch.object(launcher, 'capture', side_effect=['main', 'a' * 40, 'a' * 40, '1']), \
+             patch.object(launcher, 'run'), patch.object(launcher, 'push_release') as push:
+            with self.assertRaisesRegex(SystemExit, 'remote main has advanced'):
+                launcher.publish_prepared('v1.2.3')
+        push.assert_not_called()
+
+    def test_release_network_operations_use_command_scoped_https_authentication(self):
+        with patch.object(launcher.subprocess, 'run') as run:
+            launcher.run(['git', 'push', '--atomic', 'origin', 'HEAD:main', 'v1.2.3'])
+        command = run.call_args.args[0]
+        self.assertIn('credential.helper=!gh auth git-credential', command)
+        self.assertIn(
+            'url.https://github.com/tsilva/gradlab.git.pushInsteadOf=git@github.com:tsilva/gradlab.git',
+            command,
+        )
+        self.assertEqual(command[-5:], ['push', '--atomic', 'origin', 'HEAD:main', 'v1.2.3'])
+
     def test_atomic_push_keeps_branch_and_tag_together(self):
         with patch.object(launcher, 'run') as run:
             launcher.push_release('upstream', 'main', 'v1.2.3', dry_run=False)

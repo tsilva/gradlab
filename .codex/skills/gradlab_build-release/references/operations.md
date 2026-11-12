@@ -25,7 +25,7 @@ publishes with PyPI trusted publishing, and creates the GitHub Release.
 3. Launch the repo-owned release command:
 
    ```bash
-   python3 scripts/release.py
+   python3 scripts/release.py --notes-file /absolute/path/to/reviewed-notes.md
    ```
 
    With no version preference, an untagged unused project version is released;
@@ -33,9 +33,9 @@ publishes with PyPI trusted publishing, and creates the GitHub Release.
    explicitly requested version or bump, use exactly one of:
 
    ```bash
-   python3 scripts/release.py --to X.Y.Z
-   python3 scripts/release.py --part minor
-   python3 scripts/release.py --part major
+   python3 scripts/release.py --to X.Y.Z --notes-file /absolute/path/to/reviewed-notes.md
+   python3 scripts/release.py --part minor --notes-file /absolute/path/to/reviewed-notes.md
+   python3 scripts/release.py --part major --notes-file /absolute/path/to/reviewed-notes.md
    ```
 
    The launcher updates `pyproject.toml`, `src/gradlab/__init__.py`, `uv.lock`,
@@ -88,3 +88,9 @@ uv run python scripts/release_build.py build --auto-bump
 This path may advance a used patch version and update the four release surfaces,
 but it never commits, tags, pushes, or publishes. Report the selected version,
 changed sources, artifacts, SHA-256 digests, and every completed gate.
+
+Supply the complete approved GitHub release body through `--notes-file`; the
+launcher binds it to the annotated tag and source SHA, and Actions publishes
+those exact notes. To prepare locally for final review, add `--dry-run-push`.
+After approval, `python3 scripts/release.py --publish-prepared vX.Y.Z` verifies
+and pushes that prepared release without creating a different version.

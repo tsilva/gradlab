@@ -25,7 +25,7 @@ If unavailable, report that dependency. Read the requested path in
 For publication:
 
 ```bash
-python3 scripts/release.py
+python3 scripts/release.py --notes-file /absolute/path/to/reviewed-notes.md
 ```
 
 Use `--to X.Y.Z` or `--part minor|major` only when requested. The launcher owns
@@ -69,3 +69,9 @@ use `$private-skills_push` for default-branch README tagline reconciliation; rep
 repository-description synchronization separately. Local candidates report
 version, changed sources, artifacts/hashes, and completed gates. Actions validation
 reports the source SHA, run URL, artifact checks, and that nothing was published.
+
+Supply the complete approved GitHub release body through `--notes-file`; the
+launcher binds it to the annotated tag and source SHA, and Actions publishes
+those exact notes. To prepare locally for final review, add `--dry-run-push`.
+After approval, `python3 scripts/release.py --publish-prepared vX.Y.Z` verifies
+and pushes that prepared release without creating a different version.

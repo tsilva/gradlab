@@ -667,7 +667,7 @@ class PlaybackLoader:
                     "revision": str(candidate.source.bundle.revision or ""),
                 },
                 "execution": {
-                    "source": player_source_provenance(Path(__file__).resolve().parents[2]),
+                    "source": player_source_provenance(),
                     "qualified_environment_id": (
                         f"{candidate.config.env_provider}:{candidate.config.game}"
                     ),

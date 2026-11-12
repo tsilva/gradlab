@@ -7,12 +7,15 @@ import argparse
 import os
 import subprocess
 import sys
+import tempfile
 import tomllib
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 RELEASE_HELPER = REPO_ROOT / "scripts" / "release_build.py"
+RELEASE_NOTES = REPO_ROOT / "scripts" / "release_notes.py"
+RELEASE_PAYLOAD = REPO_ROOT / "scripts" / "release_payload.py"
 PYTHON = Path(sys.executable)
 RELEASE_FILES = (
     REPO_ROOT / "pyproject.toml",
@@ -24,6 +27,15 @@ EXPECTED_REPOSITORY = "tsilva/gradlab"
 
 
 def run(args: list[str]) -> None:
+    if args[:2] in (["git", "fetch"], ["git", "push"]):
+        destination = "https://github.com/tsilva/gradlab.git"
+        args = [
+            "git", "-c", "credential.helper=", "-c",
+            "credential.helper=!gh auth git-credential", "-c",
+            f"url.{destination}.insteadOf=git@github.com:tsilva/gradlab.git", "-c",
+            f"url.{destination}.pushInsteadOf=git@github.com:tsilva/gradlab.git",
+            *args[1:],
+        ]
     print("+", " ".join(args), flush=True)
     env = None
     if Path(args[0]).name == "uv":
@@ -151,14 +163,21 @@ def validate_remote() -> None:
     print("Monitor the workflow_dispatch run on main and verify its checked-out source SHA.")
 
 
-def create_commit_and_tag(version: str) -> str:
+def create_commit_and_tag(version: str, notes_file: Path) -> str:
     tag = f"v{version}"
     if tag_exists(tag):
         raise SystemExit(f"release tag already exists: {tag}")
     run(["git", "add", *(str(path.relative_to(REPO_ROOT)) for path in RELEASE_FILES)])
     if subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=REPO_ROOT).returncode != 0:
         run(["git", "commit", "-m", f"Release {tag}"])
-    run(["git", "tag", "-a", tag, "-m", f"GradLab {tag}"])
+    with tempfile.TemporaryDirectory(prefix="gradlab-release-notes-") as temporary:
+        message = Path(temporary) / "tag-message.txt"
+        run([
+            str(PYTHON), str(RELEASE_PAYLOAD), "prepare", "--version", version,
+            "--source", capture(["git", "rev-parse", "HEAD"]),
+            "--notes-file", str(notes_file), "--output", str(message),
+        ])
+        run(["git", "tag", "-a", tag, "-F", str(message)])
     return tag
 
 
@@ -170,6 +189,35 @@ def push_release(remote: str, branch: str, tag: str, *, dry_run: bool) -> None:
     run(command)
 
 
+def publish_prepared(tag: str) -> None:
+    """Push an already reviewed local release without preparing another version."""
+    ensure_clean()
+    version = current_version()
+    if tag != f"v{version}":
+        raise SystemExit("prepared tag must match the current project version")
+    upstream = upstream_ref()
+    remote, branch = upstream.split("/", 1)
+    require_gradlab_remote(remote)
+    if branch != "main" or capture(["git", "branch", "--show-current"]) != "main":
+        raise SystemExit("publication requires main tracking the remote main branch")
+    run(["git", "fetch", "--prune", "--tags", remote])
+    source = capture(["git", "rev-parse", "HEAD"])
+    if capture(["git", "rev-parse", f"refs/tags/{tag}^{{commit}}"]) != source:
+        raise SystemExit("prepared release tag must point to HEAD")
+    if int(capture(["git", "rev-list", "--count", f"HEAD..{upstream}"])):
+        raise SystemExit("remote main has advanced; reconcile before publishing")
+    with tempfile.TemporaryDirectory(prefix="gradlab-reviewed-release-") as temporary:
+        run([
+            str(PYTHON), str(RELEASE_PAYLOAD), "extract", "--version", version,
+            "--source", source, "--tag", tag,
+            "--output", str(Path(temporary) / "notes.md"),
+        ])
+    run_release_gates(version)
+    helper("check-pypi", "--version", version)
+    push_release(remote, branch, tag, dry_run=False)
+    print(f"Pushed reviewed {branch} and {tag} at {source} to {remote}.")
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter
@@ -178,10 +226,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     version.add_argument("--to", help="exact release version, for example 0.1.2")
     version.add_argument("--part", choices=("patch", "minor", "major"))
     parser.add_argument("--dry-run-push", action="store_true")
+    parser.add_argument("--notes-file", type=Path, help="complete reviewed GitHub release body")
+    parser.add_argument("--publish-prepared", metavar="TAG", help="publish the reviewed local release tag")
     parser.add_argument("--validate", action="store_true", help="build remote main in Actions only")
     args = parser.parse_args(argv)
-    if args.validate and (args.to or args.part or args.dry_run_push):
+    if args.validate and (args.to or args.part or args.dry_run_push or args.notes_file or args.publish_prepared):
         parser.error("--validate cannot be combined with version preparation or --dry-run-push")
+    if args.publish_prepared and (args.to or args.part or args.dry_run_push or args.notes_file):
+        parser.error("--publish-prepared cannot be combined with release preparation")
     return args
 
 
@@ -190,6 +242,12 @@ def main() -> None:
     if args.validate:
         validate_remote()
         return
+    if args.publish_prepared:
+        publish_prepared(args.publish_prepared)
+        return
+    if args.notes_file is None:
+        raise SystemExit("publication preparation requires --notes-file with reviewed release notes")
+    notes_file = args.notes_file.expanduser().resolve(strict=True)
     ensure_clean()
     remote, branch = ensure_synced()
     snapshots = {path: path.read_bytes() for path in RELEASE_FILES}
@@ -199,7 +257,11 @@ def main() -> None:
         if tag_exists(tag):
             raise SystemExit(f"release tag already exists: {tag}")
         run_release_gates(version)
-        tag = create_commit_and_tag(version)
+        run([
+            str(PYTHON), str(RELEASE_NOTES), "--version", version,
+            "--notes-file", str(notes_file),
+        ])
+        tag = create_commit_and_tag(version, notes_file)
     except BaseException:
         for path, contents in snapshots.items():
             path.write_bytes(contents)
