@@ -14,7 +14,7 @@ with portable policies and evidence-backed results.
 Try the bundled ROM-free smoke recipe without cloning, credentials, or a ROM:
 
 ```bash
-uvx gradlab@0.2.3 train gradlab__bandit/ppo
+uvx gradlab@0.2.4 train gradlab__bandit/ppo
 ```
 
 The run writes a directly playable policy below `~/.config/gradlab/runs/`.
