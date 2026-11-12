@@ -870,6 +870,9 @@ class RunSupervisor:
         self._lease_heartbeat()
         self._archive_pre_spawn_learner_state()
         environment = os.environ.copy()
+        from gradlab.training_vault import offline_learner_environment
+
+        environment = offline_learner_environment(environment)
         for name in tuple(environment):
             if (
                 name in {"WANDB_API_KEY", "MODAL_TOKEN_ID", "MODAL_TOKEN_SECRET"}
@@ -3000,9 +3003,25 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     from gradlab.mlflow_tls import configure_private_mlflow_ca
+    from gradlab.training_vault import activate_public_ca, revoke_own_session, selected, validate_session
 
-    configure_private_mlflow_ca()
-    return RunSupervisor(manifest_uri=args.manifest_uri).run()
+    vault_ca = activate_public_ca()
+    mlflow_ca = None
+    try:
+        if selected():
+            validate_session()
+        mlflow_ca = configure_private_mlflow_ca()
+        return RunSupervisor(manifest_uri=args.manifest_uri).run()
+    finally:
+        try:
+            if selected():
+                revoke_own_session()
+        finally:
+            if mlflow_ca is not None:
+                mlflow_ca.unlink(missing_ok=True)
+            if vault_ca is not None:
+                vault_ca.unlink(missing_ok=True)
+                vault_ca.parent.rmdir()
 
 
 if __name__ == "__main__":

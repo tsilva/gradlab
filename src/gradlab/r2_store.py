@@ -48,6 +48,7 @@ class BucketConfig:
     access_key_id: str = ""
     secret_access_key: str = ""
     public_base_url: str = ""
+    transport: str = "s3"
 
     @classmethod
     def from_env(
@@ -59,6 +60,11 @@ class BucketConfig:
     ) -> BucketConfig:
         values = os.environ if environment is None else environment
         normalized = prefix.rstrip("_").upper()
+        from gradlab.training_vault import gateway_endpoint, selected
+
+        vault_mode = selected(values)
+        if vault_mode:
+            gateway_endpoint(normalized.removeprefix("GRADLAB_").removesuffix("_R2"), values)
         config = cls(
             uri=_clean_env(values.get(f"{normalized}_URI")),
             endpoint_url=_clean_env(values.get(f"{normalized}_ENDPOINT_URL")),
@@ -70,11 +76,14 @@ class BucketConfig:
                 if public
                 else ""
             ),
+            transport="agent-vault" if vault_mode else "s3",
         )
         config.validate(public=public, label=normalized)
         return config
 
     def validate(self, *, public: bool = False, label: str = "R2") -> None:
+        if self.transport not in {"s3", "agent-vault"}:
+            raise ValueError("Unsupported R2 transport")
         if not self.uri:
             raise ValueError(f"{label}_URI is not set")
         values = {
@@ -203,20 +212,29 @@ class R2Bucket:
             import boto3
             from botocore.config import Config
 
-            self._client = boto3.client(
+            from botocore import UNSIGNED
+            from gradlab.training_vault import SafeS3Client, validate_session
+
+            vault_mode = self.config.transport == "agent-vault"
+            proxy = validate_session() if vault_mode else None
+            client = boto3.client(
                 "s3",
                 endpoint_url=self.config.endpoint_url,
                 region_name=self.config.region,
                 aws_access_key_id=self.config.access_key_id,
                 aws_secret_access_key=self.config.secret_access_key,
                 config=Config(
-                    signature_version="s3v4",
+                    signature_version=UNSIGNED if vault_mode else "s3v4",
                     s3={"addressing_style": "path"},
                     connect_timeout=5,
                     read_timeout=30,
                     retries={"max_attempts": 2},
+                    **({"proxies": {"http": proxy, "https": proxy},
+                        "request_checksum_calculation": "when_required",
+                        "response_checksum_validation": "when_required"} if vault_mode else {}),
                 ),
             )
+            self._client = SafeS3Client(client) if vault_mode else client
         return self._client
 
     def put_bytes(

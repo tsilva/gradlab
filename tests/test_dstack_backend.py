@@ -93,6 +93,16 @@ class DstackBackendTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must use secret_env"):
             self.task(plain_env={"WANDB_API_KEY": "inline-value"}).validate()
 
+    def test_worker_capability_uses_an_individual_secret_reference(self) -> None:
+        reference = "GRADLAB_VAULT_SESSION_" + "A" * 32
+        task = self.task(secret_bindings={"HTTP_PROXY": reference, "HTTPS_PROXY": reference})
+        config = render_task_config(task)
+        self.assertIn("HTTP_PROXY=${{ secrets." + reference + " }}", config["env"])
+        self.assertIn("HTTPS_PROXY=${{ secrets." + reference + " }}", config["env"])
+        self.assertNotIn("agv_", json.dumps(config))
+        with self.assertRaisesRegex(ValueError, "overlap"):
+            self.task(secret_bindings={"MODAL_ENVIRONMENT": reference}).validate()
+
     def test_task_rejects_names_longer_than_dstack_limit(self) -> None:
         self.task(task_name="r" * 41).validate()
         with self.assertRaisesRegex(ValueError, "DNS-style name"):

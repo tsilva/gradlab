@@ -25,7 +25,7 @@ class CoordinatorConnectionError(RuntimeError):
 
 @dataclass(frozen=True)
 class CoordinatorConnectionReport:
-    mode: Literal["direct", "existing", "managed-ssh-tunnel"]
+    mode: Literal["direct", "existing", "managed-ssh-tunnel", "agent-vault"]
     endpoint: str
     coordinator_id: str
     owned: bool

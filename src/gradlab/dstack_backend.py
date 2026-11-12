@@ -133,6 +133,7 @@ class TaskRequest:
     resources: DstackResources = field(default_factory=DstackResources)
     retry_duration: str = "24h"
     rom_mount: str | None = None
+    secret_bindings: Mapping[str, str] = field(default_factory=dict)
 
     def validate(self) -> None:
         if RUN_ID_PATTERN.fullmatch(self.run_id) is None:
@@ -156,6 +157,13 @@ class TaskRequest:
                 "secret_env must contain environment-variable names only: "
                 + ", ".join(invalid_secret_names)
             )
+        if any(
+            SECRET_ENV_NAME_PATTERN.fullmatch(name) is None
+            for pair in self.secret_bindings.items() for name in pair
+        ):
+            raise ValueError("secret_bindings must map environment names to secret names")
+        if set(self.secret_bindings) & (set(self.plain_env) | set(self.secret_env)):
+            raise ValueError("secret bindings must not overlap existing environment names")
         invalid_plain_names = sorted(
             {
                 str(name)
@@ -234,6 +242,7 @@ def render_task_config(request: TaskRequest) -> dict[str, Any]:
             "GRADLAB_ORCHESTRATOR=dstack",
             *[f"{name}={value}" for name, value in sorted(request.plain_env.items())],
             *[f"{name}=${{{{ secrets.{name} }}}}" for name in sorted(set(request.secret_env))],
+            *[f"{name}=${{{{ secrets.{source} }}}}" for name, source in sorted(request.secret_bindings.items())],
         ],
         "commands": ['python -m gradlab.run_supervisor --manifest-uri "$GRADLAB_RUN_MANIFEST_URI"'],
         "resources": {
@@ -349,6 +358,10 @@ class DstackBackend:
             timeout=timeout,
         )
         if result.returncode != 0:
+            from gradlab.training_vault import selected
+
+            if selected(self.environment):
+                raise RuntimeError(f"dstack {arguments[0]} failed; Vault capability details withheld")
             detail = (result.stderr or result.stdout).strip()
             raise RuntimeError(
                 f"dstack {' '.join(arguments[:2])} failed with exit {result.returncode}: {detail}"
@@ -461,7 +474,10 @@ class DstackBackend:
         return cloud, None
 
     def submit(self, request: TaskRequest) -> DstackTask:
-        self.sync_project_secrets(request.secret_env)
+        self.sync_project_secrets((
+            *request.secret_env,
+            *(name for name in request.secret_bindings.values() if name in self.environment),
+        ))
         config = render_task_config(request)
         self._command(
             [

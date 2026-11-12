@@ -6,6 +6,7 @@ This specification applies to GradLab's current local queue and dstack-backed ex
 
 - Operator-initiated background work must use one durable and extensible local queue.
 - One on-demand local worker must outlive requesting clients, recover safely after interruption, expose evidence-backed status, and exit when no work remains.
+- Brokered training access must keep original service keys out of operator, supervisor and offline learner processes. A queued Attempt owns a finite scoped session independent of the submitting client, revokes it after finalization, and exposes only non-secret session metadata in its immutable manifest. The offline learner receives no session capability. Recovery must preserve immutable identity and use a fresh session for a new Attempt.
 - Each current queued training Run must execute in one training container on one single-GPU host or one explicitly configured CPU-only local worker.
 - CPU-only local workers must use the same exact-source immutable training image and orchestration lifecycle as GPU workers; target selection must not silently change the training recipe.
 - A training container allocated a GPU must verify CUDA availability before materializing the Run or starting its learner. A failed check must produce truthful startup-failure evidence without starting training. Explicit CUDA device selection must reject unavailable CUDA rather than fall back to CPU; explicitly configured CPU-only workers remain supported.

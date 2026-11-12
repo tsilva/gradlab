@@ -451,6 +451,13 @@ def resolve_dstack_token(
     keychain_lookup: Callable[[KeychainReference], str | None] | None = None,
 ) -> tuple[str, str]:
     values = os.environ if environment is None else environment
+    from gradlab.training_vault import MARKERS, selected, validate_session
+
+    if selected(values):
+        validate_session(values)
+        if profile.coordinator_id != values.get("GRADLAB_VAULT_COORDINATOR_ID"):
+            raise OperatorConfigurationError("Coordinator is outside the training Vault binding")
+        return MARKERS["DSTACK_TOKEN"], "agent-vault"
     process_value = str(values.get("DSTACK_TOKEN") or "").strip()
     if process_value:
         return process_value, "process-environment"
@@ -602,6 +609,11 @@ def load_operator_environment(
     )
     loaded_sources: dict[str, str] = {}
     unavailable_sources: dict[str, str] = {}
+    from gradlab.training_vault import MARKERS, selected, validate_session
+
+    vault_mode = selected(values)
+    if vault_mode:
+        validate_session(values)
     for name, value in _plain_environment(
         document,
         selected_names=selected_names,
@@ -623,6 +635,12 @@ def load_operator_environment(
             reference = InfisicalReference.parse(raw_reference)
         except ValueError:
             raise OperatorConfigurationError("Invalid Infisical binding") from None
+        if vault_mode:
+            if name in MARKERS:
+                loaded_sources[name] = "agent-vault"
+            elif selected_names is not None:
+                raise OperatorConfigurationError("Requested service is outside the training Vault binding")
+            continue
         if str(values.get(name) or "").strip():
             continue
         try:
@@ -638,6 +656,11 @@ def load_operator_environment(
         document,
         selected_names=selected_names,
     ).items():
+        if vault_mode:
+            if name in MARKERS:
+                loaded_sources[name] = "agent-vault"
+                continue
+            raise OperatorConfigurationError("Keychain fallback is disabled in training Vault mode")
         if str(values.get(name) or "").strip():
             continue
         value = lookup(reference)
@@ -646,7 +669,7 @@ def load_operator_environment(
             continue
         values[name] = value
         loaded_sources[name] = "macos-keychain"
-    if selected_names is None or selected_names & MODAL_ENV_NAMES:
+    if not vault_mode and (selected_names is None or selected_names & MODAL_ENV_NAMES):
         _load_modal_environment(
             document,
             environment=values,

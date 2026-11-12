@@ -291,6 +291,16 @@ def _required_operator_environment(
 def _ensure_coordinator_connection(
     coordinator: DstackCoordinatorProfile,
 ) -> CoordinatorConnectionReport:
+    from gradlab.training_vault import selected, validate_session
+
+    if selected():
+        validate_session()
+        if coordinator.coordinator_id != os.environ.get("GRADLAB_VAULT_COORDINATOR_ID"):
+            raise OperatorConfigurationError("Coordinator is outside the training Vault binding")
+        return CoordinatorConnectionReport(
+            mode="agent-vault", endpoint=coordinator.server_url,
+            coordinator_id=coordinator.coordinator_id, owned=False,
+        )
     try:
         return ensure_coordinator_connection(coordinator)
     except CoordinatorConnectionError as exc:
@@ -646,6 +656,18 @@ def _task_request(manifest: RunManifest, *, manifest_uri: str) -> TaskRequest:
     fault_fixture = str(manifest.compute.get("supervision_fault_fixture") or "").strip()
     if fault_fixture:
         plain_env["GRADLAB_SUPERVISION_FAULT_FIXTURE"] = fault_fixture
+    from gradlab.training_vault import CA_B64, CA_PIN, MODE, PROXY_ADDRESS
+
+    bindings = {}
+    extra_secrets = ()
+    vault = manifest.compute.get("agent_vault")
+    if isinstance(vault, Mapping):
+        plain_env.update({
+            MODE: "agent-vault", PROXY_ADDRESS: str(vault["proxy_address"]),
+            CA_B64: os.environ[CA_B64], CA_PIN: os.environ[CA_PIN],
+        })
+        bindings = {"HTTP_PROXY": str(vault["secret_ref"]), "HTTPS_PROXY": str(vault["secret_ref"])}
+        extra_secrets = ("DSTACK_TOKEN",)
     return TaskRequest(
         run_id=manifest.run_id,
         task_name=str(manifest.compute["dstack_task"]),
@@ -654,11 +676,13 @@ def _task_request(manifest: RunManifest, *, manifest_uri: str) -> TaskRequest:
         compute=compute,
         resources=DstackResources.from_manifest(manifest.compute.get("resources")),
         plain_env=plain_env,
+        secret_bindings=bindings,
         secret_env=(
             *_required_operator_environment(
                 run_checkpoint_eval_backend(manifest),
                 getattr(manifest, "tracking", None),
             ),
+            *extra_secrets,
         ),
         rom_mount=(
             DEFAULT_ROM_MOUNT
@@ -992,6 +1016,15 @@ def cmd_launch(args: argparse.Namespace) -> int:
         "runtime_build_source_sha": release.runtime_build_source_sha,
         "submission_key": str(args.submission_key or ""),
     }
+    from gradlab.training_vault import WORKER_CAPABILITY, worker_context
+
+    vault_context = worker_context()
+    if vault_context is not None:
+        manifest_compute["agent_vault"] = vault_context
+        dstack_backend.environment[vault_context["secret_ref"]] = os.environ[WORKER_CAPABILITY]
+        # Preserve the capability only in the coordinator's existing encrypted
+        # secret store before immutable manifest admission, for resume-submit.
+        dstack_backend.sync_project_secrets((vault_context["secret_ref"],))
     if resume_checkpoint is not None:
         manifest_compute["resume_checkpoint"] = resume_checkpoint.to_dict()
     liveness = default_liveness_policy()
@@ -1054,6 +1087,8 @@ def cmd_launch(args: argparse.Namespace) -> int:
         liveness=liveness,
     )
     authority.create_manifest(manifest)
+    if vault_context is not None and args.json:
+        print(json.dumps({"event": "vault_session_bound", "run_id": run_id, "attempt_id": attempt_id}), flush=True)
     manifest_uri = authority.control.uri(f"runs/{run_id}/manifest.json")
     task = dstack_backend.submit(_task_request(manifest, manifest_uri=manifest_uri))
     output = {
@@ -1981,6 +2016,15 @@ def cmd_retry(args: argparse.Namespace) -> int:
     compute["dstack_project"] = dstack_backend.project
     compute["dstack_coordinator_id"] = previous_binding.coordinator_id
     compute["coordinator_binding_basis"] = "retry-preserved"
+    from gradlab.training_vault import WORKER_CAPABILITY, worker_context
+
+    vault_context = worker_context()
+    if vault_context is not None:
+        compute["agent_vault"] = vault_context
+        dstack_backend.environment[vault_context["secret_ref"]] = os.environ[WORKER_CAPABILITY]
+        dstack_backend.sync_project_secrets((vault_context["secret_ref"],))
+    elif "agent_vault" in compute:
+        raise RuntimeError("A Vault attempt requires a fresh worker session for retry")
     selected_compute = ComputeRequest(**dict(compute["selected"]))
     selected_compute.validate()
     selected_offer = compute.get("selected_offer")
@@ -2090,6 +2134,8 @@ def cmd_retry(args: argparse.Namespace) -> int:
     task_request = _task_request(manifest, manifest_uri=manifest_uri)
     task_request.validate()
     authority.create_attempt_manifest(manifest)
+    if vault_context is not None:
+        print(json.dumps({"event": "vault_session_bound", "run_id": args.run_id, "attempt_id": attempt_id}), flush=True)
     try:
         task = dstack_backend.submit(task_request)
     except Exception:

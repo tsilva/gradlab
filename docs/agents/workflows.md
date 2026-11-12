@@ -51,6 +51,12 @@ intent again before finishing as required by the specification policy.
 
 ## Agent service access
 
+For the reviewed local training coordinator and its R2 stores, use the dedicated
+[training Agent Vault launcher](training-vault.md). Its operator and supervisor
+bundles are separate; supervisors own finite sessions that survive client exit
+and never reach the offline learner. Other service modes require their own
+reviewed access route.
+
 The opt-in `scripts/huggingface_vault.py` launcher selects the dedicated Agent Vault bundle
 `local-gradlab-huggingface` for `huggingface.co`. The child sees the exact
 `HF_TOKEN=hf_gradlab_proxy_placeholder`, a scoped proxy session, and process-local
