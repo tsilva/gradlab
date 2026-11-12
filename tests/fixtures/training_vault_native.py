@@ -10,6 +10,7 @@ import os
 import subprocess
 import sys
 import threading
+import tempfile
 import uuid
 from datetime import UTC, datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -31,6 +32,7 @@ FAKE_DSTACK = "SyntheticDstackBearerForNativeProof"
 
 class FakeServices(BaseHTTPRequestHandler):
     requests = []
+    artifacts = {}
 
     def log_message(self, *args):
         pass
@@ -48,6 +50,17 @@ class FakeServices(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def do_PUT(self):
+        body = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+        if not self.path.startswith("/api/2.0/mlflow-artifacts/artifacts/"):
+            self.send_error(404)
+            return
+        self.artifacts[self.path] = body
+        self.requests.append((self.path, False))
+        self.send_response(200)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
     def do_POST(self):
         self.rfile.read(int(self.headers.get("Content-Length", 0)))
@@ -172,6 +185,24 @@ def child():
     PHASE = "mlflow-actual-client"
     from mlflow.tracking import MlflowClient
     assert not MlflowClient(tracking_uri="http://127.0.0.1:19405").search_experiments()
+    PHASE = "mlflow-actual-artifact-client"
+    from mlflow.store.artifact.http_artifact_repo import HttpArtifactRepository
+    with tempfile.TemporaryDirectory(prefix="gradlab-vault-artifact-") as temporary:
+        artifact = Path(temporary) / "run-configuration.json"
+        artifact.write_bytes(b'{"synthetic":true}\n')
+        repository = HttpArtifactRepository(
+            "http://127.0.0.1:19405/api/2.0/mlflow-artifacts/artifacts/2/proof/artifacts"
+        )
+        repository.log_artifact(str(artifact), artifact_path="gradlab")
+    for method, path in (("DELETE", "/api/2.0/mlflow-artifacts/artifacts/2/proof/artifacts/denied"),
+                         ("PUT", "/api/2.0/unreviewed/denied")):
+        request = urllib.request.Request("http://127.0.0.1:19405" + path, method=method, data=b"synthetic")
+        try:
+            urllib.request.urlopen(request, timeout=10)
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 403
+        else:
+            raise AssertionError("MLflow method/path policy did not fail closed")
     PHASE = "git-actual-client"
     git = subprocess.run(["git", "-c", "credential.helper=", "ls-remote", "http://127.0.0.1:19406/repo.git"],
                          capture_output=True, text=True, timeout=20)
@@ -274,13 +305,15 @@ def main():
             services.append(service["id"])
         for name, paths, credential, host in (
             ("fake-training-dstack", ["/api/runs"], {"type": "bearer", "value": FAKE_DSTACK}, "127.0.0.1:19404"),
-            ("fake-training-mlflow", ["/api/2.0/mlflow"], {"type": "passthrough"}, "127.0.0.1:19405"),
+            ("fake-training-mlflow", ["/api/2.0/mlflow", "/api/2.0/mlflow-artifacts/artifacts"], {"type": "passthrough"}, "127.0.0.1:19405"),
             ("fake-training-revoke", ["/api/v1/agent-vault/session/revoke"], {"type": "passthrough"}, "app.infisical.com"),
             ("fake-training-git", ["/repo.git"], {"type": "passthrough"}, "127.0.0.1:19406"),
         ):
             PHASE = "create-" + name
             service = admin.create_service([bundle["id"]] if name.endswith("dstack") else [bundle["id"], worker_bundle["id"]], {
-                "type": "http", "name": name, "hostPattern": host, "allowedMethods": ["GET", "POST"] if name.endswith("git") else ["POST"],
+                "type": "http", "name": name, "hostPattern": host,
+                "allowedMethods": (["GET", "POST", "PUT"] if name.endswith("mlflow")
+                                   else ["GET", "POST"] if name.endswith("git") else ["POST"]),
                 "allowedPathPrefixes": paths, "credential": credential,
             })
             services.append(service["id"])
@@ -335,11 +368,16 @@ def main():
         assert not FakeUpstream.objects
         assert ("/api/runs/list", True) in FakeServices.requests
         assert any(path == "/api/2.0/mlflow/experiments/search" for path, _ in FakeServices.requests)
+        assert FakeServices.artifacts == {
+            "/api/2.0/mlflow-artifacts/artifacts/2/proof/artifacts/gradlab/run-configuration.json":
+                b'{"synthetic":true}\n'
+        }
         proof = {"ok": True, "native_cli_version": "0.45.6", "native_basic_injection": True,
                  "actual_boto_client": True, "conditional_crud_and_hashes": True,
                  "bucket_path_and_host_denial": True, "reflected_upstream_key_redacted": True,
                  "source_credentials_retrieved": False, "fake_upstream_requests": FakeUpstream.requests,
                  "dstack_native_bearer_actual_cli": True, "mlflow_actual_client": True,
+                 "mlflow_actual_artifact_upload": True, "mlflow_artifact_policy_denial": True,
                  "git_actual_client": True,
                  "supervisor_session_self_revoke": True,
                  "worker_survives_creator_exit": True, "worker_cannot_reach_dstack": True,

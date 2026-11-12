@@ -220,7 +220,8 @@ def provision():
                                  "password": source(f"GRADLAB_{role}_R2_SECRET_ACCESS_KEY")})
     service("gradlab-training-dstack-b3", "127.0.0.1:3000", ["GET", "POST"], ["/api"],
             {"type": "bearer", "value": source("DSTACK_B3_TOKEN")}, worker=False)
-    service("gradlab-training-mlflow", "192.168.0.151:5443", ["GET", "POST"], ["/api/2.0/mlflow"],
+    service("gradlab-training-mlflow", "192.168.0.151:5443", ["GET", "POST", "PUT"],
+            ["/api/2.0/mlflow", "/api/2.0/mlflow-artifacts/artifacts"],
             {"type": "passthrough"})
     service("gradlab-training-public-models", "pub-fc35c0b186ce4aad8eea5e93d38c99db.r2.dev", ["GET", "HEAD"], ["/"],
             {"type": "passthrough"})

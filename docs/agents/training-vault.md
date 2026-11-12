@@ -41,6 +41,13 @@ unreviewed prefixes fail before the storage client starts.
 | Runtime receipt APIs and signed artifact downloads | Read | No | Existing local GitHub CLI authentication remains separate |
 | Session self-revocation | Yes | Yes | The caller's own finite session token |
 
+MLflow requires GET/POST for `/api/2.0/mlflow` and PUT uploads under
+`/api/2.0/mlflow-artifacts/artifacts`. The native service permits GET, POST and
+PUT across these two path prefixes; it cannot express method/path pairs.
+Other paths and methods remain blocked. The native fixture verifies a real SDK
+artifact upload as well as API access, rather than treating discovery as proof
+of online delivery. Existing catalog changes require explicit scope review.
+
 The native proxy binds to the selected host's Docker bridge. The operator uses
 a command-owned forward over its existing managed SSH master. Gateways bind
 only to host loopback. The reviewed backend token permissions are unchanged;
