@@ -11,7 +11,7 @@ import tempfile
 import time
 from collections.abc import Iterator, Mapping
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -1528,10 +1528,81 @@ def _status(root: Path, run_id: str) -> dict[str, Any]:
     }
 
 
+def _submission_status(
+    authority: RunAuthority, *, submission_key: str, goal_slug: str, created_since: str
+) -> dict[str, Any]:
+    """Resolve lost admission acknowledgements from immutable manifest events."""
+    from gradlab.goal_catalog import goal_catalog_event_prefix, validate_goal_catalog_event
+
+    if not re.fullmatch(r"[a-z0-9-]{1,120}", submission_key):
+        raise ValueError("submission key must be a stable lowercase identifier")
+    supplied = datetime.fromisoformat(created_since.replace("Z", "+00:00"))
+    if supplied.tzinfo is None or supplied.utcoffset() != timedelta(0):
+        raise ValueError("created-since must be an explicit UTC timestamp")
+    cutoff = parse_utc_datetime(created_since)
+    if cutoff > datetime.now(UTC):
+        raise ValueError("created-since cannot be in the future")
+    prefix = goal_catalog_event_prefix(goal_slug)
+    matches, unresolved, inspected = {}, [], 0
+    for key in authority.control.iter_keys(prefix):
+        inspected += 1
+        if inspected > 10000:
+            raise RuntimeError("submission lookup exceeded its bounded event inventory")
+        if not key.rsplit("/", 1)[-1].startswith("manifest-"):
+            continue
+        event = validate_goal_catalog_event(authority.control.get_json(key))
+        if event["goal_slug"] != goal_slug or event["phase"] != "manifest":
+            raise ValueError("submission event is outside the selected goal")
+        if parse_utc_datetime(event["created_at"]) < cutoff:
+            continue
+        document = authority.manifest(event["run_id"])
+        if document is None:
+            unresolved.append({"run_id": event["run_id"], "event_key": key})
+            continue
+        manifest = RunManifest.from_dict(document)
+        if manifest.goal_slug != goal_slug:
+            raise ValueError("submission manifest disagrees with selected goal")
+        if manifest.compute.get("submission_key") == submission_key:
+            matches[manifest.run_id] = {
+                "run_id": manifest.run_id,
+                "attempt_id": manifest.attempt_id,
+                "source_sha": manifest.source_sha,
+                "created_at": manifest.created_at,
+                "manifest_key": f"runs/{manifest.run_id}/manifest.json",
+                "dstack_task": manifest.compute.get("dstack_task"),
+            }
+    return {
+        "submission_key": submission_key,
+        "goal_slug": goal_slug,
+        "created_since": created_since,
+        "complete_search": True,
+        "event_inventory_count": inspected,
+        "matches": list(matches.values()),
+        "unresolved_candidates": unresolved,
+        "status": "found" if matches else "unresolved" if unresolved else "not_admitted",
+        "mutations_performed": False,
+        "observed_at": time.time(),
+    }
+
+
 def cmd_status(args: argparse.Namespace) -> int:
+    if getattr(args, "submission_key", None):
+        if not args.goal_slug or not args.created_since:
+            raise ValueError("submission lookup requires --goal-slug and --created-since")
+        _, authority = _storage(repository_root())
+        value = _submission_status(
+            authority,
+            submission_key=args.submission_key,
+            goal_slug=args.goal_slug,
+            created_since=args.created_since,
+        )
+    else:
+        if getattr(args, "goal_slug", None) or getattr(args, "created_since", None):
+            raise ValueError("goal-slug and created-since require submission-key")
+        value = _status(repository_root(), args.run_id)
     print(
         json.dumps(
-            json_safe(_status(repository_root(), args.run_id)),
+            json_safe(value),
             indent=None if args.json else 2,
             sort_keys=True,
         )
@@ -2376,7 +2447,11 @@ def build_parser() -> argparse.ArgumentParser:
     catalog_rebuild.set_defaults(func=cmd_catalog_rebuild)
 
     status = commands.add_parser("status", help="Inspect dstack and R2 run state.")
-    status.add_argument("--run", dest="run_id", type=_require_run_id, required=True)
+    selector = status.add_mutually_exclusive_group(required=True)
+    selector.add_argument("--run", dest="run_id", type=_require_run_id)
+    selector.add_argument("--submission-key", help="Read-only lost-acknowledgement lookup")
+    status.add_argument("--goal-slug", help="Exact goal for submission lookup")
+    status.add_argument("--created-since", help="UTC lower bound for submission lookup")
     status.add_argument("--json", action="store_true")
     status.set_defaults(func=cmd_status)
 

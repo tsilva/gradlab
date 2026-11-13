@@ -152,6 +152,14 @@ timstepz: 10
             with self.assertRaisesRegex(ValueError, "unknown field.*timstepz"):
                 load_benchmark_profile(path)
 
+    def test_local_smoke_keeps_its_bounded_recipe_overrides(self) -> None:
+        profile = find_benchmark_profile("local-smoke-mario-l11")
+        command = build_benchmark_commands(profile)[0]
+        overrides = [command.argv[i + 1] for i, arg in enumerate(command.argv) if arg == "--set"]
+        self.assertEqual(overrides, profile.payload["recipe_overrides"])
+        self.assertIn("train.timesteps=512", overrides)
+        self.assertIn("train.checkpoint_candidates=null", overrides)
+
     def test_local_smoke_uses_dstack_local_compute(self) -> None:
         profile = find_benchmark_profile("local-smoke-mario-l11")
         commands = build_benchmark_commands(profile)

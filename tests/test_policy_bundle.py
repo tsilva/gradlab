@@ -50,7 +50,6 @@ from gradlab.state_archive import StateArchive, state_archive_artifact_summary
 
 GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml")
 RECIPE = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/recipes/ppo.yaml")
-GO_EXPLORE_RECIPE = GOAL.parent / "recipes/go-explore-20m.yaml"
 LEVEL1_3_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-3/_goal.yaml")
 LEVEL1_3_TRAIN_CLEAR_RECIPE = LEVEL1_3_GOAL.parent / "recipes/ppo-train-clear-100.yaml"
 RUNTIME = "docker:ghcr.io/tsilva/gradlab/gradlab-train@sha256:" + "b" * 64
@@ -632,8 +631,8 @@ def test_evaluated_goal_preserves_manual_eval_when_automatic_eval_is_disabled() 
 
 def test_evaluated_go_explore_goal_preserves_route_eval_when_automatic_eval_is_disabled() -> None:
     resolved = compose_resolved_train_documents(
-        GOAL,
-        GO_EXPLORE_RECIPE,
+        LEVEL1_3_GOAL,
+        LEVEL1_3_GOAL.parent / "recipes/go-explore-route-diagnostic.yaml",
         prepare_materialized=lambda document: prepare_checkpoint_eval_mode(
             document,
             checkpoint_eval_backend="none",

@@ -3,6 +3,12 @@ name: local-smoke-mario-l11
 kind: local_smoke
 description: Tiny dstack local training and durable-result smoke on Mario Level1-1.
 goal_file: experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml
-recipe_file: experiments/goals/SuperMarioBros-Nes-v0/Level1-1/recipes/dstack-smoke.yaml
+recipe_file: experiments/goals/SuperMarioBros-Nes-v0/Level1-1/recipes/ppo.yaml
 seed: 123
 max_duration: 30m
+recipe_overrides:
+- train.timesteps=512
+- train.backend.config.batch_size=128
+- train.checkpoint_freq=0
+- train.checkpoint_steps=[]
+- train.checkpoint_candidates=null

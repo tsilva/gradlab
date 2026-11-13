@@ -3,6 +3,7 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import UTC, datetime
 
 import pytest
 
@@ -198,7 +199,8 @@ def test_lost_acknowledgement_never_resubmits(tmp_path, monkeypatch):
     assert batch.ExperimentBatch().advance(job).state == "blocked"
 
 
-def test_generic_job_retry_cannot_erase_uncertain_admission(tmp_path, monkeypatch):
+@pytest.mark.parametrize("failure_state", ["blocked", "failed"])
+def test_generic_job_retry_cannot_erase_uncertain_admission(tmp_path, monkeypatch, failure_state):
     store, job = setup_job(tmp_path)
     state(
         store,
@@ -206,7 +208,7 @@ def test_generic_job_retry_cannot_erase_uncertain_admission(tmp_path, monkeypatc
         "submission_uncertain",
         {"submission_key": "intent-0", "admission_started": True},
     )
-    store.finish(job["job_id"], batch.HandlerResult(state="blocked"))
+    store.finish(job["job_id"], batch.HandlerResult(state=failure_state))
     store.retry(job["job_id"])
     recovered = store.claim_next()
     monkeypatch.setattr(
@@ -226,6 +228,51 @@ def test_generic_job_retry_retains_an_admitted_run(tmp_path, monkeypatch):
         batch, "_call", lambda *a: pytest.fail("Observe the admitted Run instead of new launch")
     )
     assert batch.ExperimentBatch().advance(recovered).state == "retry_wait"
+
+
+@pytest.mark.parametrize("invalid", [None, "goal", "cutoff", "stale", "matches", "partial"])
+def test_reviewed_absence_recovers_only_matching_complete_post_failure_evidence(
+    tmp_path, monkeypatch, invalid
+):
+    store, job = setup_job(tmp_path)
+    state(store, job, "submission_uncertain", {"admission_started": True})
+    store.finish(job["job_id"], batch.HandlerResult(state="failed"))
+    store.retry(job["job_id"])
+    recovered = store.claim_next()
+    work = store.work_root / job["job_id"]
+    work.mkdir(parents=True, exist_ok=True)
+    failed = work / "intent-0-admission.json"
+    failed.write_text('{"returncode":1,"records":[]}')
+    proof = {
+        "reviewed": True,
+        "status": "not_admitted",
+        "complete_search": True,
+        "submission_key": "intent-0",
+        "goal_slug": "Mario/Level1-1",
+        "matches": [],
+        "unresolved_candidates": [],
+        "observed_at": time.time() + 1,
+        "created_since": datetime.fromtimestamp(job["created_at"] - 60, UTC).isoformat(),
+    }
+    if invalid == "goal":
+        proof["goal_slug"] = "Mario/Level1-2"
+    elif invalid == "cutoff":
+        proof["created_since"] = datetime.fromtimestamp(job["created_at"] + 60, UTC).isoformat()
+    elif invalid == "stale":
+        proof["observed_at"] = failed.stat().st_mtime - 1
+    elif invalid == "matches":
+        proof["matches"] = [{"run_id": RUN}]
+    elif invalid == "partial":
+        proof["complete_search"] = False
+    (work / "intent-0-reviewed-absence.json").write_text(json.dumps(proof))
+    monkeypatch.setattr(batch, "_call", lambda *a: pytest.fail("No admission during review"))
+    result = batch.ExperimentBatch().advance(recovered)
+    assert result.state == ("blocked" if invalid else "retry_wait")
+    detail = store.subjects(job["job_id"])[0]["detail"]
+    assert detail["admission_started"] is bool(invalid)
+    if not invalid:
+        assert len(list(work.glob("intent-0-failed-before-reconciliation-*.json"))) == 1
+        assert not failed.exists()
 
 
 def test_source_drift_never_approves_or_admits(tmp_path, monkeypatch):

@@ -82,6 +82,7 @@ jobs:
           tests/test_training_access.py
           tests/test_dstack_executable.py
           tests/test_experiment_batch.py
+          tests/test_benchmark_profiles.py
           tests/test_experiment_follow_format.py
           tests/test_early_stop.py
           tests/test_checkpoint_schedule.py
@@ -91,6 +92,7 @@ jobs:
           tests/test_dstack_backend.py
           tests/test_operator_credentials.py
           tests/test_experiment_cli.py
+          tests/test_submission_lookup.py
           tests/test_manual_mlflow.py
           tests/test_job_queue.py
           tests/test_hardware_metrics.py

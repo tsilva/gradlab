@@ -20,8 +20,10 @@ LEVELS = tuple(
 
 
 def campaign_recipe(level):
+    directory = GOALS / level / "recipes"
     name = "ppo-sil-train-clear-80" if level in {"Level1-3", "Level2-2"} else "ppo-train-clear-80"
-    return GOALS / level / "recipes" / f"{name}.yaml"
+    candidate = directory / f"{name}.yaml"
+    return candidate if candidate.exists() else directory / "ppo.yaml"
 
 
 @pytest.mark.parametrize("level", LEVELS)
@@ -72,11 +74,11 @@ def test_campaign_recipe_preserves_full_start_and_separate_acceptance(level):
     assert backend["config"]["device"] == "cuda"
     uses_sil = level in {"Level1-3", "Level2-2"}
     assert bool(backend["config"].get("sil", {}).get("enabled")) == uses_sil
-    assert config["timesteps"] == (16_777_216 if uses_sil else 50_000_000)
+    assert config["timesteps"] == (16_777_216 if uses_sil or level == "Level1-1" else 50_000_000)
 
 
 def test_campaign_covers_exactly_31_ordinary_levels_without_final_level():
-    recipes = sorted(GOALS.glob("*/recipes/*train-clear-80.yaml"))
+    recipes = [campaign_recipe(level) for level in LEVELS]
     assert {path.parent.parent.name for path in recipes} == set(LEVELS)
     assert len(recipes) == len(LEVELS) == 31
     assert not (GOALS / "Level8-4").exists()

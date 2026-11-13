@@ -328,61 +328,6 @@ class ConfigValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "missing explicit.*frame_stack"):
             validate_materialized_train_recipe(document, label="recipe")
 
-    def test_level1_1_a2c_recipe_is_native_and_preserves_goal_contract(self) -> None:
-        document = compose_train_document(
-            self.MARIO_L11_GOAL,
-            self.MARIO_SINGLE_RECIPES / "a2c.yaml",
-        )
-
-        train_config = document["train_config"]
-        backend = train_config["training_backend"]
-        self.assertEqual(backend["id"], "sb3.a2c")
-        self.assertEqual(backend["config"]["n_steps"], 64)
-        self.assertTrue(backend["config"]["use_rms_prop"])
-        self.assertFalse(backend["config"]["normalize_advantage"])
-        self.assertTrue(
-            {
-                "batch_size",
-                "n_epochs",
-                "clip_range",
-                "clip_range_vf",
-                "target_kl",
-                "adam_eps",
-            }.isdisjoint(backend["config"])
-        )
-        self.assertEqual(
-            train_config["task"]["termination"]["failure"],
-            ["life_loss"],
-        )
-        self.assertEqual(train_config["task"]["termination"]["timeout"], ["stalled"])
-        self.assertEqual(train_config["checkpoint_eval_backend"], "none")
-
-    def test_level1_1_jerk_recipe_is_playable_native_policy_search(self) -> None:
-        document = compose_train_document(
-            self.MARIO_L11_GOAL,
-            self.MARIO_SINGLE_RECIPES / "jerk.yaml",
-        )
-
-        train_config = document["train_config"]
-        backend = train_config["training_backend"]
-        self.assertEqual(backend["id"], "gradlab.jerk")
-        self.assertEqual(backend["config"]["archive_replay_probability_initial"], 0.25)
-        self.assertEqual(backend["config"]["archive_replay_probability_max"], 0.9)
-        self.assertEqual(backend["config"]["protected_prefix_steps"], 128)
-        self.assertEqual(backend["config"]["max_prefix_shorten_steps"], 128)
-        self.assertEqual(backend["config"]["acceptance_mode"], "checkpoint_eval")
-        self.assertEqual(train_config["timesteps"], 10000000)
-        self.assertEqual(train_config["checkpoint_eval_backend"], "none")
-        self.assertEqual(
-            train_config["early_stop"]["conditions"]["clear_100"]["action"],
-            "stop",
-        )
-        self.assertEqual(
-            train_config["early_stop"]["conditions"]["clear_100"]["outcome"],
-            "success",
-        )
-        self.assertNotIn("checkpoint_eval_stages", train_config)
-
     def test_level1_3_training_clear_recipe_disables_eval_and_stops_at_100_of_100(
         self,
     ) -> None:
@@ -413,39 +358,18 @@ class ConfigValidationTests(unittest.TestCase):
             },
         )
 
-    def test_level1_1_on_policy_recipes_share_common_config(self) -> None:
+    def test_qualified_level1_1_ppo_preserves_common_config(self) -> None:
         ppo = compose_train_document(self.MARIO_L11_GOAL, self.MARIO_SINGLE_RECIPES / "ppo.yaml")
-        a2c = compose_train_document(self.MARIO_L11_GOAL, self.MARIO_SINGLE_RECIPES / "a2c.yaml")
-
         self.assertEqual(ppo["recipe_id"], "ppo")
-        self.assertEqual(ppo["train_config"]["training_backend"]["id"], "gradlab.ppo")
-        self.assertEqual(
-            ppo["train_config"]["training_backend"]["config"]["execution_profile"],
-            "sb3-parity",
-        )
-        self.assertEqual(ppo["train_config"]["training_backend"]["config"]["precision"], "fp32")
-        for field in (
-            "learning_rate_final",
-            "learning_rate_schedule_timesteps",
-            "ent_coef",
-            "ent_coef_final",
-            "ent_coef_schedule_timesteps",
-            "gamma",
-            "gae_lambda",
-            "vf_coef",
-            "normalize_advantage",
-        ):
-            with self.subTest(field=field):
-                self.assertEqual(
-                    ppo["train_config"]["training_backend"]["config"][field],
-                    a2c["train_config"]["training_backend"]["config"][field],
-                )
-        self.assertEqual(ppo["train_config"]["timesteps"], 50000000)
-        self.assertEqual(a2c["train_config"]["timesteps"], 50000000)
-        self.assertEqual(ppo["train_config"]["tracking"]["backend"], "mlflow")
-        self.assertEqual(ppo["train_config"]["tracking"]["delivery"], "online")
-        self.assertEqual(a2c["train_config"]["tracking"]["backend"], "mlflow")
-        self.assertEqual(a2c["train_config"]["tracking"]["delivery"], "online")
+        config = ppo["train_config"]
+        self.assertEqual(config["training_backend"]["id"], "gradlab.ppo")
+        self.assertEqual(config["training_backend"]["config"]["execution_profile"], "sb3-parity")
+        self.assertEqual(config["training_backend"]["config"]["precision"], "fp32")
+        self.assertEqual(config["timesteps"], 16_777_216)
+        self.assertEqual(config["tracking"]["backend"], "mlflow")
+        self.assertEqual(config["tracking"]["delivery"], "online")
+        self.assertEqual(list(self.MARIO_SINGLE_RECIPES.glob("*.yaml")),
+                         [self.MARIO_SINGLE_RECIPES / "ppo.yaml"])
 
     def test_every_actor_critic_recipe_declares_explicit_policy_model(self) -> None:
         recipes = sorted(Path("experiments/goals").glob("**/recipes/*.yaml"))
@@ -472,13 +396,13 @@ class ConfigValidationTests(unittest.TestCase):
                     },
                 )
 
-        self.assertEqual(actor_critic_recipes, 86)
+        self.assertEqual(actor_critic_recipes, 82)
 
     def test_every_mario_recipe_disables_eval_and_preserves_its_clear_contract(self) -> None:
         mario_root = Path("experiments/goals/SuperMarioBros-Nes-v0")
         recipes = sorted(mario_root.glob("*/recipes/*.yaml"))
 
-        self.assertEqual(len(recipes), 58)
+        self.assertEqual(len(recipes), 52)
         for recipe_path in recipes:
             with self.subTest(recipe=recipe_path):
                 goal_path = recipe_path.parent.parent / "_goal.yaml"
@@ -486,7 +410,7 @@ class ConfigValidationTests(unittest.TestCase):
                 train_config = document["train_config"]
                 self.assertEqual(train_config["checkpoint_eval_backend"], "none")
                 self.assertNotIn("stop_on_acceptance", train_config)
-                if recipe_path.stem in {"ppo-train-clear-80", "ppo-sil-train-clear-80"}:
+                if recipe_path.stem in {"ppo-train-clear-80", "ppo-sil-train-clear-80"} or recipe_path == self.MARIO_SINGLE_RECIPES / "ppo.yaml":
                     conditions = train_config["early_stop"]["conditions"]
                     self.assertEqual(conditions["clear_100"]["action"], "stop")
                     self.assertEqual(conditions["clear_80"]["threshold"], 0.8)
@@ -615,7 +539,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(report.counts["json_files"], 0)
         self.assertGreaterEqual(report.counts["yaml_files"], 15)
         self.assertGreaterEqual(report.counts["goals"], 1)
-        self.assertEqual(report.counts["train_recipes"], 90)
+        self.assertEqual(report.counts["train_recipes"], 84)
         self.assertGreaterEqual(report.counts["env_configs"], 0)
         self.assertEqual(report.counts["benchmark_profiles"], 4)
         self.assertEqual(report.counts["workspace_manifests"], 1)
@@ -717,8 +641,9 @@ class ConfigValidationTests(unittest.TestCase):
         )
 
     def test_go_explore_persists_portable_cell_graph_without_snapshots(self) -> None:
-        recipe = self.MARIO_L11_GOAL.parent / "recipes/go-explore-20m.yaml"
-        document = compose_train_document(self.MARIO_L11_GOAL, recipe)
+        recipe = self.MARIO_L13_GOAL.parent / "recipes/go-explore-route-diagnostic.yaml"
+        document = compose_train_document(self.MARIO_L13_GOAL, recipe,
+            recipe_overrides=["train.state_archive.export.snapshots=none"])
         train_config = document["train_config"]
 
         self.assertEqual(train_config["state_archive"]["persistence"], "ephemeral")

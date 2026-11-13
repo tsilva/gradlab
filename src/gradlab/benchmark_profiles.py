@@ -66,6 +66,7 @@ class _EnvironmentThroughputProfile(_Profile):
 
 
 class _LocalSmokeProfile(_Profile):
+    recipe_overrides: list[NonEmptyText] = []
     kind: Literal["local_smoke"]
     goal_file: NonEmptyText
     recipe_file: NonEmptyText
@@ -342,6 +343,8 @@ def _local_smoke_commands(profile: Mapping[str, Any]) -> list[BenchmarkCommand]:
         str(profile.get("max_duration") or "30m"),
         "--json",
     ]
+    for override in profile.get("recipe_overrides", ()):
+        enqueue.extend(["--set", str(override)])
     if profile.get("target"):
         enqueue.extend(["--target", str(profile["target"])])
     if profile.get("runtime_image_ref_file"):

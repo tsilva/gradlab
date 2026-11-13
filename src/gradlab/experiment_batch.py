@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import fcntl
+import hashlib
 import json
 import math
 import re
@@ -16,6 +17,8 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
+from gradlab.clock import parse_utc_datetime
 
 from gradlab.job_queue import (
     HandlerResult,
@@ -271,9 +274,50 @@ class ExperimentBatch:
                 return wait
         for index, intent in enumerate(p["intents"]):
             subject = subjects[intent["key"]]
+            detail = subject.get("detail") or {}
+            if detail.get("admission_started") and not detail.get("run_id"):
+                proof_path = work / (intent["key"] + "-reviewed-absence.json")
+                failed_path = work / (intent["key"] + "-admission.json")
+                proof = json.loads(proof_path.read_text()) if proof_path.exists() else {}
+                failed = json.loads(failed_path.read_text()) if failed_path.exists() else {}
+                if (
+                    proof.get("reviewed") is True
+                    and proof.get("status") == "not_admitted"
+                    and proof.get("complete_search") is True
+                    and proof.get("submission_key") == intent["key"]
+                    and proof.get("goal_slug")
+                    == str(Path(intent["recipe"]).parent.parent).removeprefix("experiments/goals/")
+                    and proof.get("matches") == []
+                    and proof.get("unresolved_candidates") == []
+                    and type(proof.get("observed_at")) in (int, float)
+                    and math.isfinite(proof["observed_at"])
+                    and failed.get("returncode", 0) != 0
+                    and proof["observed_at"] >= failed_path.stat().st_mtime
+                    and parse_utc_datetime(proof["created_since"]).timestamp() <= job["created_at"]
+                ):
+                    digest = hashlib.sha256(proof_path.read_bytes()).hexdigest()
+                    failed_path.rename(
+                        work / (intent["key"] + "-failed-before-reconciliation-" + digest + ".json")
+                    )
+                    store.checkpoint(
+                        job["job_id"],
+                        kind="admission-absence-reviewed",
+                        subjects=(
+                            SubjectUpdate(
+                                "experiment-intent",
+                                intent["key"],
+                                "running",
+                                {"admission_started": False, "reviewed_absence_sha256": digest},
+                            ),
+                        ),
+                    )
+                    return wait
+                return HandlerResult(
+                    state="blocked",
+                    message="Admission acknowledgement is uncertain; reconcile immutable manifests before recovery",
+                )
             if subject["state"] in {"succeeded", "failed"}:
                 continue
-            detail = subject.get("detail") or {}
             if detail.get("run_id"):
                 status = _observer(p, detail["run_id"], work)
                 if not status or not status.get("completed"):
