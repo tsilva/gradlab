@@ -248,6 +248,38 @@ def test_unretained_history_peak_is_not_assigned_to_another_checkpoint(audit_cas
     assert result["selected_checkpoint"]["step"] == 1000
 
 
+def test_service_failure_reports_stage_without_private_exception_text(audit_case):
+    seal(audit_case)
+    audit_case.client.get_run.side_effect = RuntimeError("private-service-fixture-detail")
+    with pytest.raises(ValueError) as failure:
+        audit(audit_case)
+    assert str(failure.value) == "MLflow Run evidence unavailable or invalid (RuntimeError)"
+    assert "private-service-fixture-detail" not in str(failure.value)
+
+
+def test_audit_completes_with_one_shared_gateway_slot_available(audit_case, monkeypatch):
+    import threading
+    import time
+
+    seal(audit_case)
+    slot = threading.BoundedSemaphore(1)
+    original = audit_case.authority.control.get_bytes
+
+    def get_bytes(key):
+        if "/metric-segments/" not in key:
+            return original(key)
+        if not slot.acquire(blocking=False):
+            raise RuntimeError("shared gateway capacity exhausted")
+        try:
+            time.sleep(0.01)
+            return original(key)
+        finally:
+            slot.release()
+
+    monkeypatch.setattr(audit_case.authority.control, "get_bytes", get_bytes)
+    assert audit(audit_case)["qualified"]
+
+
 def test_return_or_incomplete_success_does_not_substitute_for_full_window(audit_case):
     for event in audit_case.events:
         event["payload"] = {"train/return/mean": 1e8}
@@ -268,3 +300,23 @@ def test_cli_returns_safe_domain_failure_without_claiming_a_completed_audit(monk
     result = json.loads(capsys.readouterr().out)
     assert result["audit_complete"] is False and result["qualified"] is False
     assert "completed, released" in result["reason"]
+
+
+def test_cli_unexpected_failure_withholds_private_provider_details(monkeypatch, capsys):
+    from gradlab import experiment_cli
+
+    run_id = new_run_id()
+    monkeypatch.setattr(experiment_cli, "repository_root", lambda: None)
+    monkeypatch.setattr(experiment_cli, "_status", lambda *args: {"completed": True})
+    monkeypatch.setattr(experiment_cli, "_storage", lambda *args: (None, None))
+
+    def fail(*args):
+        raise KeyError("private-provider-fixture-detail")
+
+    monkeypatch.setattr(experiment_cli, "_audit_training_run", fail)
+    args = build_parser().parse_args(["status", "--run", run_id, "--audit-training", "--json"])
+    assert cmd_status(args) == 1
+    text = capsys.readouterr().out
+    result = json.loads(text)
+    assert not result["audit_complete"] and not result["qualified"]
+    assert "KeyError" in result["reason"] and "private-provider-fixture-detail" not in text

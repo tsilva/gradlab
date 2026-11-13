@@ -1593,7 +1593,6 @@ def _audit_training_run(
     authority: RunAuthority, status: Mapping[str, Any], *, mlflow_client: Any = None
 ) -> dict[str, Any]:
     """Verify the completed fresh canonical-start Mario training contract."""
-    from concurrent.futures import ThreadPoolExecutor
     from types import SimpleNamespace
     from gradlab.metric_journal import JournalHistory, read_control_journal
     from gradlab.metric_names import EPISODE_METRIC_WINDOW_SIZE, ORCHESTRATION_EVENT_SEQUENCE
@@ -1604,6 +1603,21 @@ def _audit_training_run(
     from gradlab.env_config import env_config_from_mapping
     from gradlab.env_metadata import training_metadata
     from gradlab.rom_assets import portable_rom_asset_identity
+
+    def evidence_read(stage, operation, *arguments):
+        try:
+            return operation(*arguments)
+        except Exception as exc:
+            response = getattr(exc, "response", {})
+            status = (
+                response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+                if isinstance(response, dict)
+                else None
+            )
+            status_text = f", HTTP {status}" if type(status) is int and 400 <= status <= 599 else ""
+            raise TrainingQualificationError(
+                f"{stage} evidence unavailable or invalid ({type(exc).__name__}{status_text})"
+            ) from None
 
     if not status.get("completed") or not status.get("dstack", {}).get("terminal"):
         raise TrainingQualificationError(
@@ -1695,13 +1709,14 @@ def _audit_training_run(
         or archive.get("inventory_sha256") != inventory_digest
     ):
         raise TrainingQualificationError("journal inventory disagrees with the terminal receipt")
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        payloads = dict(zip(keys, pool.map(authority.control.get_bytes, keys), strict=True))
+    # Leave capacity for the admitted supervisor and existing observer on the
+    # shared two-slot gateway. Audit reads must not fan out against that limit.
+    payloads = {key: evidence_read("R2 journal", authority.control.get_bytes, key) for key in keys}
     if any(len(payloads[x["key"]]) != x["size"] for x in inventory):
         raise TrainingQualificationError("journal object changed during audit")
     cached = SimpleNamespace(iter_keys=lambda _: iter(keys), get_bytes=payloads.__getitem__)
-    events = read_control_journal(cached, manifest.run_id)
-    JournalHistory(events)  # Reject invalid or noncurrent scientific payloads.
+    events = evidence_read("journal integrity", read_control_journal, cached, manifest.run_id)
+    evidence_read("journal metrics", JournalHistory, events)
     high_water = int(drain.get("metric_segment_high_water") or 0)
     if (
         not events
@@ -1709,14 +1724,16 @@ def _audit_training_run(
         or int(drain.get("service_remote_high_water_mark") or 0) < high_water
     ):
         raise TrainingQualificationError("journal and remote delivery receipts are incomplete")
-    binding = authority.control.get_json(f"runs/{manifest.run_id}/metrics-binding.json")
+    binding = evidence_read(
+        "MLflow binding", authority.control.get_json, f"runs/{manifest.run_id}/metrics-binding.json"
+    )
     if binding.get("run_id") != manifest.run_id or binding.get("backend") != "mlflow":
         raise TrainingQualificationError("MLflow binding disagrees with Run")
     if mlflow_client is None:
         from mlflow.tracking import MlflowClient
 
         mlflow_client = MlflowClient(tracking_uri=os.environ["MLFLOW_TRACKING_URI"])
-    remote = mlflow_client.get_run(binding["service_run_id"])
+    remote = evidence_read("MLflow Run", mlflow_client.get_run, binding["service_run_id"])
     if (
         remote.data.tags.get(RUN_ID_TAG) != manifest.run_id
         or int(remote.data.metrics.get(ORCHESTRATION_EVENT_SEQUENCE, 0)) < high_water
@@ -1817,7 +1834,9 @@ def _audit_training_run(
             f"train/success/{level}/count": observation["cumulative_clears"],
         }
         for key, expected in selected_metrics.items():
-            history = mlflow_client.get_metric_history(binding["service_run_id"], key)
+            history = evidence_read(
+                "MLflow history", mlflow_client.get_metric_history, binding["service_run_id"], key
+            )
             if not any(
                 row.step == observation["metric_step"] and abs(row.value - expected) < 1e-9
                 for row in history
@@ -1882,6 +1901,15 @@ def cmd_status(args: argparse.Namespace) -> int:
                     "qualified": False,
                     "audit_complete": False,
                     "reason": str(exc),
+                    "run_mutations_performed": False,
+                }
+                exit_code = 1
+            except Exception as exc:
+                value = {
+                    "run_id": args.run_id,
+                    "qualified": False,
+                    "audit_complete": False,
+                    "reason": f"audit evidence unavailable or invalid ({type(exc).__name__})",
                     "run_mutations_performed": False,
                 }
                 exit_code = 1

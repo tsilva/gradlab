@@ -37,8 +37,8 @@ closed. This training criterion does not establish frozen-checkpoint quality,
 Acceptance, Promotion or reliability across training seeds.
 
 Reads are bounded to 50,000 inventory objects, 20,000 journal segments, 128 MiB
-of journal content and a 256 MiB model. Journal downloads use at most six
-concurrent requests. A Run exceeding these limits needs a separately reviewed
+of journal content and a 256 MiB model. Journal downloads are sequential to leave shared gateway
+capacity for admitted training and existing observers. A Run exceeding these limits needs a separately reviewed
 verification procedure; do not bypass the bounds or substitute credentials.
 
 Select any personal access tooling externally, according to the operator's
