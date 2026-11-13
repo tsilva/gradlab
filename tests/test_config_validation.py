@@ -396,13 +396,13 @@ class ConfigValidationTests(unittest.TestCase):
                     },
                 )
 
-        self.assertEqual(actor_critic_recipes, 82)
+        self.assertEqual(actor_critic_recipes, 81)
 
     def test_every_mario_recipe_disables_eval_and_preserves_its_clear_contract(self) -> None:
         mario_root = Path("experiments/goals/SuperMarioBros-Nes-v0")
         recipes = sorted(mario_root.glob("*/recipes/*.yaml"))
 
-        self.assertEqual(len(recipes), 52)
+        self.assertEqual(len(recipes), 51)
         for recipe_path in recipes:
             with self.subTest(recipe=recipe_path):
                 goal_path = recipe_path.parent.parent / "_goal.yaml"
@@ -410,7 +410,10 @@ class ConfigValidationTests(unittest.TestCase):
                 train_config = document["train_config"]
                 self.assertEqual(train_config["checkpoint_eval_backend"], "none")
                 self.assertNotIn("stop_on_acceptance", train_config)
-                if recipe_path.stem in {"ppo-train-clear-80", "ppo-sil-train-clear-80"} or recipe_path == self.MARIO_SINGLE_RECIPES / "ppo.yaml":
+                if recipe_path.stem in {"ppo-train-clear-80", "ppo-sil-train-clear-80"} or recipe_path in {
+                    self.MARIO_SINGLE_RECIPES / "ppo.yaml",
+                    self.MARIO_L12_GOAL.parent / "recipes/ppo.yaml",
+                }:
                     conditions = train_config["early_stop"]["conditions"]
                     self.assertEqual(conditions["clear_100"]["action"], "stop")
                     self.assertEqual(conditions["clear_80"]["threshold"], 0.8)
@@ -539,7 +542,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(report.counts["json_files"], 0)
         self.assertGreaterEqual(report.counts["yaml_files"], 15)
         self.assertGreaterEqual(report.counts["goals"], 1)
-        self.assertEqual(report.counts["train_recipes"], 84)
+        self.assertEqual(report.counts["train_recipes"], 83)
         self.assertGreaterEqual(report.counts["env_configs"], 0)
         self.assertEqual(report.counts["benchmark_profiles"], 4)
         self.assertEqual(report.counts["workspace_manifests"], 1)
@@ -1007,15 +1010,15 @@ class ConfigValidationTests(unittest.TestCase):
         )
         self.assertEqual(document["train"]["environment"]["task"]["id"], "mario")
 
-    def test_level_1_2_resets_no_progress_attractor_and_caps_ppo_at_30m(self) -> None:
+    def test_level_1_2_preserves_qualified_ppo_and_no_progress_resets(self) -> None:
         recipe = self.MARIO_L12_GOAL.parent / "recipes/ppo.yaml"
         document = compose_train_document(self.MARIO_L12_GOAL, recipe)
         stalled_event = {"signal": "x", "operation": "unchanged_for", "steps": 300}
 
-        self.assertEqual(document["train_config"]["timesteps"], 30_000_000)
+        self.assertEqual(document["train_config"]["timesteps"], 50_000_000)
         self.assertEqual(
             document["train_config"]["training_backend"]["config"]["target_kl"],
-            0.03,
+            0.16,
         )
         self.assertEqual(document["train_config"]["state"], "Level1-2")
         self.assertEqual(document["train_config"]["task"]["events"]["stalled"], stalled_event)

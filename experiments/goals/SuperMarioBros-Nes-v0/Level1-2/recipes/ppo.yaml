@@ -1,16 +1,10 @@
 defaults:
 - ../../../../recipes/_presets/mario-single-ppo@_global_
+- ../../../../recipes/_presets/mario-training-clear-80@_global_
 - _self_
-reward_shape: speedrun-v1
 recipe_id: ppo
+description: Fresh PPO training screen for {{ goal_id }}, preferring 100 genuine clears in the latest 100 target episodes, with a retained 80-clear fallback when progress stalls.
+reward_shape: speedrun-v1
+seeds: [12]
 train:
-  checkpoint_steps: [500000, 1000000, 2000000, 4000000, 8000000, 12000000, 20000000, 25000000, 28000000]
-  # The last accepted baseline cleared 100/100 by 28.6M transitions. Treat
-  # failure to recover by 30M as a failed trajectory instead of spending 50M.
-  timesteps: 30000000
-  backend:
-    config:
-      # Keep rollout updates near the 0.015-0.024 KL regime observed in the
-      # accepted Level1-2 run and stop before destructive policy drift.
-      target_kl: 0.03
-description: Stable low-KL, late-decay PPO baseline for {{ goal_id }}.
+  timesteps: 50000000
