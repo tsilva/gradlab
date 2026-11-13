@@ -27,6 +27,7 @@ from gradlab.recipe_documents import (
 )
 from gradlab.recipe_schema import validate_materialized_train_recipe
 from gradlab.resolved_training import ResolvedTrainConfig
+from tests.mario_recipe_fixtures import mario_recipe_fixture
 
 
 class ConfigValidationTests(unittest.TestCase):
@@ -328,21 +329,21 @@ class ConfigValidationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "missing explicit.*frame_stack"):
             validate_materialized_train_recipe(document, label="recipe")
 
-    def test_level1_3_training_clear_recipe_disables_eval_and_stops_at_100_of_100(
+    def test_level1_3_recipe_prefers_100_and_preserves_80_plateau_fallback(
         self,
     ) -> None:
         document = compose_train_document(
             self.MARIO_L13_GOAL,
-            self.MARIO_L13_GOAL.parent / "recipes/ppo-train-clear-100.yaml",
+            self.MARIO_L13_GOAL.parent / "recipes/ppo.yaml",
         )
 
         train_config = document["train_config"]
-        self.assertEqual(document["recipe_id"], "ppo-train-clear-100")
+        self.assertEqual(document["recipe_id"], "ppo")
         self.assertEqual(train_config["checkpoint_eval_backend"], "none")
         self.assertNotIn("stop_on_acceptance", train_config)
         self.assertEqual(
             set(train_config["early_stop"]["conditions"]),
-            {"clear_100"},
+            {"clear_100", "clear_80", "qualified_plateau"},
         )
         self.assertEqual(
             train_config["early_stop"]["conditions"]["clear_100"],
@@ -396,13 +397,13 @@ class ConfigValidationTests(unittest.TestCase):
                     },
                 )
 
-        self.assertEqual(actor_critic_recipes, 78)
+        self.assertEqual(actor_critic_recipes, 73)
 
     def test_every_mario_recipe_disables_eval_and_preserves_its_clear_contract(self) -> None:
         mario_root = Path("experiments/goals/SuperMarioBros-Nes-v0")
         recipes = sorted(mario_root.glob("*/recipes/*.yaml"))
 
-        self.assertEqual(len(recipes), 48)
+        self.assertEqual(len(recipes), 42)
         for recipe_path in recipes:
             with self.subTest(recipe=recipe_path):
                 goal_path = recipe_path.parent.parent / "_goal.yaml"
@@ -412,20 +413,18 @@ class ConfigValidationTests(unittest.TestCase):
                 self.assertNotIn("stop_on_acceptance", train_config)
                 if recipe_path.stem in {"ppo-train-clear-80", "ppo-sil-train-clear-80"} or recipe_path in {
                     mario_root / level / "recipes/ppo.yaml"
-                    for level in ("Level1-1", "Level1-2", "Level1-4", "Level2-1", "Level2-3")
+                    for level in ("Level1-1", "Level1-2", "Level1-3", "Level1-4", "Level2-1", "Level2-2", "Level2-3", "Level3-1")
                 }:
                     conditions = train_config["early_stop"]["conditions"]
                     self.assertEqual(conditions["clear_100"]["action"], "stop")
                     self.assertEqual(conditions["clear_80"]["threshold"], 0.8)
                     self.assertEqual(conditions["clear_80"]["action"], "observe")
                     self.assertEqual(conditions["qualified_plateau"]["activation_threshold"], 0.8)
-                    continue
-                if recipe_path.name == "ppo-sil-actor-only.yaml":
-                    self.assertIsNone(train_config["early_stop"])
-                    self.assertEqual(train_config["timesteps"], 9_310_208)
-                    self.assertEqual(train_config["training_backend"]["id"], "gradlab.ppo")
-                    self.assertTrue(train_config["training_backend"]["config"]["sil"]["enabled"])
-                    self.assertFalse(train_config["policy_model"]["share_features_extractor"])
+                    if recipe_path.parent.parent.name in {"Level1-3", "Level2-2"}:
+                        self.assertEqual(train_config["timesteps"], 16_777_216)
+                        self.assertEqual(train_config["training_backend"]["id"], "gradlab.ppo")
+                        self.assertTrue(train_config["training_backend"]["config"]["sil"]["enabled"])
+                        self.assertFalse(train_config["policy_model"]["share_features_extractor"])
                     continue
                 conditions = train_config["early_stop"]["conditions"]
                 self.assertEqual(set(conditions), {"clear_100"})
@@ -542,7 +541,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(report.counts["json_files"], 0)
         self.assertGreaterEqual(report.counts["yaml_files"], 15)
         self.assertGreaterEqual(report.counts["goals"], 1)
-        self.assertEqual(report.counts["train_recipes"], 80)
+        self.assertEqual(report.counts["train_recipes"], 74)
         self.assertGreaterEqual(report.counts["env_configs"], 0)
         self.assertEqual(report.counts["benchmark_profiles"], 4)
         self.assertEqual(report.counts["workspace_manifests"], 1)
@@ -644,9 +643,9 @@ class ConfigValidationTests(unittest.TestCase):
         )
 
     def test_go_explore_persists_portable_cell_graph_without_snapshots(self) -> None:
-        recipe = self.MARIO_L13_GOAL.parent / "recipes/go-explore-route-diagnostic.yaml"
-        document = compose_train_document(self.MARIO_L13_GOAL, recipe,
-            recipe_overrides=["train.state_archive.export.snapshots=none"])
+        with mario_recipe_fixture("go-explore") as (_, goal, recipe):
+            document = compose_train_document(goal, recipe,
+                recipe_overrides=["train.state_archive.export.snapshots=none"])
         train_config = document["train_config"]
 
         self.assertEqual(train_config["state_archive"]["persistence"], "ephemeral")

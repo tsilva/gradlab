@@ -60,14 +60,16 @@ remains ineligible for Acceptance. Monitoring remains a separate opt-in campaign
 
 ## Mario route discovery
 
-`goals/SuperMarioBros-Nes-v0/Level1-3/recipes/go-explore-route-diagnostic.yaml`
-searches for a complete action sequence with Go-Explore, bounded to one million
-environment transitions. Launch it with an explicit finite task duration, for
-example `--max-duration 30m`. Automatic Acceptance evaluation is disabled. Each
-checkpoint retains its portable route graph and the graph's emulator snapshots
-for subsequent replay and local PPO diagnostics. Verify a candidate route from
-the original level start before using it as a demonstration; search results do
-not establish the learned PPO policy's 100-episode Acceptance.
+The [historical Level1-3 diagnostic](https://github.com/tsilva/gradlab/blob/7e643f4f820ecc0a82b6c7f90a787810c64c5ee8/experiments/goals/SuperMarioBros-Nes-v0/Level1-3/recipes/go-explore-route-diagnostic.yaml)
+defined Go-Explore route search bounded to one million environment transitions,
+with automatic Acceptance evaluation disabled. It remains available at that
+source revision. The current Level1-3 directory keeps the
+[qualified PPO recipe with SIL](goals/SuperMarioBros-Nes-v0/Level1-3/recipes/ppo.yaml).
+
+Go-Explore checkpoint exports support portable route graphs and emulator snapshots
+for replay and PPO diagnostics. Verify a candidate route from the original level
+start before using it as a demonstration; search results do not establish the
+learned PPO policy's 100-episode Acceptance.
 
 ## Provider-owned policy signal histories
 

@@ -57,10 +57,8 @@ def test_mario_recipes_select_the_speedrun_default_or_declared_sft_variant() -> 
     recipes = sorted(goal_root.glob("*/recipes/*.yaml"))
     assert recipes
     sft_variants = {
-        "Level1-3/recipes/ppo-sft-critic-warmup.yaml",
-        "Level1-3/recipes/ppo-sil-actor-only.yaml",
-        "Level1-3/recipes/ppo-sil-train-clear-80.yaml",
-        "Level2-2/recipes/ppo-sil-train-clear-80.yaml",
+        "Level1-3/recipes/ppo.yaml",
+        "Level2-2/recipes/ppo.yaml",
     }
     assert sft_variants <= {recipe.relative_to(goal_root).as_posix() for recipe in recipes}
 

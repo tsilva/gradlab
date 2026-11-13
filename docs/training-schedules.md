@@ -45,12 +45,13 @@ sampling fraction, and the maximum collected length per lane episode. The replay
 seed defaults to the training seed. If a provider exposes an action eligibility
 signal, set `control_signal` and its integer `control_value` together. Return
 targets still include rewards on every step. Absent or disabled SIL uses the
-base update. For Mario Level1-3, use `ppo-sil-actor-only` as the default PPO
-recipe. Its absolute training budget reproduces the accepted seed 1801
-checkpoint.
+base update. For Mario Level1-3 and Level2-2, each canonical `ppo` recipe enables
+actor-only SIL with its qualified seed 1801 configuration and finite training budget.
+Training qualification does not establish Acceptance; see the
+[qualification report](../experiments/reports/smb-per-level-recipe-qualification.md).
 
 ```sh
-gradlab train SuperMarioBros-Nes-v0/Level1-3/ppo-sil-actor-only --seed 1801 --no-wandb
+gradlab train SuperMarioBros-Nes-v0/Level1-3/ppo --seed 1801 --no-wandb
 ```
 
 ## Checkpoint schedules

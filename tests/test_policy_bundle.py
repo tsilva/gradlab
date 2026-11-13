@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
+from tests.mario_recipe_fixtures import mario_recipe_fixture
 
 from gradlab.action_contract import declared_action_contract
 from gradlab.artifacts import install_model_bundle
@@ -51,7 +52,7 @@ from gradlab.state_archive import StateArchive, state_archive_artifact_summary
 GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml")
 RECIPE = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/recipes/ppo.yaml")
 LEVEL1_3_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-3/_goal.yaml")
-LEVEL1_3_TRAIN_CLEAR_RECIPE = LEVEL1_3_GOAL.parent / "recipes/ppo-train-clear-100.yaml"
+LEVEL1_3_TRAIN_CLEAR_RECIPE = LEVEL1_3_GOAL.parent / "recipes/ppo.yaml"
 RUNTIME = "docker:ghcr.io/tsilva/gradlab/gradlab-train@sha256:" + "b" * 64
 BREAKOUT_GOAL = Path("experiments/goals/Breakout-Atari2600-v0/FirstWall/_goal.yaml")
 BREAKOUT_RECIPES = tuple(sorted((BREAKOUT_GOAL.parent / "recipes").glob("*.yaml")))
@@ -105,22 +106,19 @@ def level1_1_recipe_document(*, seed: int = 7) -> dict:
 
 
 def test_warmup_recipe_preserves_portable_initial_policy() -> None:
-    resolved = compose_resolved_train_documents(
-        LEVEL1_3_GOAL,
-        LEVEL1_3_GOAL.parent / "recipes/ppo-sft-critic-warmup.yaml",
-        source_sha="a" * 40,
-    )
-    bind_mario_asset(resolved)
-    document = build_recipe_document(
-        resolved.effective,
-        repo_root=Path.cwd(),
-        source_commit="a" * 40,
-        run_description="Critic warmup portable recipe proof",
-        seed=12,
-        runtime_image_ref=RUNTIME,
-        base_materialized_recipe=resolved.base,
-        canonical_goal=resolved.canonical_goal,
-    )
+    with mario_recipe_fixture("critic-warmup") as (root, goal, recipe):
+        resolved = compose_resolved_train_documents(goal, recipe, source_sha="a" * 40)
+        bind_mario_asset(resolved)
+        document = build_recipe_document(
+            resolved.effective,
+            repo_root=root,
+            source_commit="a" * 40,
+            run_description="Critic warmup portable recipe proof",
+            seed=12,
+            runtime_image_ref=RUNTIME,
+            base_materialized_recipe=resolved.base,
+            canonical_goal=resolved.canonical_goal,
+        )
 
     validated = validate_recipe_document(document)
     initialization = training_backend_config(validated["recipe"]["train_config"])["initial_policy"]
@@ -373,7 +371,7 @@ def test_level1_3_training_clear_bundle_omits_eval_and_preserves_early_stop() ->
     assert "eval" not in recipe
     assert recipe["train_config"]["checkpoint_eval_backend"] == "none"
     assert set(recipe["train_config"]["early_stop"]["conditions"]) == {
-        "clear_100",
+        "clear_100", "clear_80", "qualified_plateau",
     }
     assert recipe["train_config"]["early_stop"]["conditions"]["clear_100"] == {
         "metric": "train/success/min",
@@ -630,27 +628,20 @@ def test_evaluated_goal_preserves_manual_eval_when_automatic_eval_is_disabled() 
 
 
 def test_evaluated_go_explore_goal_preserves_route_eval_when_automatic_eval_is_disabled() -> None:
-    resolved = compose_resolved_train_documents(
-        LEVEL1_3_GOAL,
-        LEVEL1_3_GOAL.parent / "recipes/go-explore-route-diagnostic.yaml",
-        prepare_materialized=lambda document: prepare_checkpoint_eval_mode(
-            document,
-            checkpoint_eval_backend="none",
-        ),
-        source_sha="a" * 40,
-    )
-    bind_mario_asset(resolved)
-
-    document = build_recipe_document(
-        resolved.effective,
-        repo_root=Path.cwd(),
-        source_commit="a" * 40,
-        run_description="local Go-Explore regression",
-        seed=123,
-        runtime_image_ref=RUNTIME,
-        base_materialized_recipe=resolved.base,
-        canonical_goal=resolved.canonical_goal,
-    )
+    with mario_recipe_fixture("go-explore") as (root, goal, recipe):
+        resolved = compose_resolved_train_documents(
+            goal, recipe,
+            prepare_materialized=lambda document: prepare_checkpoint_eval_mode(
+                document, checkpoint_eval_backend="none",
+            ), source_sha="a" * 40,
+        )
+        bind_mario_asset(resolved)
+        document = build_recipe_document(
+            resolved.effective, repo_root=root, source_commit="a" * 40,
+            run_description="local Go-Explore regression", seed=123,
+            runtime_image_ref=RUNTIME, base_materialized_recipe=resolved.base,
+            canonical_goal=resolved.canonical_goal,
+        )
 
     recipe = document["recipe"]
     assert recipe["train_config"]["checkpoint_eval_backend"] == "none"
