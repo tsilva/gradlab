@@ -207,10 +207,13 @@ def load_builtin_handlers() -> None:
     publication_jobs.register_job_handler()
     trajectory_publication.register_job_handler()
     from gradlab import dataset_split_publication
+
     dataset_split_publication.register_job_handler()
     from gradlab import dataset_migration_publication
+
     dataset_migration_publication.register_job_handler()
     from gradlab import experiment_batch
+
     experiment_batch.register_job_handler()
 
 
@@ -380,10 +383,7 @@ class JobStore(SqliteStore):
         handler = handler_for(job_type, handler_version)
         normalized = handler.validate_payload(payload)
         encoded = _canonical_json(normalized)
-        identities = [
-            (str(subject.subject_type), str(subject.subject_id))
-            for subject in subjects
-        ]
+        identities = [(str(subject.subject_type), str(subject.subject_id)) for subject in subjects]
         if not identities or any(not kind or not identifier for kind, identifier in identities):
             raise ValueError("a job must have at least one valid subject")
         if len(set(identities)) != len(identities):
@@ -405,16 +405,12 @@ class JobStore(SqliteStore):
                     (str(existing["job_id"]),),
                 ).fetchall()
                 existing_identities = {
-                    (str(row["subject_type"]), str(row["subject_id"]))
-                    for row in existing_subjects
+                    (str(row["subject_type"]), str(row["subject_id"])) for row in existing_subjects
                 }
-                if (
-                    str(existing["payload_json"]) != encoded
-                    or existing_identities != set(identities)
+                if str(existing["payload_json"]) != encoded or existing_identities != set(
+                    identities
                 ):
-                    raise ValueError(
-                        "job idempotency key conflicts with a different request"
-                    )
+                    raise ValueError("job idempotency key conflicts with a different request")
                 return EnqueueResult(
                     job=self._decode_job(existing),
                     subjects=tuple(self._decode_subject(row) for row in existing_subjects),
@@ -451,11 +447,7 @@ class JobStore(SqliteStore):
                         subject.subject_type,
                         subject.subject_id,
                         subject.exclusive_key,
-                        (
-                            None
-                            if subject.detail is None
-                            else _canonical_json(subject.detail)
-                        ),
+                        (None if subject.detail is None else _canonical_json(subject.detail)),
                         now,
                         now,
                     ),
@@ -512,29 +504,31 @@ class JobStore(SqliteStore):
             result[identifier] = item
         return result
 
-    def has_unfinished(self) -> bool:
+    def has_unfinished(self, *, job_types: Sequence[str] | None = None) -> bool:
         self.init()
         placeholders = ",".join("?" for _ in ACTIVE_JOB_STATES)
+        selection, parameters = _job_type_filter(job_types)
         with self.connection() as connection:
             row = connection.execute(
-                f"SELECT 1 FROM jobs WHERE state IN ({placeholders}) LIMIT 1",
-                tuple(ACTIVE_JOB_STATES),
+                f"SELECT 1 FROM jobs WHERE state IN ({placeholders}){selection} LIMIT 1",
+                (*ACTIVE_JOB_STATES, *parameters),
             ).fetchone()
         return row is not None
 
-    def claim_next(self) -> dict[str, Any] | None:
+    def claim_next(self, *, job_types: Sequence[str] | None = None) -> dict[str, Any] | None:
         self.init()
+        selection, parameters = _job_type_filter(job_types)
         now = self.clock.time()
         with self.connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
-                """
+                f"""
                 SELECT * FROM jobs
-                WHERE state IN ('queued', 'retry_wait') AND available_at <= ?
+                WHERE state IN ('queued', 'retry_wait') AND available_at <= ?{selection}
                 ORDER BY created_at, job_id
                 LIMIT 1
                 """,
-                (now,),
+                (now, *parameters),
             ).fetchone()
             if row is None:
                 return None
@@ -584,9 +578,7 @@ class JobStore(SqliteStore):
             if current is None:
                 raise ValueError(f"unknown job: {job_id}")
             if str(current["state"]) != "running":
-                raise RuntimeError(
-                    f"job {job_id} cannot finish from state {current['state']}"
-                )
+                raise RuntimeError(f"job {job_id} cannot finish from state {current['state']}")
             finished_at = now if result.state in TERMINAL_JOB_STATES else None
             connection.execute(
                 """
@@ -613,11 +605,7 @@ class JobStore(SqliteStore):
                     """,
                     (
                         subject.state,
-                        (
-                            None
-                            if subject.detail is None
-                            else _canonical_json(subject.detail)
-                        ),
+                        (None if subject.detail is None else _canonical_json(subject.detail)),
                         now,
                         str(job_id),
                         subject.subject_type,
@@ -626,8 +614,7 @@ class JobStore(SqliteStore):
                 )
                 if cursor.rowcount != 1:
                     raise ValueError(
-                        f"job {job_id} has no subject "
-                        f"{subject.subject_type}/{subject.subject_id}"
+                        f"job {job_id} has no subject {subject.subject_type}/{subject.subject_id}"
                     )
             if result.state in TERMINAL_JOB_STATES:
                 fallback = {
@@ -699,8 +686,7 @@ class JobStore(SqliteStore):
                 )
                 if cursor.rowcount != 1:
                     raise ValueError(
-                        f"job {job_id} has no subject "
-                        f"{subject.subject_type}/{subject.subject_id}"
+                        f"job {job_id} has no subject {subject.subject_type}/{subject.subject_id}"
                     )
             self._event(
                 connection,
@@ -711,13 +697,14 @@ class JobStore(SqliteStore):
             )
             return bool(current["cancel_requested"])
 
-    def recover_running(self) -> int:
+    def recover_running(self, *, job_types: Sequence[str] | None = None) -> int:
         self.init()
+        selection, parameters = _job_type_filter(job_types)
         now = self.clock.time()
         with self.connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             rows = connection.execute(
-                "SELECT job_id FROM jobs WHERE state = 'running'"
+                f"SELECT job_id FROM jobs WHERE state = 'running'{selection}", parameters
             ).fetchall()
             for row in rows:
                 job_id = str(row["job_id"])
@@ -835,9 +822,7 @@ class JobStore(SqliteStore):
     def worker_state(self) -> dict[str, Any]:
         self.init()
         with self.connection() as connection:
-            row = connection.execute(
-                "SELECT * FROM worker_state WHERE singleton = 1"
-            ).fetchone()
+            row = connection.execute("SELECT * FROM worker_state WHERE singleton = 1").fetchone()
         return {} if row is None else dict(row)
 
     def record_worker(
@@ -891,17 +876,28 @@ class JobStore(SqliteStore):
                 (str(message)[:4000], now),
             )
 
-    def next_available_at(self) -> float | None:
+    def next_available_at(self, *, job_types: Sequence[str] | None = None) -> float | None:
         self.init()
+        selection, parameters = _job_type_filter(job_types)
         with self.connection() as connection:
             row = connection.execute(
-                """
+                f"""
                 SELECT MIN(available_at) FROM jobs
-                WHERE state IN ('queued', 'retry_wait')
-                """
+                WHERE state IN ('queued', 'retry_wait'){selection}
+                """,
+                parameters,
             ).fetchone()
         value = None if row is None else row[0]
         return None if value is None else float(value)
+
+
+def _job_type_filter(job_types: Sequence[str] | None) -> tuple[str, tuple[str, ...]]:
+    if job_types is None:
+        return "", ()
+    values = tuple(dict.fromkeys(job_types))
+    if not values or any(not isinstance(value, str) or not value for value in values):
+        raise ValueError("job_types must contain nonempty job type names")
+    return " AND job_type IN (" + ",".join("?" for _ in values) + ")", values
 
 
 def _open_lock(store: JobStore) -> int:
@@ -933,21 +929,40 @@ def _rotate_log(path: Path, *, maximum_bytes: int = 2 * 1024 * 1024) -> None:
     path.replace(rotated)
 
 
+def _existing_flusher(store: JobStore, job_types: Sequence[str] | None) -> WorkerStart:
+    state = store.worker_state()
+    pid = int(state["pid"]) if state.get("pid") is not None else None
+    try:
+        selection = json.loads((store.root / "worker-selection.json").read_text())
+    except OSError, ValueError:
+        selection = None
+    if selection is None or selection.get("generation") != state.get("generation"):
+        return WorkerStart(
+            "start_failed", "Existing flusher selection is unknown; inspect before retry", pid
+        )
+    active = selection.get("job_types")
+    if active is not None and (job_types is None or not set(job_types).issubset(active)):
+        return WorkerStart(
+            "start_failed",
+            "Existing flusher handles different job types; retry after it exits",
+            pid,
+        )
+    return WorkerStart("already_running", pid=pid)
+
+
 def ensure_flusher(
     store: JobStore,
     *,
     start_timeout_seconds: float = DEFAULT_START_TIMEOUT_SECONDS,
     idle_seconds: float = DEFAULT_IDLE_SECONDS,
+    job_types: Sequence[str] | None = None,
 ) -> WorkerStart:
+    _job_type_filter(job_types)
     store.init()
-    if not store.has_unfinished():
+    if not store.has_unfinished(job_types=job_types):
         return WorkerStart("already_running", "no unfinished work")
     if lock_is_held(store):
-        state = store.worker_state()
-        return WorkerStart(
-            "already_running",
-            pid=int(state["pid"]) if state.get("pid") is not None else None,
-        )
+        return _existing_flusher(store, job_types)
     generation = secrets.token_hex(16)
     _rotate_log(store.log_path)
     try:
@@ -966,6 +981,7 @@ def ensure_flusher(
                     generation,
                     "--idle-seconds",
                     str(max(0.0, float(idle_seconds))),
+                    *[argument for kind in (job_types or ()) for argument in ("--job-type", kind)],
                 ],
                 stdin=subprocess.DEVNULL,
                 stdout=log,
@@ -987,7 +1003,7 @@ def ensure_flusher(
             if lock_is_held(store):
                 return WorkerStart("started", pid=int(state.get("pid") or process.pid))
             return_code = process.poll()
-            if return_code == 0 and not store.has_unfinished():
+            if return_code == 0 and not store.has_unfinished(job_types=job_types):
                 return WorkerStart(
                     "started",
                     "flusher started and drained the queue",
@@ -995,22 +1011,13 @@ def ensure_flusher(
                 )
         if process.poll() is not None:
             if lock_is_held(store):
-                state = store.worker_state()
-                return WorkerStart(
-                    "already_running",
-                    pid=int(state["pid"]) if state.get("pid") is not None else None,
-                )
+                return _existing_flusher(store, job_types)
             message = f"job flusher exited during startup with status {process.returncode}"
             store.record_start_error(message)
             return WorkerStart("start_failed", message)
         time.sleep(0.05)
     if lock_is_held(store):
-        state = store.worker_state()
-        return WorkerStart(
-            "already_running",
-            "another flusher won the startup race",
-            int(state["pid"]) if state.get("pid") is not None else None,
-        )
+        return _existing_flusher(store, job_types)
     message = "job flusher did not acknowledge startup before the timeout"
     store.record_start_error(message)
     return WorkerStart("start_failed", message)
@@ -1023,7 +1030,9 @@ def run_flusher(
     idle_seconds: float = DEFAULT_IDLE_SECONDS,
     poll_seconds: float = DEFAULT_POLL_SECONDS,
     clock: Clock | None = None,
+    job_types: Sequence[str] | None = None,
 ) -> int:
+    selection, parameters = _job_type_filter(job_types)
     store.init()
     worker_clock = clock or store.clock or SystemClock()
     descriptor = _open_lock(store)
@@ -1033,12 +1042,17 @@ def run_flusher(
         except BlockingIOError:
             return 0
         identity = generation or secrets.token_hex(16)
-        store.recover_running()
+        selection_path = store.root / "worker-selection.json"
+        selection_temp = selection_path.with_suffix(".tmp")
+        selection_temp.write_text(json.dumps({"generation": identity, "job_types": job_types}))
+        selection_temp.chmod(0o600)
+        selection_temp.replace(selection_path)
+        store.recover_running(job_types=job_types)
         store.record_worker(generation=identity, pid=os.getpid())
         idle_since: float | None = None
         while True:
             store.record_worker(generation=identity, pid=os.getpid())
-            job = store.claim_next()
+            job = store.claim_next(job_types=job_types)
             if job is not None:
                 idle_since = None
                 try:
@@ -1062,7 +1076,7 @@ def run_flusher(
                 store.finish(str(job["job_id"]), result)
                 continue
 
-            next_at = store.next_available_at()
+            next_at = store.next_available_at(job_types=job_types)
             if next_at is not None:
                 idle_since = None
                 delay = max(0.0, next_at - worker_clock.time())
@@ -1083,11 +1097,12 @@ def run_flusher(
             with store.connection() as connection:
                 connection.execute("BEGIN IMMEDIATE")
                 row = connection.execute(
-                    """
+                    f"""
                     SELECT 1 FROM jobs
-                    WHERE state IN ('queued', 'running', 'retry_wait')
+                    WHERE state IN ('queued', 'running', 'retry_wait'){selection}
                     LIMIT 1
-                    """
+                    """,
+                    parameters,
                 ).fetchone()
                 if row is not None:
                     continue

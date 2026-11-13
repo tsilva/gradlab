@@ -122,6 +122,53 @@ class JobQueueTests(unittest.TestCase):
             ],
         )
 
+    def test_selected_flusher_preserves_other_queued_and_running_jobs(self):
+        other = self.store.enqueue(
+            job_type=_RetryOnceHandler.job_type,
+            handler_version=1,
+            payload={"value": "other"},
+            idempotency_key="other",
+            subjects=[JobSubject("retry", "other")],
+        )
+        self.store.claim_next()
+        selected = self.enqueue()
+        self.assertEqual(run_flusher(self.store, idle_seconds=0, job_types=["test-success"]), 0)
+        self.assertEqual(self.store.job(selected.job["job_id"])["state"], "succeeded")
+        self.assertEqual(self.store.job(other.job["job_id"])["state"], "running")
+        self.assertTrue(self.store.has_unfinished())
+        self.assertFalse(self.store.has_unfinished(job_types=["test-success"]))
+        self.assertIsNone(self.store.next_available_at(job_types=["test-success"]))
+        self.assertEqual(self.store.recover_running(job_types=["test-retry-once"]), 1)
+        self.assertIsNone(self.store.claim_next(job_types=["test-success"]))
+        self.assertIsNotNone(self.store.claim_next(job_types=["test-retry-once"]))
+
+    def test_filtered_detached_worker_does_not_process_older_unselected_job(self):
+        other = self.store.enqueue(
+            job_type=_RetryOnceHandler.job_type,
+            handler_version=1,
+            payload={"value": "other"},
+            idempotency_key="other",
+            subjects=[JobSubject("retry", "other")],
+        )
+        selected = self.enqueue()
+        started = ensure_flusher(
+            self.store, start_timeout_seconds=3, idle_seconds=0.2, job_types=["test-success"]
+        )
+        self.assertEqual(started.state, "started")
+        if lock_is_held(self.store):
+            self.assertEqual(ensure_flusher(self.store).state, "start_failed")
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline and lock_is_held(self.store):
+            time.sleep(0.05)
+        self.assertFalse(lock_is_held(self.store))
+        self.assertEqual(self.store.job(selected.job["job_id"])["state"], "blocked")
+        self.assertEqual(self.store.job(other.job["job_id"])["state"], "queued")
+        self.assertEqual(self.store.job(other.job["job_id"])["attempts"], 0)
+
+    def test_empty_job_selection_is_rejected(self):
+        with self.assertRaises(ValueError):
+            self.store.claim_next(job_types=[])
+
     def test_enqueue_is_durable_idempotent_and_private(self) -> None:
         first = self.enqueue()
         repeated = self.enqueue()
@@ -210,9 +257,7 @@ class JobQueueTests(unittest.TestCase):
             handler_version=_SuccessfulHandler.version,
             payload={"value": "subject-b"},
             idempotency_key="other-request",
-            subjects=[
-                JobSubject(subject_type="test", subject_id="subject-b")
-            ],
+            subjects=[JobSubject(subject_type="test", subject_id="subject-b")],
         )
         claimed = self.store.claim_next()
         self.store.finish(
@@ -221,15 +266,9 @@ class JobQueueTests(unittest.TestCase):
         )
         retried = self.store.retry(str(other.job["job_id"]))
         self.assertEqual(retried["state"], "queued")
-        kinds = [
-            event["kind"]
-            for event in self.store.events(str(other.job["job_id"]))
-        ]
+        kinds = [event["kind"] for event in self.store.events(str(other.job["job_id"]))]
         self.assertEqual(kinds[-2:], ["state:failed", "retried"])
-        canceled_kinds = [
-            event["kind"]
-            for event in self.store.events(job_id)
-        ]
+        canceled_kinds = [event["kind"] for event in self.store.events(job_id)]
         self.assertEqual(
             canceled_kinds,
             ["enqueued", "canceled", "retried", "canceled"],
@@ -242,9 +281,7 @@ class JobQueueTests(unittest.TestCase):
                 handler_version=_RetryOnceHandler.version,
                 payload={"value": value},
                 idempotency_key=f"request-{value}",
-                subjects=[
-                    JobSubject(subject_type="retry", subject_id=value)
-                ],
+                subjects=[JobSubject(subject_type="retry", subject_id=value)],
             )
 
         run_flusher(self.store, idle_seconds=0)
@@ -272,9 +309,7 @@ class JobQueueTests(unittest.TestCase):
             handler_version=_SuccessfulHandler.version,
             payload={"value": "subject-b"},
             idempotency_key="idle-window-request",
-            subjects=[
-                JobSubject(subject_type="test", subject_id="subject-b")
-            ],
+            subjects=[JobSubject(subject_type="test", subject_id="subject-b")],
         )
         self.assertEqual(ensure_flusher(self.store).state, "already_running")
         deadline = time.monotonic() + 5.0

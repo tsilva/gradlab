@@ -464,7 +464,7 @@ def main():
             for item in payload["intents"]
         ],
     )
-    worker = ensure_flusher(store)
+    worker = ensure_flusher(store, job_types=[TYPE])
     print(
         json.dumps(
             {"job_id": queued.job["job_id"], "created": queued.created, "worker": worker.to_dict()}

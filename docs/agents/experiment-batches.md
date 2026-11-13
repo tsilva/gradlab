@@ -29,3 +29,9 @@ must be true. This acknowledgement never replaces the underlying evidence.
 Batch cancellation stops future admissions; already admitted Runs keep their
 finite bounds and observers. A completed queue proves terminal processing, not
 Acceptance or recipe qualification. Review the scientific receipts separately.
+
+Batch enqueue starts a worker restricted to `experiment-batch` jobs. It preserves
+other queued job types without claiming or recovering them. For explicit scoped
+recovery use `gradlab jobs flush --job-type experiment-batch`; the default flush
+still processes all job types. A worker with a different active selection must
+finish before a new selection can acquire the shared queue lock.

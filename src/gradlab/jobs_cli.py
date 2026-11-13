@@ -42,6 +42,8 @@ def _parser() -> argparse.ArgumentParser:
     flush_parser = subparsers.add_parser("flush", help="flush jobs in the foreground")
     flush_parser.add_argument("--idle-seconds", type=float, default=DEFAULT_IDLE_SECONDS)
 
+    flush_parser.add_argument("--job-type", action="append", help="process only selected job types")
+
     retry_parser = subparsers.add_parser(
         "retry",
         help="retry a failed, blocked, or canceled job",
@@ -54,6 +56,7 @@ def _parser() -> argparse.ArgumentParser:
     worker_parser = subparsers.add_parser("_worker", help=argparse.SUPPRESS)
     worker_parser.add_argument("--generation", required=True)
     worker_parser.add_argument("--idle-seconds", type=float, default=DEFAULT_IDLE_SECONDS)
+    worker_parser.add_argument("--job-type", action="append")
     return parser
 
 
@@ -91,11 +94,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.action == "flush":
-        return run_flusher(store, idle_seconds=args.idle_seconds)
+        return run_flusher(store, idle_seconds=args.idle_seconds, job_types=args.job_type)
 
     if args.action == "_worker":
         return run_flusher(
             store,
+            job_types=args.job_type,
             generation=args.generation,
             idle_seconds=args.idle_seconds,
         )
