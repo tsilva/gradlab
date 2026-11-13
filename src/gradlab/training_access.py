@@ -101,7 +101,7 @@ def main(arguments=None):
     elif arguments == ["inventory"]:
         inventory()
     else:
-        if arguments[:2] in (["experiment", "launch"], ["experiment", "retry"]) and "--json" not in arguments:
+        if arguments[:2] == ["experiment", "launch"] and "--json" not in arguments:
             arguments.append("--json")
         sys.argv = ["gradlab", *arguments]
         runpy.run_module("gradlab.main", run_name="__main__")
