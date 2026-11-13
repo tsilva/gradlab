@@ -142,7 +142,7 @@ def _follow(root: str, run: str, work: Path) -> int:
             return 0
         try:
             child = subprocess.Popen(
-                _command({"repo_root": root}, ["--run", run], follow=True),
+                _command({"repo_root": root}, ["--run", run, "--pretty"], follow=True),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 text=True,
@@ -152,14 +152,35 @@ def _follow(root: str, run: str, work: Path) -> int:
             _write(work / (run + ".observer-error.json"), {"startup_failed": True})
             return 1
         try:
+            pending = []
+            latest = None
             for line in child.stdout:
-                for row in _rows(line):
+                if pending:
+                    pending.append(line)
+                    if line.rstrip("\r\n") != "}":
+                        continue
+                    text = "".join(pending)
+                    pending = []
+                elif line.strip() == "{":
+                    pending = [line]
+                    continue
+                else:
+                    text = line
+                for row in _rows(text):
                     if row.get("run_id") == run and "dstack" in row:
                         _write(work / (run + ".json"), row)
+                        latest = row
             code = child.wait()
-            if code:
-                _write(work / (run + ".observer-error.json"), {"returncode": code})
-            return code
+            if code or not latest or not latest.get("completed"):
+                _write(
+                    work / (run + ".observer-error.json"),
+                    {
+                        "returncode": code,
+                        "terminal_snapshot_received": bool(latest and latest.get("completed")),
+                    },
+                )
+                return code or 1
+            return 0
         finally:
             if child.poll() is None:
                 child.terminate()

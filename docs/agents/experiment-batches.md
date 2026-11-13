@@ -13,9 +13,11 @@ the preceding Run is terminal. It creates no worker capability while waiting.
 
 Inspect the resulting job with `gradlab jobs show JOB_ID`. Its subjects retain
 admission identities and terminal receipts. Each Run has one lock-protected
-long-lived observer. An interrupted observer can reconnect without resubmission;
-failed access, source drift, operational failures and uncertain admissions stop
-the batch for review. Never retry an uncertain admission without reconciling its
+long-lived observer. Observers request `experiment follow --pretty` so large
+immutable snapshots pass line-bounded output redaction intact without changing
+its limits. An interrupted observer can reconnect without resubmission. Failed
+access, source drift, operational failures and uncertain admissions stop the
+batch for review. Never retry an uncertain admission without reconciling its
 immutable manifests.
 
 Before expanding beyond the first GPU Run, preserve its container assignment,

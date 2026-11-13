@@ -94,7 +94,7 @@ def test_follow_lock_allows_only_one_real_observer_process(tmp_path, monkeypatch
     started = threading.Event()
     original = subprocess.Popen
     children = []
-    status = json.dumps({"run_id": RUN, "dstack": {"status": "running"}, "completed": False})
+    status = json.dumps({"run_id": RUN, "dstack": {"status": "done"}, "completed": True}, indent=2)
     monkeypatch.setattr(
         batch,
         "_command",
@@ -121,6 +121,19 @@ def test_follow_lock_allows_only_one_real_observer_process(tmp_path, monkeypatch
     assert not first.is_alive()
     assert len(children) == 1
     assert json.loads((tmp_path / (RUN + ".json")).read_text()) == json.loads(status)
+
+
+def test_successful_process_without_terminal_snapshot_stops_instead_of_auth_loop(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(
+        batch,
+        "_command",
+        lambda *a, **kw: [sys.executable, "-c", "print('[oversized command output withheld]')"],
+    )
+    assert batch._follow(str(tmp_path), RUN, tmp_path) == 1
+    with pytest.raises(RuntimeError, match="recovery review"):
+        batch._observer({"repo_root": str(tmp_path)}, RUN, tmp_path)
 
 
 def test_failed_real_observer_requires_review_before_reconnect(tmp_path, monkeypatch):

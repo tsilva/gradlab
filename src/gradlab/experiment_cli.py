@@ -1579,6 +1579,7 @@ def _follow_run(
     poll_seconds: float,
     json_events: bool = False,
     terminal_exit_status: bool = False,
+    pretty: bool = False,
 ) -> int:
     previous = ""
     for value, timed_out in _poll_status(
@@ -1594,7 +1595,10 @@ def _follow_run(
                 if json_events
                 else value
             )
-            encoded = canonical_json_text(json_safe(event), ensure_ascii=True)
+            encoded = (
+                json.dumps(json_safe(event), indent=2, sort_keys=True, ensure_ascii=True)
+                if pretty else canonical_json_text(json_safe(event), ensure_ascii=True)
+            )
             print(encoded, flush=True)
             previous = fingerprint
         if value["completed"]:
@@ -1623,6 +1627,7 @@ def cmd_follow(args: argparse.Namespace) -> int:
         args.run_id,
         timeout=float(args.timeout),
         poll_seconds=float(args.poll_seconds),
+        **({"pretty": True} if getattr(args, "pretty", False) else {}),
     )
 
 
@@ -2379,6 +2384,7 @@ def build_parser() -> argparse.ArgumentParser:
     follow.add_argument("--run", dest="run_id", type=_require_run_id, required=True)
     follow.add_argument("--poll-seconds", type=float, default=2.0)
     follow.add_argument("--timeout", type=_parse_duration, default=DEFAULT_FOLLOW_TIMEOUT_SECONDS)
+    follow.add_argument("--pretty", action="store_true", help="Print multiline JSON snapshots for bounded line-oriented transports.")
     follow.set_defaults(func=cmd_follow)
 
     wait = commands.add_parser("wait", help="Wait for one run state.")
