@@ -9,9 +9,10 @@ import pytest
 from gradlab.experiment_cli import _audit_training_run, build_parser, cmd_status
 from gradlab.metric_names import ORCHESTRATION_EVENT_SEQUENCE
 from gradlab.mlflow_delivery import RUN_ID_TAG
+from gradlab.env_identity import environment_hash, environment_identity_from_train_config
 from gradlab.run_contracts import new_attempt_id, new_run_id
 from tests import test_run_authority as authority_fixtures
-from tests.test_policy_bundle import level1_1_recipe_document
+from tests.test_policy_bundle import MARIO_ASSET, level1_1_recipe_document
 
 
 @pytest.fixture
@@ -29,13 +30,15 @@ def audit_case():
         source_sha=document["provenance"]["source_commit"],
         image_digest=document["provenance"]["runtime"]["image_ref"],
         recipe_sha256=recipe_sha,
-        environment_sha256=document["recipe"]["environment_hash"].removeprefix("sha256:"),
+        environment_sha256=environment_hash(
+            environment_identity_from_train_config(config)
+        ).removeprefix("sha256:"),
         goal_variant=document["recipe"]["goal_variant"],
         goal_sha256=config["effective_goal_contract_sha256"],
         tracking={**config["tracking"], "auth_mode": "network"},
         wandb={},
         compute={**manifest.compute, "checkpoint_eval_backend": "none"},
-        modal={**manifest.modal, "enabled": False},
+        modal={**manifest.modal, "enabled": False, "rom_asset_manifest": dict(MARIO_ASSET)},
     )
     events = [
         {
@@ -159,6 +162,13 @@ def test_completed_window_model_and_service_are_independently_verified_without_m
         "cumulative_clears": 280,
     }
     assert result["journal_events_verified"] == result["mlflow_remote_high_water"] == 2
+    document = audit_case.authority.recipe_document(audit_case.manifest.recipe_sha256)
+    assert result["declared_environment_sha256"] != result["artifact_environment_sha256"]
+    assert result["declared_environment_sha256"] == audit_case.manifest.environment_sha256
+    assert result["artifact_environment_sha256"] == document["recipe"][
+        "environment_hash"
+    ].removeprefix("sha256:")
+    assert result["environment_materialization_verified"] and result["rom_asset_identity_verified"]
     assert not result["run_mutations_performed"] and not result["acceptance_claimed"]
     assert sorted(audit_case.authority.control.iter_keys("")) == before
 
@@ -179,6 +189,9 @@ def test_completed_window_model_and_service_are_independently_verified_without_m
         "resumed",
         "source",
         "active",
+        "declared_environment",
+        "artifact_hash_as_declared",
+        "rom_asset",
     ],
 )
 def test_incomplete_or_conflicting_evidence_cannot_qualify(audit_case, damage):
@@ -203,6 +216,15 @@ def test_incomplete_or_conflicting_evidence_cannot_qualify(audit_case, damage):
         c.status["semantic"]["manifest"]["source_sha"] = "f" * 40
     elif damage == "active":
         c.status["completed"] = False
+    elif damage == "declared_environment":
+        c.status["semantic"]["manifest"]["environment_sha256"] = "f" * 64
+    elif damage == "artifact_hash_as_declared":
+        document = c.authority.recipe_document(c.manifest.recipe_sha256)
+        c.status["semantic"]["manifest"]["environment_sha256"] = document["recipe"][
+            "environment_hash"
+        ].removeprefix("sha256:")
+    elif damage == "rom_asset":
+        c.status["semantic"]["manifest"]["modal"]["rom_asset_manifest"]["sha256"] = "f" * 64
     key = seal(c)
     if damage == "inventory":
         c.status["attempt_terminal"]["drain"]["journal_archive"]["inventory_sha256"] = "0" * 64

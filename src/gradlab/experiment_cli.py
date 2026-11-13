@@ -1599,6 +1599,11 @@ def _audit_training_run(
     from gradlab.metric_names import EPISODE_METRIC_WINDOW_SIZE, ORCHESTRATION_EVENT_SEQUENCE
     from gradlab.mlflow_delivery import RUN_ID_TAG
     from gradlab.json_utils import canonical_json_sha256
+    from gradlab.env_identity import environment_hash, environment_identity_from_train_config
+    from gradlab.env import resolve_env_config
+    from gradlab.env_config import env_config_from_mapping
+    from gradlab.env_metadata import training_metadata
+    from gradlab.rom_assets import portable_rom_asset_identity
 
     if not status.get("completed") or not status.get("dstack", {}).get("terminal"):
         raise TrainingQualificationError(
@@ -1617,11 +1622,21 @@ def _audit_training_run(
         raise TrainingQualificationError("Mario campaign audit requires online MLflow")
     recipe = authority.recipe_document(manifest.recipe_sha256)
     config = recipe["recipe"]["train_config"]
+    asset = manifest.modal.get("rom_asset_manifest")
+    if not isinstance(asset, Mapping):
+        raise TrainingQualificationError("Mario audit requires the frozen ROM asset binding")
+    declared_environment_hash = environment_hash(environment_identity_from_train_config(config))
+    resolved_environment = training_metadata(
+        resolve_env_config(env_config_from_mapping(config)), rom_asset_manifest=asset
+    )
     if (
         recipe["provenance"]["source_commit"] != manifest.source_sha
         or recipe["provenance"]["runtime"]["image_ref"] != manifest.image_digest
-        or recipe["recipe"]["environment_hash"].removeprefix("sha256:")
-        != manifest.environment_sha256
+        or declared_environment_hash.removeprefix("sha256:") != manifest.environment_sha256
+        or recipe["recipe"]["environment"] != resolved_environment["environment"]
+        or recipe["recipe"]["environment_hash"] != resolved_environment["environment_hash"]
+        or portable_rom_asset_identity(recipe["provenance"]["asset"])
+        != portable_rom_asset_identity(asset)
         or config["effective_goal_contract_sha256"] != manifest.goal_sha256
         or validate_goal_variant_descriptor(recipe["recipe"]["goal_variant"])
         != manifest.goal_variant
@@ -1766,6 +1781,12 @@ def _audit_training_run(
         "source_sha": manifest.source_sha,
         "runtime_image_ref": manifest.image_digest,
         "recipe_sha256": manifest.recipe_sha256,
+        "declared_environment_sha256": manifest.environment_sha256,
+        "artifact_environment_sha256": resolved_environment["environment_hash"].removeprefix(
+            "sha256:"
+        ),
+        "environment_materialization_verified": True,
+        "rom_asset_identity_verified": True,
         "initialization": "fresh canonical start",
         "uses_sil": bool(backend["config"].get("sil", {}).get("enabled", False)),
         "terminal_state": terminal["state"],

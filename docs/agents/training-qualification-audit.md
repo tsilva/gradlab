@@ -14,6 +14,12 @@ supported contract is native PPO with one canonical Mario level start, fresh
 initialization, no archive curriculum and no automatic evaluation or Monitoring.
 The learner's own SIL replay is allowed; it cannot add target-origin episodes.
 
+The Run's declared environment identity and the artifact's resolved environment
+identity are checked separately. The audit reconstructs the former from the
+stored training configuration and the latter from its effective environment
+defaults and frozen ROM binding. It requires the stored artifact metadata and
+ROM identity to match that reconstruction; the two hashes need not be equal.
+
 For each saved checkpoint, the audit matches the training observation at that
 exact transition step. It selects the highest retained qualifying window, with
 earlier checkpoints breaking ties. An unretained history peak is reported
