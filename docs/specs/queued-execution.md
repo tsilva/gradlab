@@ -5,6 +5,7 @@ This specification applies to GradLab's current local queue and dstack-backed ex
 ## Requirements
 
 - Operator-initiated background work must use one durable and extensible local queue.
+- Pre-scheduled training batches must defer admission and worker capability creation until the preceding Run is terminal and resources are released. Keep finite per-Run and batch bounds, preserve uncertain admissions without duplicate submission, and keep queue completion separate from scientific qualification. See the [batch workflow](../agents/experiment-batches.md).
 - One on-demand local worker must outlive requesting clients, recover safely after interruption, expose evidence-backed status, and exit when no work remains.
 - Brokered training access must keep original service keys out of operator, supervisor and offline learner processes. A queued Attempt owns a finite scoped session independent of the submitting client, revokes it after finalization, and exposes only non-secret session metadata in its immutable manifest. The offline learner receives no session capability. Recovery must preserve immutable identity and use a fresh session for a new Attempt.
 - Each current queued training Run must execute in one training container on one single-GPU host or one explicitly configured CPU-only local worker.

@@ -210,6 +210,8 @@ def load_builtin_handlers() -> None:
     dataset_split_publication.register_job_handler()
     from gradlab import dataset_migration_publication
     dataset_migration_publication.register_job_handler()
+    from gradlab import experiment_batch
+    experiment_batch.register_job_handler()
 
 
 def handler_for(job_type: str, version: int) -> JobHandler:
