@@ -93,6 +93,7 @@ jobs:
           tests/test_operator_credentials.py
           tests/test_experiment_cli.py
           tests/test_submission_lookup.py
+          tests/test_training_qualification_audit.py
           tests/test_manual_mlflow.py
           tests/test_job_queue.py
           tests/test_hardware_metrics.py

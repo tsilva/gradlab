@@ -1585,7 +1585,248 @@ def _submission_status(
     }
 
 
+class TrainingQualificationError(ValueError):
+    """A safe domain explanation; provider diagnostics remain private."""
+
+
+def _audit_training_run(
+    authority: RunAuthority, status: Mapping[str, Any], *, mlflow_client: Any = None
+) -> dict[str, Any]:
+    """Verify the completed fresh canonical-start Mario training contract."""
+    from concurrent.futures import ThreadPoolExecutor
+    from types import SimpleNamespace
+    from gradlab.metric_journal import JournalHistory, read_control_journal
+    from gradlab.metric_names import EPISODE_METRIC_WINDOW_SIZE, ORCHESTRATION_EVENT_SEQUENCE
+    from gradlab.mlflow_delivery import RUN_ID_TAG
+    from gradlab.json_utils import canonical_json_sha256
+
+    if not status.get("completed") or not status.get("dstack", {}).get("terminal"):
+        raise TrainingQualificationError(
+            "training qualification audit requires a completed, released Run"
+        )
+    semantic = status["semantic"]
+    manifest = RunManifest.from_dict(semantic["manifest"])
+    terminal = status["attempt_terminal"]
+    drain = terminal.get("drain") or {}
+    if terminal["attempt_id"] != manifest.attempt_id or not drain.get("complete"):
+        raise TrainingQualificationError("audit requires the original complete fresh Attempt")
+    if (
+        manifest.tracking.get("backend") != "mlflow"
+        or manifest.tracking.get("delivery") != "online"
+    ):
+        raise TrainingQualificationError("Mario campaign audit requires online MLflow")
+    recipe = authority.recipe_document(manifest.recipe_sha256)
+    config = recipe["recipe"]["train_config"]
+    if (
+        recipe["provenance"]["source_commit"] != manifest.source_sha
+        or recipe["provenance"]["runtime"]["image_ref"] != manifest.image_digest
+        or recipe["recipe"]["environment_hash"].removeprefix("sha256:")
+        != manifest.environment_sha256
+        or config["effective_goal_contract_sha256"] != manifest.goal_sha256
+        or validate_goal_variant_descriptor(recipe["recipe"]["goal_variant"])
+        != manifest.goal_variant
+    ):
+        raise TrainingQualificationError(
+            "stored recipe provenance disagrees with the immutable Run"
+        )
+    level = manifest.goal_slug.rsplit("/", 1)[-1]
+    backend = config["training_backend"]
+    if (
+        not re.fullmatch(r"SuperMarioBros-Nes-v0/Level[1-8]-[1-4]", manifest.goal_slug)
+        or level == "Level8-4"
+        or config.get("state") != level
+        or config.get("state_archive")
+        or config.get("initialization")
+        or config.get("resume_checkpoint")
+        or manifest.compute.get("resume_checkpoint")
+        or backend["id"] != "gradlab.ppo"
+        or backend["config"].get("initial_policy")
+        or config.get("metrics_schema_version") != METRICS_SCHEMA_VERSION
+        or config.get("checkpoint_eval_backend") != "none"
+        or config.get("checkpoint_monitoring", {}).get("enabled", False)
+        or EPISODE_METRIC_WINDOW_SIZE != 100
+    ):
+        raise TrainingQualificationError(
+            "audit supports only fresh single canonical-start campaign PPO"
+        )
+    prefix = f"runs/{manifest.run_id}/attempts/"
+    inventory = []
+    total_bytes = 0
+    scanned = 0
+    for item in authority.control.iter_objects(prefix):
+        scanned += 1
+        if not item["key"].startswith(prefix):
+            raise TrainingQualificationError("journal inventory escaped the selected Run")
+        if scanned > 50000:
+            raise TrainingQualificationError(
+                "journal inventory exceeds the bounded campaign audit size"
+            )
+        if "/metric-segments/" in item["key"] and item["key"].endswith(".jsonl"):
+            inventory.append(item)
+            total_bytes += item["size"]
+            if (
+                len(inventory) > 20000
+                or not 0 < item["size"] <= 8 * 1024 * 1024
+                or total_bytes > 128 * 1024 * 1024
+            ):
+                raise TrainingQualificationError("journal exceeds the bounded campaign audit size")
+    keys = [item["key"] for item in inventory]
+    with ThreadPoolExecutor(max_workers=6) as pool:
+        payloads = dict(zip(keys, pool.map(authority.control.get_bytes, keys), strict=True))
+    if any(len(payloads[x["key"]]) != x["size"] for x in inventory):
+        raise TrainingQualificationError("journal object changed during audit")
+    cached = SimpleNamespace(iter_keys=lambda _: iter(keys), get_bytes=payloads.__getitem__)
+    events = read_control_journal(cached, manifest.run_id)
+    JournalHistory(events)  # Reject invalid or noncurrent scientific payloads.
+    high_water = int(drain.get("metric_segment_high_water") or 0)
+    if (
+        not events
+        or events[-1]["event_seq"] != high_water
+        or int(drain.get("service_remote_high_water_mark") or 0) < high_water
+    ):
+        raise TrainingQualificationError("journal and remote delivery receipts are incomplete")
+    binding = authority.control.get_json(f"runs/{manifest.run_id}/metrics-binding.json")
+    if binding.get("run_id") != manifest.run_id or binding.get("backend") != "mlflow":
+        raise TrainingQualificationError("MLflow binding disagrees with Run")
+    if mlflow_client is None:
+        from mlflow.tracking import MlflowClient
+
+        mlflow_client = MlflowClient(tracking_uri=os.environ["MLFLOW_TRACKING_URI"])
+    remote = mlflow_client.get_run(binding["service_run_id"])
+    if (
+        remote.data.tags.get(RUN_ID_TAG) != manifest.run_id
+        or int(remote.data.metrics.get(ORCHESTRATION_EVENT_SEQUENCE, 0)) < high_water
+    ):
+        raise TrainingQualificationError(
+            "MLflow identity or remote delivery watermark is unverified"
+        )
+    points = {}
+    for event in events:
+        if event["kind"] == "history" and event["source"] == "train":
+            point = points.setdefault(int(event["step"]), {})
+            point.update(event["payload"])
+    observations = []
+    for step, point in points.items():
+        fraction = point.get("train/success/min")
+        count = point.get("train/episodes/count")
+        successes = point.get(f"train/success/{level}/count")
+        if fraction is None:
+            continue
+        if (
+            count is None
+            or successes is None
+            or count < 100
+            or int(count) != count
+            or not 0 <= successes <= count
+            or int(successes) != successes
+            or not 0 <= fraction <= 1
+            or abs(round(fraction * 100) - fraction * 100) > 1e-8
+        ):
+            raise TrainingQualificationError(
+                "mature window lacks matching genuine cumulative episode counts"
+            )
+        observations.append(
+            {
+                "metric_step": step,
+                "window_episodes": 100,
+                "window_clears": round(fraction * 100),
+                "cumulative_target_episodes": int(count),
+                "cumulative_all_episodes": int(count),
+                "cumulative_clears": int(successes),
+            }
+        )
+    by_step = {o["metric_step"]: o for o in observations}
+    for checkpoint in terminal["checkpoint_inventory"]:
+        if (
+            checkpoint["run_id"] != manifest.run_id
+            or checkpoint["recipe_sha256"] != manifest.recipe_sha256
+            or checkpoint["goal_sha256"] != manifest.goal_sha256
+            or checkpoint["environment_sha256"] != manifest.environment_sha256
+        ):
+            raise TrainingQualificationError("checkpoint identity disagrees with the frozen Run")
+    candidates = [
+        (by_step[c["step"]], c)
+        for c in terminal["checkpoint_inventory"]
+        if c["step"] in by_step and by_step[c["step"]]["window_clears"] >= 80
+    ]
+    result = {
+        "run_id": manifest.run_id,
+        "attempt_id": manifest.attempt_id,
+        "goal_slug": manifest.goal_slug,
+        "seed": manifest.seed,
+        "source_sha": manifest.source_sha,
+        "runtime_image_ref": manifest.image_digest,
+        "recipe_sha256": manifest.recipe_sha256,
+        "initialization": "fresh canonical start",
+        "uses_sil": bool(backend["config"].get("sil", {}).get("enabled", False)),
+        "terminal_state": terminal["state"],
+        "stop_reason": terminal["stop_reason"],
+        "final_step": terminal["final_step"],
+        "observed_at": time.time(),
+        "resolved_train_config_sha256": canonical_json_sha256(config),
+        "best_observed_window_clears": max((o["window_clears"] for o in observations), default=0),
+        "journal_events_verified": high_water,
+        "journal_segments_verified": len(inventory),
+        "mlflow_run_id": binding["service_run_id"],
+        "metrics_url": binding.get("service_url"),
+        "mlflow_remote_high_water": int(remote.data.metrics[ORCHESTRATION_EVENT_SEQUENCE]),
+        "resource_release_verified": True,
+        "drain_complete": True,
+        "qualified": bool(candidates),
+        "audit_complete": True,
+        "acceptance_claimed": False,
+        "run_mutations_performed": False,
+    }
+    if candidates:
+        observation, checkpoint = sorted(
+            candidates, key=lambda pair: (-pair[0]["window_clears"], pair[1]["step"])
+        )[0]
+        selected_metrics = {
+            "train/success/min": observation["window_clears"] / 100,
+            "train/episodes/count": observation["cumulative_all_episodes"],
+            f"train/success/{level}/count": observation["cumulative_clears"],
+        }
+        for key, expected in selected_metrics.items():
+            history = mlflow_client.get_metric_history(binding["service_run_id"], key)
+            if not any(
+                row.step == observation["metric_step"] and abs(row.value - expected) < 1e-9
+                for row in history
+            ):
+                raise TrainingQualificationError(
+                    "MLflow selected observation does not match retained journal"
+                )
+        digest = checkpoint["sha256"]
+        if (
+            not re.fullmatch("[0-9a-f]{64}", digest)
+            or not 0 < checkpoint["size_bytes"] <= 256 * 1024 * 1024
+        ):
+            raise TrainingQualificationError(
+                "selected checkpoint metadata exceeds the audited model contract"
+            )
+        key = f"runs/{manifest.run_id}/checkpoints/{checkpoint['step']}-{digest}/model.zip"
+        if checkpoint["public_url"] != authority.models.public_url(key):
+            raise TrainingQualificationError(
+                "selected checkpoint URL disagrees with immutable identity"
+            )
+        if authority.models.head(key)["size"] != checkpoint["size_bytes"]:
+            raise TrainingQualificationError("remote checkpoint size disagrees with receipt")
+        body = authority.models.get_bytes(key)
+        if len(body) != checkpoint["size_bytes"] or hashlib.sha256(body).hexdigest() != digest:
+            raise TrainingQualificationError("remote checkpoint bytes disagree with receipt")
+        result.update(
+            observation=observation,
+            selected_checkpoint=checkpoint,
+            remote_model_sha256_verified=True,
+            remote_model_size_bytes=len(body),
+            mlflow_selected_observation_verified=True,
+        )
+    return result
+
+
 def cmd_status(args: argparse.Namespace) -> int:
+    exit_code = 0
+    if getattr(args, "audit_training", False) and getattr(args, "submission_key", None):
+        raise ValueError("audit-training requires a Run ID")
     if getattr(args, "submission_key", None):
         if not args.goal_slug or not args.created_since:
             raise ValueError("submission lookup requires --goal-slug and --created-since")
@@ -1599,7 +1840,21 @@ def cmd_status(args: argparse.Namespace) -> int:
     else:
         if getattr(args, "goal_slug", None) or getattr(args, "created_since", None):
             raise ValueError("goal-slug and created-since require submission-key")
-        value = _status(repository_root(), args.run_id)
+        root = repository_root()
+        value = _status(root, args.run_id)
+        if getattr(args, "audit_training", False):
+            _, authority = _storage(root)
+            try:
+                value = _audit_training_run(authority, value)
+            except TrainingQualificationError as exc:
+                value = {
+                    "run_id": args.run_id,
+                    "qualified": False,
+                    "audit_complete": False,
+                    "reason": str(exc),
+                    "run_mutations_performed": False,
+                }
+                exit_code = 1
     print(
         json.dumps(
             json_safe(value),
@@ -1607,7 +1862,7 @@ def cmd_status(args: argparse.Namespace) -> int:
             sort_keys=True,
         )
     )
-    return 0
+    return exit_code
 
 
 def _follow_fingerprint(value: Mapping[str, Any]) -> str:
@@ -2452,6 +2707,8 @@ def build_parser() -> argparse.ArgumentParser:
     selector.add_argument("--submission-key", help="Read-only lost-acknowledgement lookup")
     status.add_argument("--goal-slug", help="Exact goal for submission lookup")
     status.add_argument("--created-since", help="UTC lower bound for submission lookup")
+    status.add_argument("--audit-training", action="store_true",
+                        help="Verify completed fresh Mario training journal, MLflow and R2 model bytes")
     status.add_argument("--json", action="store_true")
     status.set_defaults(func=cmd_status)
 
