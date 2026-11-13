@@ -13,40 +13,23 @@ Before changing a capability with an authoritative scoped specification, consult
 
 ## Agent Service Access
 
-For agent-operated training on the reviewed local coordinator, use
-`python3 -I -S -B scripts/training_vault.py check` and its
-`experiment operator-preflight|launch|status|follow|logs|cancel|retry|resume-submit`
-operations. Native Infisical 0.45.6 uses separate
-`local-gradlab-training-operator` and `local-gradlab-training-worker` bundles.
-The operator profile pins source/runtime, instance, CA and coordinator bindings;
-changed pins require trusted review and native fake-first tests.
-The reviewed sources are the Gradlab project's `prod`, `/` references for
-the six `GRADLAB_{CONTROL,EVAL,MODELS}_R2_{ACCESS_KEY_ID,SECRET_ACCESS_KEY}`
-values and `DSTACK_B3_TOKEN` in private `operator.toml`. Trusted administration
-copies those exact values into dedicated Vault services. Ordinary tools never
-read them. The three R2 services target their fixed loopback signing gateways
-and original buckets; the coordinator service targets only its pinned API.
-The proxy bootstrap source is Gradlab `dev`, `/agents/training-proxy`.
-See [training Vault access](docs/agents/training-vault.md) for setup, checks,
-recovery and limitations. Do not use raw injection or the older launchers as
-fallbacks. Modal, W&B, YouTube and durable Publication access are separate.
+Personal service injection is optional. Use the approved root Runbox profiles for
+agent-operated Hugging Face maintenance and training access; normal application
+commands keep their existing interfaces. Runbox owns source/runtime/CA approval,
+scoped sessions, managed forwarding, worker-session lifetime and sandbox policies.
+Domain modules retain publication validation, allowed Hub operations and training
+admission checks. Missing or rejected access must stop without raw keys or caches.
 
-For agent-operated standalone Hugging Face maintenance, use
-`python3 -I -S -B scripts/huggingface_vault.py check`, or its `hf` mode for the
-reviewed Hub file commands. It uses native Infisical 0.45.6, the dedicated
-`local-gradlab-huggingface` bundle, a public `HF_TOKEN` placeholder, a fresh
-scoped session and an OS sandbox. It validates protected source/runtime/SDK
-pins and rejects raw-token, endpoint, cache, scheduler and login overrides.
-Changed pins require trusted review and fake-first testing. The publisher's
-credential resolver fails closed when Vault mode is selected; it cannot fall
-back to a cached token. Do not substitute the older unsandboxed global launcher.
-The Gradlab Infisical `dev` folder `/agents/huggingface` remains the source for
-trusted administrative rotation. See [agent service access](docs/agents/workflows.md#agent-service-access)
-for checks and transfer limitations.
-This standalone route does not replace durable Checkpoint/Release Publication
-or the separate training/operator route. It does not migrate YouTube or Modal. Do not start their
-ordinary credential launchers as a fallback. Publication content and operations
-still require their existing review and authorization.
+Training operators and supervisors use separate finite capabilities; never pass
+these to the offline learner. A lost admission acknowledgement must not revoke an
+admitted worker. Use the separate long-lived follow profile for monitoring. Source
+rotation and broker bootstrap remain trusted administration, with new fake proof
+and explicit runtime review after changes. Preserve active immutable run snapshots.
+See [optional training transport](docs/agents/training-vault.md).
+
+Hub upload content and operations still require their existing approval. LFS/Xet,
+YouTube, Modal and durable Publication need their own compatible reviewed routes;
+standalone Hub access must not substitute for the durable release workflow.
 
 ## GPU Instances
 

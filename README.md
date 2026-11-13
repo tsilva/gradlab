@@ -238,15 +238,6 @@ coordinator tokens use the same reference format. Modal tokens are stored in Inf
 as well. These project-owned operator and publication launchers retain their own
 credential configuration.
 
-Standalone agent Hugging Face access uses the dedicated Agent Vault bundle through
-`~/.config/infisical/run-agent-vault gradlab-huggingface -- COMMAND`. The CLI
-receives an `HF_TOKEN` placeholder. See [agent service access](docs/agents/workflows.md#agent-service-access)
-for token permissions, provisioning, and verification. A usable fine-grained publishing
-token and an enabled proxied service are prerequisites. W&B is not part of this
-setup. The former `.access.toml` and `.access.local.toml` inventories are retired
-for this repository. Other services, including the publisher's YouTube access,
-need their own reviewed credential flow; this HF route does not supply them.
-
 Then launch a checked-in recipe using its resolved goal and bounded defaults:
 
 ```bash

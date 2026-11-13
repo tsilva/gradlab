@@ -1,8 +1,0 @@
-# Metadata only. Brokered Hugging Face access is configured separately in Infisical.
-version: 1
-general:
-  domain: https://app.infisical.com
-secrets-management:
-  project-id: 8e69bfc0-24e8-4234-9ece-78e425ac4a8f
-  environment: dev
-  secret-path: /agents/huggingface

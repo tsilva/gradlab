@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import resource
+import socket
 import ssl
 import subprocess
 import sys
@@ -156,16 +157,37 @@ def validate_source():
     return p
 
 
-def require_fake_proof():
-    import training_vault as launcher
+def source_pins():
+    names = {".runbox.yaml", "pyproject.toml", "uv.lock", "src/gradlab/training_access.py"} | {
+        "src/gradlab/" + name + ".py" for name in (
+            "training_vault", "r2_store", "r2_signing_gateway", "operator_credentials",
+            "operator_environment", "dstack_backend", "experiment_cli", "run_supervisor")}
+    return {name: hashlib.sha256((ROOT / name).read_bytes()).hexdigest() for name in names}
 
+
+def require_fake_proof():
     proof = json.loads((EVIDENCE / "native-fake-proof.json").read_text())
     if (proof.get("ok") is not True or proof.get("source_credentials_retrieved") is not False
         or proof.get("temporary_services_removed") is not True
         or proof.get("worker_survives_creator_exit") is not True
         or proof.get("native_cli_version") != "0.45.6"
-        or proof.get("source_pins") != {name: launcher.digest(ROOT / name) for name in launcher.FILES}):
-        raise SetupError("Current runtime requires a successful native fake-credential proof")
+        or proof.get("source_pins") != source_pins()):
+        raise SetupError("Current Runbox runtime requires a refreshed native fake-credential proof")
+
+
+def administration_forward():
+    """Verify newly bootstrapped public trust before ordinary runtime approval."""
+    try:
+        with socket.create_connection(("127.0.0.1", 28383), timeout=1):
+            return None
+    except OSError:
+        specification = "127.0.0.1:28383:172.17.0.1:28383"
+        for arguments in (["-O", "check", "beast-3"],
+                          ["-O", "forward", "-L", specification, "beast-3"]):
+            result = subprocess.run(["/usr/bin/ssh", *arguments], capture_output=True, timeout=15)
+            if result.returncode:
+                raise SetupError("Managed forwarding unavailable; use FleetMan recovery")
+        return specification
 
 
 def provision():
@@ -315,9 +337,7 @@ def bootstrap_token(catalog, token):
     ssh(["sudo", "-n", "python3", INSTALLATION + "/broker.py", "start"],
         packet=json.dumps({"proxy_token": token}).encode())
     # Public metadata proves the running proxy serves the exact pinned CA.
-    import training_vault as launcher
-    connection = {"proxy_local": "127.0.0.1:28383", "proxy_remote": "172.17.0.1:28383", "ssh_host": "beast-3"}
-    owned = launcher.forward(connection)
+    owned = administration_forward()
     try:
         for _ in range(30):
             try:
@@ -335,27 +355,26 @@ def bootstrap_token(catalog, token):
 
 
 def refresh_profile():
+    """Prepare metadata for explicit review; never overwrite active or approved profiles."""
     require_fake_proof()
     validate_source()
-    import training_vault as launcher
     catalog = json.loads((PRIVATE / "catalog.json").read_text())
-    pem = (PRIVATE / "training-ca.pem").read_text()
-    ca_sha = hashlib.sha256(ssl.PEM_cert_to_DER_cert(pem)).hexdigest()
     python = (ROOT / ".venv/bin/python").resolve()
-    p = {"version": 1, "repo_path": str(ROOT), "instance": INSTANCE, "project_id": PROJECT,
-         "operator_bundle": "local-gradlab-training-operator", "worker_bundle": "local-gradlab-training-worker",
-         "proxy_local": "127.0.0.1:28383", "proxy_remote": "172.17.0.1:28383", "ssh_host": "beast-3",
-         "ca_file": str(PRIVATE / "training-ca.pem"), "ca_sha256": ca_sha,
-         "ca_file_sha256": launcher.digest(PRIVATE / "training-ca.pem"), "ca_fingerprint": catalog["ca_fingerprint"],
-         "cli": str(CLI), "cli_sha256": CLI_SHA256, "python": str(python), "python_sha256": launcher.digest(python),
-         "site_packages": str(ROOT / ".venv/lib/python3.14/site-packages"), "operator_file": str(OPERATOR),
-         "operator_sha256": launcher.digest(OPERATOR), "source_pins": {name: launcher.digest(ROOT / name) for name in launcher.FILES},
-         "coordinator_id": "b3"}
-    path = PRIVATE / "training.json"
+    runtime = {
+        "infisical": str(CLI), "python": str(python), "python-root": str(python.parent.parent),
+        "ca-file": str(PRIVATE / "training-ca.pem"), "ca-fingerprint": catalog["ca_fingerprint"],
+        "imports": [str(ROOT / "src"), str(ROOT / ".venv/lib/python3.14/site-packages")],
+        "files": {"operator-config": {"path": str(OPERATOR), "private": True}},
+        "directories": {"github-config": {"path": str(Path.home() / ".config/gh"), "private": False}},
+        "integrity-files": [str(Path.home() / ".config/gh/hosts.yml")],
+        "binaries": {"ssh": "/usr/bin/ssh", "dstack": str((Path.home() / ".local/bin/dstack").resolve())},
+        "path": [str(ROOT / ".venv/bin"), str(Path.home() / ".local/bin")],
+    }
+    path = PRIVATE / "runbox-training-runtime.candidate.json"
     if path.exists():
-        path.unlink()
-    write_private(path, (json.dumps(p, indent=2) + "\n").encode())
-    print('{"training_profile_pins_reviewed":true}')
+        raise SetupError("A runtime candidate already exists; review it before preparing another")
+    write_private(path, (json.dumps(runtime, indent=2) + "\n").encode())
+    print('{"runtime_candidate_prepared":true,"explicit_runbox_approval_required":true}')
 
 
 def inventory():

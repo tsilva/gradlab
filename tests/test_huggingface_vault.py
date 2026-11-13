@@ -1,8 +1,6 @@
 """Vault mode must fail closed before reading a token cache or running a helper."""
 
-import importlib.util
 import ssl
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -10,11 +8,7 @@ import pytest
 from gradlab import huggingface_vault as guard
 from gradlab import publication_credentials as credentials
 
-ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("hf_launcher", ROOT / "scripts/huggingface_vault.py")
-launcher = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(launcher)
-
+launcher = guard
 
 def session(tmp_path):
     ca = tmp_path / "public-ca.pem"

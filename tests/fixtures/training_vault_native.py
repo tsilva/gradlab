@@ -166,7 +166,7 @@ class FakeUpstream:
 
 def child():
     global PHASE
-    import training_vault as launcher
+    from gradlab import training_access as launcher
     import urllib.error
     import urllib.request
     from gradlab import operator_credentials
@@ -230,7 +230,7 @@ def child():
 
 
 def worker_child():
-    import training_vault as launcher
+    from gradlab import training_access as launcher
     import urllib.error
     import urllib.request
     from gradlab.training_vault import revoke_own_session, validate_session
@@ -268,7 +268,6 @@ def main():
         worker_child()
         return
     from training_vault_admin import Admin, CLI, INSTANCE, PROJECT
-    import training_vault as launcher
     from gradlab import r2_signing_gateway as gateway
 
     gateway.HTTPSConnection = FakeUpstream
@@ -276,7 +275,8 @@ def main():
     bundle = worker_bundle = None
     worker_session = None
     admin = Admin()
-    source_pins = {name: launcher.digest(ROOT/name) for name in launcher.FILES}
+    from training_vault_admin import source_pins as current_source_pins
+    source_pins = current_source_pins()
     try:
         for _, bucket, port in ROLES:
             server = gateway.GatewayServer(("127.0.0.1", port), bucket=bucket, endpoint="https://" + HOST)
@@ -383,7 +383,7 @@ def main():
                  "worker_survives_creator_exit": True, "worker_cannot_reach_dstack": True,
                  "revoked_capability_denied": True,
                  "source_pins": source_pins}
-        assert source_pins == {name: launcher.digest(ROOT/name) for name in launcher.FILES}
+        assert source_pins == current_source_pins()
     finally:
         PHASE = "cleanup-worker-session"
         if worker_session is not None:

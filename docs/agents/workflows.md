@@ -51,60 +51,24 @@ intent again before finishing as required by the specification policy.
 
 ## Agent service access
 
-For the reviewed local training coordinator and its R2 stores, use the dedicated
-[training Agent Vault launcher](training-vault.md). Its operator and supervisor
-bundles are separate; supervisors own finite sessions that survive client exit
-and never reach the offline learner. Other service modes require their own
-reviewed access route.
+Normal application commands do not depend on personal secret-manager tooling.
+For agent-operated access, the local Runbox configuration selects reviewed scope,
+runtime, public CA, sandbox and finite sessions. Configuration alone grants no
+access, and changed source/runtime bindings require explicit review.
 
-The opt-in `scripts/huggingface_vault.py` launcher selects the dedicated Agent Vault bundle
-`local-gradlab-huggingface` for `huggingface.co`. The child sees the exact
-`HF_TOKEN=hf_gradlab_proxy_placeholder`, a scoped proxy session, and process-local
-CA trust. The launcher pins the Infisical instance and proxy CA, clears the
-inherited environment, and requests a 30-minute session with Infisical 0.45.6.
-The child runs inside a macOS sandbox that denies direct upstream networking,
-private credential files, Keychain access, credential helpers and writes outside
-its disposable workspace. No global CLI, app or model default is changed.
+The Hub domain client uses the actual publication credential resolver and installed
+SDK. It accepts identity, repository-file listing and explicit small-file/folder
+upload operations, returning sanitized summaries. Upload content and destination
+still need approval. Private notes, credential files and repository internals are
+excluded; prepared private payloads stay within the explicitly selected payload
+scope. LFS/Xet transfers remain unsupported. No raw keys or cached-login fallback.
 
-```sh
-python3 -I -S -B scripts/huggingface_vault.py check
-python3 -I -S -B scripts/huggingface_vault.py hf auth whoami
-```
+The optional [training transport](training-vault.md) separates operator and
+supervisor capabilities. Supervisors survive client exit, own bounded sessions and
+never pass credentials or capabilities to offline learners. Other service modes
+need separate reviewed transport; standalone Hub maintenance does not qualify
+YouTube, Modal or durable Publication.
 
-The original Gradlab Secret Manager `dev` folder `/agents/huggingface` holds the
-fine-grained source key. After rotation, update the Agent Vault service through
-trusted administration and repeat the identity and scope checks. Keep the
-credential scoped to the reviewed repository operations. Collection permissions
-apply across the account and require separate review. The publishing workflow
-must still honor its publication approvals.
-
-Trusted setup stores a metadata-only profile at
-`~/.config/infisical/huggingface-clients/gradlab.json`, with owner-only directory
-and file permissions. It pins the native source binding, exact repository files,
-runtime, SDK sources, public CA and local proxy. Ordinary commands cannot approve
-their own source changes or retrieve the service key. A changed binding or failed
-authentication stops without raw-key or cache fallback.
-
-The `check` mode runs the actual publication credential resolver and installed
-Hub SDK identity call. The `hf` mode invokes the installed CLI for `auth whoami`,
-`repo-files ls` and explicit small-file/folder `upload` operations. It returns only
-a sanitized success/failure summary. Upload needs an explicit repository and
-local payload; review the entire content and operation before use. Payloads must
-be inside the checkout; private working notes, credentials and repository internals
-are excluded. An explicitly prepared private payload may live under
-`.internal/huggingface-vault/payloads/`. The tool does not authorize uploading a
-Policy or Checkpoint outside the durable Publication workflow.
-
-Native fake tests exercised the actual SDK and CLI upload, verified the received
-bytes and substituted header, tested a rejected upstream that reflected the fake
-key, and proved direct-network/private-file/helper denial and no cached-token
-fallback. A real read-only identity check passed; no live upload was performed.
-Run the offline guard tests with `pytest tests/test_huggingface_vault.py
-tests/test_publication_credentials.py` in the locked development environment.
-
-Large-file LFS and Xet transfers remain unsupported and fail before their upload
-or token-exchange requests. They need separate compatibility work; do not enable
-direct networking or raw credentials. The older global launcher remains installed
-without OS sandboxing and is not an agent fallback. Complete durable releases
-also require separately reviewed YouTube and R2 routes. Operator, training and
-Modal credential launchers remain separate and must not be used as a shortcut.
+Run the domain tests with `pytest tests/test_huggingface_vault.py
+tests/test_publication_credentials.py tests/test_training_access.py
+tests/test_training_vault.py` in the existing locked development environment.

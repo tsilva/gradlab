@@ -338,6 +338,10 @@ class DstackBackend:
         self.environment["DSTACK_PROJECT"] = self.project
         self.environment["DSTACK_SERVER_URL"] = self.server_url
         self.environment["DSTACK_TOKEN"] = resolved_token
+        if executable == "dstack" and self.environment.get("GRADLAB_DSTACK_EXECUTABLE"):
+            executable = self.environment["GRADLAB_DSTACK_EXECUTABLE"]
+            if not os.path.isabs(executable):
+                raise ValueError("Configured dstack executable must be an absolute path")
         self.executable = executable
 
     def _command(
