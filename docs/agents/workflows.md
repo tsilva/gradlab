@@ -51,11 +51,6 @@ intent again before finishing as required by the specification policy.
 
 ## Agent service access
 
-Normal application commands do not depend on personal secret-manager tooling.
-For agent-operated access, the local Runbox configuration selects reviewed scope,
-runtime, public CA, sandbox and finite sessions. Configuration alone grants no
-access, and changed source/runtime bindings require explicit review.
-
 The Hub domain client uses the actual publication credential resolver and installed
 SDK. It accepts identity, repository-file listing and explicit small-file/folder
 upload operations, returning sanitized summaries. Upload content and destination
@@ -63,7 +58,7 @@ still need approval. Private notes, credential files and repository internals ar
 excluded; prepared private payloads stay within the explicitly selected payload
 scope. LFS/Xet transfers remain unsupported. No raw keys or cached-login fallback.
 
-The optional [training transport](training-vault.md) separates operator and
+The [worker-access contract](training-vault.md) separates operator and
 supervisor capabilities. Supervisors survive client exit, own bounded sessions and
 never pass credentials or capabilities to offline learners. Other service modes
 need separate reviewed transport; standalone Hub maintenance does not qualify

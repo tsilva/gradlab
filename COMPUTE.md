@@ -7,10 +7,6 @@ host-specific capacity belong in the operator-local inventory at
 
 ## Operator configuration
 
-Agent-operated commands for the reviewed local coordinator use the
-[training Agent Vault launcher](docs/agents/training-vault.md). Its protected
-profile and native sessions replace source-key loading for that route.
-
 Copy `ops/operator.example.toml` to
 `~/.config/gradlab/operator.toml`. Its schema-v3 `[dstack]` section names the
 default coordinator and fleet. Each coordinator records an immutable ID,

@@ -1,7 +1,7 @@
 """Deferred, sequential experiment admission in the existing durable job queue.
 
-The optional reviewed Runbox transport mints credentials only at dispatch. Queue
-payloads and observer snapshots contain metadata, never session capabilities.
+Commands inherit the operator's supplied environment. Queue payloads and
+observer snapshots contain metadata, never session capabilities.
 """
 
 from __future__ import annotations
@@ -11,8 +11,8 @@ import fcntl
 import hashlib
 import json
 import math
+import os
 import re
-import shutil
 import subprocess
 import sys
 import time
@@ -57,23 +57,25 @@ def _rows(text: str) -> list[dict]:
 
 
 def _command(payload: dict, arguments: list[str], *, follow: bool = False) -> list[str]:
-    runner = shutil.which("runbox")
-    if runner is None:
-        raise RuntimeError("Reviewed Runbox transport is unavailable; no fallback")
-    profile, command = (
-        ("training-follow", "gradlab-follow") if follow else ("training", "gradlab-training")
-    )
-    return [
-        runner,
-        "--repo",
-        payload["repo_root"],
-        "--profile",
-        profile,
-        "run",
-        "--",
-        command,
-        *arguments,
-    ]
+    # A caller may explicitly supply a nonsecret argv executor. Never discover
+    # launchers from checkout metadata or place capabilities in this vector.
+    field = "GRADLAB_FOLLOW_COMMAND" if follow else "GRADLAB_EXPERIMENT_COMMAND"
+    if field in os.environ:
+        raw = os.environ[field]
+        if len(raw.encode()) > 65536:
+            raise ValueError("Invalid supplied experiment command")
+        prefix = json.loads(raw)
+        if (
+            not isinstance(prefix, list)
+            or not 1 <= len(prefix) <= 32
+            or any(not isinstance(value, str) or len(value.encode()) > 4096
+                   or re.search(r"[\x00-\x1f\x7f-\x9f]", value) for value in prefix)
+            or not Path(prefix[0]).is_absolute()
+        ):
+            raise ValueError("Invalid supplied experiment command")
+        return [*prefix, *arguments]
+    prefix = ["experiment", "follow"] if follow else []
+    return [sys.executable, "-m", "gradlab.main", *prefix, *arguments]
 
 
 def _call(payload: dict, arguments: list[str], output: Path) -> dict:
@@ -197,8 +199,8 @@ class ExperimentBatch:
     def validate_payload(cls, value):
         p = dict(value)
         root = Path(str(p.get("repo_root", ""))).resolve()
-        if not root.is_dir() or not (root / ".runbox.yaml").is_file():
-            raise ValueError("Batch requires an existing reviewed Runbox checkout")
+        if not (root / "pyproject.toml").is_file() or not (root / "src/gradlab").is_dir():
+            raise ValueError("Batch requires an existing GradLab checkout")
         if not re.fullmatch("[0-9a-f]{40}", str(p.get("source_sha", ""))):
             raise ValueError("Batch requires an immutable source SHA")
         if not re.fullmatch(r"[a-z0-9-]{1,120}", str(p.get("batch_id", ""))):

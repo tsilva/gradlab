@@ -231,12 +231,9 @@ install -m 600 ops/operator.example.toml ~/.config/gradlab/operator.toml
 gradlab experiment operator-preflight --json
 ```
 
-Secrets in `operator.toml` use value-free `[infisical.NAME]` bindings with explicit HTTPS instance, project,
-environment, folder path and secret name. Install the Infisical CLI and run `infisical login`;
-Gradlab fetches requested credentials in memory and aborts on a failed read. dstack
-coordinator tokens use the same reference format. Modal tokens are stored in Infisical
-as well. These project-owned operator and publication launchers retain their own
-credential configuration.
+Operator configuration stores credential references rather than secret values.
+Commands can also use their documented process environment. See
+[compute operations](COMPUTE.md) for fleet selection and preflight.
 
 Then launch a checked-in recipe using its resolved goal and bounded defaults:
 

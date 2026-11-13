@@ -16,7 +16,8 @@ SHA = "b" * 40
 
 
 def setup_job(tmp_path, *, count=2, after_run=None):
-    (tmp_path / ".runbox.yaml").write_text("version: 1\n")
+    (tmp_path / "pyproject.toml").write_text('[project]\nname = "gradlab"\n')
+    (tmp_path / "src/gradlab").mkdir(parents=True)
     recipe = "experiments/goals/Mario/Level1-1/recipes/ppo.yaml"
     path = tmp_path / recipe
     path.parent.mkdir(parents=True)
@@ -355,3 +356,37 @@ def test_first_terminal_run_records_evidence_before_advancing(
     assert result.state == "retry_wait"
     assert result.subjects[0].state == "succeeded"
     assert result.subjects[0].detail["attempt_terminal"]["final_step"] == 1000
+
+
+def test_dispatch_uses_the_normal_cli_and_needs_no_personal_runner(tmp_path):
+    assert batch._command({"repo_root": str(tmp_path)}, ["experiment", "status"]) == [
+        sys.executable, "-m", "gradlab.main", "experiment", "status"
+    ]
+    assert batch._command({"repo_root": str(tmp_path)}, ["--run", RUN], follow=True) == [
+        sys.executable, "-m", "gradlab.main", "experiment", "follow", "--run", RUN
+    ]
+
+
+def test_checkout_validation_does_not_require_launcher_metadata(tmp_path):
+    _, job = setup_job(tmp_path)
+    assert not (tmp_path / ".runbox.yaml").exists()
+    assert batch.ExperimentBatch.validate_payload(job["payload"])["repo_root"] == str(tmp_path)
+
+
+def test_supplied_command_executors_are_explicit_argv_and_do_not_fall_back(tmp_path, monkeypatch):
+    monkeypatch.setenv("GRADLAB_EXPERIMENT_COMMAND", json.dumps([sys.executable, "-B"]))
+    monkeypatch.setenv("GRADLAB_FOLLOW_COMMAND", json.dumps([sys.executable, "-u"]))
+    assert batch._command({}, ["experiment", "status"]) == [sys.executable, "-B", "experiment", "status"]
+    assert batch._command({}, ["--run", RUN], follow=True) == [sys.executable, "-u", "--run", RUN]
+    for value in ["not json", "[]", '["relative"]', json.dumps([sys.executable, "bad\nargument"]),
+                  json.dumps([sys.executable, "x" * 4097]), json.dumps([sys.executable] * 33)]:
+        monkeypatch.setenv("GRADLAB_EXPERIMENT_COMMAND", value)
+        with pytest.raises(ValueError):
+            batch._command({}, ["experiment", "status"])
+
+
+def test_real_command_receives_supplied_environment_without_secret_bootstrap(tmp_path, monkeypatch):
+    monkeypatch.setenv("SUPPLIED_OPERATOR_FIXTURE", "present")
+    script = "import os,json; print(json.dumps({'supplied':os.environ.get('SUPPLIED_OPERATOR_FIXTURE')=='present'}))"
+    monkeypatch.setenv("GRADLAB_EXPERIMENT_COMMAND", json.dumps([sys.executable, "-c", script]))
+    assert batch._call({"repo_root": str(tmp_path)}, [], tmp_path / "receipt.json") == {"supplied": True}

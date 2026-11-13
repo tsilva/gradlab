@@ -1,9 +1,7 @@
 # Sequential experiment batches
 
 `python -m gradlab.experiment_batch enqueue --file BATCH.json` schedules finite
-training intents in the existing durable job queue. This optional operator
-workflow uses approved `training` and `training-follow` Runbox profiles; ordinary
-GradLab commands retain their interfaces.
+training intents in the existing durable job queue.
 
 The data-only batch names its exact clean pushed source, local target, admission
 deadline, optional predecessor Run and ordered intents. Each intent records a

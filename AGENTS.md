@@ -11,25 +11,18 @@ The maintained procedure is `/Users/tsilva/.codex/skills/private-skills/private-
 
 Before changing a capability with an authoritative scoped specification, consult the matching file indexed by `docs/specs/README.md` under the shared task-level read/reuse cadence. Preserve existing commitments and keep scoped requirements consistent with root `SPECS.md` and `CONTEXT.md`; apply the same `$private-skills_specs-author` decision-based approval policy to root and scoped changes.
 
-## Agent Service Access
+## Service boundaries
 
-Personal service injection is optional. Use the approved root Runbox profiles for
-agent-operated Hugging Face maintenance and training access; normal application
-commands keep their existing interfaces. Runbox owns source/runtime/CA approval,
-scoped sessions, managed forwarding, worker-session lifetime and sandbox policies.
-Domain modules retain publication validation, allowed Hub operations and training
-admission checks. Missing or rejected access must stop without raw keys or caches.
-
+Preserve publication validation, approved Hub operations and training admission
+checks. Failed access must stop without credential-cache or raw-key fallbacks.
 Training operators and supervisors use separate finite capabilities; never pass
-these to the offline learner. A lost admission acknowledgement must not revoke an
-admitted worker. Use the separate long-lived follow profile for monitoring. Source
-rotation and broker bootstrap remain trusted administration, with new fake proof
-and explicit runtime review after changes. Preserve active immutable run snapshots.
-See [optional training transport](docs/agents/training-vault.md).
+these to offline learners. A lost admission acknowledgement must not revoke an
+admitted worker. Preserve active immutable run snapshots and the
+[worker-access contract](docs/agents/training-vault.md).
 
-Hub upload content and operations still require their existing approval. LFS/Xet,
-YouTube, Modal and durable Publication need their own compatible reviewed routes;
-standalone Hub access must not substitute for the durable release workflow.
+Hub upload content and destinations retain their approval requirements. Standalone
+Hub maintenance does not qualify LFS/Xet transfers, YouTube, Modal or durable
+Publication; those operations need their own compatible access and workflow.
 
 ## GPU Instances
 
