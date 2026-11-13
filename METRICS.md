@@ -338,7 +338,10 @@ resuming as its cause without a matched uninterrupted continuation.
   means player control, not proof that recovery is physically possible. In
   development reports, label horizontal maxima as camera-scroll/task progress
   and state explicitly which coordinate a landing or frontier threshold uses.
-- Mario recipes disable automatic checkpoint evaluation and stop when
+- Mario recipes disable automatic checkpoint evaluation. The per-level campaign
+  prefers `train/success/min` reaching one, with a neutral plateau stop allowed
+  after a mature fraction of at least 0.8; it preserves qualifying fallback
+  checkpoints within the original bounds. Other perfect-window recipes stop when
   `train/success/min` first reaches one. For a single start,
   that means 100 consecutive genuine target-origin clears; for multiple starts, every configured
   start's latest 100 attempts must all clear. This training stop is not acceptance or promotion;

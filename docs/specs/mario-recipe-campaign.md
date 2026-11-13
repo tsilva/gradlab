@@ -53,6 +53,8 @@ For one configured canonical start, it is the fraction of clears among that
 start's latest 100 genuine completed target-origin episodes. Its minimum is
 across starts, not across the binary episode outcomes. Threshold `0.8` therefore
 means at least 80/100; threshold `1.0` requires 100 consecutive clears. The
-campaign recipes retain the inherited perfect-window condition as observation
-only and use `clear_80` as the stopping condition. Existing goal defaults and
-the separate 100/100 Acceptance rule remain available.
+campaign recipes stop at `clear_100`, observe `clear_80`, and permit a neutral
+plateau stop only after reaching 80/100. The plateau requires 1,048,576
+transitions without a 0.01 improvement in the best mature fraction. Checkpoint
+thresholds retain 80/100, 90/100, 95/100 and 100/100 fallbacks within the declared
+candidate budget. The separate 100/100 Acceptance rule remains unchanged.
