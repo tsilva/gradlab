@@ -42,10 +42,17 @@ return `qualified: false`. Corrupt, incomplete or unsupported evidence fails
 closed. This training criterion does not establish frozen-checkpoint quality,
 Acceptance, Promotion or reliability across training seeds.
 
+Failure diagnostics identify the read stage, exception class, optional HTTP status,
+and code module/function/line when available. They omit exception text, filesystem
+paths, local variables and provider payloads. Preserve that structured diagnostic
+when an external caller records a failed audit.
+
 Reads are bounded to 50,000 inventory objects, 20,000 journal segments, 128 MiB
-of journal content and a 256 MiB model. Journal downloads are sequential to leave shared gateway
-capacity for admitted training and existing observers. A Run exceeding these limits needs a separately reviewed
-verification procedure; do not bypass the bounds or substitute credentials.
+of journal content and a 256 MiB model. When sharing a gateway with training,
+schedule completed-run audits while training and recovery supervisors are idle.
+Downloads are sequential, but this does not reserve capacity for concurrent
+supervisors or observers. A Run exceeding these limits needs a separately
+reviewed verification procedure; do not bypass the bounds or substitute credentials.
 
 Select any personal access tooling externally, according to the operator's
 approved setup. The package command consumes ordinary environment settings.

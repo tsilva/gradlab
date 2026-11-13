@@ -396,13 +396,13 @@ class ConfigValidationTests(unittest.TestCase):
                     },
                 )
 
-        self.assertEqual(actor_critic_recipes, 81)
+        self.assertEqual(actor_critic_recipes, 78)
 
     def test_every_mario_recipe_disables_eval_and_preserves_its_clear_contract(self) -> None:
         mario_root = Path("experiments/goals/SuperMarioBros-Nes-v0")
         recipes = sorted(mario_root.glob("*/recipes/*.yaml"))
 
-        self.assertEqual(len(recipes), 51)
+        self.assertEqual(len(recipes), 48)
         for recipe_path in recipes:
             with self.subTest(recipe=recipe_path):
                 goal_path = recipe_path.parent.parent / "_goal.yaml"
@@ -411,8 +411,8 @@ class ConfigValidationTests(unittest.TestCase):
                 self.assertEqual(train_config["checkpoint_eval_backend"], "none")
                 self.assertNotIn("stop_on_acceptance", train_config)
                 if recipe_path.stem in {"ppo-train-clear-80", "ppo-sil-train-clear-80"} or recipe_path in {
-                    self.MARIO_SINGLE_RECIPES / "ppo.yaml",
-                    self.MARIO_L12_GOAL.parent / "recipes/ppo.yaml",
+                    mario_root / level / "recipes/ppo.yaml"
+                    for level in ("Level1-1", "Level1-2", "Level1-4", "Level2-1", "Level2-3")
                 }:
                     conditions = train_config["early_stop"]["conditions"]
                     self.assertEqual(conditions["clear_100"]["action"], "stop")
@@ -542,7 +542,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(report.counts["json_files"], 0)
         self.assertGreaterEqual(report.counts["yaml_files"], 15)
         self.assertGreaterEqual(report.counts["goals"], 1)
-        self.assertEqual(report.counts["train_recipes"], 83)
+        self.assertEqual(report.counts["train_recipes"], 80)
         self.assertGreaterEqual(report.counts["env_configs"], 0)
         self.assertEqual(report.counts["benchmark_profiles"], 4)
         self.assertEqual(report.counts["workspace_manifests"], 1)

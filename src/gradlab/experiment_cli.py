@@ -1589,6 +1589,24 @@ class TrainingQualificationError(ValueError):
     """A safe domain explanation; provider diagnostics remain private."""
 
 
+def _audit_error_origin(error: Exception) -> dict[str, Any] | None:
+    """Identify reviewed code without exception text, paths, values or locals."""
+    origin = None
+    trace = error.__traceback__
+    while trace is not None:
+        module = trace.tb_frame.f_globals.get("__name__", "")
+        function = trace.tb_frame.f_code.co_name
+        if (
+            isinstance(module, str)
+            and module.startswith(("gradlab.", "mlflow.", "botocore.", "urllib3.", "requests."))
+            and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]{0,160}", module)
+            and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,160}", function)
+        ):
+            origin = {"module": module, "function": function, "line": trace.tb_lineno}
+        trace = trace.tb_next
+    return origin
+
+
 def _audit_training_run(
     authority: RunAuthority, status: Mapping[str, Any], *, mlflow_client: Any = None
 ) -> dict[str, Any]:
@@ -1609,15 +1627,14 @@ def _audit_training_run(
             return operation(*arguments)
         except Exception as exc:
             response = getattr(exc, "response", {})
-            status = (
-                response.get("ResponseMetadata", {}).get("HTTPStatusCode")
-                if isinstance(response, dict)
-                else None
-            )
+            metadata = response.get("ResponseMetadata") if isinstance(response, dict) else None
+            status = metadata.get("HTTPStatusCode") if isinstance(metadata, dict) else None
             status_text = f", HTTP {status}" if type(status) is int and 400 <= status <= 599 else ""
-            raise TrainingQualificationError(
+            error = TrainingQualificationError(
                 f"{stage} evidence unavailable or invalid ({type(exc).__name__}{status_text})"
-            ) from None
+            )
+            error.diagnostic_origin = _audit_error_origin(exc)
+            raise error from None
 
     if not status.get("completed") or not status.get("dstack", {}).get("terminal"):
         raise TrainingQualificationError(
@@ -1931,9 +1948,12 @@ def _audit_training_run(
             raise TrainingQualificationError(
                 "selected checkpoint URL disagrees with immutable identity"
             )
-        if authority.models.head(key)["size"] != checkpoint["size_bytes"]:
+        if (
+            evidence_read("R2 model header", authority.models.head, key)["size"]
+            != checkpoint["size_bytes"]
+        ):
             raise TrainingQualificationError("remote checkpoint size disagrees with receipt")
-        body = authority.models.get_bytes(key)
+        body = evidence_read("R2 model", authority.models.get_bytes, key)
         if len(body) != checkpoint["size_bytes"] or hashlib.sha256(body).hexdigest() != digest:
             raise TrainingQualificationError("remote checkpoint bytes disagree with receipt")
         result.update(
@@ -1977,6 +1997,8 @@ def cmd_status(args: argparse.Namespace) -> int:
                     "reason": str(exc),
                     "run_mutations_performed": False,
                 }
+                if getattr(exc, "diagnostic_origin", None):
+                    value["diagnostic_origin"] = exc.diagnostic_origin
                 exit_code = 1
             except Exception as exc:
                 value = {
@@ -1986,6 +2008,9 @@ def cmd_status(args: argparse.Namespace) -> int:
                     "reason": f"audit evidence unavailable or invalid ({type(exc).__name__})",
                     "run_mutations_performed": False,
                 }
+                origin = _audit_error_origin(exc)
+                if origin:
+                    value["diagnostic_origin"] = origin
                 exit_code = 1
     print(
         json.dumps(

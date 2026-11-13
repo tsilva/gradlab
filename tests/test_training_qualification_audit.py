@@ -379,6 +379,36 @@ def test_service_failure_reports_stage_without_private_exception_text(audit_case
     assert "private-service-fixture-detail" not in str(failure.value)
 
 
+@pytest.mark.parametrize("method,stage", [("head", "R2 model header"), ("get_bytes", "R2 model")])
+def test_model_reader_failure_preserves_safe_stage_and_code_origin(
+    audit_case, monkeypatch, method, stage
+):
+    seal(audit_case)
+
+    def fail(*args):
+        raise AttributeError("private-model-reader-fixture-detail")
+
+    monkeypatch.setattr(audit_case.authority.models, method, fail)
+    with pytest.raises(ValueError) as failure:
+        audit(audit_case)
+    assert str(failure.value) == f"{stage} evidence unavailable or invalid (AttributeError)"
+    origin = failure.value.diagnostic_origin
+    assert origin["module"] == "gradlab.experiment_cli"
+    assert set(origin) == {"module", "function", "line"} and origin["line"] > 0
+    assert "private-model-reader-fixture-detail" not in json.dumps(origin)
+
+
+def test_nonmapping_error_metadata_does_not_mask_the_provider_error(audit_case):
+    seal(audit_case)
+    error = RuntimeError("private-service-fixture-detail")
+    error.response = {"ResponseMetadata": None}
+    audit_case.client.get_run.side_effect = error
+    with pytest.raises(
+        ValueError, match=r"MLflow Run evidence unavailable or invalid \(RuntimeError\)"
+    ):
+        audit(audit_case)
+
+
 def test_audit_completes_with_one_shared_gateway_slot_available(audit_case, monkeypatch):
     import threading
     import time
@@ -442,3 +472,7 @@ def test_cli_unexpected_failure_withholds_private_provider_details(monkeypatch, 
     result = json.loads(text)
     assert not result["audit_complete"] and not result["qualified"]
     assert "KeyError" in result["reason"] and "private-provider-fixture-detail" not in text
+    assert result["diagnostic_origin"]["module"] == "gradlab.experiment_cli"
+    assert result["diagnostic_origin"]["function"] == "cmd_status"
+    assert set(result["diagnostic_origin"]) == {"module", "function", "line"}
+    assert "/Users/" not in text
