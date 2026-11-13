@@ -1671,6 +1671,15 @@ def _audit_training_run(
             ):
                 raise TrainingQualificationError("journal exceeds the bounded campaign audit size")
     keys = [item["key"] for item in inventory]
+    archive = drain.get("journal_archive") or {}
+    inventory_digest = hashlib.sha256("\n".join(sorted(keys)).encode()).hexdigest()
+    if (
+        archive.get("retention") != "durable"
+        or archive.get("prefix") != prefix
+        or archive.get("segment_count") != len(keys)
+        or archive.get("inventory_sha256") != inventory_digest
+    ):
+        raise TrainingQualificationError("journal inventory disagrees with the terminal receipt")
     with ThreadPoolExecutor(max_workers=6) as pool:
         payloads = dict(zip(keys, pool.map(authority.control.get_bytes, keys), strict=True))
     if any(len(payloads[x["key"]]) != x["size"] for x in inventory):

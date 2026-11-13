@@ -131,6 +131,13 @@ def seal(case):
     digest = hashlib.sha256(payload).hexdigest()
     key = case.prefix + f"0001-0002-{digest}.jsonl"
     case.authority.control.put_bytes(key, payload)
+    keys = sorted(x["key"] for x in case.authority.control.iter_objects(case.prefix))
+    case.status["attempt_terminal"]["drain"]["journal_archive"] = {
+        "retention": "durable",
+        "prefix": f"runs/{case.manifest.run_id}/attempts/",
+        "segment_count": len(keys),
+        "inventory_sha256": hashlib.sha256("\n".join(keys).encode()).hexdigest(),
+    }
     return key
 
 
@@ -163,6 +170,7 @@ def test_completed_window_model_and_service_are_independently_verified_without_m
         "gap",
         "watermark",
         "service_identity",
+        "inventory",
         "metric_history",
         "model",
         "checkpoint_identity",
@@ -196,7 +204,9 @@ def test_incomplete_or_conflicting_evidence_cannot_qualify(audit_case, damage):
     elif damage == "active":
         c.status["completed"] = False
     key = seal(c)
-    if damage == "hash":
+    if damage == "inventory":
+        c.status["attempt_terminal"]["drain"]["journal_archive"]["inventory_sha256"] = "0" * 64
+    elif damage == "hash":
         body = c.authority.control.get_bytes(key).replace(b"0.95", b"0.94")
         c.authority.control.put_bytes(key, body, create_only=False)
     elif damage == "model":
