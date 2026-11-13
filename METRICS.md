@@ -782,6 +782,9 @@ metric.
 The supervisor seals immutable metric-journal segments to private R2 every five seconds or 1,000
 events and batches pending frames to the selected service when online. A retry reconstructs its local SQLite state from those
 segments before producing new events. It reconciles the same frozen service binding.
+Delivery-only recovery replays scientific observations at their original steps and
+timestamps. New operational events may advance the journal sequence, but recovery
+does not add training transitions or completed episodes.
 
 Backpressure is sampled every 15 seconds. The selected online service receives pending outbox count, oldest unpublished
 age, remote-visible lag, pending checkpoints, pending evaluations, scratch utilization, and

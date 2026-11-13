@@ -14,6 +14,12 @@ supported contract is native PPO with one canonical Mario level start, fresh
 initialization, no archive curriculum and no automatic evaluation or Monitoring.
 The learner's own SIL replay is allowed; it cannot add target-origin episodes.
 
+Delivery-only recovery does not invalidate fresh training. Every later Attempt
+must explicitly be drain-only, preserve the frozen scientific contract, and
+retain the original learning boundary without new training-history events. The
+audit reports the learning Attempt and stop reason separately from the delivery
+Attempt and stop reason. Training resumes do not satisfy this fresh-run audit.
+
 The Run's declared environment identity and the artifact's resolved environment
 identity are checked separately. The audit reconstructs the former from the
 stored training configuration and the latter from its effective environment

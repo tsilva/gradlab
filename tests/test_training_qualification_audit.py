@@ -1,5 +1,6 @@
 import hashlib
 import json
+from copy import deepcopy
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -132,7 +133,10 @@ def audit_case():
 def seal(case):
     payload = b"".join(json.dumps(event, sort_keys=True).encode() + b"\n" for event in case.events)
     digest = hashlib.sha256(payload).hexdigest()
-    key = case.prefix + f"0001-0002-{digest}.jsonl"
+    key = (
+        case.prefix
+        + f"{case.events[0]['event_seq']:04}-{case.events[-1]['event_seq']:04}-{digest}.jsonl"
+    )
     case.authority.control.put_bytes(key, payload)
     keys = sorted(x["key"] for x in case.authority.control.iter_objects(case.prefix))
     case.status["attempt_terminal"]["drain"]["journal_archive"] = {
@@ -246,6 +250,124 @@ def test_unretained_history_peak_is_not_assigned_to_another_checkpoint(audit_cas
     assert result["best_observed_window_clears"] == 95
     assert result["observation"]["window_clears"] == 80
     assert result["selected_checkpoint"]["step"] == 1000
+
+
+def add_delivery_recovery(case):
+    original = deepcopy(case.status["attempt_terminal"])
+    original.update(state="resumable_failure", stop_reason="supervisor_failure")
+    original["drain"]["complete"] = False
+    checkpoint = {
+        **case.status["attempt_terminal"]["checkpoint_inventory"][-1],
+        "schema_version": 2,
+        "purpose": "final",
+        "model_document_url": "https://models.example.test/model.json",
+        "model_document_sha256": "a" * 64,
+        "recipe_document_url": "https://models.example.test/recipe.json",
+        "recipe_document_sha256": case.manifest.recipe_sha256,
+        "evaluation_contract_sha256": "b" * 64,
+        "recovery_sidecar_key": "runs/fixture/recovery-sidecar.json",
+        "created_at": case.manifest.created_at,
+    }
+    recovered = replace(
+        case.manifest,
+        attempt_id=new_attempt_id(),
+        compute={
+            **case.manifest.compute,
+            "recovery_mode": "drain-only",
+            "resume_checkpoint": checkpoint,
+        },
+    )
+    terminal = deepcopy(case.status["attempt_terminal"])
+    terminal.update(
+        attempt_id=recovered.attempt_id, state="succeeded", stop_reason="training_cap_complete"
+    )
+    case.status["semantic"].update(
+        attempts=[case.manifest.to_dict(), recovered.to_dict()],
+        attempt_terminals=[original, terminal],
+    )
+    case.status["attempt_terminal"] = terminal
+
+
+def test_delivery_only_recovery_preserves_fresh_qualification_and_original_stop(audit_case):
+    add_delivery_recovery(audit_case)
+    audit_case.events.append(
+        {
+            "event_seq": 3,
+            "event_id": "delivery-progress",
+            "kind": "history",
+            "source": "supervisor",
+            "step": 3,
+            "created_at": 3.0,
+            "payload": {ORCHESTRATION_EVENT_SEQUENCE: 3.0},
+        }
+    )
+    audit_case.status["attempt_terminal"]["drain"].update(
+        metric_segment_high_water=3,
+        service_remote_high_water_mark=3,
+    )
+    audit_case.remote.data.metrics[ORCHESTRATION_EVENT_SEQUENCE] = 3.0
+    seal(audit_case)
+    result = audit(audit_case)
+    assert result["qualified"] and result["remote_model_sha256_verified"]
+    assert result["observation"]["window_clears"] == 95
+    assert result["attempt_id"] == audit_case.manifest.attempt_id
+    assert result["delivery_attempt_id"] != result["attempt_id"]
+    assert result["drain_recovery_attempts"] == 1
+    assert result["stop_reason"] == "supervisor_failure"
+    assert result["delivery_stop_reason"] == "training_cap_complete"
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "training_resume",
+        "seed",
+        "source",
+        "recipe",
+        "missing_receipt",
+        "evaluation",
+        "boundary",
+        "checkpoint_boundary",
+    ],
+)
+def test_delivery_recovery_requires_unchanged_contract_and_complete_history(audit_case, damage):
+    add_delivery_recovery(audit_case)
+    recovery = audit_case.status["semantic"]["attempts"][1]
+    if damage == "training_resume":
+        recovery["compute"]["recovery_mode"] = "resume-training"
+    elif damage in {"seed", "source", "recipe"}:
+        key = {"seed": "seed", "source": "source_sha", "recipe": "recipe_sha256"}[damage]
+        recovery[key] = 99 if damage == "seed" else "f" * (40 if damage == "source" else 64)
+    elif damage == "missing_receipt":
+        audit_case.status["semantic"]["attempt_terminals"].pop(0)
+    elif damage == "evaluation":
+        recovery["compute"]["checkpoint_eval_backend"] = "training-container"
+    elif damage == "boundary":
+        audit_case.status["attempt_terminal"]["final_step"] += 1
+    elif damage == "checkpoint_boundary":
+        audit_case.status["attempt_terminal"]["checkpoint_inventory"][-1]["step"] += 1
+    seal(audit_case)
+    with pytest.raises(ValueError):
+        audit(audit_case)
+
+
+def test_recovery_cannot_hide_new_training_at_an_old_transition_step(audit_case):
+    add_delivery_recovery(audit_case)
+    audit_case.events.append(
+        {
+            **deepcopy(audit_case.events[-1]),
+            "event_seq": 3,
+            "event_id": "new-learning",
+            "step": 1000,
+        }
+    )
+    terminal = audit_case.status["attempt_terminal"]
+    terminal["drain"]["metric_segment_high_water"] = 3
+    terminal["drain"]["service_remote_high_water_mark"] = 3
+    audit_case.remote.data.metrics[ORCHESTRATION_EVENT_SEQUENCE] = 3
+    seal(audit_case)
+    with pytest.raises(ValueError, match="new training history"):
+        audit(audit_case)
 
 
 def test_service_failure_reports_stage_without_private_exception_text(audit_case):

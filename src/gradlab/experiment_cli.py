@@ -1627,8 +1627,69 @@ def _audit_training_run(
     manifest = RunManifest.from_dict(semantic["manifest"])
     terminal = status["attempt_terminal"]
     drain = terminal.get("drain") or {}
-    if terminal["attempt_id"] != manifest.attempt_id or not drain.get("complete"):
-        raise TrainingQualificationError("audit requires the original complete fresh Attempt")
+    if not drain.get("complete"):
+        raise TrainingQualificationError("audit requires complete Run delivery")
+    learning_terminal = terminal
+    recovery_count = 0
+    if terminal["attempt_id"] != manifest.attempt_id:
+        attempts = [RunManifest.from_dict(a) for a in semantic.get("attempts", [])]
+        receipts = semantic.get("attempt_terminals", [])
+        ids = [a.attempt_id for a in attempts]
+        receipt_ids = [t["attempt_id"] for t in receipts]
+        if (
+            len(ids) != len(set(ids))
+            or len(receipt_ids) != len(set(receipt_ids))
+            or set(ids) != set(receipt_ids)
+            or manifest.attempt_id not in ids
+            or terminal["attempt_id"] not in ids
+        ):
+            raise TrainingQualificationError("delivery recovery requires complete Attempt history")
+        scientific_fields = (
+            "run_id",
+            "seed",
+            "source_sha",
+            "image_digest",
+            "recipe_sha256",
+            "goal_slug",
+            "goal_sha256",
+            "goal_variant",
+            "environment_sha256",
+            "tracking",
+            "modal",
+            "recipe_slug",
+            "recipe_overrides",
+            "storage",
+        )
+        for attempt in attempts:
+            if any(getattr(attempt, key) != getattr(manifest, key) for key in scientific_fields):
+                raise TrainingQualificationError(
+                    "delivery recovery changed the frozen Run contract"
+                )
+            if (
+                attempt.attempt_id == manifest.attempt_id
+                and attempt.to_dict() != manifest.to_dict()
+            ):
+                raise TrainingQualificationError("original Attempt history disagrees with the Run")
+            if attempt.attempt_id != manifest.attempt_id:
+                if attempt.compute.get("recovery_mode") != "drain-only":
+                    raise TrainingQualificationError("audit permits only delivery-only recovery")
+                if attempt.compute.get("checkpoint_eval_backend") != manifest.compute.get(
+                    "checkpoint_eval_backend"
+                ):
+                    raise TrainingQualificationError(
+                        "delivery recovery changed the evaluation mode"
+                    )
+                recovery_count += 1
+        learning_terminal = next(t for t in receipts if t["attempt_id"] == manifest.attempt_id)
+        if (
+            next(t for t in receipts if t["attempt_id"] == terminal["attempt_id"]) != terminal
+            or terminal["final_step"] != learning_terminal["final_step"]
+        ):
+            raise TrainingQualificationError("delivery recovery changed the learning boundary")
+    elif any(a["attempt_id"] != manifest.attempt_id for a in semantic.get("attempts", [])):
+        raise TrainingQualificationError(
+            "terminal receipt does not cover the complete Attempt history"
+        )
     if (
         manifest.tracking.get("backend") != "mlflow"
         or manifest.tracking.get("delivery") != "online"
@@ -1664,6 +1725,9 @@ def _audit_training_run(
         not re.fullmatch(r"SuperMarioBros-Nes-v0/Level[1-8]-[1-4]", manifest.goal_slug)
         or level == "Level8-4"
         or config.get("state") != level
+        or config.get("states")
+        or config.get("state_probs")
+        or config.get("seed") != manifest.seed
         or config.get("state_archive")
         or config.get("initialization")
         or config.get("resume_checkpoint")
@@ -1744,6 +1808,11 @@ def _audit_training_run(
     points = {}
     for event in events:
         if event["kind"] == "history" and event["source"] == "train":
+            if recovery_count and (
+                event["event_seq"] > int(learning_terminal["drain"]["metric_segment_high_water"])
+                or event["step"] > int(learning_terminal["final_step"])
+            ):
+                raise TrainingQualificationError("delivery recovery contains new training history")
             point = points.setdefault(int(event["step"]), {})
             point.update(event["payload"])
     observations = []
@@ -1785,6 +1854,8 @@ def _audit_training_run(
             or checkpoint["environment_sha256"] != manifest.environment_sha256
         ):
             raise TrainingQualificationError("checkpoint identity disagrees with the frozen Run")
+        if checkpoint["step"] > learning_terminal["final_step"]:
+            raise TrainingQualificationError("checkpoint exceeds the original learning boundary")
     candidates = [
         (by_step[c["step"]], c)
         for c in terminal["checkpoint_inventory"]
@@ -1793,6 +1864,8 @@ def _audit_training_run(
     result = {
         "run_id": manifest.run_id,
         "attempt_id": manifest.attempt_id,
+        "delivery_attempt_id": terminal["attempt_id"],
+        "drain_recovery_attempts": recovery_count,
         "goal_slug": manifest.goal_slug,
         "seed": manifest.seed,
         "source_sha": manifest.source_sha,
@@ -1807,7 +1880,8 @@ def _audit_training_run(
         "initialization": "fresh canonical start",
         "uses_sil": bool(backend["config"].get("sil", {}).get("enabled", False)),
         "terminal_state": terminal["state"],
-        "stop_reason": terminal["stop_reason"],
+        "stop_reason": learning_terminal["stop_reason"],
+        "delivery_stop_reason": terminal["stop_reason"],
         "final_step": terminal["final_step"],
         "observed_at": time.time(),
         "resolved_train_config_sha256": canonical_json_sha256(config),
