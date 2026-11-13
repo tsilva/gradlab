@@ -13,9 +13,12 @@ end-to-end goals are outside this campaign.
   shaped returns and progress measures cannot satisfy this criterion. Actor-only
   SIL may reuse this learner's own episodes for learning; replay updates do not
   add completed episodes to the success window.
-- Stop at the first qualifying reported window and the next safe learner
-  boundary. Do not continue to pursue a perfect window. Preserve the metric
-  observation step separately from the saved checkpoint step.
+- Prefer a 100/100 window when the training trajectory supports further progress.
+  Preserve qualifying checkpoints from 80/100 onward so continued learning cannot
+  lose the fallback. Continue within the existing finite bounds while the best
+  mature window improves; stop at 100/100 or a declared plateau after qualification.
+  An 80/100 checkpoint remains acceptable when stuck or when the original bound
+  is reached. Preserve metric observation and checkpoint steps separately.
 - Record the window's episode and clear counts, cumulative episode count,
   qualifying training step, seed, initialization, recipe and resolved-config
   hashes, exact source/runtime and hash-verifiable checkpoint identity.

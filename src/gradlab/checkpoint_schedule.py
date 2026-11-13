@@ -26,7 +26,7 @@ def normalize_checkpoint_config(config: dict[str, Any], *, metric_validator=None
         min_interval_steps=1,
         max_checkpoints=3,
     )
-    if not isinstance(candidate, Mapping) or set(candidate) - {*defaults, "metric"}:
+    if not isinstance(candidate, Mapping) or set(candidate) - {*defaults, "metric", "thresholds"}:
         raise ValueError("checkpoint_candidates contains unknown settings")
     candidate = {**defaults, **candidate}
     metric = candidate.get("metric")
@@ -53,6 +53,17 @@ def normalize_checkpoint_config(config: dict[str, Any], *, metric_validator=None
             raise ValueError(f"checkpoint_candidates.{key} must be an integer >= {minimum}")
     if candidate["max_checkpoints"] > 16:
         raise ValueError("checkpoint_candidates.max_checkpoints must be <= 16")
+    if "thresholds" in candidate:
+        thresholds = candidate["thresholds"]
+        if (
+            not isinstance(thresholds, list)
+            or not 1 <= len(thresholds) <= 16
+            or any(type(v) not in (int, float) or not math.isfinite(v) for v in thresholds)
+            or thresholds != sorted(set(thresholds))
+        ):
+            raise ValueError(
+                "checkpoint_candidates.thresholds must be finite, unique and increasing"
+            )
     envelope = config.get("training_backend") or {}
     backend = envelope.get("id") if isinstance(envelope, Mapping) else None
     if backend not in {"sb3.ppo", "sb3.a2c", "gradlab.ppo"}:
@@ -83,6 +94,7 @@ class CheckpointSchedule:
         self.sample_step = -1
         self.candidate_count = 0
         self.last_candidate_step = initial_step
+        self.crossed_thresholds: set[float] = set()
 
     @property
     def enabled(self) -> bool:
@@ -111,6 +123,23 @@ class CheckpointSchedule:
         ):
             return False
         self.sample_step = sample_step
+        if "thresholds" in rule:
+            crossed = {
+                v
+                for v in rule["thresholds"]
+                if v not in self.crossed_thresholds
+                and (value >= v if rule["direction"] == "maximize" else value <= v)
+            }
+            if (
+                not crossed
+                or self.candidate_count >= rule["max_checkpoints"]
+                or step - self.last_candidate_step < rule["min_interval_steps"]
+            ):
+                return False
+            self.crossed_thresholds.update(crossed)
+            self.candidate_count += 1
+            self.last_candidate_step = step
+            return True
         if self.reference is None:
             self.reference = value
             return False

@@ -82,6 +82,34 @@ def test_negative_return_minimize_and_relative_delta():
     assert schedule.candidate_due(60, (-110, 60))
 
 
+def test_threshold_candidates_capture_first_qualifying_sample_and_never_lose_fallback():
+    config = candidate_config(thresholds=[0.8, 0.9, 0.95, 1.0])
+    config["checkpoint_candidates"].update(max_checkpoints=4, min_interval_steps=1)
+    schedule = CheckpointSchedule(config)
+    assert not schedule.candidate_due(1, None)
+    assert not schedule.candidate_due(2, (0.79, 2))
+    assert schedule.candidate_due(3, (0.8, 3))
+    assert not schedule.candidate_due(4, (0.7, 4))
+    assert not schedule.candidate_due(5, (0.8, 5))
+    assert schedule.candidate_due(6, (0.95, 6))  # Coalesces 90 and 95.
+    assert not schedule.candidate_due(7, (0.9, 7))
+    assert schedule.candidate_due(8, (1.0, 8))
+    assert not schedule.candidate_due(9, (1.0, 9))
+
+
+def test_first_mature_window_already_above_floor_is_saved_without_baseline():
+    config = candidate_config(thresholds=[0.8])
+    assert CheckpointSchedule(config).candidate_due(20, (0.9, 20))
+
+
+@pytest.mark.parametrize(
+    "thresholds", [[], [0.9, 0.8], [0.8, 0.8], [True], [float("nan")], [float("inf")]]
+)
+def test_threshold_candidates_reject_invalid_bounds(thresholds):
+    with pytest.raises(ValueError, match="thresholds"):
+        candidate_config(thresholds=thresholds)
+
+
 @pytest.mark.parametrize(
     "change",
     [

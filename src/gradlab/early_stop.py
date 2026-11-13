@@ -30,7 +30,9 @@ METRIC_EARLY_STOP_COMMON_KEYS = frozenset(
     }
 )
 METRIC_EARLY_STOP_THRESHOLD_KEYS = frozenset({"operator", "progress_baseline", "threshold"})
-METRIC_EARLY_STOP_NO_IMPROVEMENT_KEYS = frozenset({"delta_mode", "direction", "min_delta"})
+METRIC_EARLY_STOP_NO_IMPROVEMENT_KEYS = frozenset(
+    {"delta_mode", "direction", "min_delta", "activation_threshold"}
+)
 METRIC_EARLY_STOP_TRIGGERS = frozenset({"no_improvement", "threshold"})
 METRIC_EARLY_STOP_OUTCOMES = frozenset({"failure", "neutral", "success"})
 METRIC_EARLY_STOP_ACTIONS = frozenset({"observe", "stop"})
@@ -153,7 +155,8 @@ def normalize_metric_threshold_rules(
 
 
 def metric_threshold_evidence(
-    rule: Mapping[str, Any], value: float | None,
+    rule: Mapping[str, Any],
+    value: float | None,
 ) -> dict[str, Any]:
     """Describe a validated criterion without assigning Acceptance authority."""
     operator = str(rule["operator"])
@@ -297,6 +300,10 @@ def _normalize_metric_early_stop_condition(
                 ),
             }
         )
+        if "activation_threshold" in node:
+            normalized["activation_threshold"] = _require_finite_number(
+                node, "activation_threshold", label=label
+            )
     metric_path_segment(condition_id)
     return normalized
 
@@ -494,6 +501,7 @@ class _MetricEarlyStopRuntime:
     patience_reference_value: float | None = None
     last_improvement_step: int | None = None
     predicate_since_step: int | None = None
+    activation_step: int | None = None
 
 
 class MetricEarlyStopStateMachine:
@@ -549,7 +557,9 @@ class MetricEarlyStopStateMachine:
         delta = float(condition["min_delta"])
         if str(condition["delta_mode"]) == "relative":
             delta *= max(abs(best_value), 1.0)
-        return improvement > 0.0 and improvement >= delta
+        return improvement > 0.0 and (
+            improvement >= delta or math.isclose(improvement, delta, rel_tol=1e-12, abs_tol=1e-12)
+        )
 
     @staticmethod
     def _progress(*, eligible: bool, elapsed: int, patience: int, triggered: bool) -> float:
@@ -649,7 +659,18 @@ class MetricEarlyStopStateMachine:
             direction=str(condition["direction"]),
         )
 
-        eligible = sample.step >= int(condition["start_after_steps"])
+        activation_threshold = condition.get("activation_threshold")
+        activated = True
+        if activation_threshold is not None:
+            activated = (
+                state.best_value >= activation_threshold
+                if condition["direction"] == "maximize"
+                else state.best_value <= activation_threshold
+            )
+            if activated and state.activation_step is None:
+                state.activation_step = sample.step
+                state.last_improvement_step = sample.step
+        eligible = sample.step >= int(condition["start_after_steps"]) and activated
         anchor = max(
             int(condition["start_after_steps"]),
             int(

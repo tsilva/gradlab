@@ -282,7 +282,10 @@ def test_operational_failure_stops_batch_instead_of_spending_more_slots(tmp_path
     assert result.subjects[0].state == "failed"
 
 
-def test_first_terminal_run_records_evidence_before_advancing(tmp_path, monkeypatch):
+@pytest.mark.parametrize("terminal_state", ["succeeded", "stopped"])
+def test_first_terminal_run_records_evidence_before_advancing(
+    tmp_path, monkeypatch, terminal_state
+):
     store, job = setup_job(tmp_path)
     state(store, job, "submitted", {"run_id": RUN, "image_digest": "image-sha"})
     startup_proof(store, job)
@@ -292,7 +295,7 @@ def test_first_terminal_run_records_evidence_before_advancing(tmp_path, monkeypa
         lambda *a: {
             "completed": True,
             "attempt_terminal": {
-                "state": "succeeded",
+                "state": terminal_state,
                 "final_step": 1000,
                 "drain": {"complete": True},
             },

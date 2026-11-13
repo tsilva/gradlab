@@ -3,7 +3,7 @@ defaults:
 - ../../../../recipes/_presets/mario-training-clear-80@_global_
 - _self_
 recipe_id: ppo-train-clear-80
-description: Fresh PPO training screen for {{ goal_id }}, stopping at 80 genuine clears in the latest 100 target episodes.
+description: Fresh PPO training screen for {{ goal_id }}, preferring 100 genuine clears in the latest 100 target episodes, with a retained 80-clear fallback when progress stalls.
 reward_shape: speedrun-v1
 seeds: [12]
 train:

@@ -1,7 +1,7 @@
 defaults:
 - _self_
-# A single canonical target start supplies a mature rolling fraction. Keep the
-# inherited perfect-window diagnostic observational so clear_80 owns stopping.
+# Prefer a perfect mature window; preserve bounded qualifying fallbacks while
+# the learner improves. Plateau stopping arms only after a genuine 80/100.
 tracking:
   backend: mlflow
   delivery: online
@@ -9,10 +9,19 @@ train:
   checkpoint_eval_backend: none
   checkpoint_monitoring:
     enabled: false
+  checkpoint_candidates:
+    metric: train/success/min
+    direction: maximize
+    thresholds: [0.8, 0.9, 0.95, 1.0]
+    min_delta: 0.01
+    delta_mode: absolute
+    start_after_steps: 0
+    min_interval_steps: 1
+    max_checkpoints: 4
   early_stop:
     conditions:
       clear_100:
-        action: observe
+        action: stop
       clear_80:
         metric: train/success/min
         trigger: threshold
@@ -21,4 +30,15 @@ train:
         threshold: 0.8
         patience_steps: 0
         outcome: success
+        action: observe
+      qualified_plateau:
+        metric: train/success/min
+        trigger: no_improvement
+        direction: maximize
+        delta_mode: absolute
+        min_delta: 0.01
+        activation_threshold: 0.8
+        start_after_steps: 0
+        patience_steps: 1048576
+        outcome: neutral
         action: stop

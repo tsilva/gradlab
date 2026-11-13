@@ -77,6 +77,44 @@ def test_threshold_zero_patience_fires_immediately() -> None:
     assert result.stop_decision["outcome"] == "success"
 
 
+def test_qualified_plateau_cannot_stop_before_floor_and_arms_a_fresh_budget():
+    metric = TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN
+    condition = plateau_condition(direction="maximize", delta_mode="absolute", start_after_steps=0)
+    condition.update(metric=metric, activation_threshold=0.8)
+    machine = MetricEarlyStopStateMachine({"conditions": {"plateau": condition}})
+    assert update(machine, metric, 0.0, 1).stop_decision is None
+    assert update(machine, metric, 0.0, 1000).stop_decision is None
+    assert update(machine, metric, 0.79, 1100).stop_decision is None
+    assert update(machine, metric, 0.8, 1200).stop_decision is None
+    assert update(machine, metric, 0.8, 1299).stop_decision is None
+    decision = update(machine, metric, 0.79, 1300).stop_decision
+    assert decision["outcome"] == "neutral"
+    assert decision["best_value"] == 0.8
+
+
+def test_qualified_plateau_budget_resets_when_the_best_window_improves():
+    metric = TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN
+    condition = plateau_condition(direction="maximize", delta_mode="absolute", start_after_steps=0)
+    condition.update(metric=metric, activation_threshold=0.8)
+    machine = MetricEarlyStopStateMachine({"conditions": {"plateau": condition}})
+    assert update(machine, metric, 0.8, 100).stop_decision is None
+    assert update(machine, metric, 0.9, 190).stop_decision is None
+    assert update(machine, metric, 0.89, 200).stop_decision is None
+    assert update(machine, metric, 0.9, 289).stop_decision is None
+    assert update(machine, metric, 0.9, 290).stop_decision is not None
+
+
+def test_one_additional_clear_resets_patience_despite_float_rounding():
+    metric = TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN
+    condition = plateau_condition(direction="maximize", delta_mode="absolute", start_after_steps=0)
+    condition.update(metric=metric, activation_threshold=0.8)
+    machine = MetricEarlyStopStateMachine({"conditions": {"plateau": condition}})
+    assert update(machine, metric, 0.81, 100).stop_decision is None
+    assert update(machine, metric, 0.82, 190).stop_decision is None
+    assert update(machine, metric, 0.82, 200).stop_decision is None
+    assert update(machine, metric, 0.82, 290).stop_decision is not None
+
+
 def test_threshold_patience_requires_continuous_truth_and_resets() -> None:
     machine = MetricEarlyStopStateMachine(
         {
@@ -87,13 +125,16 @@ def test_threshold_patience_requires_continuous_truth_and_resets() -> None:
     )
 
     assert (
-        update(machine, TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN, 1.0, 100).stop_decision is None
+        update(machine, TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN, 1.0, 100).stop_decision
+        is None
     )
     assert (
-        update(machine, TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN, 0.5, 150).stop_decision is None
+        update(machine, TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN, 0.5, 150).stop_decision
+        is None
     )
     assert (
-        update(machine, TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN, 1.0, 200).stop_decision is None
+        update(machine, TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN, 1.0, 200).stop_decision
+        is None
     )
     result = update(machine, TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN, 1.0, 300)
 
@@ -306,23 +347,24 @@ def test_stop_precedence_is_success_then_failure_then_neutral_then_condition_id(
     assert update(no_success, metric, 1.0, 10).stop_decision["condition_id"] == "failure"
 
     neutral_only = MetricEarlyStopStateMachine(
-        {"conditions": {key: value for key, value in conditions.items() if key.startswith("neutral")}}
+        {
+            "conditions": {
+                key: value for key, value in conditions.items() if key.startswith("neutral")
+            }
+        }
     )
     assert update(neutral_only, metric, 1.0, 10).stop_decision["condition_id"] == "neutral_a"
 
 
 def test_current_policy_accepts_neutral_plateau_and_rejects_historical_authoring() -> None:
     neutral = {"conditions": {"plateau": plateau_condition()}}
-    historical = {
-        "conditions": {"plateau": plateau_condition(outcome="failure")}
-    }
+    historical = {"conditions": {"plateau": plateau_condition(outcome="failure")}}
 
-    assert validate_metric_early_stop_policy(neutral) == normalize_metric_early_stop_config(
-        neutral
+    assert validate_metric_early_stop_policy(neutral) == normalize_metric_early_stop_config(neutral)
+    assert (
+        normalize_metric_early_stop_config(historical)["conditions"]["plateau"]["outcome"]
+        == "failure"
     )
-    assert normalize_metric_early_stop_config(historical)["conditions"]["plateau"][
-        "outcome"
-    ] == "failure"
     with pytest.raises(ValueError, match="must be neutral for no_improvement"):
         validate_metric_early_stop_policy(historical)
 

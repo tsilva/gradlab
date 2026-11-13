@@ -298,7 +298,9 @@ class ExperimentBatch:
                             state="blocked",
                             message="First worker needs reviewed GPU/CUDA/learner startup verification before further admission",
                         )
-                state = "succeeded" if terminal.get("state") == "succeeded" else "failed"
+                state = (
+                    "succeeded" if terminal.get("state") in {"succeeded", "stopped"} else "failed"
+                )
                 if terminal.get("state") == "resumable_failure":
                     return HandlerResult(
                         state="blocked",

@@ -488,9 +488,10 @@ class ConfigValidationTests(unittest.TestCase):
                 self.assertNotIn("stop_on_acceptance", train_config)
                 if recipe_path.stem in {"ppo-train-clear-80", "ppo-sil-train-clear-80"}:
                     conditions = train_config["early_stop"]["conditions"]
-                    self.assertEqual(conditions["clear_100"]["action"], "observe")
+                    self.assertEqual(conditions["clear_100"]["action"], "stop")
                     self.assertEqual(conditions["clear_80"]["threshold"], 0.8)
-                    self.assertEqual(conditions["clear_80"]["action"], "stop")
+                    self.assertEqual(conditions["clear_80"]["action"], "observe")
+                    self.assertEqual(conditions["qualified_plateau"]["activation_threshold"], 0.8)
                     continue
                 if recipe_path.name == "ppo-sil-actor-only.yaml":
                     self.assertIsNone(train_config["early_stop"])

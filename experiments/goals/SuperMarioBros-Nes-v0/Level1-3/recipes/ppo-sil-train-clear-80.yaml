@@ -3,7 +3,7 @@ defaults:
 - ../../../../recipes/_presets/mario-training-clear-80@_global_
 - _self_
 recipe_id: ppo-sil-train-clear-80
-description: Fresh actor-only SIL plus PPO training screen for {{ goal_id }}, stopping at 80 genuine clears in the latest 100 target episodes.
+description: Fresh actor-only SIL plus PPO training screen for {{ goal_id }}, preferring 100 genuine clears in the latest 100 target episodes, with a retained 80-clear fallback when progress stalls.
 reward_shape: sft-ppo-v1
 seeds: [1801]
 train:

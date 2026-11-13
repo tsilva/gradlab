@@ -22,7 +22,7 @@ GradLab is a public, reproducible, general-purpose reinforcement-learning resear
 
 - Training Success must remain a training-time proxy and must not confirm that a Research Goal is solved.
 - An early-stop rule must be declared when used and must not cause Acceptance or Promotion.
-- The [Mario per-level recipe campaign](docs/specs/mario-recipe-campaign.md) requires fresh 80/100 genuine target-origin training clears for each included ordinary level; Level8-4 remains explicitly deferred, and the criterion does not establish Acceptance or across-seed reliability.
+- The [Mario per-level recipe campaign](docs/specs/mario-recipe-campaign.md) prefers fresh 100/100 genuine target-origin training clears when attainable within its bounds, with at least 80/100 acceptable when stuck; Level8-4 remains explicitly deferred, and the criterion does not establish Acceptance or across-seed reliability.
 - Acceptance must use an immutable Policy, the Evaluated Goal’s declared evaluation method, evaluation seeds different from training seeds, and state isolated from active training.
 - Acceptance based on a fixed-episode mean must use every declared episode before it makes its decision.
 - Deterministic Search must grant Acceptance only when a Policy produces the declared success event within the declared resource limit.

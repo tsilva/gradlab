@@ -6,6 +6,7 @@ import pytest
 from gradlab.early_stop import MetricEarlyStopStateMachine, MetricSample
 from gradlab.recipe_documents import compose_resolved_train_documents
 from gradlab.training_metrics import EpisodeMetricsReducer
+from gradlab.checkpoint_schedule import CheckpointSchedule
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -26,7 +27,9 @@ def campaign_recipe(level):
 @pytest.mark.parametrize("level", LEVELS)
 def test_campaign_recipe_preserves_full_start_and_separate_acceptance(level):
     resolved = compose_resolved_train_documents(
-        GOALS / level / "_goal.yaml", campaign_recipe(level), source_sha="a" * 40,
+        GOALS / level / "_goal.yaml",
+        campaign_recipe(level),
+        source_sha="a" * 40,
     )
     document = resolved.effective
     config = document["train_config"]
@@ -51,8 +54,15 @@ def test_campaign_recipe_preserves_full_start_and_separate_acceptance(level):
     assert not config.get("state_archive")
     assert not config.get("initialization")
     conditions = config["early_stop"]["conditions"]
-    assert conditions["clear_100"]["action"] == "observe"
-    assert {key for key, value in conditions.items() if value["action"] == "stop"} == {"clear_80"}
+    assert conditions["clear_100"]["action"] == "stop"
+    assert {key for key, value in conditions.items() if value["action"] == "stop"} == {
+        "clear_100",
+        "qualified_plateau",
+    }
+    assert conditions["clear_80"]["action"] == "observe"
+    assert conditions["qualified_plateau"]["activation_threshold"] == 0.8
+    assert conditions["qualified_plateau"]["outcome"] == "neutral"
+    assert config["checkpoint_candidates"]["thresholds"] == [0.8, 0.9, 0.95, 1.0]
     assert conditions["clear_80"]["metric"] == "train/success/min"
     assert conditions["clear_80"]["threshold"] == 0.8
     assert conditions["clear_80"]["operator"] == ">="
@@ -74,14 +84,19 @@ def test_campaign_covers_exactly_31_ordinary_levels_without_final_level():
 
 def episode(success, *, origin="target"):
     return SimpleNamespace(
-        start_id="Level1-1", start_origin=origin, episode_return=100000.0,
-        episode_length=10, metrics={}, outcome="success" if success else "failure",
+        start_id="Level1-1",
+        start_origin=origin,
+        episode_return=100000.0,
+        episode_length=10,
+        metrics={},
+        outcome="success" if success else "failure",
     )
 
 
-def test_clear_80_requires_a_full_genuine_window_and_stops_at_80_not_100():
+def test_full_genuine_80_window_preserves_fallback_then_continues_to_100():
     config = compose_resolved_train_documents(
-        GOALS / "Level1-1/_goal.yaml", campaign_recipe("Level1-1"),
+        GOALS / "Level1-1/_goal.yaml",
+        campaign_recipe("Level1-1"),
     ).effective["train_config"]
     reducer = EpisodeMetricsReducer(configured_starts=("Level1-1",))
     assert reducer.window_size == 100
@@ -89,9 +104,9 @@ def test_clear_80_requires_a_full_genuine_window_and_stops_at_80_not_100():
 
     def observe(records, step):
         values = reducer.consume(records)
-        return values, machine.update({
-            key: MetricSample(step=step, value=value) for key, value in values.items()
-        }).stop_decision
+        return values, machine.update(
+            {key: MetricSample(step=step, value=value) for key, value in values.items()}
+        ).stop_decision
 
     # Even 99/99 actual clears cannot qualify during warm-up.
     warmup = EpisodeMetricsReducer(configured_starts=("Level1-1",))
@@ -113,15 +128,22 @@ def test_clear_80_requires_a_full_genuine_window_and_stops_at_80_not_100():
     assert values["train/success/min"] == 0.8
     assert len(reducer.success_windows["Level1-1"]) == 100
     assert sum(reducer.success_windows["Level1-1"]) == 80
-    assert decision["condition_id"] == "clear_80"
-    assert decision["metric_step"] == 5
-    assert decision["value"] == 0.8
+    assert decision is None
+    schedule = CheckpointSchedule(config)
+    assert schedule.candidate_due(5, (values["train/success/min"], 5))
+    values, decision = observe([episode(True) for _ in range(20)], 6)
+    assert decision["condition_id"] == "clear_100"
+    assert decision["metric_step"] == 6
+    assert decision["value"] == 1.0
 
 
-def test_a_perfect_first_window_also_selects_clear_80_stop():
+def test_a_perfect_first_window_selects_clear_100_stop():
     config = compose_resolved_train_documents(
-        GOALS / "Level1-1/_goal.yaml", campaign_recipe("Level1-1"),
+        GOALS / "Level1-1/_goal.yaml",
+        campaign_recipe("Level1-1"),
     ).effective["train_config"]
     machine = MetricEarlyStopStateMachine(config["early_stop"])
-    decision = machine.update({"train/success/min": MetricSample(step=100, value=1.0)}).stop_decision
-    assert decision["condition_id"] == "clear_80"
+    decision = machine.update(
+        {"train/success/min": MetricSample(step=100, value=1.0)}
+    ).stop_decision
+    assert decision["condition_id"] == "clear_100"

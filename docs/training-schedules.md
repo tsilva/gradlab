@@ -90,6 +90,18 @@ limits save frequency. Candidates are ordinary immutable Checkpoints, retain the
 configured evaluation backend, and do not prove optimality or restore an earlier
 Policy. See `METRICS.md` for proxy semantics. Smoke/demo recipes disable the shortlist.
 
+Candidates may instead declare increasing, unique `thresholds`, such as
+`[0.8, 0.9, 0.95, 1.0]` with `max_checkpoints: 4`. In this mode the first eligible
+sample crossing each threshold saves a checkpoint without requiring a baseline.
+Crossed thresholds coalesce at the safe boundary and never save again after a
+regression. Cooldown, eligibility and the declared checkpoint budget still apply.
+
+A `no_improvement` early-stop rule may set `activation_threshold`. Its patience
+clock starts when the best value first reaches that threshold (above for maximize,
+below for minimize), then resets on meaningful improvements. This supports
+bounded continuation toward a preferred result after saving an acceptable fallback;
+it does not stop an unqualified learner merely because its metric is flat.
+
 Go-Explore/JERK consume the same schedule after complete search batches. Go-Explore
 also permits at most `train.backend.config.improvement_checkpoints` improved-completion
 snapshots per Attempt (default three, zero disables them), spaced by at least the
