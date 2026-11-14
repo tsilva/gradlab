@@ -5,6 +5,33 @@ from unittest.mock import patch
 import pytest
 
 from gradlab import training_access
+from gradlab.training_vault import TrainingVaultCommandError
+
+
+@pytest.mark.parametrize("text,category", [
+    ("HTTP 401 Unauthorized", "authentication_failed"),
+    ("HTTP 403 Client Error", "authentication_failed"),
+    ("407 Proxy Authentication Required", "proxy_rejected"),
+    ("certificate verify failed", "tls_failed"),
+    ("ConnectionRefusedError", "connection_failed"),
+    ("Unexpected upstream status", "nativecall_error"),
+])
+def test_native_failure_categories_never_include_provider_details(text, category):
+    private = "http://x-agent-vault:agv_syntheticPrivate@127.0.0.1:28383/private-body"
+    error = TrainingVaultCommandError(private, text + private)
+    assert error.category == category
+    assert str(error) == "Training inventory request failed: " + category
+    assert "agv_" not in repr(error) and "private-body" not in repr(error)
+
+
+def test_inventory_emits_only_fixed_error_category(capsys):
+    error = TrainingVaultCommandError("private-body", "401 Unauthorized")
+    with patch('gradlab.training_vault.validate_session'), patch.object(
+        training_access, 'inventory', side_effect=error
+    ), pytest.raises(SystemExit) as caught:
+        training_access.main(['inventory'])
+    assert caught.value.code == 1
+    assert capsys.readouterr().out == '{"probe_error": "authentication_failed"}\n'
 
 
 def test_unreviewed_operation_fails_before_transport_validation():

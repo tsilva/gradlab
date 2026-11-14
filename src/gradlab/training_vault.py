@@ -36,6 +36,24 @@ class TrainingVaultError(RuntimeError):
     pass
 
 
+class TrainingVaultCommandError(RuntimeError):
+    """A fixed diagnostic category without native provider text or capability."""
+
+    def __init__(self, stdout: str, stderr: str):
+        text = (stdout[:8192] + "\n" + stderr[:8192]).lower()
+        self.category = "nativecall_error"
+        for category, markers in (
+            ("proxy_rejected", ("407 proxy", "proxy authentication required")),
+            ("authentication_failed", ("401 unauthorized", "401 client error", "403 forbidden", "403 client error")),
+            ("tls_failed", ("certificate verify failed", "certificate_verify_failed", "sslcertverificationerror", "tls handshake")),
+            ("connection_failed", ("connection refused", "connectionrefusederror", "failed to establish a new connection", "connecttimeout", "readtimeout", "timed out", "name or service not known")),
+        ):
+            if any(marker in text for marker in markers):
+                self.category = category
+                break
+        super().__init__("Training inventory request failed: " + self.category)
+
+
 def selected(values: Mapping[str, str] | None = None) -> bool:
     values = os.environ if values is None else values
     if MODE not in values:

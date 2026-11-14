@@ -362,10 +362,10 @@ class DstackBackend:
             timeout=timeout,
         )
         if result.returncode != 0:
-            from gradlab.training_vault import selected
+            from gradlab.training_vault import TrainingVaultCommandError, selected
 
             if selected(self.environment):
-                raise RuntimeError(f"dstack {arguments[0]} failed; Vault capability details withheld")
+                raise TrainingVaultCommandError(result.stdout or "", result.stderr or "")
             detail = (result.stderr or result.stdout).strip()
             raise RuntimeError(
                 f"dstack {' '.join(arguments[:2])} failed with exit {result.returncode}: {detail}"

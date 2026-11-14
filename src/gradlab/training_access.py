@@ -99,7 +99,13 @@ def main(arguments=None):
     if arguments == ["check"]:
         check_storage()
     elif arguments == ["inventory"]:
-        inventory()
+        from gradlab.training_vault import TrainingVaultCommandError
+
+        try:
+            inventory()
+        except TrainingVaultCommandError as error:
+            print(json.dumps({"probe_error": error.category}))
+            raise SystemExit(1) from None
     else:
         if arguments[:2] == ["experiment", "launch"] and "--json" not in arguments:
             arguments.append("--json")
