@@ -13,6 +13,12 @@ conditional-object semantics and publication guards. Missing access fails closed
 cleanup and needs explicit authorization. Neither should start training merely
 to verify access.
 
+The operator lifecycle adapter includes `experiment reconcile` for a terminal
+compute task missing its Attempt receipt. It validates the existing operator
+session and preserves the CLI's evidence hashes and failure reason. It creates
+no worker capability or training task. Adopting changed protected adapter source
+requires a fresh explicit Runbox consumer review.
+
 Installation, bootstrap and rotation are trusted administrative operations,
 separate from application startup. The administrative helper validates source
 scope and current native fake-credential proof. Runtime refresh prepares a

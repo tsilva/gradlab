@@ -69,3 +69,26 @@ def test_retry_dispatch_matches_the_actual_cli_parser():
         with patch.dict(os.environ, {}, clear=True), patch.object(training_access.sys, 'argv', []):
             training_access.main(['experiment', 'retry', '--run', run_id])
             run.assert_called_once_with('gradlab.main', run_name='__main__')
+
+
+def test_reconcile_dispatch_preserves_the_actual_cli_evidence_and_stop_reason():
+    from gradlab.experiment_cli import build_parser, cmd_reconcile
+
+    run_id = 'gradlab-' + 'a' * 32
+    evidence = 'f' * 64
+
+    def parse_dispatch(*args, **kwargs):
+        parsed = build_parser().parse_args(training_access.sys.argv[2:])
+        assert parsed.func is cmd_reconcile and parsed.run_id == run_id
+        assert parsed.stop_reason == 'forced_cancel_before_drain'
+        assert parsed.evidence_sha256 == [evidence] and parsed.json
+
+    with patch('gradlab.training_vault.validate_session') as validate, patch.object(
+        training_access.runpy, 'run_module', side_effect=parse_dispatch
+    ) as run:
+        with patch.dict(os.environ, {}, clear=True), patch.object(training_access.sys, 'argv', []):
+            training_access.main(['experiment', 'reconcile', '--run', run_id,
+                                  '--stop-reason', 'forced_cancel_before_drain',
+                                  '--evidence-sha256', evidence, '--json'])
+            validate.assert_called_once_with()
+            run.assert_called_once_with('gradlab.main', run_name='__main__')

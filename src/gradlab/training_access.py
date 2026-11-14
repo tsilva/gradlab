@@ -83,7 +83,7 @@ def main(arguments=None):
     arguments = list(sys.argv[1:] if arguments is None else arguments)
     if arguments not in (["check"], ["inventory"]) and (len(arguments) < 2
             or arguments[0] != "experiment" or arguments[1] not in {
-                "operator-preflight", "launch", "status", "follow", "logs", "cancel", "retry", "resume-submit"}):
+                "operator-preflight", "launch", "status", "follow", "logs", "cancel", "retry", "resume-submit", "reconcile"}):
         raise LaunchError("Use check, inventory or a reviewed experiment lifecycle operation")
     if arguments[:2] == ["experiment", "follow"] and os.environ.get("GRADLAB_TRAINING_FOLLOW") != "1":
         raise LaunchError("Use the reviewed long-lived follow profile")
