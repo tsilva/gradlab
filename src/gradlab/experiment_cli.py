@@ -2171,7 +2171,44 @@ def cmd_cancel(args: argparse.Namespace) -> int:
 def _project_reconciled_terminal(
     manifest: RunManifest,
     receipt: TerminalReceipt,
-) -> None:
+    *,
+    authority: RunAuthority | None = None,
+) -> bool:
+    tracking = manifest.tracking or {"backend": "wandb", "delivery": "online"}
+    if tracking["delivery"] == "local_only":
+        return False
+    if tracking["backend"] == "mlflow":
+        from mlflow.tracking import MlflowClient
+        from gradlab.mlflow_delivery import MlflowDelivery, RUN_ID_TAG
+        from gradlab.mlflow_tls import private_mlflow_ca_context
+
+        if authority is None:
+            raise RuntimeError("MLflow reconciliation requires the existing Run binding")
+        binding = authority.control.get_json_optional(f"runs/{manifest.run_id}/metrics-binding.json")
+        uri = _preflight_mlflow_service_uri(str(os.environ.get("MLFLOW_TRACKING_URI") or ""))
+        validate_mlflow_access(uri, tracking)
+        if (
+            not isinstance(binding, Mapping)
+            or binding.get("schema_version") != 1
+            or binding.get("run_id") != manifest.run_id
+            or binding.get("backend") != "mlflow"
+            or not re.fullmatch(r"[0-9a-f]{32}", str(binding.get("service_run_id") or ""))
+            or str(binding.get("service_url") or "").split("/#/", 1)[0].rstrip("/") != uri.rstrip("/")
+        ):
+            raise RuntimeError("MLflow reconciliation binding is missing or differs from the frozen Run")
+        with private_mlflow_ca_context():
+            client = MlflowClient(tracking_uri=uri)
+            bound = client.get_run(binding["service_run_id"])
+            if bound.data.tags.get(RUN_ID_TAG) != manifest.run_id:
+                raise RuntimeError("MLflow reconciliation Run identity differs from its binding")
+            delivery = MlflowDelivery(
+                client, run_id=binding["service_run_id"], gradlab_run_id=manifest.run_id,
+                created_at_ms=int(parse_utc_datetime(manifest.created_at).timestamp() * 1000),
+                tracking_uri=uri, experiment_id=str(bound.info.experiment_id),
+            )
+            delivery.publish_terminal(state=receipt.state, reason=receipt.stop_reason, timeout_seconds=300)
+            delivery.finish_projection(timeout_seconds=300)
+        return True
     startup_without_run = (
         receipt.stop_reason == "supervisor_startup_failure"
         and receipt.final_step == 0
@@ -2197,6 +2234,7 @@ def _project_reconciled_terminal(
             timeout_seconds=300,
             exit_code=0 if receipt.state in {"succeeded", "stopped"} else 1,
         )
+    return True
 
 
 def cmd_reconcile(args: argparse.Namespace) -> int:
@@ -2242,7 +2280,7 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
             receipt = TerminalReceipt.from_dict(existing)
             if receipt.attempt_id != manifest.attempt_id:
                 raise RuntimeError("latest attempt terminal belongs to another attempt")
-        _project_reconciled_terminal(manifest, receipt)
+        service_projected = _project_reconciled_terminal(manifest, receipt, authority=authority)
     finally:
         authority.release_lease(lease)
     output = {
@@ -2254,7 +2292,9 @@ def cmd_reconcile(args: argparse.Namespace) -> int:
         "state": receipt.state,
         "stop_reason": receipt.stop_reason,
         "final_step": receipt.final_step,
-        "wandb_projected": True,
+        "tracking_backend": (manifest.tracking or {"backend": "wandb"})["backend"],
+        "service_projected": service_projected,
+        "wandb_projected": service_projected and (manifest.tracking or {"backend": "wandb"})["backend"] == "wandb",
     }
     print(
         json.dumps(output, sort_keys=True)
@@ -2899,7 +2939,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Seal a terminal dstack attempt that has no authoritative receipt.",
         description=(
             "Acquire the attempt writer lease, create an idempotent operational-failure "
-            "receipt for a terminal dstack task, then project that receipt to W&B."
+            "receipt for a terminal dstack task, then project it to the frozen metrics service."
         ),
     )
     reconcile.add_argument("--run", dest="run_id", type=_require_run_id, required=True)

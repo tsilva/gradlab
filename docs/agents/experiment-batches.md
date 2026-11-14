@@ -18,6 +18,13 @@ access, source drift, operational failures and uncertain admissions stop the
 batch for review. Never retry an uncertain admission without reconciling its
 immutable manifests.
 
+For a terminal compute task missing its Attempt receipt, `experiment reconcile`
+seals truthful operational-failure evidence under the writer lease. It projects
+to the Run's frozen metrics backend; MLflow requires the existing binding and a
+matching GradLab Run tag. Local-only reconciliation makes no service calls.
+Reconciliation does not claim complete drain or successful training. If service
+projection fails, repeating reconciliation preserves the original receipt.
+
 Before expanding beyond the first GPU Run, preserve its container assignment,
 CUDA tensor operation and actual learner CUDA log. Record that reviewed evidence
 in the job work directory's `startup-verified.json` with `run_id`, `image_digest`,

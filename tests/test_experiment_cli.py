@@ -1393,7 +1393,7 @@ def test_reconcile_acquires_lease_writes_r2_before_wandb_and_releases(
         ),
         mock.patch(
             "gradlab.experiment_cli._project_reconciled_terminal",
-            side_effect=lambda *_args: events.append("wandb"),
+            side_effect=lambda *_args, **_kwargs: (events.append("wandb") or True),
         ),
     ):
         assert cmd_reconcile(args) == 0
@@ -1465,6 +1465,113 @@ def test_reconciled_stopped_run_closes_wandb_with_zero_exit() -> None:
 
     projector.close.assert_called_once_with(timeout_seconds=300, exit_code=0)
     assert resume.call_args.kwargs["allow_create"] is False
+
+
+def _reconciled_mlflow_manifest(delivery="online"):
+    return replace(_manifest_only_run(), tracking={
+        "backend": "mlflow", "delivery": delivery,
+        "sources": {"backend": "test override", "delivery": "test override"},
+    }, wandb={})
+
+
+@pytest.mark.parametrize("delivery", ["online", "local_only"])
+def test_reconciled_mlflow_uses_only_its_existing_binding(monkeypatch, delivery) -> None:
+    manifest = _reconciled_mlflow_manifest(delivery)
+    receipt = SimpleNamespace(state="resumable_failure", stop_reason="forced_cancel_before_drain")
+    uri = "https://mlflow.example.test"
+    service_id = "1" * 32
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", uri)
+    monkeypatch.setenv("MLFLOW_TRACKING_USERNAME", "proxy-placeholder")
+    monkeypatch.setenv("MLFLOW_TRACKING_PASSWORD", "proxy-placeholder")
+    authority = mock.MagicMock()
+    authority.control.get_json_optional.return_value = {
+        "schema_version": 1, "run_id": manifest.run_id, "backend": "mlflow",
+        "service_run_id": service_id, "service_url": f"{uri}/#/experiments/7/runs/{service_id}",
+    }
+    client = mock.MagicMock()
+    client.get_run.return_value = SimpleNamespace(
+        info=SimpleNamespace(experiment_id="7"), data=SimpleNamespace(tags={"gradlab.run_id": manifest.run_id}),
+    )
+    with (
+        mock.patch("mlflow.tracking.MlflowClient", return_value=client) as constructor,
+        mock.patch("gradlab.mlflow_delivery.MlflowDelivery.publish_terminal") as publish,
+        mock.patch("gradlab.experiment_cli.WandbProjector.resume") as wandb,
+    ):
+        assert _project_reconciled_terminal(manifest, receipt, authority=authority) is (delivery == "online")
+    wandb.assert_not_called()
+    if delivery == "online":
+        constructor.assert_called_once_with(tracking_uri=uri)
+        client.get_run.assert_called_once_with(service_id)
+        client.create_run.assert_not_called()
+        publish.assert_called_once_with(state=receipt.state, reason=receipt.stop_reason, timeout_seconds=300)
+    else:
+        constructor.assert_not_called()
+        publish.assert_not_called()
+        authority.control.get_json_optional.assert_not_called()
+
+
+@pytest.mark.parametrize("mismatch", ["missing", "binding_run", "backend", "service_uri", "service_run_tag"])
+def test_reconciled_mlflow_rejects_unverified_identity(monkeypatch, mismatch) -> None:
+    manifest = _reconciled_mlflow_manifest()
+    receipt = SimpleNamespace(state="resumable_failure", stop_reason="forced_cancel_before_drain")
+    uri = "https://mlflow.example.test"
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", uri)
+    monkeypatch.setenv("MLFLOW_TRACKING_USERNAME", "proxy-placeholder")
+    monkeypatch.setenv("MLFLOW_TRACKING_PASSWORD", "proxy-placeholder")
+    authority = mock.MagicMock()
+    binding = {"schema_version": 1, "run_id": manifest.run_id, "backend": "mlflow",
+               "service_run_id": "1" * 32, "service_url": uri + "/#/experiments/7/runs/" + "1" * 32}
+    if mismatch == "binding_run":
+        binding["run_id"] = new_run_id()
+    if mismatch == "backend":
+        binding["backend"] = "wandb"
+    if mismatch == "service_uri":
+        binding["service_url"] = "https://another.example.test/#/experiments/7/runs/" + "1" * 32
+    authority.control.get_json_optional.return_value = None if mismatch == "missing" else binding
+    client = mock.MagicMock()
+    client.get_run.return_value = SimpleNamespace(
+        info=SimpleNamespace(experiment_id="7"), data=SimpleNamespace(tags={"gradlab.run_id": new_run_id()}),
+    )
+    with (
+        mock.patch("mlflow.tracking.MlflowClient", return_value=client),
+        mock.patch("gradlab.mlflow_delivery.MlflowDelivery.publish_terminal") as publish,
+        mock.patch("gradlab.experiment_cli.WandbProjector.resume") as wandb,
+        pytest.raises(RuntimeError, match="binding|identity"),
+    ):
+        _project_reconciled_terminal(manifest, receipt, authority=authority)
+    publish.assert_not_called()
+    wandb.assert_not_called()
+
+
+def test_reconcile_projection_retry_preserves_one_authoritative_receipt(tmp_path, capsys) -> None:
+    manifest = _reconciled_mlflow_manifest()
+    authority = _pre_submit_authority(tmp_path)
+    authority.create_manifest(manifest)
+    backend = mock.MagicMock()
+    backend.status.return_value = DstackTask(
+        project="research", name=str(manifest.compute["dstack_task"]), status="failed",
+    )
+    args = SimpleNamespace(run_id=manifest.run_id, stop_reason="forced_cancel_before_drain",
+                           evidence_sha256=["f" * 64], json=True)
+    with (
+        mock.patch("gradlab.experiment_cli.repository_root", return_value=tmp_path),
+        mock.patch("gradlab.experiment_cli._storage", return_value=(None, authority)),
+        mock.patch("gradlab.experiment_cli._dstack_backend_for_attempt", return_value=(backend, None)),
+        mock.patch("gradlab.experiment_cli._project_reconciled_terminal",
+                   side_effect=[RuntimeError("temporary selected-service failure"), True]) as project,
+    ):
+        with pytest.raises(RuntimeError, match="selected-service failure"):
+            cmd_reconcile(args)
+        first = authority.semantic_state(manifest.run_id)["attempt_terminals"]
+        assert len(first) == 1
+        assert cmd_reconcile(args) == 0
+    assert authority.semantic_state(manifest.run_id)["attempt_terminals"] == first
+    assert project.call_count == 2
+    output = json.loads(capsys.readouterr().out)
+    assert output["terminal_created"] is False
+    assert output["tracking_backend"] == "mlflow"
+    assert output["service_projected"] is True
+    assert output["wandb_projected"] is False
 
 
 def test_resume_submit_recovers_only_the_original_manifest(
