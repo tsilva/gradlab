@@ -17,10 +17,11 @@ performance, across-seed reliability, Acceptance or Promotion.
 | Level2-1 | [PPO](../goals/SuperMarioBros-Nes-v0/Level2-1/recipes/ppo.yaml) | 90/100 | 7,012,352 / 7,012,352 | 12 |
 | Level2-2 | [PPO + SIL](../goals/SuperMarioBros-Nes-v0/Level2-2/recipes/ppo.yaml) | 84/100 | 7,155,712 / 7,155,712 | 1801 |
 | Level2-3 | [PPO](../goals/SuperMarioBros-Nes-v0/Level2-3/recipes/ppo.yaml) | 90/100 | 3,424,256 / 3,424,256 | 12 |
+| Level2-4 | [PPO + SIL](../goals/SuperMarioBros-Nes-v0/Level2-4/recipes/ppo.yaml) | 95/100 | 15,142,912 / 15,142,912 | 2801 |
 | Level3-1 | [PPO](../goals/SuperMarioBros-Nes-v0/Level3-1/recipes/ppo.yaml) | 96/100 | 5,505,024 / 5,505,024 | 12 |
 | Level3-2 | [PPO](../goals/SuperMarioBros-Nes-v0/Level3-2/recipes/ppo.yaml) | 96/100 | 2,007,040 / 2,007,040 | 12 |
 
-The other 22 included levels remain unqualified by this campaign.
+The other 21 included levels remain unqualified by this campaign.
 
 ## Level1-1 — 2026-11-13
 
@@ -260,6 +261,38 @@ initialization, archive curriculum, automatic evaluation or Monitoring was used.
 This is training qualification, not Acceptance or across-seed reliability.
 
 The [executed recipe](https://github.com/tsilva/gradlab/blob/7e643f4f820ecc0a82b6c7f90a787810c64c5ee8/experiments/goals/SuperMarioBros-Nes-v0/Level2-3/recipes/ppo-train-clear-80.yaml)
+is consolidated into `ppo.yaml`. Its normalized training configuration and full
+resolved environment are unchanged. Competing launchable YAMLs were removed only
+after qualification; historical source, shared presets and checkpoints are preserved.
+
+
+## Level2-4 — 2026-11-15
+
+Fresh PPO with SIL Run `gradlab-2c62561b9b478b9bd3600b822a42675c`, Attempt
+`attempt-58c08af6f1d99503`, used seed 2801 and one canonical Level2-4 start.
+The retained checkpoint has **95/100** genuine target-origin clears
+at 15,142,912 transitions. At that exact step, 36,353
+episodes had completed and 5,181 had cleared cumulatively.
+Its separate history peak was 97/100; the final window was
+86/100 at 16,199,680 transitions. History peaks are not assigned to
+another saved model.
+
+The selected model is [`checkpoint-15142912-a095703629b52c63`](https://pub-fc35c0b186ce4aad8eea5e93d38c99db.r2.dev/runs/gradlab-2c62561b9b478b9bd3600b822a42675c/checkpoints/15142912-a095703629b52c634b3339a8df5f347965c5c0e91b9be4b2fe3cce4554cb8ba4/model.zip):
+
+- SHA-256: `a095703629b52c634b3339a8df5f347965c5c0e91b9be4b2fe3cce4554cb8ba4`; 40,663,537 bytes, independently downloaded and verified.
+- Source: `7e643f4f820ecc0a82b6c7f90a787810c64c5ee8`.
+- Runtime digest: `sha256:5d316181cc88dce83c9613543e2439214544379adf5682459f1120590b322991`.
+- Executed recipe document SHA-256: `b363b56b0f408567d6241c825f1dabd71a37712079b9f2a8ab15ff3349db6463`.
+- Normalized portable training configuration SHA-256: `4687ab219c983e922aac537aa50c71d8c8d788a34da678819c2a890c9884e436`.
+
+The finite bound was 16,777,216 transitions and 4 hours. The declared neutral plateau stopped learning; complete delivery and task release were verified.
+The read-only audit checked all 3,673 retained journal segments
+and delivery through 4,724 events, with the selected window and
+cumulative counts independently matched to actual MLflow history. No imported
+initialization, archive curriculum, automatic evaluation or Monitoring was used.
+This is training qualification, not Acceptance or across-seed reliability.
+
+The [executed recipe](https://github.com/tsilva/gradlab/blob/7e643f4f820ecc0a82b6c7f90a787810c64c5ee8/experiments/goals/SuperMarioBros-Nes-v0/Level2-4/recipes/ppo-train-clear-80.yaml)
 is consolidated into `ppo.yaml`. Its normalized training configuration and full
 resolved environment are unchanged. Competing launchable YAMLs were removed only
 after qualification; historical source, shared presets and checkpoints are preserved.
