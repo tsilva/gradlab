@@ -418,6 +418,7 @@ class ConfigValidationTests(unittest.TestCase):
                         "Level2-1", "Level2-2", "Level2-3", "Level2-4",
                         "Level3-1", "Level3-2", "Level3-4", "Level4-1",
                         "Level5-1", "Level5-2", "Level5-3", "Level5-4",
+                        "Level6-2", "Level6-4", "Level7-1",
                     )
                 }:
                     conditions = train_config["early_stop"]["conditions"]
