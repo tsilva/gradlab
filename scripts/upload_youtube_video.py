@@ -21,6 +21,8 @@ from gradlab.publication_credentials import (
     youtube_store,
     youtube_token_available,
 )
+from gradlab.youtube_publication import YouTubeClient, YouTubePublicationError
+from gradlab.youtube_transport import PLACEHOLDER, RelayError, YouTubeRelay
 
 
 YOUTUBE_UPLOAD_SCOPES = (
@@ -101,6 +103,13 @@ def post_form(url: str, data: dict[str, str]) -> dict[str, Any]:
         ) from exc
 
 
+def open_youtube(request: urllib.request.Request, *, timeout: float):
+    relay = YouTubeRelay.from_environment()
+    if relay is not None:
+        return relay.open(request, timeout=timeout)
+    return urllib.request.urlopen(request, timeout=timeout)
+
+
 def request_json(
     url: str,
     *,
@@ -114,7 +123,7 @@ def request_json(
         headers["Content-Type"] = "application/json; charset=UTF-8"
     request = urllib.request.Request(url, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(request, timeout=60) as response:
+        with open_youtube(request, timeout=60) as response:
             body = response.read().decode("utf-8")
             return {} if not body.strip() else json.loads(body)
     except urllib.error.HTTPError as exc:
@@ -272,17 +281,23 @@ def start_resumable_upload(
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=60) as response:
+        with open_youtube(request, timeout=60) as response:
             location = response.headers.get("Location")
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", "replace")
         raise SystemExit(f"Could not start YouTube upload: HTTP {exc.code}: {body}") from exc
     if not location:
         raise SystemExit("YouTube did not return a resumable upload URL")
-    return location
+    relay = YouTubeRelay.from_environment()
+    return relay.upload_handle(location) if relay is not None else location
 
 
 def upload_video(upload_url: str, token: str, video_path: Path) -> dict[str, Any]:
+    relay = YouTubeRelay.from_environment()
+    if relay is not None:
+        return YouTubeClient(token, open_request=relay.open).upload_chunks(
+            relay.upload_handle(upload_url), video_path
+        )
     data = video_path.read_bytes()
     mime_type = mimetypes.guess_type(video_path.name)[0] or "video/mp4"
     request = urllib.request.Request(
@@ -387,7 +402,7 @@ def upload_thumbnail(*, token: str, video_id: str, thumbnail_path: Path) -> dict
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=120) as response:
+        with open_youtube(request, timeout=120) as response:
             body = response.read().decode("utf-8")
             return {} if not body.strip() else json.loads(body)
     except urllib.error.HTTPError as exc:
@@ -565,6 +580,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = ExactArgumentParser(description="Upload a local video to YouTube.")
     config_dir = default_gradlab_config_dir()
     parser.add_argument("video", type=Path, nargs="?")
+    parser.add_argument("--metadata-file", type=Path, help="JSON file containing title, description, tags and category_id.")
     parser.add_argument(
         "--client-secret",
         type=Path,
@@ -635,20 +651,54 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> None:
-    args = build_parser().parse_args()
-    if (
-        youtube_store(args.client_secret.parent.resolve()) is None
-        and not args.client_secret.is_file()
-    ):
-        raise SystemExit(f"client secret not found: {args.client_secret}")
-
-    client_config = load_client_config(args.client_secret)
-    if args.auth_only:
-        authorize(client_config, args.token, no_browser=args.no_browser)
-        print("YouTube authorization saved to the configured credential backend.")
+def apply_metadata_file(args: argparse.Namespace) -> None:
+    if args.metadata_file is None:
         return
-    token = access_token(client_config, args.token, no_browser=args.no_browser)
+    if args.auth_only or args.video_id or args.title or args.human_description or args.model_page or args.description or args.tags or args.category_id:
+        raise SystemExit("Use --metadata-file for new uploads without inline metadata options")
+    try:
+        with args.metadata_file.open("rb") as source:
+            raw = source.read(65537)
+        if len(raw) > 65536:
+            raise ValueError
+        value = json.loads(raw)
+        if not isinstance(value, dict) or set(value) != {"title", "description", "tags", "category_id"}:
+            raise ValueError
+        title, description, tags, category = (value[k] for k in ("title", "description", "tags", "category_id"))
+        if not (isinstance(title, str) and title.strip() and len(title) <= 100
+                and isinstance(description, str) and len(description) <= 5000
+                and isinstance(tags, list) and len(tags) <= 100
+                and all(isinstance(tag, str) and tag.strip() and len(tag) <= 100 and "," not in tag for tag in tags)
+                and sum(map(len, tags)) <= 500
+                and isinstance(category, str) and category.isascii() and category.isdigit() and len(category) <= 3):
+            raise ValueError
+    except (OSError, ValueError):
+        raise SystemExit("Invalid YouTube metadata file") from None
+    args.title, args.description, args.tags, args.category_id = title, description, ",".join(tags), category
+
+
+def publish(args: argparse.Namespace) -> None:
+    apply_metadata_file(args)
+    relay = YouTubeRelay.from_environment()
+    if relay is not None:
+        if args.auth_only or args.output.name == "youtube_token.json":
+            raise SystemExit("External YouTube access cannot manage OAuth credentials")
+        principal = YouTubeClient(PLACEHOLDER, open_request=relay.open).channel_identity()
+        if principal["channel_id"] != relay.channel_id:
+            raise SystemExit("YouTube relay returned a different channel")
+        token = PLACEHOLDER
+    else:
+        if (
+            youtube_store(args.client_secret.parent.resolve()) is None
+            and not args.client_secret.is_file()
+        ):
+            raise SystemExit(f"client secret not found: {args.client_secret}")
+        client_config = load_client_config(args.client_secret)
+        if args.auth_only:
+            authorize(client_config, args.token, no_browser=args.no_browser)
+            print("YouTube authorization saved to the configured credential backend.")
+            return
+        token = access_token(client_config, args.token, no_browser=args.no_browser)
     description_provided = any(
         value is not None and value != ""
         for value in (args.human_description, args.model_page, args.description)
@@ -774,6 +824,13 @@ def main() -> None:
             }
     save_json(args.output, result)
     print(json.dumps(result, indent=2, sort_keys=True), flush=True)
+
+
+def main() -> None:
+    try:
+        publish(build_parser().parse_args())
+    except (RelayError, YouTubePublicationError) as error:
+        raise SystemExit(str(error)) from None
 
 
 if __name__ == "__main__":

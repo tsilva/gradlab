@@ -358,6 +358,17 @@ configured. Malformed scopes and unknown fields stop access before calling the C
 
 Optional `login_profile` pins the Infisical login. Its identity needs read access to both secrets and write access to the token secret. The player, durable publisher, and standalone YouTube script use the selected store, including refresh and consent writeback. Writes use stdin without creating plaintext JSON files. Vault failures stop credential access without a local-file fallback; local token locking remains in place for the player and publisher.
 
+The standalone script also accepts a host-provisioned loopback relay through
+`GRADLAB_YOUTUBE_RELAY`, `GRADLAB_YOUTUBE_CHANNEL_ID`, and the public marker
+`GRADLAB_YOUTUBE_RELAY_TOKEN=gradlab_youtube_proxy_placeholder`. It checks the
+channel before publishing and sends uploads in chunks to local handles supplied
+by the relay. The operator supplies the relay explicitly. OAuth setup and
+credential storage stay outside this mode.
+
+For a new upload, `--metadata-file` accepts a JSON object with `title`,
+`description`, `tags` (a list), and `category_id` (a string). Use it in place
+of the inline metadata options when you want to review the draft as a file.
+
 From the repository, reconnect without uploading or changing a video:
 
 ```bash

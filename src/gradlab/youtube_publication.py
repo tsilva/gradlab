@@ -14,9 +14,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
 
-from PIL import Image, ImageDraw, ImageFont, ImageOps
-
-
 YOUTUBE_SCOPES = (
     "https://www.googleapis.com/auth/youtube.upload",
     "https://www.googleapis.com/auth/youtube.force-ssl",
@@ -203,11 +200,15 @@ def refresh_access_token(
 
 
 class YouTubeClient:
-    def __init__(self, access_token: str) -> None:
+    def __init__(self, access_token: str, *, open_request: Callable[..., Any] | None = None) -> None:
         token = str(access_token).strip()
         if not token:
             raise YouTubePublicationError("YouTube access token is empty")
         self._token = token
+        self._open_request = open_request
+
+    def _open(self, request: urllib.request.Request, *, timeout: float):
+        return (self._open_request or urllib.request.urlopen)(request, timeout=timeout)
 
     def _request_json(
         self,
@@ -223,7 +224,7 @@ class YouTubeClient:
             headers["Content-Type"] = "application/json; charset=UTF-8"
         request = urllib.request.Request(url, data=data, headers=headers, method=method)
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
+            with self._open(request, timeout=timeout) as response:
                 body = response.read()
         except urllib.error.HTTPError as exc:
             raise _http_error(exc, operation="API request") from exc
@@ -290,7 +291,7 @@ class YouTubeClient:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=60) as response:
+            with self._open(request, timeout=60) as response:
                 location = response.headers.get("Location")
         except urllib.error.HTTPError as exc:
             raise _http_error(exc, operation="upload start") from exc
@@ -314,7 +315,7 @@ class YouTubeClient:
             method="PUT",
         )
         try:
-            with urllib.request.urlopen(request, timeout=60) as response:
+            with self._open(request, timeout=60) as response:
                 body = response.read()
                 return json.loads(body or b"{}")
         except urllib.error.HTTPError as exc:
@@ -362,7 +363,7 @@ class YouTubeClient:
                     method="PUT",
                 )
                 try:
-                    with urllib.request.urlopen(request, timeout=600) as response:
+                    with self._open(request, timeout=600) as response:
                         body = response.read()
                         value = json.loads(body or b"{}")
                 except urllib.error.HTTPError as exc:
@@ -606,7 +607,7 @@ class YouTubeClient:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=120) as response:
+            with self._open(request, timeout=120) as response:
                 value = json.loads(response.read() or b"{}")
         except urllib.error.HTTPError as exc:
             raise _http_error(exc, operation="thumbnail upload") from exc
@@ -659,6 +660,8 @@ def create_publication_thumbnail(
     step: str,
     metric: str,
 ) -> Path:
+    from PIL import Image, ImageDraw, ImageFont, ImageOps
+
     source = output.with_name(f".{output.stem}-frame.jpg")
     extract_thumbnail(video_path, source, seconds=seconds)
     try:
