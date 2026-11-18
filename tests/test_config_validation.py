@@ -397,13 +397,13 @@ class ConfigValidationTests(unittest.TestCase):
                     },
                 )
 
-        self.assertEqual(actor_critic_recipes, 69)
+        self.assertEqual(actor_critic_recipes, 68)
 
     def test_every_mario_recipe_disables_eval_and_preserves_its_clear_contract(self) -> None:
         mario_root = Path("experiments/goals/SuperMarioBros-Nes-v0")
         recipes = sorted(mario_root.glob("*/recipes/*.yaml"))
 
-        self.assertEqual(len(recipes), 38)
+        self.assertEqual(len(recipes), 37)
         for recipe_path in recipes:
             with self.subTest(recipe=recipe_path):
                 goal_path = recipe_path.parent.parent / "_goal.yaml"
@@ -416,9 +416,9 @@ class ConfigValidationTests(unittest.TestCase):
                     for level in (
                         "Level1-1", "Level1-2", "Level1-3", "Level1-4",
                         "Level2-1", "Level2-2", "Level2-3", "Level2-4",
-                        "Level3-1", "Level3-2", "Level3-4", "Level4-1",
+                        "Level3-1", "Level3-2", "Level3-4", "Level4-1", "Level4-3",
                         "Level5-1", "Level5-2", "Level5-3", "Level5-4",
-                        "Level6-2", "Level6-4", "Level7-1",
+                        "Level6-2", "Level6-4", "Level7-1", "Level7-2", "Level7-3",
                         "Level8-1", "Level8-2", "Level8-3",
                     )
                 }:
@@ -427,7 +427,9 @@ class ConfigValidationTests(unittest.TestCase):
                     self.assertEqual(conditions["clear_80"]["threshold"], 0.8)
                     self.assertEqual(conditions["clear_80"]["action"], "observe")
                     self.assertEqual(conditions["qualified_plateau"]["activation_threshold"], 0.8)
-                    if recipe_path.parent.parent.name in {"Level1-3", "Level2-2", "Level2-4"}:
+                    if recipe_path.parent.parent.name in {
+                        "Level1-3", "Level2-2", "Level2-4", "Level4-3", "Level7-2", "Level7-3",
+                    }:
                         self.assertEqual(train_config["timesteps"], 16_777_216)
                         self.assertEqual(train_config["training_backend"]["id"], "gradlab.ppo")
                         self.assertTrue(train_config["training_backend"]["config"]["sil"]["enabled"])
@@ -548,7 +550,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(report.counts["json_files"], 0)
         self.assertGreaterEqual(report.counts["yaml_files"], 15)
         self.assertGreaterEqual(report.counts["goals"], 1)
-        self.assertEqual(report.counts["train_recipes"], 70)
+        self.assertEqual(report.counts["train_recipes"], 69)
         self.assertGreaterEqual(report.counts["env_configs"], 0)
         self.assertEqual(report.counts["benchmark_profiles"], 4)
         self.assertEqual(report.counts["workspace_manifests"], 1)
