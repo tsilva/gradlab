@@ -6,6 +6,7 @@ import os
 import tempfile
 import urllib.request
 from collections.abc import Iterator, Mapping
+from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -17,6 +18,10 @@ from gradlab.json_utils import canonical_json_line_bytes as _canonical_json
 
 class ObjectNotFound(FileNotFoundError):
     pass
+
+
+class ObjectReadInterrupted(RuntimeError):
+    """An object response body could not be read completely."""
 
 
 class ConditionalWriteConflict(RuntimeError):
@@ -381,16 +386,23 @@ class R2Bucket:
                 return self._file_path(key).read_bytes()
             except FileNotFoundError as exc:
                 raise ObjectNotFound(self.uri(key)) from exc
+        from botocore.exceptions import IncompleteReadError, ReadTimeoutError, ResponseStreamingError
+
         bucket, object_key = self._s3_parts(key)
         try:
-            return self._s3_client().get_object(Bucket=bucket, Key=object_key)["Body"].read()
+            result = self._s3_client().get_object(Bucket=bucket, Key=object_key)
         except Exception as exc:
-            response = getattr(exc, "response", {})
+            response = getattr(exc, "response", None) or {}
             status = response.get("ResponseMetadata", {}).get("HTTPStatusCode")
             code = response.get("Error", {}).get("Code")
             if status == 404 or code in {"NoSuchKey", "404"}:
                 raise ObjectNotFound(self.uri(key)) from exc
             raise
+        try:
+            with closing(result["Body"]) as body:
+                return body.read()
+        except (IncompleteReadError, ReadTimeoutError, ResponseStreamingError):
+            raise ObjectReadInterrupted("R2 object response was interrupted") from None
 
     def get_json(self, key: str) -> dict[str, Any]:
         value = json.loads(self.get_bytes(key))
@@ -400,7 +412,6 @@ class R2Bucket:
 
     def download_verified(self, key: str, path: Path, *, size: int, sha256: str) -> None:
         """Copy a known immutable object with bounded memory and a strict size ceiling."""
-        from contextlib import closing
         head = self.head(key)
         if head["size"] != size or size <= 0:
             raise ValueError("downloaded object size differs from its immutable reference")

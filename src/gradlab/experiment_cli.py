@@ -54,7 +54,7 @@ from gradlab.operator_credentials import (
     resolve_dstack_token,
 )
 from gradlab.operator_environment import load_repository_operator_environment
-from gradlab.r2_store import R2Bucket, RunStorageConfig
+from gradlab.r2_store import ObjectReadInterrupted, R2Bucket, RunStorageConfig
 from gradlab.policy_bundle import build_recipe_document, canonical_json_sha256
 from gradlab.recipe_documents import (
     compose_resolved_train_documents,
@@ -1953,7 +1953,15 @@ def _audit_training_run(
             != checkpoint["size_bytes"]
         ):
             raise TrainingQualificationError("remote checkpoint size disagrees with receipt")
-        body = evidence_read("R2 model", authority.models.get_bytes, key)
+
+        def read_model():
+            try:
+                return authority.models.get_bytes(key)
+            except ObjectReadInterrupted:
+                # Retry only the interrupted body, within the same audit and route.
+                return authority.models.get_bytes(key)
+
+        body = evidence_read("R2 model", read_model)
         if len(body) != checkpoint["size_bytes"] or hashlib.sha256(body).hexdigest() != digest:
             raise TrainingQualificationError("remote checkpoint bytes disagree with receipt")
         result.update(

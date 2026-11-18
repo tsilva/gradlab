@@ -7,10 +7,11 @@ from unittest.mock import Mock
 
 import pytest
 
-from gradlab.experiment_cli import _audit_training_run, build_parser, cmd_status
+from gradlab.experiment_cli import TrainingQualificationError, _audit_training_run, build_parser, cmd_status
 from gradlab.metric_names import ORCHESTRATION_EVENT_SEQUENCE
 from gradlab.mlflow_delivery import RUN_ID_TAG
 from gradlab.env_identity import environment_hash, environment_identity_from_train_config
+from gradlab.r2_store import ObjectReadInterrupted
 from gradlab.run_contracts import new_attempt_id, new_run_id
 from tests import test_run_authority as authority_fixtures
 from tests.test_policy_bundle import MARIO_ASSET, level1_1_recipe_document
@@ -175,6 +176,33 @@ def test_completed_window_model_and_service_are_independently_verified_without_m
     assert result["environment_materialization_verified"] and result["rom_asset_identity_verified"]
     assert not result["run_mutations_performed"] and not result["acceptance_claimed"]
     assert sorted(audit_case.authority.control.iter_keys("")) == before
+
+
+@pytest.mark.parametrize("second_read", ["intact", "corrupt", "interrupted"])
+def test_model_body_read_retries_once_and_still_requires_hash(audit_case, monkeypatch, second_read):
+    seal(audit_case)
+    models = audit_case.authority.models
+    checkpoint = audit_case.status["attempt_terminal"]["checkpoint_inventory"][1]
+    key = f"runs/{audit_case.manifest.run_id}/checkpoints/2000-{checkpoint['sha256']}/model.zip"
+    body = models.get_bytes(key)
+    interrupted = ObjectReadInterrupted("response body interrupted")
+    retried_body = {"intact": body, "corrupt": b"x" * len(body), "interrupted": interrupted}
+    read = Mock(side_effect=[interrupted, retried_body[second_read]])
+    monkeypatch.setattr(models, "get_bytes", read)
+
+    if second_read == "intact":
+        result = audit(audit_case)
+        assert result["qualified"] and result["remote_model_sha256_verified"]
+        assert result["selected_checkpoint"]["sha256"] == hashlib.sha256(body).hexdigest()
+    else:
+        message = {
+            "corrupt": "remote checkpoint bytes disagree with receipt",
+            "interrupted": "R2 model evidence unavailable or invalid",
+        }
+        with pytest.raises(TrainingQualificationError, match=message[second_read]):
+            audit(audit_case)
+
+    assert [call.args for call in read.call_args_list] == [(key,), (key,)]
 
 
 @pytest.mark.parametrize(
