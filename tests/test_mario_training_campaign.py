@@ -73,7 +73,7 @@ def test_campaign_recipe_preserves_full_start_and_separate_acceptance(level):
     assert backend["id"] == "gradlab.ppo"
     assert backend["config"]["device"] == "cuda"
     uses_sil = level in {
-        "Level1-3", "Level2-2", "Level2-4", "Level4-3", "Level6-1", "Level6-3", "Level7-2", "Level7-3",
+        "Level1-3", "Level2-2", "Level2-4", "Level4-3", "Level6-1", "Level6-3", "Level7-2", "Level7-3", "Level7-4",
     }
     assert bool(backend["config"].get("sil", {}).get("enabled")) == uses_sil
     assert config["timesteps"] == (16_777_216 if uses_sil or level == "Level1-1" else 50_000_000)
