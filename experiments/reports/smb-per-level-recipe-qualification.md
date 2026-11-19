@@ -27,6 +27,7 @@ performance, across-seed reliability, Acceptance or Promotion.
 | Level5-2 | [PPO](../goals/SuperMarioBros-Nes-v0/Level5-2/recipes/ppo.yaml) | 95/100 | 5,005,312 / 5,005,312 | 12 |
 | Level5-3 | [PPO](../goals/SuperMarioBros-Nes-v0/Level5-3/recipes/ppo.yaml) | 95/100 | 28,688,384 / 28,688,384 | 12 |
 | Level5-4 | [PPO](../goals/SuperMarioBros-Nes-v0/Level5-4/recipes/ppo.yaml) | 95/100 | 4,120,576 / 4,120,576 | 12 |
+| Level6-1 | [PPO + SIL](../goals/SuperMarioBros-Nes-v0/Level6-1/recipes/ppo.yaml) | 90/100 | 9,465,856 / 9,465,856 | 1801 |
 | Level6-2 | [PPO](../goals/SuperMarioBros-Nes-v0/Level6-2/recipes/ppo.yaml) | 80/100 | 7,430,144 / 7,430,144 | 12 |
 | Level6-3 | [PPO + SIL](../goals/SuperMarioBros-Nes-v0/Level6-3/recipes/ppo.yaml) | 80/100 | 7,139,328 / 7,139,328 | 1801 |
 | Level6-4 | [PPO](../goals/SuperMarioBros-Nes-v0/Level6-4/recipes/ppo.yaml) | 100/100 | 4,562,944 / 4,562,944 | 12 |
@@ -37,7 +38,7 @@ performance, across-seed reliability, Acceptance or Promotion.
 | Level8-2 | [PPO](../goals/SuperMarioBros-Nes-v0/Level8-2/recipes/ppo.yaml) | 83/100 | 10,780,672 / 10,780,672 | 12 |
 | Level8-3 | [PPO](../goals/SuperMarioBros-Nes-v0/Level8-3/recipes/ppo.yaml) | 81/100 | 4,612,096 / 4,612,096 | 12 |
 
-The other 5 included levels remain unqualified by this campaign.
+The other 4 included levels remain unqualified by this campaign.
 
 ## Level1-1 — 2026-11-13
 
@@ -597,6 +598,38 @@ initialization, archive curriculum, automatic evaluation or Monitoring was used.
 This is training qualification, not Acceptance or across-seed reliability.
 
 The [executed recipe](https://github.com/tsilva/gradlab/blob/7e643f4f820ecc0a82b6c7f90a787810c64c5ee8/experiments/goals/SuperMarioBros-Nes-v0/Level5-4/recipes/ppo-train-clear-80.yaml)
+is consolidated into `ppo.yaml`. Its normalized training configuration and full
+resolved environment are unchanged. Competing launchable YAMLs were removed only
+after qualification; historical source, shared presets and checkpoints are preserved.
+
+
+## Level6-1 — 2026-11-19
+
+Fresh PPO with SIL Run `gradlab-556c8169fd1e7652fb3c1e8b472a3453`, Attempt
+`attempt-0244cceb4c92b24b`, used seed 1801 and one canonical Level6-1 start.
+The retained checkpoint has **90/100** genuine target-origin clears
+at 9,465,856 transitions. At that exact step, 20,951
+episodes had completed and 7,995 had cleared cumulatively.
+Its separate history peak was 93/100; the final window was
+83/100 at 12,435,456 transitions. History peaks are not assigned to
+another saved model.
+
+The selected model is [`checkpoint-9465856-e51ad7fb23313128`](https://pub-fc35c0b186ce4aad8eea5e93d38c99db.r2.dev/runs/gradlab-556c8169fd1e7652fb3c1e8b472a3453/checkpoints/9465856-e51ad7fb23313128e244a47e872f06b88768bcd2aa20f32a1a9c0337e4bd4879/model.zip):
+
+- SHA-256: `e51ad7fb23313128e244a47e872f06b88768bcd2aa20f32a1a9c0337e4bd4879`; 40,663,536 bytes, independently downloaded and verified.
+- Source: `7e643f4f820ecc0a82b6c7f90a787810c64c5ee8`.
+- Runtime digest: `sha256:5d316181cc88dce83c9613543e2439214544379adf5682459f1120590b322991`.
+- Executed recipe document SHA-256: `f360eb9567a672bf020e44d9596dc36d574232cc81380194aff3fc61434afa57`.
+- Normalized portable training configuration SHA-256: `a61c1ca8fedde7a35f28a7b9c6403570579759a6b7ae803f3d5dd2239b73962b`.
+
+The finite bound was 16,777,216 transitions and 4 hours. The declared neutral plateau stopped learning; complete delivery and task release were verified.
+The read-only audit checked all 2,978 retained journal segments
+and delivery through 3,639 events, with the selected window and
+cumulative counts independently matched to actual MLflow history. No imported
+initialization, archive curriculum, automatic evaluation or Monitoring was used.
+This is training qualification, not Acceptance or across-seed reliability.
+
+The [executed recipe](https://github.com/tsilva/gradlab/blob/7e643f4f820ecc0a82b6c7f90a787810c64c5ee8/experiments/goals/SuperMarioBros-Nes-v0/Level6-1/recipes/ppo-train-clear-80.yaml)
 is consolidated into `ppo.yaml`. Its normalized training configuration and full
 resolved environment are unchanged. Competing launchable YAMLs were removed only
 after qualification; historical source, shared presets and checkpoints are preserved.
