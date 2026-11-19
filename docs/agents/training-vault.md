@@ -27,6 +27,12 @@ The agent command starts with
 A missing or incompatible agent session fails before reading operator
 credential sources.
 
+Before reserving another study wave, query the study's pinned fleet with
+`runbox --profile training run -- gradlab-training reservations --study <study>`.
+The command returns the fleet and its active GradLab reservation count. An
+incomplete listing or an unresolved fleet target stops the count. Resolve
+effective capacity separately from the configured fleet inventory.
+
 Installation, bootstrap and rotation are trusted administrative operations,
 separate from application startup. The administrative helper validates source
 scope and current native fake-credential proof. Runtime refresh prepares a

@@ -1,5 +1,7 @@
 """Domain dispatch does not create sessions or perform source-credential reads."""
+import json
 import os
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -40,6 +42,32 @@ def test_unreviewed_operation_fails_before_transport_validation():
             training_access.main(['unreviewed'])
         with pytest.raises(training_access.LaunchError):
             training_access.main(['autoresearch', 'reserve-wave'])
+        with pytest.raises(training_access.LaunchError):
+            training_access.main(['reservations', '--fleet', 'synthetic'])
+
+
+def test_reservations_uses_the_study_fleet_and_coordinator(tmp_path, capsys):
+    from gradlab.autoresearch import SCHEMA_VERSION
+
+    path = tmp_path / "study.json"
+    path.write_text(json.dumps({
+        "schema_version": SCHEMA_VERSION,
+        "repo_root": str(training_access.ROOT),
+        "policy": {"compute_target": "synthetic-fleet", "dstack_coordinator_id": "selected"},
+    }))
+    before = path.read_bytes()
+    fleet = SimpleNamespace(name="synthetic-fleet")
+    backend = SimpleNamespace(active_training_reservations=lambda name: 2 if name == fleet.name else 0)
+    with patch("gradlab.training_vault.validate_session") as validate, patch.object(
+        training_access, "_fleet_backend", return_value=(fleet, backend)
+    ) as route:
+        with patch.dict(os.environ, {}, clear=True):
+            training_access.main(["reservations", "--study", str(path)])
+        validate.assert_called_once_with()
+        route.assert_called_once_with("synthetic-fleet", "selected")
+
+    assert json.loads(capsys.readouterr().out) == {"fleet": "synthetic-fleet", "active_reservations": 2}
+    assert path.read_bytes() == before
 
 
 @pytest.mark.parametrize("operation", ["reconcile", "collect-training-evidence"])

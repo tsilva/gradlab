@@ -63,20 +63,43 @@ def check_storage():
                       "hashes_verified": True, "probe_objects_removed": True}))
 
 
-def inventory():
+def _fleet_backend(target=None, coordinator_id=None):
     from gradlab.dstack_backend import DstackBackend
-    from gradlab.operator_credentials import resolve_dstack_token
-    from gradlab.operator_environment import load_repository_operator_environment
+    from gradlab.operator_credentials import load_operator_environment, resolve_dstack_token
 
-    report = load_repository_operator_environment(ROOT)
-    fleet = report.dstack.fleet()
+    report = load_operator_environment(requested_names=())
+    if report.dstack is None:
+        raise LaunchError("Training requires the configured dstack profiles")
+    fleet = report.dstack.fleet(target)
+    if coordinator_id is not None and coordinator_id != fleet.coordinator_id:
+        raise LaunchError("The study coordinator differs from its configured fleet")
     coordinator = report.dstack.coordinator(fleet.coordinator_id)
     token, _ = resolve_dstack_token(coordinator)
     backend = DstackBackend(project=coordinator.project, server_url=coordinator.server_url, token=token)
-    result = backend._command(["offer", "--project", coordinator.project, "--json", "--fleet", fleet.name,
+    return fleet, backend
+
+
+def inventory():
+    fleet, backend = _fleet_backend()
+    result = backend._command(["offer", "--project", backend.project, "--json", "--fleet", fleet.name,
                                "--reuse", "--cpu", "12..", "--memory", "40GB..", "--gpu", "1", "--disk", "50GB.."])
     offers = json.loads(result.stdout)["offers"]
     print(json.dumps({"fleet": fleet.name, "offers": offers}))
+
+
+def reservations(path):
+    from gradlab.autoresearch import load_state, study_path
+
+    state = load_state(study_path(path))
+    policy = state.get("policy")
+    if state.get("repo_root") != str(ROOT) or not isinstance(policy, dict):
+        raise LaunchError("Reservation checks require a study in this checkout")
+    target, coordinator_id = policy.get("compute_target"), policy.get("dstack_coordinator_id")
+    if not all(isinstance(value, str) and value.strip() for value in (target, coordinator_id)):
+        raise LaunchError("The study is missing its pinned fleet and coordinator")
+    fleet, backend = _fleet_backend(target, coordinator_id)
+    active = backend.active_training_reservations(fleet.name)
+    print(json.dumps({"fleet": fleet.name, "active_reservations": active}))
 
 
 def main(arguments=None):
@@ -89,7 +112,8 @@ def main(arguments=None):
         },
         "autoresearch": {"reconcile", "collect-training-evidence"},
     }
-    if arguments not in (["check"], ["inventory"]) and (
+    reservation_check = len(arguments) == 3 and command == ["reservations", "--study"]
+    if not reservation_check and arguments not in (["check"], ["inventory"]) and (
         len(command) != 2 or command[1] not in allowed.get(command[0], ())
     ):
         raise LaunchError("Use a reviewed training inventory, lifecycle or evidence operation")
@@ -106,11 +130,14 @@ def main(arguments=None):
     })
     if arguments == ["check"]:
         check_storage()
-    elif arguments == ["inventory"]:
+    elif arguments == ["inventory"] or reservation_check:
         from gradlab.training_vault import TrainingVaultCommandError
 
         try:
-            inventory()
+            if reservation_check:
+                reservations(arguments[2])
+            else:
+                inventory()
         except TrainingVaultCommandError as error:
             print(json.dumps({"probe_error": error.category}))
             raise SystemExit(1) from None

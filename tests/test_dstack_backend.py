@@ -398,6 +398,53 @@ class DstackBackendTests(unittest.TestCase):
         self.assertEqual(backend.status("run-one").status, "running")
 
     @mock.patch("gradlab.dstack_backend.subprocess.run")
+    def test_reservations_count_assigned_and_waiting_training_tasks(self, run) -> None:
+        def row(name, status, assigned=None, targets=None):
+            return {
+                "status": status,
+                "fleet": {"name": assigned} if assigned is not None else None,
+                "run_spec": {"configuration": {
+                    "name": name, "fleets": targets,
+                }},
+            }
+
+        rows = [
+            row("gradlab-" + "a" * 32, "running", assigned="local"),
+            row("gradlab-" + "b" * 32, "pending", targets=[{"project": None, "name": "local"}]),
+            row("gradlab-" + "c" * 32, "running", assigned="other"),
+            row("gradlab-" + "d" * 32, "terminated", assigned="local"),
+            row("gradlab-" + "e" * 32, "pending", targets=[{"project": "other", "name": "local"}]),
+            row("other-task", "running", assigned="local"),
+        ]
+        output = "A new version of dstack is available: 0.21.0\n\n" + json.dumps({"runs": rows})
+        run.return_value = subprocess.CompletedProcess([], 0, output, "")
+        backend = DstackBackend(
+            project="research", server_url="http://127.0.0.1:3000",
+            token="synthetic-placeholder", environment={},
+        )
+
+        self.assertEqual(backend.active_training_reservations("local"), 2)
+        self.assertEqual(run.call_args.args[0], ["dstack", "ps", "--project", "research", "--json"])
+        self.assertEqual(run.call_args.kwargs["timeout"], 30)
+
+    @mock.patch("gradlab.dstack_backend.subprocess.run")
+    def test_reservations_refuse_truncation_and_ambiguous_fleet(self, run) -> None:
+        row = {
+            "status": "pending",
+            "run_spec": {"configuration": {"name": "gradlab-" + "a" * 32}},
+        }
+        backend = DstackBackend(
+            project="research", server_url="http://127.0.0.1:3000",
+            token="synthetic-placeholder", environment={},
+        )
+        for rows, message in (([row] * 100, "complete active-run inventory"),
+                              ([row], "no confirmed fleet target")):
+            with self.subTest(message=message):
+                run.return_value = subprocess.CompletedProcess([], 0, json.dumps({"runs": rows}), "")
+                with self.assertRaisesRegex(ValueError, message):
+                    backend.active_training_reservations("local")
+
+    @mock.patch("gradlab.dstack_backend.subprocess.run")
     def test_status_rejects_noncurrent_name_and_state_aliases(self, run) -> None:
         run.return_value = subprocess.CompletedProcess(
             ["dstack", "ps"],

@@ -538,6 +538,57 @@ class DstackBackend:
             )
         raise KeyError(f"dstack task not found: {self.project}/{name}")
 
+    def active_training_reservations(self, fleet: str) -> int:
+        """Count unfinished GradLab tasks assigned or explicitly targeted to the fleet."""
+        result = self._command(["ps", "--project", self.project, "--json"], timeout=30)
+        # The pinned client can print its daily update notice before JSON.
+        output = re.sub(
+            r"\AA new version of dstack is available: [0-9][\w.+!-]*\r?\n",
+            "", result.stdout, count=1,
+        )
+        response = json.loads(output)
+        rows = response.get("runs") if isinstance(response, Mapping) else None
+        if not isinstance(rows, list) or len(rows) >= 100:
+            raise ValueError("dstack did not return a complete active-run inventory")
+        active = 0
+        for row in rows:
+            if not isinstance(row, Mapping) or not isinstance(row.get("status"), str):
+                raise ValueError("dstack run status is missing or invalid")
+            status = row["status"].strip().lower().replace("_", "-")
+            if not status:
+                raise ValueError("dstack run status is missing or invalid")
+            if status in TERMINAL_DSTACK_STATUSES:
+                continue
+            spec = row.get("run_spec")
+            config = spec.get("configuration") if isinstance(spec, Mapping) else None
+            if not isinstance(config, Mapping):
+                raise ValueError("dstack run configuration is missing or invalid")
+            name = spec.get("run_name") or config.get("name")
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError("dstack run name is missing or invalid")
+            if not RUN_ID_PATTERN.fullmatch(name):
+                continue
+            allocation = row.get("fleet")
+            if allocation is not None:
+                assigned = allocation.get("name") if isinstance(allocation, Mapping) else None
+                if not isinstance(assigned, str) or not assigned.strip():
+                    raise ValueError("dstack fleet assignment is invalid")
+                active += assigned == fleet
+                continue
+            targets = config.get("fleets")
+            if not isinstance(targets, list) or not targets or any(
+                not isinstance(target, Mapping)
+                or not isinstance(target.get("name"), str)
+                or not target["name"].strip()
+                for target in targets
+            ):
+                raise ValueError("Unassigned active GradLab task has no confirmed fleet target")
+            active += any(
+                target["name"] == fleet and target.get("project") in (None, self.project)
+                for target in targets
+            )
+        return active
+
     def logs(self, name: str, *, since: str | None = None) -> str:
         arguments = ["logs", "--project", self.project]
         if since:

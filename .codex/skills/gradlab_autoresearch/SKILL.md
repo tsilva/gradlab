@@ -30,7 +30,7 @@ Use the maintained controller for reservations, ranking, and winner application:
 
 ```bash
 gradlab autoresearch init --goal <goal-file> --recipe <recipe-file>
-gradlab autoresearch reconcile --study <study>
+runbox --profile training run -- gradlab-training autoresearch reconcile --study <study>
 gradlab autoresearch next --study <study>
 ```
 

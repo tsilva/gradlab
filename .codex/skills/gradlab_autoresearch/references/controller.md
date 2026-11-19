@@ -33,12 +33,12 @@ Obey the returned action. Never infer or skip a rung, evidence read, or barrier.
 Before every reservation, read dstack without mutating capacity:
 
 ```bash
-dstack ps --json
+runbox --profile training run -- gradlab-training reservations --study <study>
 ```
 
 Read the pinned fleet's effective capacity from the private inventory. Pass it
-as `effective_capacity` and count active training tasks targeting that same
-fleet as `active_reservations`. Wait when no slot is available.
+as `effective_capacity` and use the returned `active_reservations` count.
+Wait when no slot is available or the count is unavailable.
 
 Baseline screen and pair:
 
@@ -86,7 +86,7 @@ Reservations are durable. Search always retains five of the 48 jobs for at least
 Run one bounded observation pass before submission and after meaningful status changes:
 
 ```bash
-gradlab autoresearch reconcile --study <study>
+runbox --profile training run -- gradlab-training autoresearch reconcile --study <study>
 ```
 
 This command owns submission discovery, terminal recording, and journal collection.
@@ -130,7 +130,9 @@ selected-service delivery; local-only trials require journal retention.
 
 For diagnosis or replaying a saved observation, the lower-level commands remain:
 `record-launch --payload-file`, `record-terminal --event-file`, and
-`collect-training-evidence --run-id`. Do not hand-assemble their payloads during
+`collect-training-evidence --run-id`. Route evidence collection through
+`runbox --profile training run -- gradlab-training autoresearch collect-training-evidence`.
+Do not hand-assemble their payloads during
 normal operation. Transient evidence reads are repeatable; invalid hashes/fences
 pause the study. Do not use failed confirmation per-seed values for new proposals.
 
