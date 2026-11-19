@@ -33,6 +33,15 @@ The command returns the fleet and its active GradLab reservation count. An
 incomplete listing or an unresolved fleet target stops the count. Resolve
 effective capacity separately from the configured fleet inventory.
 
+For an agent-operated player that needs the private catalog, set
+`GRADLAB_CATALOG_EXECUTOR` to a JSON argument array containing an absolute
+Runbox executable, `--repo` and the canonical checkout,
+`--profile playback-catalog`, and `run -- gradlab-catalog --socket`. The
+player appends a private socket path and the helper performs only bounded
+catalog reads. It uses a separate local forward from training operations, and
+the player closes its connection on exit. Only one scoped catalog executor can
+own that forward at a time.
+
 Installation, bootstrap and rotation are trusted administrative operations,
 separate from application startup. The administrative helper validates source
 scope and current native fake-credential proof. Runtime refresh prepares a

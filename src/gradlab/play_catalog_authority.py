@@ -1,18 +1,22 @@
 from __future__ import annotations
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
 import re
 import socket
+import stat
 import subprocess
 import sys
+import tempfile
 import threading
+import time
 from collections.abc import Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 from gradlab.catalog_errors import CatalogIntegrityError, CatalogUnavailable
 from gradlab.goal_catalog import GOAL_CATALOG_ROOT
@@ -28,6 +32,7 @@ CONTROL_R2_ENV_NAMES = frozenset(
         "GRADLAB_CONTROL_R2_SECRET_ACCESS_KEY",
     }
 )
+CATALOG_EXECUTOR_ENV = "GRADLAB_CATALOG_EXECUTOR"
 MAX_REQUEST_BYTES = 16 * 1024
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 MAX_BULK_READ_KEYS = 256
@@ -102,9 +107,11 @@ class CatalogAuthorityClient:
         sock: socket.socket,
         *,
         process: subprocess.Popen[bytes] | None = None,
+        executor_lock: BinaryIO | None = None,
     ) -> None:
         self._socket = sock
         self._process = process
+        self._executor_lock = executor_lock
         self._lock = threading.Lock()
         self._closed = False
         self.authority_identity = ""
@@ -222,16 +229,12 @@ class CatalogAuthorityClient:
                 self._socket.close()
             except OSError:
                 pass
-        if self._process is not None:
-            try:
-                self._process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self._process.terminate()
-                try:
-                    self._process.wait(timeout=2)
-                except subprocess.TimeoutExpired:
-                    self._process.kill()
-                    self._process.wait(timeout=2)
+        try:
+            if self._process is not None:
+                _stop_helper(self._process)
+        finally:
+            if self._executor_lock is not None:
+                self._executor_lock.close()
 
 
 def _helper_environment() -> dict[str, str]:
@@ -257,6 +260,11 @@ def _helper_environment() -> dict[str, str]:
 
 
 def start_catalog_authority_helper(repo_root: Path | str) -> CatalogAuthorityClient:
+    executor = os.environ.get(CATALOG_EXECUTOR_ENV)
+    if executor is not None:
+        return _start_external_catalog(executor)
+    if "INFISICAL_AGENT_VAULT_URL" in os.environ or "RUNBOX_POLICY" in os.environ:
+        raise CatalogUnavailable("Configure an external catalog executor for this agent session")
     parent, child = socket.socketpair()
     try:
         child.set_inheritable(True)
@@ -289,25 +297,136 @@ def start_catalog_authority_helper(repo_root: Path | str) -> CatalogAuthorityCli
     return client
 
 
+def _start_external_catalog(executor: str) -> CatalogAuthorityClient:
+    try:
+        command = json.loads(executor)
+    except ValueError:
+        command = None
+    if (
+        not isinstance(command, list) or not command
+        or any(not isinstance(arg, str) or not arg or "\0" in arg for arg in command)
+        or not Path(command[0]).is_absolute()
+    ):
+        raise CatalogUnavailable("External catalog executor requires an absolute command array")
+    executor_lock = _lock_external_catalog()
+    try:
+        return _connect_external_catalog(command, executor_lock)
+    except BaseException:
+        executor_lock.close()
+        raise
+
+
+def _lock_external_catalog() -> BinaryIO:
+    directory = Path(tempfile.gettempdir()) / f"gradlab-catalog-{os.getuid()}"
+    directory.mkdir(mode=0o700, exist_ok=True)
+    info = directory.lstat()
+    if not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o077:
+        raise CatalogUnavailable("External catalog lock directory is not owner-only")
+    fd = os.open(directory / "executor.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    file = os.fdopen(fd, "r+b")
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        file.close()
+        raise CatalogUnavailable("An external catalog executor is already active") from None
+    return file
+
+
+def _connect_external_catalog(
+    command: list[str], executor_lock: BinaryIO
+) -> CatalogAuthorityClient:
+    with tempfile.TemporaryDirectory(prefix="glc-", dir="/tmp") as directory:
+        endpoint = Path(directory).resolve() / "catalog"
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
+            listener.bind(str(endpoint))
+            listener.listen(1)
+            listener.settimeout(0.25)
+            try:
+                process = subprocess.Popen(
+                    [*command, str(endpoint)],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    env={
+                        "HOME": str(Path.home()),
+                        "PATH": "/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+                    },
+                    pass_fds=(executor_lock.fileno(),),
+                    start_new_session=True,
+                )
+            except OSError:
+                raise CatalogUnavailable("External catalog executor could not start") from None
+            deadline = time.monotonic() + 25
+            try:
+                while True:
+                    try:
+                        connection, _ = listener.accept()
+                        break
+                    except TimeoutError:
+                        if process.poll() is not None or time.monotonic() >= deadline:
+                            raise CatalogUnavailable("External catalog executor did not connect") from None
+            except BaseException:
+                _stop_helper(process)
+                raise
+    connection.settimeout(55)
+    client = CatalogAuthorityClient(connection, process=process, executor_lock=executor_lock)
+    try:
+        client.ready()
+    except BaseException:
+        client.close()
+        raise
+    return client
+
+
+def _stop_helper(process: subprocess.Popen[bytes]) -> None:
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        process.terminate()
+        try:
+            process.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=2)
+
+
 def scrub_protected_environment() -> None:
     for name in PROTECTED_ENV_NAMES:
         os.environ.pop(name, None)
 
 
-def _serve(sock: socket.socket, repo_root: Path) -> int:
+def _scoped_control_bucket():
+    from gradlab.operator_credentials import load_operator_environment
+    from gradlab.r2_store import BucketConfig, R2Bucket
+    from gradlab.training_vault import validate_session
+
+    validate_session()
+    load_operator_environment(requested_names={
+        "GRADLAB_CONTROL_R2_URI", "GRADLAB_CONTROL_R2_REGION",
+    })
+    return R2Bucket(BucketConfig.from_env("GRADLAB_CONTROL_R2"))
+
+
+def _serve(sock: socket.socket, repo_root: Path, *, scoped: bool = False) -> int:
     from gradlab.operator_environment import load_repository_operator_environment
     from gradlab.r2_store import BucketConfig, R2Bucket
 
     bucket = None
     startup_error: tuple[str, str] | None = None
     try:
-        load_repository_operator_environment(
-            repo_root,
-            requested_names=CONTROL_R2_ENV_NAMES,
-        )
-        bucket = R2Bucket(BucketConfig.from_env("GRADLAB_CONTROL_R2"))
+        if scoped:
+            bucket = _scoped_control_bucket()
+        else:
+            load_repository_operator_environment(
+                repo_root,
+                requested_names=CONTROL_R2_ENV_NAMES,
+            )
+            bucket = R2Bucket(BucketConfig.from_env("GRADLAB_CONTROL_R2"))
     except Exception as exc:
-        startup_error = ("catalog_configuration", str(exc))
+        startup_error = (
+            "catalog_configuration",
+            "Scoped catalog configuration unavailable" if scoped else str(exc),
+        )
 
     while True:
         try:
@@ -402,7 +521,10 @@ def _serve(sock: socket.socket, repo_root: Path) -> int:
                 {
                     "ok": False,
                     "code": "catalog_transient",
-                    "message": f"control catalog read failed: {exc}",
+                    "message": (
+                        "Scoped control catalog read failed"
+                        if scoped else f"control catalog read failed: {exc}"
+                    ),
                     "retryable": True,
                 },
             )
@@ -412,13 +534,62 @@ def _serve(sock: socket.socket, repo_root: Path) -> int:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--serve-fd", type=int, required=True)
-    parser.add_argument("--repo-root", type=Path, required=True)
+    operation = parser.add_mutually_exclusive_group(required=True)
+    operation.add_argument("--serve-fd", type=int)
+    operation.add_argument("--socket", type=Path)
+    operation.add_argument("--probe-run")
+    parser.add_argument("--repo-root", type=Path)
     return parser
 
 
+def _serve_scoped_catalog(endpoint: Path) -> int:
+    parent = endpoint.parent
+    if (
+        not endpoint.is_absolute() or endpoint.resolve() != endpoint
+        or not parent.is_dir() or parent.stat().st_uid != os.getuid()
+        or parent.stat().st_mode & 0o077 or not stat.S_ISSOCK(endpoint.stat().st_mode)
+        or endpoint.stat().st_uid != os.getuid()
+    ):
+        raise ValueError("External catalog requires an owner-only local socket")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+        connection.settimeout(45 * 60)
+        connection.connect(str(endpoint))
+        return _serve(connection, Path(__file__).resolve().parents[2], scoped=True)
+
+
 def main(argv: list[str] | None = None) -> int:
-    args = _build_parser().parse_args(argv)
+    parser = _build_parser()
+    args = parser.parse_args(argv)
+    if args.serve_fd is None:
+        if args.repo_root is not None:
+            parser.error("Scoped catalog commands use the selected checkout")
+        if args.socket is not None:
+            return _serve_scoped_catalog(args.socket)
+        key = _allowed_control_key(f"runs/{args.probe_run}/manifest.json")
+        from gradlab.r2_store import ObjectNotFound
+        from gradlab.training_vault import SafeS3Error
+
+        try:
+            bucket = _scoped_control_bucket()
+        except Exception:
+            print(json.dumps({"ok": False, "stage": "session"}))
+            return 1
+        try:
+            bucket.head(key)
+        except (ObjectNotFound, SafeS3Error) as exc:
+            status = 404 if isinstance(exc, ObjectNotFound) else (
+                exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+            )
+            if type(status) is int and 400 <= status <= 599:
+                print(f"runbox: Service request failed (HTTP {status}); details withheld", file=sys.stderr)
+            else:
+                print(json.dumps({"ok": False, "stage": "storage"}))
+            return 1
+        return 0
+    if args.repo_root is None or any(name in os.environ for name in (
+        "GRADLAB_TRAINING_TRANSPORT", "INFISICAL_AGENT_VAULT_URL", "RUNBOX_POLICY",
+    )):
+        parser.error("The standalone catalog helper requires a repository outside agent sessions")
     sock = socket.socket(fileno=int(args.serve_fd))
     try:
         return _serve(sock, args.repo_root.resolve())
