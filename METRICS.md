@@ -338,6 +338,8 @@ resuming as its cause without a matched uninterrupted continuation.
   backwards movement beyond `progress_rewind_min_distance` by
   `progress_rewind_penalty_scale`. The task's measured forward progress still
   uses the episode maximum.
+  The optional `loop_check_pass_reward` adds to the progress component when an
+  active castle check ends without rewinding on a nonterminal transition.
   `y_pos`, `player_motion`, and `player_task` in Mario playback remain provider
   fields: world-space vertical position, ROM movement state, and ROM player task.
   Movement state 1 means jumping or swimming, not necessarily ascending; task 8

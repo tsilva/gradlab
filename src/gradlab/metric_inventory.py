@@ -117,6 +117,7 @@ def active_reward_components(task: Mapping[str, object]) -> tuple[str, ...]:
         float(reward.get("progress_reward_scale") or 0.0) != 0.0
         or float(reward.get("progress_reward_boost_scale") or 0.0) != 0.0
         or float(reward.get("progress_rewind_penalty_scale") or 0.0) != 0.0
+        or float(reward.get("loop_check_pass_reward") or 0.0) != 0.0
     ):
         components.append("progress")
     if reward_mode == "score":

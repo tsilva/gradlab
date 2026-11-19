@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import unittest
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from typing import Any
 from unittest.mock import patch
 
@@ -1244,6 +1245,37 @@ class MarioKernelTests(unittest.TestCase):
         next_step = runtime.step(actions)
         np.testing.assert_array_equal(next_step.rewards, [0, -25])
         np.testing.assert_array_equal(next_step.terminated, [False, True])
+
+    def test_mario_loop_check_reward_requires_a_non_rewinding_falling_edge(self):
+        provider = DeterministicNativeVectorProvider()
+        descriptor = descriptor_for(provider)
+        descriptor = replace(descriptor, signal_schema={
+            **descriptor.signal_schema,
+            "loop_command_active": SignalSpec("loop_command_active", np.int64),
+        })
+        config = MarioTaskConfig(
+            x="x", score="score", lives="lives", level=("level_hi", "level_lo"),
+            declared_signals=(("loop_command_active", "loop_command_active"),),
+            reward_mode="additive", progress_x_signed_16bit=True,
+            progress_rewind_penalty_scale=0.2, loop_check_pass_reward=250,
+        )
+        kernel = MarioTaskDefinition(config).bind(descriptor, provider.num_envs)
+        false = np.zeros(provider.num_envs, dtype=bool)
+        mask = ~false
+        native = np.zeros(provider.num_envs, dtype=np.float32)
+        initial = {**provider._infos(), "loop_command_active": np.asarray([0, 0])}
+        kernel.on_reset(None, initial, mask)
+        entered = {**initial, "x": np.asarray([907, 1939]), "loop_command_active": np.asarray([1, 1])}
+        np.testing.assert_array_equal(kernel.process(native, false, false, entered).rewards, [907, 1939])
+        saved = kernel.capture_lane_states(mask)
+        kernel.on_reset(None, initial, mask)
+        kernel.restore_lane_states(saved, mask)
+
+        resolved = {**initial, "x": np.asarray([912, 925])}
+        step = kernel.process(native, false, false, resolved)
+        np.testing.assert_allclose(step.rewards, [255, -100.4])
+        self.assertFalse(np.any(done_flags(step)))
+        np.testing.assert_array_equal(kernel.process(native, false, false, resolved).rewards, [0, 0])
 
     def test_canonical_task_softcodes_signal_bindings_and_stall_outcome(self):
         config = EnvConfig(

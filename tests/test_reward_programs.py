@@ -363,6 +363,22 @@ def test_mario_rewind_penalty_has_its_own_reward_identity() -> None:
     assert rewind["goal_contract_sha256"] == signed["goal_contract_sha256"]
 
 
+def test_mario_loop_check_reward_has_its_own_reward_identity() -> None:
+    goal = MARIO_GOAL.parent.parent / "Level4-4" / "_goal.yaml"
+    recipe = goal.parent / "recipes/ppo.yaml"
+    control = compose_train_document(
+        goal, recipe, recipe_overrides=("reward_shape=sft-ppo-rewind-penalty-v1",),
+    )["train_config"]
+    with_bonus = compose_train_document(
+        goal, recipe, recipe_overrides=("reward_shape=sft-ppo-loop-check-v1",),
+    )["train_config"]
+    expected = {**control["task"]["reward"], "loop_check_pass_reward": 250.0}
+    assert with_bonus["task"]["reward"] == expected
+    assert with_bonus["checkpoint_eval_environment"]["task"]["reward"] == expected
+    assert with_bonus["reward_shape_sha256"] != control["reward_shape_sha256"]
+    assert with_bonus["goal_contract_sha256"] == control["goal_contract_sha256"]
+
+
 def test_reward_definition_override_must_target_selected_shape() -> None:
     with pytest.raises(ValueError, match="unselected shape"):
         compose_train_document(

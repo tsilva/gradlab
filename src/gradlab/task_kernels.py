@@ -2752,6 +2752,7 @@ class MarioTaskConfig:
     progress_reward_boost_scale: float = 0.0
     progress_rewind_penalty_scale: float = 0.0
     progress_rewind_min_distance: float = MARIO_PROGRESS_REWIND_MIN_DISTANCE
+    loop_check_pass_reward: float = 0.0
     terminal_reward: float = 50.0
     time_penalty: float = 0.0
     death_penalty: float = 25.0
@@ -2906,6 +2907,7 @@ class MarioTaskConfig:
             progress_rewind_min_distance=reward_value(
                 "progress_rewind_min_distance", MARIO_PROGRESS_REWIND_MIN_DISTANCE,
             ),
+            loop_check_pass_reward=reward_value("loop_check_pass_reward", 0.0),
             terminal_reward=reward_value("terminal_reward", 50.0),
             time_penalty=reward_value("time_penalty", 0.0),
             death_penalty=reward_value("death_penalty", 25.0),
@@ -2969,6 +2971,14 @@ class MarioTaskKernel:
         if config.game_mode is not None:
             signal_sources["game_mode"] = config.game_mode
         self.bindings = SignalBindings(descriptor, signal_sources, self.num_envs)
+        self._loop_active: np.ndarray | None = None
+        if config.loop_check_pass_reward > 0.0:
+            (loop_flag_dtype,) = self.bindings.scalar_source_dtypes(
+                "loop_command_active", require_reset=True,
+            )
+            if loop_flag_dtype.kind not in "biu":
+                raise ValueError("Mario loop_command_active must be a boolean or integer signal")
+            self._loop_active = np.zeros(self.num_envs, dtype=bool)
         self._x_signal_names = (config.x,) if isinstance(config.x, str) else tuple(config.x)
         self._score_signal_name = str(config.score)
         self._lives_signal_name = str(config.lives)
@@ -3379,15 +3389,13 @@ class MarioTaskKernel:
             if not bool(selected[lane]):
                 states.append(None)
                 continue
-            states.append(
-                TaskLaneState(
-                    schema_id="gradlab.mario-task-lane-v2",
-                    values={
-                        name: int(array[lane])
-                        for name, array in zip(names, self._compiled_state, strict=True)
-                    },
-                )
-            )
+            values = {
+                name: int(array[lane])
+                for name, array in zip(names, self._compiled_state, strict=True)
+            }
+            if self._loop_active is not None:
+                values["loop_command_active"] = int(self._loop_active[lane])
+            states.append(TaskLaneState(schema_id="gradlab.mario-task-lane-v2", values=values))
         return tuple(states)
 
     def restore_lane_states(
@@ -3413,17 +3421,22 @@ class MarioTaskKernel:
             "episode_steps",
             "last_progress_step",
         )
+        expected = set(names)
+        if self._loop_active is not None:
+            expected.add("loop_command_active")
         for lane in np.flatnonzero(selected):
             lane_index = int(lane)
             state = states[lane_index]
             if state is None or state.schema_id != "gradlab.mario-task-lane-v2":
                 raise ValueError(f"archive lane {lane_index} has incompatible Mario task state")
-            if set(state.values) != set(names):
+            if set(state.values) != expected:
                 raise ValueError(
                     f"archive lane {lane_index} Mario task state fields do not match task"
                 )
             for name, array in zip(names, self._compiled_state, strict=True):
                 array[lane_index] = int(state.values[name])
+            if self._loop_active is not None:
+                self._loop_active[lane_index] = bool(state.values["loop_command_active"])
 
     def process(
         self,
@@ -3452,6 +3465,7 @@ class MarioTaskKernel:
             else self._zero_signal
         )
         self._update_task_observation(level_hi, level_lo)
+        previous_x = self._x.copy() if self._loop_active is not None else None
         self.has_events = self._run_compiled(
             x_hi,
             x_lo,
@@ -3464,6 +3478,19 @@ class MarioTaskKernel:
             provider_truncated,
             np.asarray(native_rewards, dtype=np.float32),
         )
+        if self._loop_active is not None:
+            current_loop = self.bindings.scalar("loop_command_active", signals) != 0
+            passed = (
+                self._loop_active
+                & ~current_loop
+                & (self._x >= previous_x)
+                & ~(self._terminated | self._truncated | provider_terminated | provider_truncated)
+            )
+            bonus = self.config.loop_check_pass_reward
+            self._rewards[passed] += bonus
+            self._raw_reward[passed] += bonus
+            self._progress_reward_component[passed] += bonus
+            self._loop_active[:] = current_loop
 
         return self._task_step
 
@@ -3482,6 +3509,9 @@ class MarioTaskKernel:
         lives = self.bindings.scalar("lives", reset_signals, mask=mask).astype(np.int64)
         level_hi, level_lo = self._level_values(reset_signals, mask=mask)
         self._update_task_observation(level_hi, level_lo, mask)
+        if self._loop_active is not None:
+            flags = self.bindings.scalar("loop_command_active", reset_signals, mask=mask)
+            self._loop_active[mask] = flags[mask] != 0
         self._x[mask] = x[mask]
         self._max_x[mask] = x[mask]
         self._level_max_x[mask] = x[mask]
