@@ -3,3 +3,21 @@ defaults:
 - ../_goal-common@_global_
 # Apply this file after the shared contract; goal-specific overrides can live here when needed.
 - _self_
+
+reward_shapes:
+  definitions:
+    sft-ppo-signed-scroll-v1:
+      reward_mode: additive
+      use_native_reward: false
+      reward_clip: false
+      progress_reward_cap: 30.0
+      progress_reward_scale: 1.0
+      progress_reward_boost_start_x: 0.0
+      progress_reward_boost_scale: 0.0
+      terminal_reward: 50.0
+      reward_scale: 0.001
+      time_penalty: 0.001
+      death_penalty: 25.0
+      completion_reward: 1000.0
+      score_progress_clipped: false
+      progress_x_signed_16bit: true

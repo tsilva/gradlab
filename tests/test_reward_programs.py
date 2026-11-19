@@ -326,11 +326,13 @@ def test_selected_reward_definition_can_be_overridden_for_an_adhoc_run() -> None
 
 
 def test_signed_mario_progress_is_an_opt_in_reward_variant() -> None:
-    baseline = compose_train_document(MARIO_GOAL, MARIO_RECIPE)["train_config"]
+    goal = MARIO_GOAL.parent.parent / "Level4-4" / "_goal.yaml"
+    recipe = goal.parent / "recipes/ppo.yaml"
+    baseline = compose_train_document(
+        goal, recipe, recipe_overrides=("reward_shape=sft-ppo-v1",),
+    )["train_config"]
     modified = compose_train_document(
-        MARIO_GOAL,
-        MARIO_RECIPE,
-        recipe_overrides=("reward_shapes.definitions.speedrun-v1.progress_x_signed_16bit=true",),
+        goal, recipe, recipe_overrides=("reward_shape=sft-ppo-signed-scroll-v1",),
     )["train_config"]
 
     key = "progress_x_signed_16bit"
