@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import sys
-import tempfile
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -29,7 +28,6 @@ def test_catalog_probe_checks_only_manifest_head(monkeypatch, capsys):
 
 
 def test_external_executor_uses_private_socket_and_clean_environment(monkeypatch, tmp_path):
-    monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     control = tmp_path / "control"
     key = "runs/gradlab-" + "a" * 32 + "/manifest.json"
     target = control / key
@@ -60,14 +58,18 @@ with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
     monkeypatch.setenv("INFISICAL_AGENT_VAULT_URL", "https://vault.example.test")
 
     helper = start_catalog_authority_helper(tmp_path)
+    other = None
     try:
         assert helper.get_json_optional(key) == {"synthetic": True}
-        with pytest.raises(CatalogUnavailable, match="already active"):
-            start_catalog_authority_helper(tmp_path)
+        other = start_catalog_authority_helper(tmp_path)
         with pytest.raises(CatalogIntegrityError, match="unsupported control object"):
             helper.get_json_optional("secrets/stored.json")
+        helper.close()
+        assert other.get_json_optional(key) == {"synthetic": True}
     finally:
         helper.close()
+        if other is not None:
+            other.close()
     assert helper._process is not None and helper._process.returncode == 0
 
 

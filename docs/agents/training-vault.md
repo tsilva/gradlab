@@ -38,9 +38,9 @@ For an agent-operated player that needs the private catalog, set
 Runbox executable, `--repo` and the canonical checkout,
 `--profile playback-catalog`, and `run -- gradlab-catalog --socket`. The
 player appends a private socket path and the helper performs only bounded
-catalog reads. It uses a separate local forward from training operations, and
-the player closes its connection on exit. Only one scoped catalog executor can
-own that forward at a time.
+catalog reads. Its reviewed runtime enables Runbox's shared forwarding on a
+dedicated local port. Each player closes its own connection on exit. Runbox
+keeps the forward available until the last catalog helper exits.
 
 Installation, bootstrap and rotation are trusted administrative operations,
 separate from application startup. The administrative helper validates source
