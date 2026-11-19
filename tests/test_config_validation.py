@@ -418,7 +418,7 @@ class ConfigValidationTests(unittest.TestCase):
                         "Level2-1", "Level2-2", "Level2-3", "Level2-4",
                         "Level3-1", "Level3-2", "Level3-4", "Level4-1", "Level4-3",
                         "Level5-1", "Level5-2", "Level5-3", "Level5-4",
-                        "Level6-2", "Level6-4", "Level7-1", "Level7-2", "Level7-3",
+                        "Level6-2", "Level6-3", "Level6-4", "Level7-1", "Level7-2", "Level7-3",
                         "Level8-1", "Level8-2", "Level8-3",
                     )
                 }:
@@ -428,7 +428,8 @@ class ConfigValidationTests(unittest.TestCase):
                     self.assertEqual(conditions["clear_80"]["action"], "observe")
                     self.assertEqual(conditions["qualified_plateau"]["activation_threshold"], 0.8)
                     if recipe_path.parent.parent.name in {
-                        "Level1-3", "Level2-2", "Level2-4", "Level4-3", "Level7-2", "Level7-3",
+                        "Level1-3", "Level2-2", "Level2-4", "Level4-3", "Level6-3",
+                        "Level7-2", "Level7-3",
                     }:
                         self.assertEqual(train_config["timesteps"], 16_777_216)
                         self.assertEqual(train_config["training_backend"]["id"], "gradlab.ppo")
