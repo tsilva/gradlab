@@ -501,6 +501,7 @@ def _mario_step_kernel(
     death_penalty,
     completion_reward,
     score_progress_clipped,
+    progress_x_signed_16bit,
     max_episode_steps,
     no_progress_timeout_steps,
     no_progress_min_delta,
@@ -522,6 +523,8 @@ def _mario_step_kernel(
         current_x = int(x_hi[lane])
         if x_uses_pair:
             current_x = current_x * 256 + int(x_lo[lane])
+        if progress_x_signed_16bit and current_x >= 32768:
+            current_x -= 65536
         current_score = int(score[lane])
         current_lives = int(lives[lane])
         current_level_hi = int(level_hi[lane])
@@ -2745,6 +2748,7 @@ class MarioTaskConfig:
     death_penalty: float = 25.0
     completion_reward: float = 0.0
     score_progress_clipped: bool = False
+    progress_x_signed_16bit: bool = False
     max_episode_steps: int = 0
     no_progress_timeout_steps: int = 0
     no_progress_min_delta: int = 0
@@ -2894,6 +2898,7 @@ class MarioTaskConfig:
             death_penalty=reward_value("death_penalty", 25.0),
             completion_reward=reward_value("completion_reward", 0.0),
             score_progress_clipped=reward_value("score_progress_clipped", False),
+            progress_x_signed_16bit=reward_value("progress_x_signed_16bit", False),
             max_episode_steps=int(termination.get("max_episode_steps", 0)),
             no_progress_timeout_steps=stalled_steps,
             no_progress_min_delta=int(termination.get("no_progress_min_delta", 0)),
@@ -3102,6 +3107,7 @@ class MarioTaskKernel:
             config.death_penalty,
             config.completion_reward,
             config.score_progress_clipped,
+            config.progress_x_signed_16bit,
             config.max_episode_steps,
             config.no_progress_timeout_steps,
             config.no_progress_min_delta,
@@ -3271,12 +3277,14 @@ class MarioTaskKernel:
             else self.bindings.unchecked_columns("x", signals)
         )
         if len(columns) == 1:
-            return np.asarray(columns[0], dtype=np.int64)
-        if len(columns) == 2:
-            return np.asarray(columns[0], dtype=np.int64) * 256 + np.asarray(
-                columns[1], dtype=np.int64
-            )
-        raise ValueError("Mario x signal must bind one value or a high/low pair")
+            x = np.asarray(columns[0], dtype=np.int64)
+        elif len(columns) == 2:
+            x = np.asarray(columns[0], dtype=np.int64) * 256 + np.asarray(columns[1], dtype=np.int64)
+        else:
+            raise ValueError("Mario x signal must bind one value or a high/low pair")
+        if self.config.progress_x_signed_16bit:
+            x = np.where(x >= 32768, x - 65536, x)
+        return x
 
     def _level_values(
         self,

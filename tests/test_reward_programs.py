@@ -59,6 +59,15 @@ def test_mario_recipes_select_the_speedrun_default_or_declared_sft_variant() -> 
     sft_variants = {
         "Level1-3/recipes/ppo.yaml",
         "Level2-2/recipes/ppo.yaml",
+        "Level2-4/recipes/ppo.yaml",
+        "Level3-3/recipes/ppo.yaml",
+        "Level4-2/recipes/ppo.yaml",
+        "Level4-3/recipes/ppo.yaml",
+        "Level6-1/recipes/ppo.yaml",
+        "Level6-3/recipes/ppo.yaml",
+        "Level7-2/recipes/ppo.yaml",
+        "Level7-3/recipes/ppo.yaml",
+        "Level7-4/recipes/ppo.yaml",
     }
     assert sft_variants <= {recipe.relative_to(goal_root).as_posix() for recipe in recipes}
 
@@ -314,6 +323,22 @@ def test_selected_reward_definition_can_be_overridden_for_an_adhoc_run() -> None
         != baseline["train_config"]["effective_goal_contract_sha256"]
     )
     assert config["reward_shape_sha256"] != baseline["train_config"]["reward_shape_sha256"]
+
+
+def test_signed_mario_progress_is_an_opt_in_reward_variant() -> None:
+    baseline = compose_train_document(MARIO_GOAL, MARIO_RECIPE)["train_config"]
+    modified = compose_train_document(
+        MARIO_GOAL,
+        MARIO_RECIPE,
+        recipe_overrides=("reward_shapes.definitions.speedrun-v1.progress_x_signed_16bit=true",),
+    )["train_config"]
+
+    key = "progress_x_signed_16bit"
+    assert key not in baseline["task"]["reward"]
+    assert modified["task"]["reward"] == {**baseline["task"]["reward"], key: True}
+    assert modified["checkpoint_eval_environment"]["task"]["reward"][key] is True
+    assert modified["reward_shape_sha256"] != baseline["reward_shape_sha256"]
+    assert modified["goal_contract_sha256"] == baseline["goal_contract_sha256"]
 
 
 def test_reward_definition_override_must_target_selected_shape() -> None:

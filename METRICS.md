@@ -325,9 +325,10 @@ resuming as its cause without a matched uninterrupted continuation.
   episodes are excluded. These inspection statistics are local diagnostics, not W&B metrics.
 - Mario coordinate names depend on their source. Task/playback `x_pos` and
   `global_x_pos` are global camera-scroll progress computed from the task's
-  `xscrollHi`/`xscrollLo` binding; `max_x_pos` and `global_max_x_pos` are its
-  episode maxima. `level_x_pos` and `level_max_x_pos` are the corresponding
-  per-level values. These legacy aliases are not the provider player-position
+  `xscrollHi`/`xscrollLo` binding. The optional `progress_x_signed_16bit` reward
+  setting decodes this coordinate before progress is computed. `max_x_pos` and
+  `global_max_x_pos` are its episode maxima. `level_x_pos` and `level_max_x_pos`
+  are the corresponding per-level values. These legacy aliases are not the provider player-position
   signal. Playback merges task metrics over provider info, so task `x_pos` wins.
   In archive cell definitions, the declared `x_pos` signal instead resolves to
   the provider's player position before that merge. Do not compare its bucket

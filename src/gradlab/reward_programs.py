@@ -32,10 +32,12 @@ MARIO_REWARD_FIELDS = (
     "death_penalty",
     "completion_reward",
     "score_progress_clipped",
+    "progress_x_signed_16bit",
 )
 MARIO_REWARD_FIELD_SET = frozenset(MARIO_REWARD_FIELDS)
 MARIO_REWARD_MODES = frozenset({"native", "bounded", "baseline", "score", "additive"})
-MARIO_BOOL_FIELDS = frozenset({"use_native_reward", "score_progress_clipped"})
+MARIO_OPTIONAL_REWARD_FIELDS = frozenset({"progress_x_signed_16bit"})
+MARIO_BOOL_FIELDS = frozenset({"use_native_reward", "score_progress_clipped", "progress_x_signed_16bit"})
 MARIO_NUMBER_FIELDS = frozenset(
     MARIO_REWARD_FIELD_SET - MARIO_BOOL_FIELDS - {"reward_mode", "reward_clip"}
 )
@@ -119,7 +121,9 @@ def normalize_mario_reward(
     if unknown:
         raise ValueError(f"{label} has unexpected field(s): {', '.join(unknown)}")
     if require_complete:
-        missing = [key for key in MARIO_REWARD_FIELDS if key not in value]
+        missing = [
+            key for key in MARIO_REWARD_FIELDS if key not in value and key not in MARIO_OPTIONAL_REWARD_FIELDS
+        ]
         if missing:
             raise ValueError(f"{label} is missing required field(s): {', '.join(missing)}")
 
@@ -287,6 +291,8 @@ def _mario_compiled_semantics(reward: Mapping[str, Any]) -> dict[str, Any]:
         "reward_clip": reward["reward_clip"],
         "time_penalty": float(reward["time_penalty"]),
     }
+    if reward.get("progress_x_signed_16bit", False):
+        semantics["progress_x_signed_16bit"] = True
     if mode == "bounded":
         semantics.update(
             progress_reward_cap=float(reward["progress_reward_cap"]),

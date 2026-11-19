@@ -1204,6 +1204,25 @@ class MarioKernelTests(unittest.TestCase):
         )
         np.testing.assert_allclose(second.metrics["progress_reward_component"], [20.75, 0.5])
 
+    def test_signed_mario_progress_rejects_a_wrapped_castle_rewind(self):
+        for signed, rewind_reward, recovered_reward in ((False, 64_522, 0), (True, 0, 9)):
+            with self.subTest(signed=signed):
+                provider, _kernel, runtime = self.make_runtime(
+                    reward_mode="additive", progress_x_signed_16bit=signed,
+                )
+                runtime.reset()
+                provider.queue_step(x=[911, 100])
+                runtime.step(np.asarray([0, 0]))
+
+                provider.queue_step(x=[65_433, 110])
+                rewind = runtime.step(np.asarray([0, 0]))
+                np.testing.assert_array_equal(rewind.rewards, [rewind_reward, 10])
+                self.assertFalse(np.any(done_flags(rewind)))
+
+                provider.queue_step(x=[920, 120])
+                recovered = runtime.step(np.asarray([0, 0]))
+                np.testing.assert_array_equal(recovered.rewards, [recovered_reward, 10])
+
     def test_canonical_task_softcodes_signal_bindings_and_stall_outcome(self):
         config = EnvConfig(
             game="SuperMarioBros-Nes-v0",

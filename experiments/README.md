@@ -35,6 +35,12 @@ checkpoint and occupancy settings. Mario mixed-state PPO inherits the common
 Mario optimizer and checkpoint schedule, overriding its policy fusion and
 advantage grouping. The Mario family owns its shared reward catalog.
 
+Mario reward shapes can opt in to `progress_x_signed_16bit: true` when the
+provider's position wraps at the 16-bit boundary. The task decodes the position
+before updating furthest progress and stall timing. This setting is part of the
+reward shape's semantic hash. Existing shapes keep their original decoding
+unless they opt in.
+
 Classic-control PPO specializes the discrete Gymnasium CPU preset's entropy
 coefficient. Health Gathering Supreme inherits the Health Gathering goal and
 training preset, retaining its scenario identity and longer training budget.
