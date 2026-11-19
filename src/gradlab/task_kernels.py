@@ -19,6 +19,7 @@ from gradlab.action_codecs import (
 )
 from gradlab.json_utils import canonical_json_sha256
 from gradlab.reward_programs import (
+    MARIO_PROGRESS_REWIND_MIN_DISTANCE,
     normalize_vizdoom_deathmatch_reward,
     vizdoom_deathmatch_reward_semantic_sha256,
 )
@@ -496,6 +497,8 @@ def _mario_step_kernel(
     progress_reward_scale,
     progress_reward_boost_start_x,
     progress_reward_boost_scale,
+    progress_rewind_penalty_scale,
+    progress_rewind_min_distance,
     terminal_reward,
     time_penalty,
     death_penalty,
@@ -677,6 +680,10 @@ def _mario_step_kernel(
                 progress_reward_scale * component_progress
                 + progress_reward_boost_scale * boost_progress
             )
+            if progress_rewind_penalty_scale > 0.0 and not done:
+                rewind = float(state_x[lane]) - current_x - progress_rewind_min_distance
+                if rewind > 0.0:
+                    progress_part -= progress_rewind_penalty_scale * rewind
             if completed:
                 completion_part = completion_reward
             if lost_life:
@@ -2743,6 +2750,8 @@ class MarioTaskConfig:
     progress_reward_scale: float = 1.0
     progress_reward_boost_start_x: float = 0.0
     progress_reward_boost_scale: float = 0.0
+    progress_rewind_penalty_scale: float = 0.0
+    progress_rewind_min_distance: float = MARIO_PROGRESS_REWIND_MIN_DISTANCE
     terminal_reward: float = 50.0
     time_penalty: float = 0.0
     death_penalty: float = 25.0
@@ -2893,6 +2902,10 @@ class MarioTaskConfig:
             progress_reward_scale=reward_value("progress_reward_scale", 1.0),
             progress_reward_boost_start_x=reward_value("progress_reward_boost_start_x", 0.0),
             progress_reward_boost_scale=reward_value("progress_reward_boost_scale", 0.0),
+            progress_rewind_penalty_scale=reward_value("progress_rewind_penalty_scale", 0.0),
+            progress_rewind_min_distance=reward_value(
+                "progress_rewind_min_distance", MARIO_PROGRESS_REWIND_MIN_DISTANCE,
+            ),
             terminal_reward=reward_value("terminal_reward", 50.0),
             time_penalty=reward_value("time_penalty", 0.0),
             death_penalty=reward_value("death_penalty", 25.0),
@@ -3102,6 +3115,8 @@ class MarioTaskKernel:
             config.progress_reward_scale,
             config.progress_reward_boost_start_x,
             config.progress_reward_boost_scale,
+            config.progress_rewind_penalty_scale,
+            config.progress_rewind_min_distance,
             config.terminal_reward,
             config.time_penalty,
             config.death_penalty,

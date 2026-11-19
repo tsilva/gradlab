@@ -33,10 +33,17 @@ MARIO_REWARD_FIELDS = (
     "completion_reward",
     "score_progress_clipped",
     "progress_x_signed_16bit",
+    "progress_rewind_penalty_scale",
+    "progress_rewind_min_distance",
 )
 MARIO_REWARD_FIELD_SET = frozenset(MARIO_REWARD_FIELDS)
 MARIO_REWARD_MODES = frozenset({"native", "bounded", "baseline", "score", "additive"})
-MARIO_OPTIONAL_REWARD_FIELDS = frozenset({"progress_x_signed_16bit"})
+MARIO_OPTIONAL_REWARD_FIELDS = frozenset({
+    "progress_x_signed_16bit",
+    "progress_rewind_penalty_scale",
+    "progress_rewind_min_distance",
+})
+MARIO_PROGRESS_REWIND_MIN_DISTANCE = 512.0
 MARIO_BOOL_FIELDS = frozenset({"use_native_reward", "score_progress_clipped", "progress_x_signed_16bit"})
 MARIO_NUMBER_FIELDS = frozenset(
     MARIO_REWARD_FIELD_SET - MARIO_BOOL_FIELDS - {"reward_mode", "reward_clip"}
@@ -153,7 +160,13 @@ def normalize_mario_reward(
             raise ValueError(f"{label}.{key} must be finite")
         if abs(number) > _MARIO_SAFE_COEFFICIENT_ABS_MAX:
             raise ValueError(f"{label}.{key} exceeds the Mario float32 reward safety bound")
+        if key in {"progress_rewind_penalty_scale", "progress_rewind_min_distance"} and number < 0.0:
+            raise ValueError(f"{label}.{key} must be non-negative")
         normalized[key] = _normalize_zero(number)
+    if normalized.get("progress_rewind_penalty_scale", 0.0) > 0.0 and normalized.get(
+        "reward_mode", "additive"
+    ) not in {"additive", "score"}:
+        raise ValueError(f"{label}.progress_rewind_penalty_scale requires additive or score reward")
     if "reward_scale" in value:
         normalized["reward_scale"] = normalize_reward_mapping(
             {"reward_scale": value["reward_scale"]},
@@ -311,6 +324,14 @@ def _mario_compiled_semantics(reward: Mapping[str, Any]) -> dict[str, Any]:
             completion_reward=float(reward["completion_reward"]),
             death_penalty=float(reward["death_penalty"]),
         )
+        rewind_penalty_scale = reward.get("progress_rewind_penalty_scale", 0.0)
+        if rewind_penalty_scale > 0.0:
+            semantics.update(
+                progress_rewind_penalty_scale=float(rewind_penalty_scale),
+                progress_rewind_min_distance=float(reward.get(
+                    "progress_rewind_min_distance", MARIO_PROGRESS_REWIND_MIN_DISTANCE,
+                )),
+            )
         if mode == "score":
             clipped = bool(reward["score_progress_clipped"])
             semantics["score_progress_clipped"] = clipped

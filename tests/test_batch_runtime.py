@@ -1223,6 +1223,28 @@ class MarioKernelTests(unittest.TestCase):
                 recovered = runtime.step(np.asarray([0, 0]))
                 np.testing.assert_array_equal(recovered.rewards, [recovered_reward, 10])
 
+    def test_mario_rewind_penalty_applies_above_threshold_while_episode_continues(self):
+        provider, _kernel, runtime = self.make_runtime(
+            reward_mode="additive",
+            progress_x_signed_16bit=True,
+            progress_rewind_penalty_scale=0.2,
+            progress_rewind_min_distance=512,
+        )
+        runtime.reset()
+        actions = np.asarray([0, 0])
+        provider.queue_step(x=[1939, 1939])
+        runtime.step(actions)
+
+        provider.queue_step(x=[925, 1900])
+        rewind = runtime.step(actions)
+        np.testing.assert_allclose(rewind.rewards, [-100.4, 0])
+        self.assertFalse(np.any(done_flags(rewind)))
+
+        provider.queue_step(x=[1100, 800], lives=[3, 2])
+        next_step = runtime.step(actions)
+        np.testing.assert_array_equal(next_step.rewards, [0, -25])
+        np.testing.assert_array_equal(next_step.terminated, [False, True])
+
     def test_canonical_task_softcodes_signal_bindings_and_stall_outcome(self):
         config = EnvConfig(
             game="SuperMarioBros-Nes-v0",

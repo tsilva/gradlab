@@ -6,7 +6,7 @@ defaults:
 
 reward_shapes:
   definitions:
-    sft-ppo-signed-scroll-v1:
+    sft-ppo-signed-scroll-v1: &signed_scroll
       reward_mode: additive
       use_native_reward: false
       reward_clip: false
@@ -21,3 +21,7 @@ reward_shapes:
       completion_reward: 1000.0
       score_progress_clipped: false
       progress_x_signed_16bit: true
+    sft-ppo-rewind-penalty-v1:
+      <<: *signed_scroll
+      progress_rewind_penalty_scale: 0.2
+      progress_rewind_min_distance: 512.0

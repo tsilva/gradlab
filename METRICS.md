@@ -333,6 +333,11 @@ resuming as its cause without a matched uninterrupted continuation.
   In archive cell definitions, the declared `x_pos` signal instead resolves to
   the provider's player position before that merge. Do not compare its bucket
   directly with task progress or label task maxima as raw player positions.
+  For Mario additive and score rewards, an optional rewind penalty subtracts
+  from the progress reward component on nonterminal transitions. It scales the
+  backwards movement beyond `progress_rewind_min_distance` by
+  `progress_rewind_penalty_scale`. The task's measured forward progress still
+  uses the episode maximum.
   `y_pos`, `player_motion`, and `player_task` in Mario playback remain provider
   fields: world-space vertical position, ROM movement state, and ROM player task.
   Movement state 1 means jumping or swimming, not necessarily ascending; task 8
