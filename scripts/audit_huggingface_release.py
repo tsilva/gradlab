@@ -20,7 +20,7 @@ from gradlab.publication import (
 
 def _parser() -> argparse.ArgumentParser:
     parser = ExactArgumentParser(
-        description="Audit one immutable gradlab model release on the Hugging Face Hub."
+        description="Audit one immutable public GradLab model release without Hub credentials."
     )
     parser.add_argument("repo_id")
     parser.add_argument("--revision", required=True, help="Sequential release tag, such as v1.")
@@ -48,7 +48,7 @@ def audit_huggingface_release(
 ) -> dict[str, Any]:
     if not revision.startswith("v") or not revision[1:].isdigit() or revision == "v0":
         raise ValueError("revision must be a sequential release tag such as v1 or v2")
-    api = api or HfApi()
+    api = api if api is not None else HfApi(token=False)
     main = api.model_info(repo_id, files_metadata=True)
     tagged = api.model_info(repo_id, revision=revision, files_metadata=True)
     if bool(main.private) or bool(tagged.private):
@@ -85,6 +85,7 @@ def audit_huggingface_release(
                 filename,
                 repo_type="model",
                 revision=revision,
+                token=False,
             )
             shutil.copy2(cached, root / filename)
         manifest = validate_release_bundle(root)

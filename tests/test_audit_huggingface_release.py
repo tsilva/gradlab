@@ -5,6 +5,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import httpx2
+from huggingface_hub import constants
+from huggingface_hub.utils import _http
 
 from gradlab.publication import HUGGINGFACE_RELEASE_FILES
 
@@ -99,3 +102,69 @@ def test_remote_release_audit_rejects_main_tag_drift() -> None:
             "v4",
             api=FakeApi(main_sha="a" * 40, tag_sha="b" * 40),
         )
+
+
+def test_public_release_audit_ignores_ambient_hub_token(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    repo = "example/model"
+    commit = "a" * 40
+    collection = {
+        "slug": "example/gradlab-fixture",
+        "title": "GradLab — Fixture-v0",
+        "owner": "example",
+        "items": [{
+            "_id": "fixture-item", "id": repo, "type": "model", "position": 0,
+            "note": {"text": f"https://huggingface.co/{repo}/tree/v4"},
+        }],
+        "lastUpdated": "2026-01-01T00:00:00.000Z",
+        "private": False,
+        "theme": "blue",
+        "upvotes": 0,
+    }
+    model = f"/api/models/{repo}"
+    requests = []
+
+    def respond(request: httpx2.Request) -> httpx2.Response:
+        assert "authorization" not in request.headers
+        path = request.url.path
+        requests.append((request.method, path))
+        if path in {model, f"{model}/revision/v4"}:
+            return httpx2.Response(200, json={"id": repo, "sha": commit, "private": False})
+        if path == f"{model}/refs":
+            return httpx2.Response(200, json={"branches": [], "converts": [], "tags": [
+                {"name": "v4", "ref": "refs/tags/v4", "targetCommit": commit},
+            ]})
+        if path in {f"{model}/tree/main", f"{model}/tree/v4"}:
+            return httpx2.Response(200, json=[
+                {"type": "file", "path": name, "size": len(name), "oid": commit}
+                for name in HUGGINGFACE_RELEASE_FILES
+            ])
+        if path == "/api/collections":
+            return httpx2.Response(200, json=[collection])
+        if path == f"/api/collections/{collection['slug']}":
+            return httpx2.Response(200, json={**collection, "position": 0})
+        prefix = f"/{repo}/resolve/v4/"
+        assert path.startswith(prefix), path
+        name = path.removeprefix(prefix)
+        assert name in HUGGINGFACE_RELEASE_FILES
+        return httpx2.Response(200, content=name.encode() if request.method == "GET" else b"",
+                               headers={"X-Repo-Commit": commit, "ETag": f'"{name}"',
+                                        "Content-Length": str(len(name))})
+
+    monkeypatch.setenv("HF_TOKEN", "hf_synthetic_ambient_token")
+    monkeypatch.setattr(constants, "HF_HUB_DISABLE_IMPLICIT_TOKEN", False)
+    monkeypatch.setattr(constants, "HF_HUB_CACHE", str(tmp_path / "cache"))
+    monkeypatch.setattr(MODULE, "validate_release_bundle", lambda root: {
+        "repository": {"repo_id": repo, "canonical_environment_id": "Fixture-v0"},
+        "release": {"version": "v4"},
+    })
+    monkeypatch.setattr(MODULE, "verify_replay", lambda path: {"frames": 100})
+    with httpx2.Client(transport=httpx2.MockTransport(respond)) as client:
+        monkeypatch.setattr(_http, "_GLOBAL_CLIENT", client)
+        assert MODULE.audit_huggingface_release(repo, "v4")["status"] == "passed"
+
+    for name in HUGGINGFACE_RELEASE_FILES:
+        path = f"/{repo}/resolve/v4/{name}"
+        assert ("HEAD", path) in requests
+        assert ("GET", path) in requests
