@@ -118,11 +118,6 @@ def _status(root: Path, run_id: str) -> dict[str, Any]:
     return experiment_status(root, run_id)
 
 
-def _authority(root: Path) -> RunAuthority:
-    study.load_repository_operator_environment(root)
-    return RunAuthority(study.RunStorageConfig.from_env())
-
-
 def _guard(path: Path) -> dict[str, Any]:
     with study.edit_state(path) as state:
         if state["status"] == "active":
@@ -178,7 +173,8 @@ def reconcile_study(
         if state["status"] != "active" or not state["waves"]:
             return _report(path, observations)
         try:
-            authority = authority or _authority(Path(state["repo_root"]))
+            if authority is None:
+                authority = study.training_evidence_authority(Path(state["repo_root"]))
             reserved = [wave for wave in state["waves"] if wave["status"] == "reserved"]
             matches = (
                 discover_submissions(

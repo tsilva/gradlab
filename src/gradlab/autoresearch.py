@@ -31,6 +31,7 @@ from gradlab.metric_names import (
     TRAIN_OUTCOME_SUCCESS_STARTS_ALL_ROLLING_RATE_MIN,
     train_success_count_metric,
 )
+from gradlab.operator_credentials import load_operator_environment
 from gradlab.operator_environment import load_repository_operator_environment
 from gradlab.provider_config import provider_num_envs
 from gradlab.recipe_documents import compose_train_document
@@ -40,6 +41,7 @@ from gradlab.run_contracts import ATTEMPT_ID_PATTERN, RUN_ID_PATTERN
 from gradlab.seeds import DEFAULT_TRAIN_SEED, validate_training_seed
 from gradlab.tracking_config import validate_tracking
 from gradlab.training_backend import training_backend_id
+from gradlab.training_vault import ROLES, selected, validate_session
 
 
 SCHEMA_VERSION = 6
@@ -754,7 +756,9 @@ def command_init(args: argparse.Namespace) -> None:
             emit({"study": str(matches[0]), "resumed": True, "next": next_action(state)})
             return
 
-        operator = load_repository_operator_environment(root)
+        operator = load_repository_operator_environment(
+            root, requested_names={"GRADLAB_OPERATOR_CONFIG"}
+        )
         if operator.dstack is None:
             raise RuntimeError("operator config has no schema-v3 dstack profiles")
         fleet = operator.dstack.fleet(getattr(args, "target", None))
@@ -1397,6 +1401,19 @@ def command_record_terminal(args: argparse.Namespace) -> None:
     emit({"study": str(path), **result})
 
 
+def training_evidence_authority(root: Path) -> RunAuthority:
+    if selected() or "INFISICAL_AGENT_VAULT_URL" in os.environ or "RUNBOX_POLICY" in os.environ:
+        validate_session()
+        # The reviewed transport supplies the endpoints and public placeholders.
+        # Only public bucket metadata is needed from the operator configuration.
+        names = {f"GRADLAB_{role}_R2_{field}" for role in ROLES for field in ("URI", "REGION")}
+        names.add("GRADLAB_MODELS_R2_PUBLIC_BASE_URL")
+        load_operator_environment(requested_names=names)
+    else:
+        load_repository_operator_environment(root)
+    return RunAuthority(RunStorageConfig.from_env())
+
+
 def fetch_training_evidence(
     *,
     root: Path,
@@ -1416,8 +1433,7 @@ def fetch_training_evidence(
     if journal_high_water < 1:
         raise ValueError("training evidence requires a positive journal fence")
     if authority is None:
-        load_repository_operator_environment(root)
-        authority = RunAuthority(RunStorageConfig.from_env())
+        authority = training_evidence_authority(root)
     manifest = authority.manifest(run_id)
     terminal = authority.control.get_json_optional(
         f"runs/{run_id}/attempts/{attempt_id}/terminal.json"

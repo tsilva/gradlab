@@ -19,6 +19,14 @@ session and preserves the CLI's evidence hashes and failure reason. It creates
 no worker capability or training task. Adopting changed protected adapter source
 requires a fresh explicit Runbox consumer review.
 
+The same operator adapter accepts `autoresearch reconcile` and
+`autoresearch collect-training-evidence`. These commands read existing Run
+evidence through the selected training transport and update only the local study.
+The agent command starts with
+`runbox --profile training run -- gradlab-training autoresearch`.
+A missing or incompatible agent session fails before reading operator
+credential sources.
+
 Installation, bootstrap and rotation are trusted administrative operations,
 separate from application startup. The administrative helper validates source
 scope and current native fake-credential proof. Runtime refresh prepares a

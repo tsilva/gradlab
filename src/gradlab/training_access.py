@@ -81,10 +81,18 @@ def inventory():
 
 def main(arguments=None):
     arguments = list(sys.argv[1:] if arguments is None else arguments)
-    if arguments not in (["check"], ["inventory"]) and (len(arguments) < 2
-            or arguments[0] != "experiment" or arguments[1] not in {
-                "operator-preflight", "launch", "status", "follow", "logs", "cancel", "retry", "resume-submit", "reconcile"}):
-        raise LaunchError("Use check, inventory or a reviewed experiment lifecycle operation")
+    command = arguments[:2]
+    allowed = {
+        "experiment": {
+            "operator-preflight", "launch", "status", "follow", "logs", "cancel",
+            "retry", "resume-submit", "reconcile",
+        },
+        "autoresearch": {"reconcile", "collect-training-evidence"},
+    }
+    if arguments not in (["check"], ["inventory"]) and (
+        len(command) != 2 or command[1] not in allowed.get(command[0], ())
+    ):
+        raise LaunchError("Use a reviewed training inventory, lifecycle or evidence operation")
     if arguments[:2] == ["experiment", "follow"] and os.environ.get("GRADLAB_TRAINING_FOLLOW") != "1":
         raise LaunchError("Use the reviewed long-lived follow profile")
     from gradlab.training_vault import validate_session

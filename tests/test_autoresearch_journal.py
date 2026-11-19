@@ -10,10 +10,26 @@ from gradlab import autoresearch
 from gradlab.json_utils import canonical_json_sha256
 from gradlab.r2_store import BucketConfig, RunStorageConfig
 from gradlab.run_authority import RunAuthority
+from gradlab.training_vault import TrainingVaultError
 
 
 RUN_ID = "gradlab-" + "a" * 32
 ATTEMPT_ID = "attempt-" + "b" * 16
+
+
+def test_unrelated_agent_session_cannot_read_operator_credentials(monkeypatch, tmp_path):
+    monkeypatch.delenv("GRADLAB_TRAINING_TRANSPORT", raising=False)
+    monkeypatch.setenv("INFISICAL_AGENT_VAULT_URL", "https://vault.example")
+
+    def unexpected_config(*args, **kwargs):
+        pytest.fail("Invalid session loaded operator configuration")
+
+    monkeypatch.setattr(autoresearch, "load_operator_environment", unexpected_config)
+    monkeypatch.setattr(
+        autoresearch, "load_repository_operator_environment", unexpected_config
+    )
+    with pytest.raises(TrainingVaultError, match="explicit native training Vault session"):
+        autoresearch.training_evidence_authority(tmp_path)
 
 
 def history_event(seq: int, step: int, metrics: dict) -> dict:

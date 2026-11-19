@@ -38,6 +38,31 @@ def test_unreviewed_operation_fails_before_transport_validation():
     with patch('gradlab.training_vault.validate_session', side_effect=AssertionError('not reached')):
         with pytest.raises(training_access.LaunchError):
             training_access.main(['unreviewed'])
+        with pytest.raises(training_access.LaunchError):
+            training_access.main(['autoresearch', 'reserve-wave'])
+
+
+@pytest.mark.parametrize("operation", ["reconcile", "collect-training-evidence"])
+def test_training_dispatch_parses_evidence_operations(operation):
+    from gradlab.autoresearch import build_parser
+
+    options = ["--study", "synthetic-study"]
+    if operation == "collect-training-evidence":
+        options.extend(["--run-id", "gradlab-" + "a" * 32])
+
+    def parse_dispatch(*args, **kwargs):
+        assert training_access.sys.argv[1] == "autoresearch"
+        parsed = build_parser().parse_args(training_access.sys.argv[2:])
+        assert parsed.study == "synthetic-study"
+        assert parsed.handler.__name__ == "command_" + operation.replace("-", "_")
+
+    with patch('gradlab.training_vault.validate_session') as validate, patch.object(
+        training_access.runpy, 'run_module', side_effect=parse_dispatch
+    ) as run:
+        with patch.dict(os.environ, {}, clear=True), patch.object(training_access.sys, 'argv', []):
+            training_access.main(["autoresearch", operation, *options])
+            validate.assert_called_once_with()
+            run.assert_called_once_with('gradlab.main', run_name='__main__')
 
 
 def test_follow_requires_the_separate_long_lived_profile():
