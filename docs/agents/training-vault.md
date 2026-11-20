@@ -53,7 +53,7 @@ GradLab uses the operator's GitHub CLI as usual.
 If an external dispatch needs to protect nonterminal Modal evaluators, select
 `GRADLAB_MODAL_PROTECTION_EXECUTOR` with an absolute command array. Use the
 reviewed read-only control-storage route for
-`python -m gradlab.runtime_refs protected-modal-apps`. It requires a scoped
+`python -m gradlab.modal_protection`. It requires a scoped
 Training Vault session and returns `complete: true` with the protected app
 names only after reading the full inventory. Missing or incomplete inventory
 blocks dispatch before the operator's storage credentials are read. Ordinary

@@ -11,7 +11,6 @@ import sys
 import time
 import zipfile
 from collections.abc import Mapping, Sequence
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from pathlib import Path
@@ -20,6 +19,8 @@ from typing import Annotated, Any, Literal
 from pydantic import StringConstraints
 
 from gradlab.boundary_schema import BoundaryModel, NonEmptyText, Sha256, validate_boundary
+from gradlab.modal_protection import control_modal_app_names
+from gradlab.modal_protection import main as _serve_modal_protection_inventory
 from gradlab.runtime_contract import (
     RUNTIME_DESCRIPTOR_SCHEMA_VERSION,
     train_config_contract_sha256,
@@ -494,35 +495,6 @@ def _run_gh(command: Sequence[str]) -> None:
     )
 
 
-def _control_modal_app_names() -> tuple[str, ...]:
-    from gradlab.r2_store import BucketConfig, R2Bucket
-
-    control = R2Bucket(BucketConfig.from_env("GRADLAB_CONTROL_R2"))
-    keys = [key for key in control.iter_keys("runs/") if key.startswith("runs/")]
-    manifests = {
-        key.split("/")[1]: key
-        for key in keys
-        if key.count("/") == 2 and key.endswith("/manifest.json")
-    }
-    terminal_run_ids = {
-        key.split("/")[1] for key in keys if key.count("/") == 2 and key.endswith("/terminal.json")
-    }
-    protected_manifest_keys = [
-        key for run_id, key in manifests.items() if run_id not in terminal_run_ids
-    ]
-    with ThreadPoolExecutor(max_workers=16) as pool:
-        protected_manifests = list(pool.map(control.get_json, protected_manifest_keys))
-    return tuple(
-        sorted(
-            {
-                app_name
-                for manifest in protected_manifests
-                if (app_name := str((manifest.get("modal") or {}).get("app_name") or "").strip())
-            }
-        )
-    )
-
-
 def nonterminal_modal_app_names(repo_root: Path | str = ".") -> tuple[str, ...]:
     from gradlab.operator_environment import load_repository_operator_environment
     from gradlab.play_catalog_authority import CONTROL_R2_ENV_NAMES
@@ -530,7 +502,7 @@ def nonterminal_modal_app_names(repo_root: Path | str = ".") -> tuple[str, ...]:
     load_repository_operator_environment(
         Path(repo_root).resolve(), requested_names=CONTROL_R2_ENV_NAMES,
     )
-    return _control_modal_app_names()
+    return control_modal_app_names()
 
 
 def _external_modal_app_names(repo_root: Path | str) -> list[str]:
@@ -1049,19 +1021,6 @@ def runtime_image_digest(value: str) -> str:
     match = DIGEST_IMAGE_REF_RE.fullmatch(normalize_runtime_image_ref(value))
     assert match is not None
     return match.group("digest").lower()
-
-
-def _serve_modal_protection_inventory() -> int:
-    from gradlab.training_vault import validate_session
-
-    try:
-        validate_session()
-        names = _control_modal_app_names()
-    except Exception:
-        print("Modal protection inventory unavailable", file=sys.stderr)
-        return 1
-    print(json.dumps({"complete": True, "protected_modal_apps": names}))
-    return 0
 
 
 if __name__ == "__main__":
