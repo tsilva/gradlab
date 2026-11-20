@@ -187,11 +187,15 @@ def _secret_egress_gate(validation: Any) -> None:
 
 
 def _remote_head(api: Any, repo_id: str, revision: str) -> tuple[bool, str | None]:
+    from huggingface_hub.errors import RepositoryNotFoundError
+
     try:
         info = api.dataset_info(repo_id=repo_id, revision=revision)
-    except Exception as exc:
-        response = getattr(exc, "response", None)
-        if getattr(response, "status_code", None) == 404:
+    except RepositoryNotFoundError as exc:
+        if (
+            exc.response.status_code == 404
+            and exc.response.headers.get("X-Error-Code") == "RepoNotFound"
+        ):
             return False, None
         raise
     return True, str(info.sha or "") or None

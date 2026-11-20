@@ -5,6 +5,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import httpx2
+import pytest
+from huggingface_hub import HfApi
+from huggingface_hub.errors import HfHubHTTPError
+
 from gradlab.dataset_hub import HubAppendSession
 
 
@@ -98,3 +103,48 @@ def test_append_session_advances_expected_parent_without_rescanning(tmp_path):
     assert api.calls[0]["parent_commit"] == "head-0"
     assert session.episode_fingerprints == {episode_id: "a" * 64}
     assert len(session.sessions) == 1
+
+
+@pytest.mark.parametrize(
+    "status, error_code, expected_create",
+    [
+        (404, "RepoNotFound", True),
+        (404, "RevisionNotFound", False),
+        (404, None, False),
+        (401, "RepoNotFound", False),
+        (403, None, False),
+    ],
+)
+def test_append_session_creates_only_after_confirmed_repository_absence(
+    monkeypatch, status, error_code, expected_create
+):
+    calls = []
+    repo = "owner/repository"
+
+    def provider(request):
+        assert request.url.host == "hub.example.com"
+        calls.append(request.method)
+        if calls == ["GET"]:
+            assert request.url.path == f"/api/datasets/{repo}/revision/main"
+            return httpx2.Response(
+                status,
+                headers={"X-Error-Code": error_code} if error_code else {},
+                json={"error": "synthetic response"},
+            )
+        if calls == ["GET", "POST"]:
+            assert request.url.path == "/api/repos/create"
+            return httpx2.Response(200, json={"url": f"https://hub.example.com/datasets/{repo}"})
+        assert calls == ["GET", "POST", "GET"]
+        return httpx2.Response(200, json={"id": repo, "sha": "c" * 40})
+
+    api = HfApi(endpoint="https://hub.example.com", token=False)
+    with httpx2.Client(transport=httpx2.MockTransport(provider)) as session:
+        monkeypatch.setattr("huggingface_hub.hf_api.get_session", lambda: session)
+        monkeypatch.setattr("huggingface_hub.HfApi", lambda: api)
+        if expected_create:
+            assert HubAppendSession(repo).head == "c" * 40
+            assert calls == ["GET", "POST", "GET"]
+        else:
+            with pytest.raises(HfHubHTTPError):
+                HubAppendSession(repo)
+            assert calls == ["GET"]
