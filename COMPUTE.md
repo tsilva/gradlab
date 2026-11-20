@@ -30,6 +30,40 @@ metrics backend when the selected service is unavailable.
 An explicit `--target` overrides `dstack.default_fleet`. Local or automatic
 compute fails closed when the selected fleet is not configured.
 
+## Launch and follow a queued run
+
+After preflight, launch a checked-in recipe and follow it through terminal drain:
+
+```bash
+gradlab experiment launch \
+  --recipe-file experiments/goals/SuperMarioBros-Nes-v0/Level1-1/recipes/ppo.yaml \
+  --follow
+```
+
+The recipe path resolves the goal. Launch defaults to seed 12, automatic
+compute, and a 48-hour limit. Add `--json` for JSON Lines launch, status, and
+terminal events. Interrupting `--follow` detaches the client while the run
+continues. Launch without `--follow` to submit asynchronously. Use
+`gradlab experiment follow --run ID` to reattach or
+`gradlab experiment status --run ID` for a snapshot.
+
+When the coordinator declares `ssh_tunnel`, GradLab reuses an existing local
+endpoint or opens a temporary tunnel for the command. It closes only the
+tunnel it created.
+
+### Architecture
+
+dstack places a training container, its supervisor coordinates the learner and
+checkpoint evaluation, and R2 stores run state and artifacts. The Run
+Configuration records the tracking backend and evaluation mode. The terminal
+receipt captures checkpoint publication, evaluation drain, promotion state, and
+metric delivery.
+
+![Queued training with Modal evaluation and W&B tracking](architecture.png)
+
+This diagram shows the Modal and W&B configuration. The checked-in tracking
+default is MLflow.
+
 ## Selection policy
 
 | Need | Request |

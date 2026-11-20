@@ -27,6 +27,62 @@ Current research state:
 - `benchmarks/`: reproducible benchmark profiles and supporting documentation.
 - `scripts/`: active experiment utilities used by benchmarks and tooling.
 
+## Local training
+
+```bash
+gradlab train gradlab__bandit/ppo
+gradlab env list
+gradlab benchmark list
+```
+
+The bundled bandit recipe runs on CPU with a durable local metric journal.
+For other recipes, `gradlab train <goal>/<recipe>` uses the checked-in goal and
+training configuration. NES goals require a lawfully obtained ROM. Supply it
+with `--rom-path` or register it with `gradlab rom sync`. Use
+`gradlab rom status --json` to inspect registered ROMs. Keep ROMs and credentials
+outside source control.
+
+Visual PPO presets request CUDA and fail if it is unavailable. Classic control,
+the discrete Gymnasium baseline, and the bundled bandit recipe select CPU.
+Local training can establish Training Success. Acceptance requires a separate
+evaluation under the goal's declared contract.
+
+### Gymnasium recipes
+
+The discrete Gymnasium goals use isolated vector lanes, masked resets, native
+rewards, and RGB rendering. They are Training-Only goals. Use
+`gymnasium:<environment-id>` for the qualified environment ID.
+
+| Environment | PPO recipe |
+| --- | --- |
+| CartPole, MountainCar, Acrobot, LunarLander | `CartPole-v1/ppo`, `MountainCar-v0/ppo`, `Acrobot-v1/ppo`, `LunarLander-v3/ppo` |
+| FrozenLake | `FrozenLake-v1/Default/ppo`, `FrozenLake-v1/Maze/ppo` |
+| CliffWalking | `CliffWalking-v1/Default/ppo`, `CliffWalking-v1/Slippery/ppo` |
+| Taxi, Blackjack | `Taxi-v3/ppo`, `Blackjack-v1/ppo` |
+
+The FrozenLake recipes use deterministic movement on the standard 4×4 map
+and the fixed maze, respectively. Blackjack retains categorical observations
+using `MultiDiscrete([32, 11, 2])` for player sum, dealer card, and usable ace.
+
+### Tracking and publication
+
+Project recipes inherit [MLflow](tracking.yaml) with online delivery unless
+overridden. Pass `--set tracking.backend=wandb` to select W&B for local or
+queued training.
+The bandit example selects `local_only` delivery. Use `--no-wandb` to keep
+other local runs local.
+
+- `gradlab publish-local <run-directory>` publishes a completed local run's
+  checkpoints, journal, and public telemetry.
+- `gradlab sync <run-directory>` syncs a completed local run to its frozen tracker.
+- `gradlab sync-run <run-id>` syncs a queued local-only run's retained R2 journal
+  to its frozen tracker.
+
+See the [MLflow debugging guide](../ops/mlflow/README.md#debugging-training) for
+checkpoints and execution diagnostics, and [compute operations](../COMPUTE.md)
+for queued runs. For replay publishing credentials, see the
+[YouTube operator guide](../ops/youtube/README.md).
+
 ## Shared configurations
 
 FirstWall and TwoWalls inherit their common Breakout PPO policy, optimizer,
@@ -46,6 +102,30 @@ coefficient. Health Gathering Supreme inherits the Health Gathering goal and
 training preset, retaining its scenario identity and longer training budget.
 Recipe identities and paths remain separate; composition records every shared
 source in immutable provenance.
+
+Checked-in PPO recipes use the native `gradlab.ppo` backend. Set
+`train.backend.config.precision` to `fp32`, `amp-fp16`, or `amp-bf16`.
+The `execution_profile` options are `sb3-parity`, `compiled-parity`,
+`compiled-fused-parity`, and the backend default, `max-throughput`.
+The Atari, Mario, classic-control, and discrete Gymnasium base presets select
+`sb3-parity` and `fp32`. CPU and MPS use eager execution. SB3 backends remain
+available for explicit comparisons.
+
+To initialize native PPO from public tensor-only weights, set
+`train.backend.config.initial_policy` with a Hugging Face `repo_id`, full
+commit `revision` for `policy.pt`, `sha256`, `size_bytes`, and boolean
+`reset_value_head`. GradLab validates the weights and starts a fresh optimizer
+and transition counter. Recovery resumes the saved checkpoint.
+
+Set `critic_only: true` to fit an independent critic while freezing the actor.
+It requires `train.policy_model.share_features_extractor: false` and a positive
+value-loss coefficient. Set `bootstrap_truncations: false` for zero continuation
+at episode truncation. That choice is recorded in the critic value contract.
+
+Saved-state curricula practise from recorded states when
+`state_archive.curriculum.restore_entries: true`. See the
+[archive guide](../docs/occupancy.md#enable-coverage-starts) and
+[curriculum metrics](../METRICS.md) for archive generations and practice metrics.
 
 ## Screening recipes
 

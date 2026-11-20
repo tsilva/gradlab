@@ -15,6 +15,11 @@ not grant Acceptance or Promotion.
 
 The [ViZDoom environment collection](https://huggingface.co/collections/tsilva/gradlab-vizdoomdeathmatch-v1-6a75be1f7f77460f66953c43) lists its current Release.
 
+The [ViZDoom videos](https://www.youtube.com/playlist?list=PLbd2wb1agDJ0) and
+[Mario videos](https://www.youtube.com/playlist?list=PLpwSvrlUj8-ISJH2ptsalWqNc8dc6N5Hi)
+show representative gameplay. Use the immutable model tags for accepted
+evaluation evidence.
+
 The historical Mario `rlab` Policy Releases are [Level1-1](https://huggingface.co/tsilva/Level1-1_stable-baselines3-ppo_7d9b9131), [Level1-2](https://huggingface.co/tsilva/Level1-2_stable-baselines3-ppo_91df110f), [Level1-4](https://huggingface.co/tsilva/Level1-4_stable-baselines3-ppo_be9abbc8), [Level2-1](https://huggingface.co/tsilva/Level2-1_stable-baselines3-ppo_4792f358), [Level2-3](https://huggingface.co/tsilva/Level2-3_stable-baselines3-ppo_ff330a59), [Level3-2](https://huggingface.co/tsilva/Level3-2_stable-baselines3-ppo_945d412a), [Level3-3](https://huggingface.co/tsilva/Level3-3_stable-baselines3-ppo_d52f7c68), [Level3-4](https://huggingface.co/tsilva/Level3-4_stable-baselines3-ppo_4141caab), and [Level4-1](https://huggingface.co/tsilva/Level4-1_stable-baselines3-ppo_fe8a02dc).
 
 ## Use recorded episodes

@@ -1,391 +1,44 @@
 <p align="center">
-  <img src="./logo.png" alt="gradlab" width="256" />
+  <img src="https://raw.githubusercontent.com/tsilva/gradlab/main/logo.png" alt="GradLab" width="256" />
   <br />
   <!-- repo-tagline:start -->
   <strong>🤖 RL workbench for training game agents 🎮</strong>
   <!-- repo-tagline:end -->
 </p>
 
-GradLab is a Python CLI and reproducible reinforcement-learning workbench for
-researchers who train, evaluate, compare, inspect, and publish game agents. It
-turns versioned goal contracts and recipes into traceable local or queued runs,
-with portable policies and evidence-backed results.
+GradLab is a Python CLI for reinforcement learning researchers. Train game agents
+from versioned goals and recipes, inspect their decisions in an interactive
+player, and share checkpoints with the evidence needed to compare results.
 
-Try the bundled ROM-free smoke recipe without cloning, credentials, or a ROM:
+## Quickstart
+
+[Install uv](https://docs.astral.sh/uv/getting-started/installation/), then run
+the bundled CPU example on macOS arm64 or Linux x86-64. It needs no checkout,
+credentials, ROM, or tracking service. GradLab uses Python 3.14, which uv can
+install automatically.
 
 ```bash
 uvx gradlab@0.2.4 train gradlab__bandit/ppo
 ```
 
-The run writes a directly playable policy below `~/.config/gradlab/runs/`.
+A completed run saves a playable policy under `~/.config/gradlab/runs/`.
+Copy the playback command printed at the end to open the policy.
 
-Saved-state curricula require `state_archive.curriculum.restore_entries: true`
-to practise from recorded states. Durable archive publication preserves a verified
-generation while collection continues during remote uploads. See the
-[curriculum metrics](METRICS.md) to distinguish recorded inventory from actual practice.
+On Linux, the desktop player requires GTK 3 and WebKitGTK 4.1. Add `--no-open`
+to use the printed local URL in your own browser. The installed package includes
+the player assets.
 
-On Linux, a supervised learner and its process group stop if their supervisor
-dies, including an abrupt kill. Normal cancellation still requests a cooperative
-learner stop and preserves finalization while the supervisor remains alive.
+## Explore GradLab
 
-Goals and recipes default to MLflow through `experiments/tracking.yaml`.
-MLflow records original event times, searchable research parameters, canonical
-checkpoint links in its Artifacts browser, and available CPU/RAM/GPU diagnostics.
-Its execution status distinguishes completion, interruption, and failure; use the
-task's success metrics and Acceptance evidence to judge whether the policy solved it.
-See [MLflow debugging and setup](ops/mlflow/README.md#debugging-training) for the
-focused chart layout and metadata-store verification.
-Selected-checkpoint evaluations record one of the declared episodes for environments
-that support video; recording does not add another evaluation episode.
-Select W&B explicitly with `--set tracking.backend=wandb` for local training or
-`--override tracking.backend=wandb` for experiment launches. The bundled smoke
-recipe uses `local_only` delivery and requires no tracking service.
+- [Recipes and local training](https://github.com/tsilva/gradlab/tree/main/experiments#readme) covers Atari, NES, ViZDoom, and Gymnasium examples, ROM setup, and tracking.
+- [Player guide](https://github.com/tsilva/gradlab/blob/main/docs/player.md) covers browsing checkpoints, inspecting rewards, and exporting episodes.
+- [Research catalog](https://github.com/tsilva/gradlab/blob/main/docs/hugging-face-catalog.md) links public policies, datasets, and gameplay videos.
+- [Compute operations](https://github.com/tsilva/gradlab/blob/main/COMPUTE.md) covers queued training, evaluation, and the run architecture.
+- [Source development](https://github.com/tsilva/gradlab/blob/main/docs/development.md) covers checkout setup, tests, and release validation.
 
-## Install
-
-[Install uv](https://docs.astral.sh/uv/getting-started/installation/) and Node 22.12+
-with the pinned pnpm version from `package.json`, then run:
-
-```bash
-git clone https://github.com/tsilva/gradlab.git
-cd gradlab
-./install.sh
-gradlab validate
-```
-
-Run `gradlab --help` to open the command reference, or train and play the
-bundled smoke recipe:
-
-```bash
-gradlab train gradlab__bandit/ppo
-gradlab play --recipe gradlab__bandit/ppo
-```
-
-`gradlab play` starts the local web player and prints its loopback URL.
-It opens a dedicated Neutralinojs window titled **GradLab — Player**, with a cyan
-play-badge icon. **GradLab — Stats** has an amber chart-badge icon; the two viewers
-also have distinct macOS app identities and browser-tab icons. The
-pinned, SHA-256-verified runtime downloads once into `~/.cache/gradlab/neutralino`
-(or `$XDG_CACHE_HOME/gradlab/neutralino`). On macOS, GradLab creates its app bundle
-from the existing icon automatically. No Node.js, npm, compiler, or rebuild is
-needed to run the installed player. `gradlab play` serves compiled player assets
-by default. From a source checkout, pass `--hotreload` to start Vite and reload
-frontend changes in the open viewer. The header warns when hot reload is active.
-The **Stats** button opens or focuses a synchronized GradLab window. Reward panels
-show their pinned return-reference step and discount; the default step-one reference
-aligns contributions with the first decision's return-to-go. Use **Set return reference
-to cursor** to change it; scrubbing keeps it fixed. **Provider reward** is the environment
-output, while **Native reward contribution** is its weighted task component. Tiny nonzero
-component percentages retain enough precision to remain visible.
-Closing the last Player or Stats window stops the local player cleanly; keeping
-either window open keeps the session running.
-Ctrl+C or killing the GradLab process closes its viewer windows without affecting
-your normal browser. Use `--no-open` for an external browser or headless use; this
-skips the runtime download entirely. Linux desktop use requires GTK 3 and
-WebKitGTK 4.1 installed by your distribution.
-Use `gradlab play --latest` to open the highest-step published checkpoint from the
-newest run in the player catalog that has a published checkpoint. It starts paused; click **Play** to begin inference.
-Runs without published checkpoints are skipped; the command reports when none are available.
-Use **Download episode** to save a self-contained trajectory, or **Import episode**
-to inspect its stored frames and exact Policy inputs without running the environment.
-Open an archive directly with `gradlab play --recording episode.trj`.
-See the [trajectory format and controls](docs/player-trajectories.md).
-
-## Gymnasium discrete environments
-
-GradLab includes strict Turbo-vector goals for nine Gymnasium discrete-action
-environments:
-
-```bash
-gradlab train CartPole-v1/ppo
-gradlab train MountainCar-v0/ppo
-gradlab train Acrobot-v1/ppo
-gradlab train LunarLander-v3/ppo
-gradlab train FrozenLake-v1/Default/ppo
-gradlab train FrozenLake-v1/Maze/ppo
-gradlab train CliffWalking-v1/Default/ppo
-gradlab train CliffWalking-v1/Slippery/ppo
-gradlab train Taxi-v3/ppo
-gradlab train Blackjack-v1/ppo
-```
-
-`FrozenLake-v1/Maze/ppo` uses a fixed maze with 31 holes, two dead
-ends, and a 26-move shortest safe route. `FrozenLake-v1/Default/ppo` uses
-the standard 4×4 map. Both goals use deterministic, non-slippery movement.
-
-Use `gymnasium:<environment-id>` for the qualified environment ID. These goals
-use isolated spawned lanes, explicit masked resets, native rewards, and RGB
-rendering through the same training, checkpoint-publication, and playback
-workflows as other GradLab providers. They can establish Training Success but
-cannot establish Acceptance, Promotion, or Release. Native categorical observations remain
-categorical; Blackjack uses the fixed `MultiDiscrete([32, 11, 2])` encoding
-`(player sum, dealer card, usable ace)`.
-
-## Commands
-
-```bash
-gradlab train <goal>/<recipe>       # train a checked-in recipe locally
-gradlab play [artifact]             # browse or inspect local and remote policies
-gradlab validate                    # validate goals, recipes, benchmarks, and ops config
-gradlab env list                    # list available environment providers
-gradlab rom status --json           # inspect registered ROM assets
-gradlab benchmark list              # list reproducible benchmark profiles
-gradlab experiment status --run ID  # inspect an orchestrated run
-uv run pytest                       # run Python tests
-uv run ruff check .                 # lint Python code
-pnpm test:web                       # run web-player tests
-```
-
-Use `gradlab <command> --help` for full arguments. Gameplay datasets, leader
-queries, W&B reports, and workspace management are also available through the
-`dataset`, `leaders`, `reports`, and `workspaces` commands.
-Configuration validation excludes portable evidence under `experiments/reports/`;
-see the [experiment layout](experiments/README.md).
-
-## Source development
-
-The [regression CI workflow](.github/workflows/gradlab-python-checks.yml) runs on
-relevant pushes to `main` and pull requests. It validates configuration, tests
-screening, checkpoints, provenance, and Acceptance, and runs the credential-free
-simulated lifecycle gate twice to check determinism. It uses CPU only and does
-not launch experiments or deploy services. Full-suite validation remains part of
-the release workflow.
-
-Successful regression and [report validation](.github/workflows/gradlab-reports-validate.yml)
-jobs prune the uv cache before saving it, retaining wheels built from source.
-Prebuilt wheels may be downloaded again on later runs; dependency versions remain
-fixed by `uv.lock`.
-
-Published wheels and source distributions include the compiled player. Running
-an installed GradLab package does not require Node or pnpm.
-
-From a checkout, install Node 22.12+ and the pinned pnpm version in `package.json`,
-then install dependencies before running Playback or the Python browser tests:
-
-```bash
-uv sync --frozen
-pnpm install --frozen-lockfile
-pnpm check:web
-pnpm build:web
-uv run gradlab play
-```
-
-Pass `--hotreload` to use hot reload in this checkout. Changes under
-`frontend/` and `src/gradlab/web_player/` update the open viewer; Python changes
-still require restarting the command. `pnpm build:web` remains necessary for
-package builds and compiled-mode testing. Vite writes ignored
-assets to `src/gradlab/web_player/dist/`; commit source and `pnpm-lock.yaml`, never
-bundles. `uv build` checks that the compiled assets match their source inputs and
-includes them in both distribution formats. Building a wheel from the published
-source distribution uses those included assets without invoking Node.
-
-Frontend security fixes are pinned through `pnpm-workspace.yaml` overrides for
-`devalue` and `source-map-js`; the seven-day release-age gate remains enabled.
-
-Run `pnpm test:web` for controller and calculation tests. Browser fixture commands
-and performance workloads are documented in
-[the player fixture guide](tests/web_player/fixtures/README.md).
-
-GradLab package releases use [$gradlab_build-release](.codex/skills/gradlab_build-release/SKILL.md).
-`python3 scripts/release.py` prepares metadata and atomically pushes the branch
-and release tag; GitHub Actions runs the source checks, web build, Python package
-builds, artifact audits, and trusted publication. `python3 scripts/release.py --validate` builds committed remote `main` in Actions without publishing or
-changing local versions. Local candidate builds are available when explicitly requested.
-
-## Research results
-
-Environment indexes:
-
-- [Breakout-Atari2600-v0 datasets and derived models](https://huggingface.co/collections/tsilva/gradlab-breakout-atari2600-v0)
-- [VizdoomDeathmatch-v1 models](https://huggingface.co/collections/tsilva/gradlab-vizdoomdeathmatch-v1-6a75be1f7f77460f66953c43)
-  and [videos](https://www.youtube.com/playlist?list=PLbd2wb1agDJ0)
-- [SuperMarioBros-Nes-v0 models](https://huggingface.co/collections/tsilva/gradlab-supermariobros-nes-v0-6a5675af108d798040f3aafb)
-  and [videos](https://www.youtube.com/playlist?list=PLpwSvrlUj8-ISJH2ptsalWqNc8dc6N5Hi)
-
-Evaluation evidence and representative replay are distinct: immutable model
-tags contain the accepted evaluation record, while videos show one separately
-labeled episode.
-
-## Queued runs
-
-Queued training uses dstack for placement, a single supervisor-controlled
-training container, Modal for separately scheduled checkpoint evaluation, R2
-for run authority and artifacts, and W&B for metrics.
-
-Checkpoint evaluation defaults come from recipes or execution configuration and
-resolve into the recorded Run Configuration. Modal remains the current fallback;
-an explicit choice may use bounded training-container evaluation or disable
-evaluation. Disabled evaluation cannot establish Acceptance or Promotion.
-
-For screening, select the [TwoWalls screening recipe](experiments/goals/Breakout-Atari2600-v0/TwoWalls/recipes/ppo-screening.yaml).
-It keeps the original training settings and checkpoint cadence, disables automatic
-evaluation and monitoring, and preserves the contract for separate Acceptance
-evaluation. See [screening recipes](experiments/README.md#screening-recipes).
-
-Copy the portable operator template into private user configuration and run the
-read-only preflight before launching:
-
-```bash
-mkdir -p ~/.config/gradlab
-install -m 600 ops/operator.example.toml ~/.config/gradlab/operator.toml
-gradlab experiment operator-preflight --json
-```
-
-Operator configuration stores credential references rather than secret values.
-Commands can also use their documented process environment. See
-[compute operations](COMPUTE.md) for fleet selection and preflight.
-
-Then launch a checked-in recipe using its resolved goal and bounded defaults:
-
-```bash
-gradlab experiment launch \
-  --recipe-file experiments/goals/SuperMarioBros-Nes-v0/Level1-1/recipes/ppo.yaml \
-  --follow
-```
-
-The recipe path identifies its owning goal. The launch seed defaults to `12`,
-the description defaults to `<goal> <recipe> seed <seed>`, compute defaults to
-the configured local fleet, and maximum duration defaults to 48 hours.
-`--follow` keeps the command attached after submission, streams authoritative
-run-state changes, and exits when training and its terminal drain are complete.
-Interrupting the client stops the stream without canceling the remote run. Omit
-the flag to retain asynchronous submission. Add `--json` for typed JSON Lines
-events (`launch`, `status`, and `terminal`).
-
-When the selected coordinator declares `ssh_tunnel` metadata in private
-`operator.toml`, this same command reuses an existing local endpoint or opens a
-temporary SSH tunnel automatically. The tunnel remains attached for the full
-command and is closed on exit only when GradLab created it.
-
-Local compute requires an enrolled fleet in
-`~/.config/gradlab/instances.md`. Paid cloud compute is always bounded and
-explicitly authorized. See [COMPUTE.md](COMPUTE.md) and the
-[dstack runbook](ops/dstack/README.md) before operating queued runs.
-
-## Notes
-
-- GradLab requires Python 3.14 and uses `uv` with a committed lockfile and a
-  seven-day dependency age gate. Supported binary targets are macOS arm64 and
-  Linux x86_64.
-- Local `gradlab train` Runs use online W&B and R2 by default; inherited
-  `tracking.backend` can select MLflow. The bundled bandit recipe explicitly
-  selects credential-free `tracking.delivery: local_only` and completes with a
-  durable local metric journal and a `complete_local` outcome.
-  `gradlab publish-local <run-directory>` uploads a completed local-only Run's
-  checkpoints and journal and creates its public telemetry without tracker sync.
-  Online runs retain periodic checkpoints and follow the recipe budget and
-  early-stop rules. Use `gradlab sync <run-directory>` to recover publication of a
-  finished local-only run to its frozen tracker without retraining. `--no-wandb`
-  explicitly selects local-only delivery for other local recipes. Acceptance
-  evaluation remains disabled for local training.
-  They can establish Training Success but cannot establish Acceptance or
-  Promotion.
-- Queued `complete_local` Runs seal the journal to private R2. An operator can
-  later run `gradlab sync-run <run-id>` to project that journal to the Run's
-  frozen backend without changing its terminal receipt.
-- Checked-in PPO recipes use the tensor-native `gradlab.ppo` backend. It accepts the
-  `sb3.ppo` configuration surface plus `precision` (`fp32`, `amp-fp16`, or
-  `amp-bf16`) and an `execution_profile`. `sb3-parity` preserves SB3's eager,
-  unfused, environment-major minibatch path; `compiled-parity` and
-  `compiled-fused-parity` isolate the CUDA optimizations; `max-throughput`
-  additionally uses GPU-native permutation and is the default. The backend
-  keeps PPO artifacts mutually resumable with SB3 and uses eager execution on
-  CPU or MPS. The Atari, Mario, classic-control, and discrete Gymnasium PPO base
-  presets use `sb3-parity` and `fp32`, disabling policy compilation and fused
-  Adam; goal-specific configurations can declare other profiles and precisions.
-  SB3 backends remain available for explicit comparison configurations.
-- Visual PPO presets request `device: cuda`; classic-control, discrete Gymnasium,
-  and the bundled bandit smoke recipe select CPU. Explicit CUDA selection fails
-  when CUDA is unavailable. A dstack task allocated a GPU also checks CUDA inside
-  its training container before materialization or learner startup, so stale
-  worker inventory cannot silently turn that task into CPU training. CPU-only
-  workers declare `gpu = "0"` and require a CPU-compatible recipe or explicit
-  device override.
-- Custom PPO can initialize from immutable public tensor-only weights with
-  `train.backend.config.initial_policy` requires a Hugging Face model `repo_id`
-  and full commit `revision` for `policy.pt`, plus `sha256`, `size_bytes`, and
-  boolean `reset_value_head`. Tensor names, shapes, dtypes and finiteness must match the
-  requested policy. This initializes a fresh optimizer and transition counter;
-  recovery resumes the saved checkpoint without repeating initialization.
-  `critic_only: true` fits an independent critic while freezing the actor;
-  it requires `train.policy_model.share_features_extractor: false` and a
-  positive value-loss coefficient. A later Run can resume with `critic_only: false`.
-  `bootstrap_truncations: false` optimizes bounded-episode returns with zero
-  continuation at truncation. It does not change environment boundaries or
-  Acceptance criteria. The default remains true, and both modes are recorded
-  in the critic value contract and respected by Playback.
-- NES recipes require a lawfully obtained ROM supplied with `--rom-path` or
-  registered with `gradlab rom sync`. ROMs and credentials must remain outside
-  source control.
-- Generated runs default to `~/.config/gradlab/runs/`; other generated logs and
-  models belong in ignored `logs/` and `models/` directories.
-- dstack task success is not scientific success. A queued run succeeds only
-  when its terminal receipt proves checkpoint publication, evaluation drain,
-  promotion state, and metric delivery.
-- [SPECS.md](SPECS.md) defines project-wide product requirements,
-  [docs/specs/](docs/specs/README.md) defines scoped product requirements,
-  [METRICS.md](METRICS.md) defines metric semantics, and
-  [experiments/README.md](experiments/README.md) explains the checked-in
-  research contracts.
-
-## Architecture
-
-![GradLab architecture](./architecture.png)
-
-## YouTube credentials in Infisical
-
-The default YouTube credential backend uses private `youtube_client_secret.json` and `youtube_token.json` files in the GradLab config directory. To select Infisical, install and log in to its CLI, store the complete client and token JSON objects in a dedicated project, and create `youtube_infisical.json` in that same config directory:
-
-```json
-{
-  "instance": "https://app.infisical.com",
-  "project_id": "your-project-UUID",
-  "environment": "prod",
-  "path": "/youtube",
-  "executable": "infisical",
-  "secrets": {
-    "client": "GRADLAB_YOUTUBE_CLIENT_JSON",
-    "token": "GRADLAB_YOUTUBE_TOKEN_JSON"
-  }
-}
-```
-
-Both operator references and YouTube store configurations require `instance`,
-`project_id`, `environment` and `path`; none has an implicit default. Existing
-Infisical configurations missing these fields must be updated before use. Select
-the narrow folder that owns the credentials; `/` is accepted only when explicitly
-configured. Malformed scopes and unknown fields stop access before calling the CLI.
-
-Optional `login_profile` pins the Infisical login. Its identity needs read access to both secrets and write access to the token secret. The player, durable publisher, and standalone YouTube script use the selected store, including refresh and consent writeback. Writes use stdin without creating plaintext JSON files. Vault failures stop credential access without a local-file fallback; local token locking remains in place for the player and publisher.
-
-The standalone script also accepts a host-provisioned loopback relay through
-`GRADLAB_YOUTUBE_RELAY`, `GRADLAB_YOUTUBE_CHANNEL_ID`, and the public marker
-`GRADLAB_YOUTUBE_RELAY_TOKEN=gradlab_youtube_proxy_placeholder`. It checks the
-channel before publishing and sends uploads in chunks to local handles supplied
-by the relay. The operator supplies the relay explicitly. OAuth setup and
-credential storage stay outside this mode.
-
-For a new upload, `--metadata-file` accepts a JSON object with `title`,
-`description`, `tags` (a list), and `category_id` (a string). Use it in place
-of the inline metadata options when you want to review the draft as a file.
-
-From the repository, reconnect without uploading or changing a video:
-
-```bash
-uv run --frozen python scripts/upload_youtube_video.py --auth-only
-```
-
-After verifying access and token refresh, retire the former local OAuth files. A Google `deleted_client` error requires a replacement Desktop OAuth client before reauthorization; copying the deleted client's JSON to Infisical cannot restore it.
-
-## Secret scanning
-
-GitHub Actions scans changed commits with the pinned Infisical CLI. New branches
-and rewritten pushes scan the complete history reachable from the new head, even
-when the previous commit is no longer available. Missing pull-request revisions
-and scanner errors still fail the check. Reports publish only finding locations;
-credentials and matched source content remain private.
+Run `uvx gradlab --help` for the command list.
 
 ## License
 
-GradLab is licensed under the [MIT License](LICENSE). Third-party attributions
-are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+[MIT License](https://github.com/tsilva/gradlab/blob/main/LICENSE) ·
+[Third-party notices](https://github.com/tsilva/gradlab/blob/main/THIRD_PARTY_NOTICES.md)
