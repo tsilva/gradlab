@@ -498,7 +498,7 @@ def _control_modal_app_names() -> tuple[str, ...]:
     from gradlab.r2_store import BucketConfig, R2Bucket
 
     control = R2Bucket(BucketConfig.from_env("GRADLAB_CONTROL_R2"))
-    keys = list(control.iter_keys("runs/"))
+    keys = [key for key in control.iter_keys("runs/") if key.startswith("runs/")]
     manifests = {
         key.split("/")[1]: key
         for key in keys

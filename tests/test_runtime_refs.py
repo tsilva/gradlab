@@ -135,6 +135,7 @@ class RuntimeRefsTests(unittest.TestCase):
             bucket.iter_keys.return_value = [
                 "runs/live/manifest.json", "runs/active-without-modal/manifest.json",
                 "runs/finished/manifest.json", "runs/finished/terminal.json",
+                "runs-archive/live/terminal.json", "runs-archive/unrelated/manifest.json",
             ]
             bucket.get_json.side_effect = lambda key: (
                 {"modal": {"app_name": "gradlab-eval-v2-retained"}} if key == "runs/live/manifest.json" else {}
