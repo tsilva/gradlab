@@ -35,7 +35,6 @@ from gradlab.wandb_reports import (
 ROOT = Path(__file__).resolve().parents[1]
 FAMILY_ROOT = ROOT / "experiments" / "goals" / "SuperMarioBros-Nes-v0"
 LEVEL1_1_GOAL = FAMILY_ROOT / "Level1-1" / "_goal.yaml"
-MIXED_GOAL = FAMILY_ROOT / "Levels_1-1_1-2" / "_goal.yaml"
 MARIO_RECIPE = (
     ROOT / "experiments" / "goals" / "SuperMarioBros-Nes-v0" / "Level1-1" / "recipes" / "ppo.yaml"
 )
@@ -82,7 +81,7 @@ class WandbReportCompilationTests(unittest.TestCase):
         self.assertNotIn("{goal_title}", spec.title)
 
     def test_mixed_goal_exposes_balanced_metrics_and_both_starts(self) -> None:
-        spec = goal_spec("Levels_1-1_1-2")
+        spec = dataclasses.replace(goal_spec("Level1-1"), starts=("Level1-1", "Level1-2"))
         report = build_wandb_report(spec, entity="entity", source_sha="a" * 40)
         payload = dataclasses.asdict(report)
 

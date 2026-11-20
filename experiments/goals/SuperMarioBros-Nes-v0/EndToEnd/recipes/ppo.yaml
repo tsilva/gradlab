@@ -1,7 +1,0 @@
-defaults:
-- ../../../../recipes/_presets/mario-single-ppo@_global_
-- _self_
-
-reward_shape: speedrun-v1
-recipe_id: ppo
-description: Whole-game PPO for {{ goal_id }}, from Level1-1 through Level8-4.

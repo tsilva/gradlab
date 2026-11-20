@@ -2,8 +2,9 @@
 
 This campaign qualifies current launchable recipes independently for ordinary
 Super Mario Bros. Levels 1-1 through 8-3. Level8-4 is explicitly deferred; it
-remains unfinished scope of the original all-level objective. Mixed-level and
-end-to-end goals are outside this campaign.
+remains unfinished scope of the original all-level objective. The active Mario
+catalog keeps one launchable goal and recipe per published campaign checkpoint
+stage. Mixed-level and end-to-end experiments remain available in Git history.
 
 - A recipe qualifies only after fresh training reaches at least 80 genuine
   level clears in a full latest rolling window of 100 completed target-origin
@@ -40,11 +41,12 @@ end-to-end goals are outside this campaign.
   across-seed reliability, formal Acceptance, Promotion and Release. Preserve
   those contracts for later explicitly requested work. Do not publish to
   Hugging Face or YouTube as part of this campaign.
-- After a level qualifies, keep one canonical working launchable recipe YAML
-  for it and remove its competing launchable recipe YAMLs only after repairing
-  references and verifying the retained recipe loads. Preserve shared presets,
-  resolved historical configurations, initialization assets, checkpoints,
-  datasets and research evidence. Keep competitors for unresolved levels.
+- After selecting a published campaign checkpoint, keep one canonical working
+  launchable recipe YAML for that stage. Remove unused launchable recipes after
+  repairing references and verifying the retained recipe loads. The retained
+  World 4-4 checkpoint gives that unresolved stage a launchable starting point.
+  Preserve used shared presets, resolved historical configurations,
+  initialization assets, checkpoints, datasets and research evidence.
 
 ## Rolling metric interpretation
 

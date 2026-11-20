@@ -21,9 +21,8 @@ LEVELS = tuple(
 
 def campaign_recipe(level):
     directory = GOALS / level / "recipes"
-    name = "ppo-sil-train-clear-80" if level in {"Level1-3", "Level2-2", "Level2-4"} else "ppo-train-clear-80"
-    candidate = directory / f"{name}.yaml"
-    return candidate if candidate.exists() else directory / "ppo.yaml"
+    name = "ppo-train-clear-80" if level == "Level4-4" else "ppo"
+    return directory / f"{name}.yaml"
 
 
 @pytest.mark.parametrize("level", LEVELS)
@@ -73,7 +72,7 @@ def test_campaign_recipe_preserves_full_start_and_separate_acceptance(level):
     assert backend["id"] == "gradlab.ppo"
     assert backend["config"]["device"] == "cuda"
     uses_sil = level in {
-        "Level1-3", "Level2-2", "Level2-4", "Level3-3", "Level4-2", "Level4-3",
+        "Level1-3", "Level2-2", "Level2-4", "Level3-3", "Level4-2", "Level4-3", "Level4-4",
         "Level6-1", "Level6-3", "Level7-2", "Level7-3", "Level7-4",
     }
     assert bool(backend["config"].get("sil", {}).get("enabled")) == uses_sil
@@ -82,6 +81,8 @@ def test_campaign_recipe_preserves_full_start_and_separate_acceptance(level):
 
 def test_campaign_covers_exactly_31_ordinary_levels_without_final_level():
     recipes = [campaign_recipe(level) for level in LEVELS]
+    assert set(GOALS.glob("*/recipes/*.yaml")) == set(recipes)
+    assert {path.parent.name for path in GOALS.glob("*/_goal.yaml")} == set(LEVELS)
     assert {path.parent.parent.name for path in recipes} == set(LEVELS)
     assert len(recipes) == len(LEVELS) == 31
     assert not (GOALS / "Level8-4").exists()

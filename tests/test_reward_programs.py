@@ -52,7 +52,7 @@ def test_mario_reward_shape_defaults_and_cli_override_materialize_both_phases() 
     assert "reward_shapes" not in selected["goal"]
 
 
-def test_mario_recipes_select_the_speedrun_default_or_declared_sft_variant() -> None:
+def test_mario_recipes_select_the_declared_reward_shape() -> None:
     goal_root = Path("experiments/goals/SuperMarioBros-Nes-v0")
     recipes = sorted(goal_root.glob("*/recipes/*.yaml"))
     assert recipes
@@ -69,15 +69,17 @@ def test_mario_recipes_select_the_speedrun_default_or_declared_sft_variant() -> 
         "Level7-3/recipes/ppo.yaml",
         "Level7-4/recipes/ppo.yaml",
     }
-    assert sft_variants <= {recipe.relative_to(goal_root).as_posix() for recipe in recipes}
+    reward_shapes = dict.fromkeys(sft_variants, "sft-ppo-v1")
+    reward_shapes["Level4-4/recipes/ppo-train-clear-80.yaml"] = "sft-ppo-rewind-penalty-v1"
+    assert reward_shapes.keys() <= {recipe.relative_to(goal_root).as_posix() for recipe in recipes}
 
     for recipe in recipes:
         goal = recipe.parent.parent / "_goal.yaml"
         document = compose_train_document(goal, recipe)
         config = document["train_config"]
-        is_sft = recipe.relative_to(goal_root).as_posix() in sft_variants
-        assert config["reward_shape"] == ("sft-ppo-v1" if is_sft else "speedrun-v1"), recipe
-        assert config["reward_shape_is_default"] is (not is_sft), recipe
+        expected = reward_shapes.get(recipe.relative_to(goal_root).as_posix(), "speedrun-v1")
+        assert config["reward_shape"] == expected, recipe
+        assert config["reward_shape_is_default"] is (expected == "speedrun-v1"), recipe
         assert config["task"]["reward"]["reward_mode"] == "additive", recipe
         assert config["task"]["reward"]["time_penalty"] == 0.001, recipe
         assert (
@@ -327,7 +329,7 @@ def test_selected_reward_definition_can_be_overridden_for_an_adhoc_run() -> None
 
 def test_signed_mario_progress_is_an_opt_in_reward_variant() -> None:
     goal = MARIO_GOAL.parent.parent / "Level4-4" / "_goal.yaml"
-    recipe = goal.parent / "recipes/ppo.yaml"
+    recipe = goal.parent / "recipes/ppo-train-clear-80.yaml"
     baseline = compose_train_document(
         goal, recipe, recipe_overrides=("reward_shape=sft-ppo-v1",),
     )["train_config"]
@@ -345,7 +347,7 @@ def test_signed_mario_progress_is_an_opt_in_reward_variant() -> None:
 
 def test_mario_rewind_penalty_has_its_own_reward_identity() -> None:
     goal = MARIO_GOAL.parent.parent / "Level4-4" / "_goal.yaml"
-    recipe = goal.parent / "recipes/ppo.yaml"
+    recipe = goal.parent / "recipes/ppo-train-clear-80.yaml"
     signed = compose_train_document(
         goal, recipe, recipe_overrides=("reward_shape=sft-ppo-signed-scroll-v1",),
     )["train_config"]
@@ -365,7 +367,7 @@ def test_mario_rewind_penalty_has_its_own_reward_identity() -> None:
 
 def test_mario_loop_check_reward_has_its_own_reward_identity() -> None:
     goal = MARIO_GOAL.parent.parent / "Level4-4" / "_goal.yaml"
-    recipe = goal.parent / "recipes/ppo.yaml"
+    recipe = goal.parent / "recipes/ppo-train-clear-80.yaml"
     control = compose_train_document(
         goal, recipe, recipe_overrides=("reward_shape=sft-ppo-rewind-penalty-v1",),
     )["train_config"]

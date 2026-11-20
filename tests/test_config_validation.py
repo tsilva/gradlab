@@ -36,7 +36,6 @@ class ConfigValidationTests(unittest.TestCase):
     MARIO_L11_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-1/_goal.yaml")
     MARIO_L12_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-2/_goal.yaml")
     MARIO_L13_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/Level1-3/_goal.yaml")
-    MARIO_END_TO_END_GOAL = Path("experiments/goals/SuperMarioBros-Nes-v0/EndToEnd/_goal.yaml")
     MARIO_SINGLE_RECIPES = MARIO_L11_GOAL.parent / "recipes"
     VIZDOOM_BASIC_GOAL = Path("experiments/goals/VizdoomBasic-v1/_goal.yaml")
     VIZDOOM_BASIC_RECIPE = VIZDOOM_BASIC_GOAL.parent / "recipes/ppo.yaml"
@@ -397,13 +396,13 @@ class ConfigValidationTests(unittest.TestCase):
                     },
                 )
 
-        self.assertEqual(actor_critic_recipes, 66)
+        self.assertEqual(actor_critic_recipes, 62)
 
     def test_every_mario_recipe_disables_eval_and_preserves_its_clear_contract(self) -> None:
         mario_root = Path("experiments/goals/SuperMarioBros-Nes-v0")
         recipes = sorted(mario_root.glob("*/recipes/*.yaml"))
 
-        self.assertEqual(len(recipes), 35)
+        self.assertEqual(len(recipes), 31)
         for recipe_path in recipes:
             with self.subTest(recipe=recipe_path):
                 goal_path = recipe_path.parent.parent / "_goal.yaml"
@@ -411,53 +410,19 @@ class ConfigValidationTests(unittest.TestCase):
                 train_config = document["train_config"]
                 self.assertEqual(train_config["checkpoint_eval_backend"], "none")
                 self.assertNotIn("stop_on_acceptance", train_config)
-                if recipe_path.stem in {"ppo-train-clear-80", "ppo-sil-train-clear-80"} or recipe_path in {
-                    mario_root / level / "recipes/ppo.yaml"
-                    for level in (
-                        "Level1-1", "Level1-2", "Level1-3", "Level1-4",
-                        "Level2-1", "Level2-2", "Level2-3", "Level2-4",
-                        "Level3-1", "Level3-2", "Level3-3", "Level3-4", "Level4-1", "Level4-2", "Level4-3",
-                        "Level5-1", "Level5-2", "Level5-3", "Level5-4",
-                        "Level6-1", "Level6-2", "Level6-3", "Level6-4",
-                        "Level7-1", "Level7-2", "Level7-3", "Level7-4",
-                        "Level8-1", "Level8-2", "Level8-3",
-                    )
-                }:
-                    conditions = train_config["early_stop"]["conditions"]
-                    self.assertEqual(conditions["clear_100"]["action"], "stop")
-                    self.assertEqual(conditions["clear_80"]["threshold"], 0.8)
-                    self.assertEqual(conditions["clear_80"]["action"], "observe")
-                    self.assertEqual(conditions["qualified_plateau"]["activation_threshold"], 0.8)
-                    if recipe_path.parent.parent.name in {
-                        "Level1-3", "Level2-2", "Level2-4", "Level3-3", "Level4-2", "Level4-3",
-                        "Level6-1", "Level6-3",
-                        "Level7-2", "Level7-3", "Level7-4",
-                    }:
-                        self.assertEqual(train_config["timesteps"], 16_777_216)
-                        self.assertEqual(train_config["training_backend"]["id"], "gradlab.ppo")
-                        self.assertTrue(train_config["training_backend"]["config"]["sil"]["enabled"])
-                        self.assertFalse(train_config["policy_model"]["share_features_extractor"])
-                    continue
                 conditions = train_config["early_stop"]["conditions"]
-                self.assertEqual(set(conditions), {"clear_100"})
-                self.assertEqual(
-                    conditions["clear_100"],
-                    {
-                        "metric": "train/success/min",
-                        "trigger": "threshold",
-                        "outcome": "success",
-                        "action": "stop",
-                        "patience_steps": 0,
-                        "operator": ">=",
-                        "progress_baseline": 0.0,
-                        "threshold": 1.0,
-                    },
-                )
-                if train_config["training_backend"]["id"] == "gradlab.jerk":
-                    self.assertEqual(
-                        train_config["training_backend"]["config"]["acceptance_mode"],
-                        "checkpoint_eval",
-                    )
+                self.assertEqual(conditions["clear_100"]["action"], "stop")
+                self.assertEqual(conditions["clear_80"]["threshold"], 0.8)
+                self.assertEqual(conditions["clear_80"]["action"], "observe")
+                self.assertEqual(conditions["qualified_plateau"]["activation_threshold"], 0.8)
+                if recipe_path.parent.parent.name in {
+                    "Level1-3", "Level2-2", "Level2-4", "Level3-3", "Level4-2", "Level4-3",
+                    "Level4-4", "Level6-1", "Level6-3", "Level7-2", "Level7-3", "Level7-4",
+                }:
+                    self.assertEqual(train_config["timesteps"], 16_777_216)
+                    self.assertEqual(train_config["training_backend"]["id"], "gradlab.ppo")
+                    self.assertTrue(train_config["training_backend"]["config"]["sil"]["enabled"])
+                    self.assertFalse(train_config["policy_model"]["share_features_extractor"])
 
     def test_every_vizdoom_recipe_composes_shared_success_and_plateau_conditions(self) -> None:
         recipes = sorted(Path("experiments/goals").glob("Vizdoom*/recipes/*.yaml"))
@@ -553,7 +518,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(report.counts["json_files"], 0)
         self.assertGreaterEqual(report.counts["yaml_files"], 15)
         self.assertGreaterEqual(report.counts["goals"], 1)
-        self.assertEqual(report.counts["train_recipes"], 67)
+        self.assertEqual(report.counts["train_recipes"], 63)
         self.assertGreaterEqual(report.counts["env_configs"], 0)
         self.assertEqual(report.counts["benchmark_profiles"], 4)
         self.assertEqual(report.counts["workspace_manifests"], 1)
@@ -1047,37 +1012,12 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(eval_task["termination"]["success"], ["level_change"])
         self.assertEqual(eval_task["termination"]["timeout"], ["stalled"])
 
-    def test_end_to_end_mario_goal_truncates_stalls_and_succeeds_after_level_8_4(self) -> None:
-        document = load_goal_contract(self.MARIO_END_TO_END_GOAL)
-
-        self.assertEqual(
-            document["train"]["environment"]["env_config"]["state"],
-            "Level1-1",
-        )
-        for phase in ("train", "eval"):
-            task = document[phase]["environment"]["task"]
-            self.assertEqual(
-                task["events"]["game_complete"],
-                {
-                    "signal": "game_mode",
-                    "operation": "equals",
-                    "value": 2,
-                    "when": {"signal": "level", "value": [7, 3]},
-                },
-            )
-            self.assertEqual(task["termination"]["failure"], [])
-            self.assertEqual(task["termination"]["success"], ["game_complete"])
-            self.assertEqual(task["termination"]["timeout"], ["stalled"])
-            self.assertEqual(task["termination"]["max_episode_steps"], 144000)
-
     def test_all_mario_level_goals_share_attempt_termination_contract(self) -> None:
         root = self.MARIO_L11_GOAL.parent.parent
         expected_stalled = {"signal": "x", "operation": "unchanged_for", "steps": 300}
-        goal_paths = sorted(
-            path for path in root.glob("*/_goal.yaml") if path.parent.name != "EndToEnd"
-        )
+        goal_paths = sorted(root.glob("*/_goal.yaml"))
 
-        self.assertEqual(len(goal_paths), 32)
+        self.assertEqual(len(goal_paths), 31)
         for goal_path in goal_paths:
             document = load_goal_contract(goal_path)
             for phase in ("train", "eval"):
