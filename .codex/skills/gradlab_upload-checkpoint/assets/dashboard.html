@@ -1,0 +1,238 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>$title</title>
+<style>
+  :root { color-scheme: dark; --page:#101831; --panel:#192747; --line:#5273a4;
+    --ink:#fff4d7; --muted:#bfcde8; --accent:#ffd24d; --accent-hover:#ffe893;
+    --link:#86d7ff; --brick:#ff765e; --warn:#ffb195; --screen:#070b17; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--page); color:var(--ink);
+    font: 1rem/1.5 system-ui, sans-serif; }
+  main { max-width:76rem; padding:clamp(1rem,4vw,3.5rem); margin:auto; }
+  header { border-top:4px solid var(--brick); padding-top:1.5rem; margin-bottom:2rem; }
+  nav { display:flex; flex-wrap:wrap; align-items:center; gap:.75rem 1.5rem; margin-bottom:1.25rem; }
+  a { color:var(--link); text-underline-offset:.18em; }
+  a:hover { text-decoration-thickness:2px; }
+  :is(a, button, .table-wrap):focus-visible { outline:2px solid var(--accent); outline-offset:4px; }
+  .primary { background:var(--accent); color:var(--page); }
+  .primary:hover { background:var(--accent-hover); }
+  h1 { font-size:clamp(1.9rem,4vw,3.2rem); line-height:1.12; letter-spacing:-.035em;
+    margin:0 0 .8rem; overflow-wrap:anywhere; }
+  .summary { color:var(--muted); margin:.5rem 0; max-width:58rem; }
+  .summary strong { color:var(--ink); }
+  .dashboard-details { display:flex; flex-wrap:wrap; gap:.7rem 1.4rem; margin:.8rem 0 0; }
+  .dashboard-details dt { color:var(--muted); font-size:.8rem; }
+  .dashboard-details dd { margin:0; overflow-wrap:anywhere; }
+  .table-wrap { overflow:auto; border:1px solid var(--line); border-radius:.6rem; }
+  table { width:100%; min-width:29rem; border-collapse:collapse; font-variant-numeric:tabular-nums; }
+  col.compact { width:1%; }
+  .solved { text-align:center; }
+  caption { text-align:left; font-size:1.08rem; font-weight:700; padding:.9rem 1rem; }
+  th, td { border-top:1px solid var(--line); padding:.68rem .9rem; text-align:left; white-space:nowrap; }
+  thead { background:var(--panel); color:var(--muted); font-size:.82rem; }
+  .sort-button { display:inline-flex; align-items:center; gap:.35rem; min-block-size:1.5rem;
+    border:0; padding:0; font:inherit; color:inherit; background:none; cursor:pointer; }
+  .sort-button:hover { text-decoration:underline; }
+  .sort-icon { display:inline-block; inline-size:1em; text-align:center; }
+  .sort-icon::before { content:"↕"; }
+  th[aria-sort] .sort-icon { color:var(--accent); }
+  th[aria-sort="ascending"] .sort-icon::before { content:"↑"; }
+  th[aria-sort="descending"] .sort-icon::before { content:"↓"; }
+  td.num, th.num { text-align:right; }
+  td.num { font-size:.9rem; }
+  .rate { display:block; color:var(--muted); font-size:.76rem; }
+  .score { color:var(--accent); font-weight:700; }
+  .attention { color:var(--warn); }
+  .absent { color:var(--muted); }
+  tbody tr:hover { background:var(--panel); }
+  td.links a+a { margin-inline-start:.9rem; }
+  #playlist { margin-bottom:2rem; padding:1rem; background:var(--panel);
+    border:1px solid var(--line); border-radius:.6rem; text-align:center; }
+  .visually-hidden { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+  #replay-player { display:block; width:min(100%, 33rem); margin-inline:auto;
+    aspect-ratio:4/3; background:var(--screen); }
+  .replay-controls { display:flex; justify-content:center; gap:.55rem; margin-top:.8rem; }
+  .replay-controls button { display:grid; place-items:center; inline-size:2.75rem; block-size:2.75rem;
+    padding:0; border:1px solid var(--line); border-radius:.35rem; cursor:pointer; }
+  .replay-controls button:not(.primary) { background:transparent; color:var(--ink); }
+  .replay-controls svg { width:1.25rem; height:1.25rem; fill:currentColor; pointer-events:none; }
+  #toggle-replay[data-playing="true"] .play-icon,
+  #toggle-replay[data-playing="false"] .pause-icon { display:none; }
+  .replay-controls button:hover:not(:disabled) { border-color:var(--accent); }
+  .replay-controls button:disabled { opacity:.5; cursor:default; }
+  #replay-position { margin:.5rem 0 0; color:var(--muted);
+    font-size:.875rem; font-variant-numeric:tabular-nums; }
+  #replay-message { color:var(--muted); margin:.75rem 0 0; }
+  #replay-message:empty { display:none; }
+  @media (max-width:45rem) { th,td { padding:.55rem .65rem; } }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <nav aria-label="Project links">
+    <a href="$collection_url" target="_blank" rel="noopener">← Collection</a>
+  </nav>
+  <h1>$title</h1>
+  $summary
+  <dl class="dashboard-details">
+    $properties
+  </dl>
+</header>
+<section id="playlist" aria-label="Replay playlist" hidden>
+  <span id="replay-progress" class="visually-hidden" aria-live="polite"></span>
+  <video id="replay-player" muted playsinline preload="metadata" aria-label="Level replay"></video>
+  <div class="replay-controls">
+    <button type="button" id="previous-replay" aria-label="Previous replay" title="Previous replay">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h2v14H5zm14 0v14L8 12z"/></svg>
+    </button>
+    <button class="primary" type="button" id="toggle-replay" data-playing="false" aria-label="Play" title="Play">
+      <svg class="play-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4v16l13-8z"/></svg>
+      <svg class="pause-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h4v16H6zm8 0h4v16h-4z"/></svg>
+    </button>
+    <button type="button" id="next-replay" aria-label="Next replay" title="Next replay">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 5h2v14h-2zM5 5l11 7-11 7z"/></svg>
+    </button>
+  </div>
+  <p id="replay-position" aria-hidden="true"></p>
+  <p id="replay-message" role="status"></p>
+</section>
+<div class="table-wrap" role="region" aria-label="Results" tabindex="0">
+  <p id="results-method" class="visually-hidden">$methods</p>
+  <table aria-describedby="results-method">
+    <caption>Results</caption>
+    <colgroup><col class="compact" span="$compact_columns"><col></colgroup>
+    <thead>
+      <tr>
+        $headings
+      </tr>
+    </thead>
+    <tbody>
+      $stage_rows
+    </tbody>
+  </table>
+</div>
+</main>
+<script>
+  const replays = Array.from(document.querySelectorAll("tbody tr[data-replay-url]"), row => ({
+    label: row.dataset.replayLabel,
+    url: row.dataset.replayUrl,
+  }));
+  const toggle = document.getElementById("toggle-replay");
+  const playlist = document.getElementById("playlist");
+  const player = document.getElementById("replay-player");
+  const progress = document.getElementById("replay-progress");
+  const position = document.getElementById("replay-position");
+  const message = document.getElementById("replay-message");
+  const previous = document.getElementById("previous-replay");
+  const next = document.getElementById("next-replay");
+  let current = -1;
+  let playbackRequest = 0;
+
+  function showReplayError() {
+    message.textContent = next.disabled
+      ? "This replay could not be loaded."
+      : "This replay could not be loaded. Use Next replay to continue.";
+  }
+
+  function startPlayback() {
+    const request = ++playbackRequest;
+    player.play().catch(error => {
+      if (request !== playbackRequest || error.name === "AbortError") return;
+      if (error.name === "NotAllowedError") {
+        message.textContent = "Press Play to start the replay.";
+      } else {
+        showReplayError();
+      }
+    });
+  }
+
+  function selectReplay(index, start = true) {
+    const replay = replays[index];
+    if (!replay) return;
+    ++playbackRequest;
+    current = index;
+    const label = replay.label;
+    const replayNumber = index + 1;
+    progress.textContent = label + " · Replay " + replayNumber + " of " + replays.length;
+    position.textContent = replayNumber + " / " + replays.length;
+    player.setAttribute("aria-label", label + " replay");
+    message.textContent = "";
+    previous.disabled = index === 0;
+    next.disabled = index === replays.length - 1;
+    player.src = replay.url;
+    if (start) startPlayback();
+  }
+
+  function updateToggle() {
+    const playing = !player.paused && !player.ended;
+    const label = playing ? "Pause" : "Play";
+    toggle.dataset.playing = String(playing);
+    toggle.setAttribute("aria-label", label);
+    toggle.title = label;
+  }
+
+  toggle.addEventListener("click", () => {
+    if (player.ended) {
+      selectReplay(0);
+    } else if (player.paused) {
+      startPlayback();
+    } else {
+      player.pause();
+    }
+  });
+  previous.addEventListener("click", () => selectReplay(current - 1, !player.paused));
+  next.addEventListener("click", () => selectReplay(current + 1, !player.paused));
+  player.addEventListener("play", updateToggle);
+  player.addEventListener("pause", updateToggle);
+  player.addEventListener("playing", () => { message.textContent = ""; });
+  player.addEventListener("error", () => {
+    if (!playlist.hidden) showReplayError();
+  });
+  player.addEventListener("ended", () => {
+    updateToggle();
+    if (next.disabled) {
+      message.textContent = "Playlist complete.";
+    } else {
+      selectReplay(current + 1);
+    }
+  });
+  if (replays.length > 0) {
+    playlist.hidden = false;
+    selectReplay(0);
+  }
+
+  const results = document.querySelector(".table-wrap tbody");
+  const stageOrder = Array.from(results.rows);
+  const sortButtons = document.querySelectorAll(".sort-button");
+  for (const button of sortButtons) {
+    button.addEventListener("click", () => {
+      const key = button.dataset.sort;
+      const header = button.closest("th");
+      const currentDirection = header.getAttribute("aria-sort");
+      let descending = false;
+      const sortedRows = [...stageOrder];
+      if (key !== "stage") {
+        descending = currentDirection ? currentDirection === "ascending" : button.dataset.initialDirection === "descending";
+        sortedRows.sort((first, second) => {
+          const a = first.dataset[key];
+          const b = second.dataset[key];
+          if (a === undefined || b === undefined) {
+            return Number(a === undefined) - Number(b === undefined);
+          }
+          const difference = Number(a) - Number(b);
+          return descending ? -difference : difference;
+        });
+      }
+      const activeHeader = document.querySelector(".table-wrap th[aria-sort]");
+      activeHeader.removeAttribute("aria-sort");
+      header.setAttribute("aria-sort", descending ? "descending" : "ascending");
+      results.append(...sortedRows);
+    });
+  }
+</script>
+</body>
+</html>

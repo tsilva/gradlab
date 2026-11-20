@@ -8,12 +8,14 @@ This specification applies to GradLab's current publication providers and public
 - YouTube must remain the current representative-replay publication provider.
 - Hugging Face must use one stable model repository for each Research Goal identity.
 - Goal Revisions, Goal Variants, and Policy Lineages must remain explicit within immutable Release tags instead of creating one repository for each lineage.
-- Each environment-scoped Hugging Face collection and YouTube playlist must be named `GradLab — <canonical environment ID>`.
+- Use `GradLab — <canonical environment ID>` for environment-scoped YouTube playlists and as the default title for new Hugging Face collections. Reuse the verified collection when the owner chooses a different title.
 - Only a curated index that spans environments may use a name that is not an environment name.
 - Each publication-enabled Run must declare a Publication Policy that selects its publishable periodic and final Checkpoints.
 - Checkpoint Publication must remain independent of evaluation status and must not imply Acceptance, Promotion, or Release.
 - Publication of an accepted source-overlay Run must preserve its original checkpoint and recipe bytes, record the base commit and overlay separately, and retain the verified evaluation's scientific evidence when relocating its video.
-- A Release for a visual or interactive Policy must include its representative replay as root `replay.mp4` when the publication provider supports that preview.
+- A visual or interactive Checkpoint or Release published to a Hugging Face model repository must include a representative replay of the exact Policy as root `replay.mp4` and have a working Video Preview.
+- Game model uploads must appear in the owner's Hugging Face collection for the canonical environment. Reuse the existing collection or create it if absent.
+- Game model uploads must also update a single environment dashboard in that collection. Create the dashboard if absent and place it first. It must preserve the game's stage order by default and link verified published checkpoints, recipes, and available representative replays.
 - Public model, video, source, and telemetry surfaces for one result must link to each other and use the same stable result identity.
 - New-schema public telemetry must come from the verified GradLab journal and remain readable without private metrics-service access. Before a direct local-only Run is published, its required journal and Checkpoint artifacts must be uploaded durably; tracker sync is optional and cannot change the original `complete_local` receipt.
 - Dataset Publication remains an explicit durable local operation on finalized verified Run inventories; training requires no HF target or credentials.

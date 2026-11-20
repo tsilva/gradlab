@@ -44,6 +44,7 @@ intent again before finishing as required by the specification policy.
 | Optimize architecture, rollout size, rewards, or another backend | Explicit experiment plan covering the requested axes |
 | Publish this unevaluated Checkpoint | `gradlab_upload-checkpoint`, Checkpoint Publication path |
 | Publish this accepted Policy to HF/YouTube | `gradlab_upload-checkpoint`, accepted-release path |
+| Create or refresh this game's public dashboard | `gradlab_upload-checkpoint`, [dashboard procedure](../../.codex/skills/gradlab_upload-checkpoint/references/dashboard.md) |
 | Update this existing YouTube description | `gradlab_upload-youtube-video`, existing-video path |
 | Publish the next Python package release | `gradlab_build-release`, publication path |
 | Build a release candidate locally | `gradlab_build-release`, local-candidate path |
