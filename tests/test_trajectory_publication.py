@@ -1,6 +1,14 @@
 import pytest
 from types import SimpleNamespace
 
+from httpx2 import Request, Response
+from huggingface_hub.errors import RemoteEntryNotFoundError
+
+
+def missing_remote_entry():
+    request = Request("HEAD", "https://huggingface.co/datasets/test/data/resolve/main/missing")
+    return RemoteEntryNotFoundError("missing", response=Response(404, request=request))
+
 
 class Hub:
     """Controlled remote contents, including compare-and-swap and lost replies."""
@@ -63,7 +71,6 @@ def test_durable_queue_filters_before_transfer_and_reconciles_hub_commit(tmp_pat
     from gradlab.trajectory_publication import enqueue_publication
     from gradlab.json_utils import canonical_json_sha256
     from tests.test_checkpoint_monitoring import RequestedRight
-    from huggingface_hub.errors import EntryNotFoundError
 
     fixture = CertificationFixture(tmp_path / "storage")
     bucket = fixture.authority.models
@@ -135,7 +142,7 @@ def test_durable_queue_filters_before_transfer_and_reconciles_hub_commit(tmp_pat
     def download(repo, name, *, revision, cache_dir, **kwargs):
         data = api.read(name, revision)
         if data is None:
-            raise EntryNotFoundError("missing")
+            raise missing_remote_entry()
         path = Path(cache_dir) / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)

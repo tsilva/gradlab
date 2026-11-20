@@ -3,6 +3,7 @@
 from importlib import import_module
 
 import pytest
+from huggingface_hub.errors import LocalEntryNotFoundError
 
 from gradlab.job_queue import JobSubject
 
@@ -52,6 +53,27 @@ def test_cancellation_prevents_upload_and_commit(publication):
         handler.publish(payload, job["job_id"])
     assert hub.uploaded == {}
     assert hub.head == head
+
+
+def test_unavailable_receipt_lookup_prevents_upload_and_commit(publication, monkeypatch):
+    handler, queue, payload, hub = publication
+    job = queue.enqueue(
+        job_type=handler.job_type,
+        handler_version=handler.version,
+        payload=payload,
+        idempotency_key="unavailable-receipt",
+        subjects=[JobSubject("dataset", payload["repo"])],
+    ).job
+
+    def unavailable(*_args, **_kwargs):
+        raise LocalEntryNotFoundError("Hub lookup failed and the local cache is empty")
+
+    monkeypatch.setattr("gradlab.dataset_publication.hf_hub_download", unavailable)
+    result = handler.advance(job)
+    assert result.state == "retry_wait"
+    assert result.message.startswith("LocalEntryNotFoundError:")
+    assert hub.uploaded == {}
+    assert hub.head == payload["parent"]
 
 
 @pytest.mark.parametrize("attempts, state", [(1, "retry_wait"), (8, "blocked")])

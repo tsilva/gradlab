@@ -3,11 +3,10 @@ import json
 from pathlib import Path
 
 import pytest
-from huggingface_hub.errors import EntryNotFoundError
 
 from gradlab.dataset_split_publication import SplitPublicationHandler, JOB_TYPE
 from gradlab.job_queue import JobStore, JobSubject, run_flusher
-from tests.test_trajectory_publication import Hub
+from tests.test_trajectory_publication import Hub, missing_remote_entry
 from gradlab.trajectory_format import trajectory_schema_identity, table_schema
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -73,7 +72,7 @@ def prepare(tmp_path, monkeypatch):
     def download(repo, name, revision, **kwargs):
         data = hub.read(name, revision)
         if data is None:
-            raise EntryNotFoundError("missing")
+            raise missing_remote_entry()
         p = tmp_path / "remote-receipt"
         p.write_bytes(data)
         return str(p)

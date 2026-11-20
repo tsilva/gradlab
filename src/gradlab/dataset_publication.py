@@ -4,7 +4,7 @@ import time
 from pathlib import Path
 
 from huggingface_hub import HfApi, hf_hub_download
-from huggingface_hub.errors import EntryNotFoundError
+from huggingface_hub.errors import RemoteEntryNotFoundError
 
 from gradlab.dataset_shards import PublicationBudget, PublicationDeferred
 from gradlab.job_queue import HandlerResult, SubjectUpdate
@@ -51,7 +51,7 @@ class AtomicDatasetPublication:
                         revision=revision,
                     )
                 ).read_bytes()
-            except EntryNotFoundError:
+            except RemoteEntryNotFoundError:
                 return None
 
         with budget.writer(payload["repo"]):

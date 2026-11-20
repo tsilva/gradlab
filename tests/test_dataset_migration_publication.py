@@ -5,14 +5,13 @@ import shutil
 import pytest
 import pyarrow.parquet as pq
 import yaml
-from huggingface_hub.errors import EntryNotFoundError
 
 from gradlab.dataset_migration_publication import JOB_TYPE, MigrationPublicationHandler
 from gradlab.file_utils import file_sha256
 from gradlab.job_queue import JobStore, JobSubject, run_flusher
 from gradlab.trajectory_format import trajectory_schema_identity
 from tests.test_trajectory_schema import legacy_snapshot, migrate
-from tests.test_trajectory_publication import Hub
+from tests.test_trajectory_publication import Hub, missing_remote_entry
 
 
 def prepare(tmp_path, monkeypatch):
@@ -119,7 +118,7 @@ def prepare(tmp_path, monkeypatch):
     def download(repo, name, revision, **kwargs):
         value = hub.read(name, revision)
         if value is None:
-            raise EntryNotFoundError("missing")
+            raise missing_remote_entry()
         path = tmp_path / "downloaded-receipt"
         path.write_bytes(value)
         return str(path)

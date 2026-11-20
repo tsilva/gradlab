@@ -12,7 +12,7 @@ import zipfile
 from pathlib import Path
 
 from huggingface_hub import CommitOperationAdd, HfApi, hf_hub_download
-from huggingface_hub.errors import EntryNotFoundError, HfHubHTTPError
+from huggingface_hub.errors import HfHubHTTPError, RemoteEntryNotFoundError
 
 from gradlab.job_queue import (
     HandlerResult,
@@ -319,7 +319,7 @@ class DatasetPublicationHandler:
                     repo, name, repo_type="dataset", revision=revision,
                     cache_dir=work / "cache",
                 )).read_bytes()
-            except EntryNotFoundError:
+            except RemoteEntryNotFoundError:
                 return None
 
         publisher = publish_sharded
