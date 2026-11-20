@@ -50,6 +50,15 @@ Set the read executor alone for read-only access. With either executor configure
 an operation whose executor is missing or fails stops. When both are unset,
 GradLab uses the operator's GitHub CLI as usual.
 
+If an external dispatch needs to protect nonterminal Modal evaluators, select
+`GRADLAB_MODAL_PROTECTION_EXECUTOR` with an absolute command array. Use the
+reviewed read-only control-storage route for
+`python -m gradlab.runtime_refs protected-modal-apps`. It requires a scoped
+Training Vault session and returns `complete: true` with the protected app
+names only after reading the full inventory. Missing or incomplete inventory
+blocks dispatch before the operator's storage credentials are read. Ordinary
+operator dispatch can still use its configured storage directly.
+
 Installation, bootstrap and rotation are trusted administrative operations,
 separate from application startup. The administrative helper validates source
 scope and current native fake-credential proof. Runtime refresh prepares a

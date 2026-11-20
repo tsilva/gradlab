@@ -34,6 +34,7 @@ DEFAULT_MODAL_ARTIFACT = "gradlab-modal-eval-readiness"
 DEFAULT_MODAL_ARTIFACT_FILE = "gradlab-modal-eval-readiness.json"
 ACTIONS_READ_EXECUTOR_ENV = "GRADLAB_ACTIONS_READ_EXECUTOR"
 ACTIONS_DISPATCH_EXECUTOR_ENV = "GRADLAB_ACTIONS_DISPATCH_EXECUTOR"
+MODAL_PROTECTION_EXECUTOR_ENV = "GRADLAB_MODAL_PROTECTION_EXECUTOR"
 MODAL_READINESS_SCHEMA_VERSION = 3
 VIZDOOM_SMOKE_CONTRACT_VERSION = 3
 DEFAULT_RUNTIME_READINESS_TIMEOUT_SECONDS = 20 * 60
@@ -386,15 +387,10 @@ def _gh_executable() -> str:
     raise RuntimeError("gh CLI is required to resolve runtime artifacts")
 
 
-def _actions_executor(*, dispatch: bool) -> list[str] | None:
-    read = os.environ.get(ACTIONS_READ_EXECUTOR_ENV)
-    write = os.environ.get(ACTIONS_DISPATCH_EXECUTOR_ENV)
-    if read is None and write is None:
-        return None
-    name = ACTIONS_DISPATCH_EXECUTOR_ENV if dispatch else ACTIONS_READ_EXECUTOR_ENV
-    value = write if dispatch else read
+def _external_command(name: str) -> list[str]:
+    value = os.environ.get(name)
     if value is None:
-        raise ActionsExecutorError(f"Set {name} to use an external GitHub Actions executor")
+        raise ActionsExecutorError(f"Set {name} to select its external executor")
     try:
         command = json.loads(value)
     except ValueError:
@@ -407,6 +403,17 @@ def _actions_executor(*, dispatch: bool) -> list[str] | None:
     ):
         raise ActionsExecutorError(f"{name} requires an absolute command array")
     return command
+
+
+def _actions_executor(*, dispatch: bool) -> list[str] | None:
+    if not {ACTIONS_READ_EXECUTOR_ENV, ACTIONS_DISPATCH_EXECUTOR_ENV} & os.environ.keys():
+        return None
+    return _external_command(ACTIONS_DISPATCH_EXECUTOR_ENV if dispatch else ACTIONS_READ_EXECUTOR_ENV)
+
+
+def _executor_environment() -> dict[str, str]:
+    names = ("HOME", "PATH", "TMPDIR", "XDG_CONFIG_HOME", "XDG_RUNTIME_DIR", "LANG", "LC_ALL")
+    return {key: os.environ[key] for key in names if key in os.environ}
 
 
 def _resolved_gh_command(command: Sequence[str], executor: list[str] | None = None) -> list[str]:
@@ -422,8 +429,7 @@ def _run_github(
     options: dict[str, Any] = {}
     if executor is not None:
         # A configured executor owns authentication independently of this process.
-        environment = ("HOME", "PATH", "TMPDIR", "XDG_CONFIG_HOME", "XDG_RUNTIME_DIR", "LANG", "LC_ALL")
-        options["env"] = {key: os.environ[key] for key in environment if key in os.environ}
+        options["env"] = _executor_environment()
     try:
         result = subprocess.run(
             _resolved_gh_command(command, executor),
@@ -488,13 +494,9 @@ def _run_gh(command: Sequence[str]) -> None:
     )
 
 
-def nonterminal_modal_app_names(repo_root: Path | str = ".") -> tuple[str, ...]:
-    from gradlab.operator_environment import load_repository_operator_environment
-    from gradlab.play_catalog_authority import CONTROL_R2_ENV_NAMES
+def _control_modal_app_names() -> tuple[str, ...]:
     from gradlab.r2_store import BucketConfig, R2Bucket
 
-    root = Path(repo_root).resolve()
-    load_repository_operator_environment(root, requested_names=CONTROL_R2_ENV_NAMES)
     control = R2Bucket(BucketConfig.from_env("GRADLAB_CONTROL_R2"))
     keys = list(control.iter_keys("runs/"))
     manifests = {
@@ -521,6 +523,46 @@ def nonterminal_modal_app_names(repo_root: Path | str = ".") -> tuple[str, ...]:
     )
 
 
+def nonterminal_modal_app_names(repo_root: Path | str = ".") -> tuple[str, ...]:
+    from gradlab.operator_environment import load_repository_operator_environment
+    from gradlab.play_catalog_authority import CONTROL_R2_ENV_NAMES
+
+    load_repository_operator_environment(
+        Path(repo_root).resolve(), requested_names=CONTROL_R2_ENV_NAMES,
+    )
+    return _control_modal_app_names()
+
+
+def _external_modal_app_names(repo_root: Path | str) -> list[str]:
+    command = _external_command(MODAL_PROTECTION_EXECUTOR_ENV)
+    try:
+        result = subprocess.run(
+            command,
+            cwd=Path(repo_root).resolve(),
+            env=_executor_environment(),
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=True,
+        )
+        payload = json.loads(result.stdout)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        raise ActionsExecutorError("External Modal protection inventory failed") from None
+    if (
+        not isinstance(payload, dict)
+        or set(payload) != {"complete", "protected_modal_apps"}
+        or payload["complete"] is not True
+        or not isinstance(payload["protected_modal_apps"], list)
+        or any(
+            not isinstance(name, str) or not name or name.strip() != name
+            or any(character in name for character in "\0\r\n")
+            for name in payload["protected_modal_apps"]
+        )
+    ):
+        raise ActionsExecutorError("External Modal protection inventory is incomplete or invalid")
+    return payload["protected_modal_apps"]
+
+
 def _modal_cleanup_arguments(
     *,
     protected_app_names: Sequence[str] | None,
@@ -529,11 +571,12 @@ def _modal_cleanup_arguments(
 ) -> list[str]:
     if protected_app_names is None and not protect_nonterminal_apps:
         return []
-    protected = (
-        tuple(protected_app_names)
-        if protected_app_names is not None
-        else nonterminal_modal_app_names(repo_root)
-    )
+    if protected_app_names is not None:
+        protected = protected_app_names
+    elif MODAL_PROTECTION_EXECUTOR_ENV in os.environ or _actions_executor(dispatch=True) is not None:
+        protected = _external_modal_app_names(repo_root)
+    else:
+        protected = nonterminal_modal_app_names(repo_root)
     encoded = json.dumps(sorted(set(protected)), separators=(",", ":"))
     return [
         "-f",
@@ -1006,3 +1049,22 @@ def runtime_image_digest(value: str) -> str:
     match = DIGEST_IMAGE_REF_RE.fullmatch(normalize_runtime_image_ref(value))
     assert match is not None
     return match.group("digest").lower()
+
+
+def _serve_modal_protection_inventory() -> int:
+    from gradlab.training_vault import validate_session
+
+    try:
+        validate_session()
+        names = _control_modal_app_names()
+    except Exception:
+        print("Modal protection inventory unavailable", file=sys.stderr)
+        return 1
+    print(json.dumps({"complete": True, "protected_modal_apps": names}))
+    return 0
+
+
+if __name__ == "__main__":
+    if sys.argv[1:] != ["protected-modal-apps"]:
+        raise SystemExit("Use python -m gradlab.runtime_refs protected-modal-apps in the reviewed session")
+    raise SystemExit(_serve_modal_protection_inventory())

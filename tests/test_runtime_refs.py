@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import importlib.metadata
+import io
 import json
 import os
 import sys
 import tempfile
 import unittest
 import zipfile
+from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -65,6 +67,87 @@ def image_info() -> runtime_refs.RuntimeImageInfo:
 
 
 class RuntimeRefsTests(unittest.TestCase):
+    def test_external_dispatch_requires_its_read_only_modal_protection_inventory(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as temporary,
+            mock.patch.dict(os.environ, {
+                runtime_refs.ACTIONS_DISPATCH_EXECUTOR_ENV: json.dumps([sys.executable]),
+                "GRADLAB_CONTROL_R2_ACCESS_KEY_ID": "synthetic-source-value",
+                "HTTPS_PROXY": "synthetic-proxy-value",
+            }, clear=True),
+            mock.patch.object(runtime_refs, "nonterminal_modal_app_names") as native,
+        ):
+            arguments = dict(protected_app_names=None, protect_nonterminal_apps=True, repo_root=temporary)
+            with self.assertRaisesRegex(runtime_refs.ActionsExecutorError, runtime_refs.MODAL_PROTECTION_EXECUTOR_ENV):
+                runtime_refs._modal_cleanup_arguments(**arguments)
+
+            script = Path(temporary) / "inventory.py"
+            script.write_text(
+                'import json, os, sys\n'
+                'assert not {"GRADLAB_CONTROL_R2_ACCESS_KEY_ID", "HTTPS_PROXY"} & os.environ.keys()\n'
+                'print(json.dumps({"complete": sys.argv[1] == "complete", "protected_modal_apps": ["gradlab-eval-v3-current", "gradlab-eval-v2-retained"]}))\n',
+                encoding="utf-8",
+            )
+            command = [sys.executable, str(script), "complete"]
+            os.environ[runtime_refs.MODAL_PROTECTION_EXECUTOR_ENV] = json.dumps(command)
+            self.assertEqual(runtime_refs._modal_cleanup_arguments(**arguments), [
+                "-f", 'protected_modal_apps_json=["gradlab-eval-v2-retained","gradlab-eval-v3-current"]',
+                "-f", "cleanup_authorized=true",
+            ])
+            command[-1] = "incomplete"
+            os.environ[runtime_refs.MODAL_PROTECTION_EXECUTOR_ENV] = json.dumps(command)
+            with self.assertRaisesRegex(runtime_refs.ActionsExecutorError, "incomplete or invalid"):
+                runtime_refs._modal_cleanup_arguments(**arguments)
+            with (
+                mock.patch.object(runtime_refs, "runtime_release_for_source", side_effect=RuntimeError),
+                mock.patch.object(runtime_refs, "_matching_runs", return_value=[]),
+                mock.patch.object(runtime_refs, "require_remote_source"),
+                mock.patch.object(runtime_refs, "_run_gh") as dispatch,
+                self.assertRaisesRegex(runtime_refs.ActionsExecutorError, "incomplete or invalid"),
+            ):
+                runtime_refs.wait_for_runtime_release(
+                    source_sha=SOURCE_SHA, workflow=runtime_refs.DEFAULT_IMAGE_WORKFLOW,
+                    branch="main", artifact_name=runtime_refs.DEFAULT_IMAGE_ARTIFACT,
+                    timeout=10, protect_nonterminal_apps=True,
+                )
+            dispatch.assert_not_called()
+        native.assert_not_called()
+
+    def test_inventory_command_requires_a_scoped_session_and_reads_only_live_manifests(self) -> None:
+        from gradlab.training_vault import TrainingVaultError
+
+        with (
+            mock.patch("gradlab.training_vault.validate_session") as session,
+            mock.patch("gradlab.r2_store.BucketConfig.from_env") as config,
+            mock.patch("gradlab.r2_store.R2Bucket") as bucket_type,
+            mock.patch("gradlab.operator_environment.load_repository_operator_environment") as native,
+            redirect_stdout(io.StringIO()) as stdout,
+            redirect_stderr(io.StringIO()) as stderr,
+        ):
+            session.side_effect = TrainingVaultError("synthetic credential detail")
+            self.assertEqual(runtime_refs._serve_modal_protection_inventory(), 1)
+            self.assertNotIn("synthetic credential detail", stderr.getvalue())
+            self.assertEqual(stdout.getvalue(), "")
+            config.assert_not_called()
+
+            session.side_effect = None
+            bucket = bucket_type.return_value
+            bucket.iter_keys.return_value = [
+                "runs/live/manifest.json", "runs/active-without-modal/manifest.json",
+                "runs/finished/manifest.json", "runs/finished/terminal.json",
+            ]
+            bucket.get_json.side_effect = lambda key: (
+                {"modal": {"app_name": "gradlab-eval-v2-retained"}} if key == "runs/live/manifest.json" else {}
+            )
+            self.assertEqual(runtime_refs._serve_modal_protection_inventory(), 0)
+            self.assertEqual(json.loads(stdout.getvalue()), {
+                "complete": True, "protected_modal_apps": ["gradlab-eval-v2-retained"],
+            })
+            self.assertCountEqual(bucket.get_json.call_args_list, [
+                mock.call("runs/live/manifest.json"), mock.call("runs/active-without-modal/manifest.json"),
+            ])
+            native.assert_not_called()
+
     def test_external_executor_reads_exact_runtime_archive_and_dispatches_separately(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
