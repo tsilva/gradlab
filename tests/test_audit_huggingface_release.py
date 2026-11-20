@@ -39,16 +39,19 @@ class FakeApi:
         return sorted(HUGGINGFACE_RELEASE_FILES)
 
     def list_collections(self, **kwargs: object) -> list[SimpleNamespace]:
+        if kwargs.get("item") != "spaces/tsilva/VizdoomDeathmatch-v1_Dashboard":
+            return []
         return [
             SimpleNamespace(
-                title="GradLab — VizdoomDeathmatch-v1",
+                title="VizDoom policy collection",
                 slug="tsilva/gradlab-vizdoom-id",
             )
         ]
 
     def get_collection(self, slug: str) -> SimpleNamespace:
         return SimpleNamespace(
-                title="GradLab — VizdoomDeathmatch-v1",
+                title="VizDoom policy collection",
+                owner="tsilva",
                 slug=slug,
                 private=False,
                 items=[
@@ -112,7 +115,7 @@ def test_public_release_audit_ignores_ambient_hub_token(
     collection = {
         "slug": "example/gradlab-fixture",
         "title": "GradLab — Fixture-v0",
-        "owner": "example",
+        "owner": {"name": "example", "type": "user"},
         "items": [{
             "_id": "fixture-item", "id": repo, "type": "model", "position": 0,
             "note": {"text": f"https://huggingface.co/{repo}/tree/v4"},
@@ -141,6 +144,8 @@ def test_public_release_audit_ignores_ambient_hub_token(
                 for name in HUGGINGFACE_RELEASE_FILES
             ])
         if path == "/api/collections":
+            if "item" in request.url.params:
+                return httpx2.Response(200, json=[])
             return httpx2.Response(200, json=[collection])
         if path == f"/api/collections/{collection['slug']}":
             return httpx2.Response(200, json={**collection, "position": 0})

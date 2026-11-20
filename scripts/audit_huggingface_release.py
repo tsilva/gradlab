@@ -4,7 +4,6 @@ import argparse
 import json
 import shutil
 import tempfile
-from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +12,8 @@ from huggingface_hub import HfApi, hf_hub_download
 from gradlab.cli_parser import ExactArgumentParser
 from gradlab.publication import (
     HUGGINGFACE_RELEASE_FILES,
+    find_huggingface_environment_collection,
+    validate_huggingface_environment_collection,
     validate_release_bundle,
     verify_replay,
 )
@@ -25,19 +26,6 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("repo_id")
     parser.add_argument("--revision", required=True, help="Sequential release tag, such as v1.")
     return parser
-
-
-def _collection_with_title(collections: Iterable[Any], *, expected_title: str) -> Any:
-    matches = [
-        collection
-        for collection in collections
-        if str(collection.title) == expected_title
-    ]
-    if len(matches) != 1:
-        raise ValueError(
-            f"expected exactly one collection titled {expected_title!r}, found {len(matches)}"
-        )
-    return matches[0]
 
 
 def audit_huggingface_release(
@@ -102,15 +90,13 @@ def audit_huggingface_release(
             f"release manifest version {manifest_version!r} disagrees with {revision!r}"
         )
     environment_id = str(manifest["repository"]["canonical_environment_id"])
-    expected_title = f"GradLab — {environment_id}"
     owner = repo_id.split("/", 1)[0]
-    listed_collection = _collection_with_title(
-        api.list_collections(owner=owner, limit=100),
-        expected_title=expected_title,
+    collection = find_huggingface_environment_collection(
+        api, owner=owner, environment_id=environment_id
     )
-    collection = api.get_collection(str(listed_collection.slug))
-    if bool(collection.private):
-        raise ValueError(f"collection {collection.slug} must be public")
+    if collection is None:
+        raise ValueError(f"Hugging Face environment collection is missing for {owner}/{environment_id}")
+    validate_huggingface_environment_collection(collection, owner=owner)
     members = {
         str(item.item_id)
         for item in collection.items

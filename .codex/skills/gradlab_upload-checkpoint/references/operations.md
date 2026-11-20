@@ -76,7 +76,9 @@ player's representative capture and the normal Publication controls.
    as the title and `Policies that play <canonical environment ID>.` as the
    description. Use owner-specified metadata when provided. Preserve existing
    entries and metadata during ordinary uploads.
-   For accepted Releases, the durable publisher owns the collection step.
+   For accepted Releases, the durable publisher owns the collection step. It
+   identifies a renamed collection by its canonical dashboard, or reuses a
+   unique match under the current or legacy title.
 4. Verify the published files against the staged hashes at the immutable
    revision and confirm the live card. For a selected Checkpoint, verify its
    Quick start uses the unpinned model ID and that GradLab resolves it

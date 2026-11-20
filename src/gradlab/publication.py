@@ -10,7 +10,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path, PureWindowsPath
 from typing import Any, Literal
 
-from huggingface_hub import ModelCard
+from huggingface_hub import Collection, HfApi, ModelCard
 from huggingface_hub.utils import validate_repo_id
 from jinja2 import Environment, FileSystemLoader, StrictUndefined
 from gradlab.action_contract import action_contract_meanings
@@ -507,6 +507,44 @@ def build_model_repo_id(identity: PublicationIdentity) -> str:
     repo_id = f"{HUGGINGFACE_NAMESPACE}/{repo_name}"
     validate_repo_id(repo_id)
     return repo_id
+
+
+def huggingface_environment_collection_title(environment_id: str) -> str:
+    return f"Policies - {environment_id}"
+
+
+def find_huggingface_environment_collection(
+    api: HfApi, *, owner: str, environment_id: str
+) -> Collection | None:
+    dashboard = f"spaces/{owner}/{environment_id}_Dashboard"
+    matches = list(api.list_collections(owner=owner, item=dashboard, limit=2))
+    if not matches:
+        names = {
+            huggingface_environment_collection_title(environment_id),
+            f"GradLab — {environment_id}",
+        }
+        matches = [
+            collection
+            for collection in api.list_collections(owner=owner)
+            if collection.title in names
+        ]
+    if len(matches) > 1:
+        raise ValueError(f"multiple Hugging Face collections match {owner}/{environment_id}")
+    if not matches:
+        return None
+    return api.get_collection(matches[0].slug)
+
+
+def validate_huggingface_environment_collection(collection: Collection, *, owner: str) -> None:
+    # The Hub also returns an owner object despite the SDK's string annotation.
+    collection_owner = collection.owner
+    owner_name = (
+        collection_owner.get("name") if isinstance(collection_owner, Mapping) else collection_owner
+    )
+    if owner_name != owner:
+        raise ValueError(f"collection {collection.slug} must be owned by {owner}")
+    if collection.private:
+        raise ValueError(f"collection {collection.slug} must be public")
 
 
 def _first_present(mapping: Mapping[str, Any], *keys: str) -> Any:

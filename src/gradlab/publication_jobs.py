@@ -36,7 +36,14 @@ from gradlab.player_publication import (
     prepare_release_bundle,
 )
 from gradlab.policy_bundle import load_policy_bundle
-from gradlab.publication import HUGGINGFACE_RELEASE_FILES, validate_release_bundle, verify_replay
+from gradlab.publication import (
+    HUGGINGFACE_RELEASE_FILES,
+    find_huggingface_environment_collection,
+    huggingface_environment_collection_title,
+    validate_huggingface_environment_collection,
+    validate_release_bundle,
+    verify_replay,
+)
 from gradlab.publication_credentials import resolve_huggingface_credential
 from gradlab.youtube_publication import (
     YouTubeClient,
@@ -181,7 +188,12 @@ class PlayerPublicationJobHandler:
         provisional = validate_release_bundle(root / "provisional_release")
         if provisional.get("publication", {}).get("request_fingerprint") != fingerprint:
             raise ValueError("provisional release differs from the admitted request")
-        return {"root": root, "request": request, "capture": capture}
+        return {
+            "root": root,
+            "request": request,
+            "capture": capture,
+            "environment_id": provisional["repository"]["canonical_environment_id"],
+        }
 
     def _state(self, store: JobStore, job_id: str) -> tuple[Path, dict[str, Any]]:
         root = store.work_root / job_id
@@ -714,38 +726,35 @@ class PlayerPublicationJobHandler:
         job_id = str(job["job_id"])
         api, _token = self._hf_access(request)
         client = self._youtube_access(request)
-        title = str(request["metadata"]["container_name"])
-        matches = [
-            item
-            for item in api.list_collections(
-                owner=request["principals"]["huggingface_namespace"], limit=100
+        namespace = str(request["principals"]["huggingface_namespace"])
+        environment_id = str(snapshot["environment_id"])
+        selected_slug = state.get("huggingface_collection")
+        if selected_slug:
+            collection = api.get_collection(str(selected_slug))
+        else:
+            collection = find_huggingface_environment_collection(
+                api, owner=namespace, environment_id=environment_id
             )
-            if str(item.title) == title
-        ]
-        if len(matches) > 1:
-            raise ValueError(f"multiple Hugging Face collections are titled {title!r}")
-        collection = (
-            matches[0]
-            if matches
-            else api.create_collection(
-                title,
-                namespace=str(request["principals"]["huggingface_namespace"]),
-                description="GradLab research releases for this canonical environment.",
-                private=False,
-                exists_ok=False,
-            )
-        )
-        if bool(getattr(collection, "private", False)):
-            raise ValueError("Hugging Face environment collection must be public")
+            if collection is None:
+                collection = api.create_collection(
+                    huggingface_environment_collection_title(environment_id),
+                    namespace=namespace,
+                    description=f"Policies that play {environment_id}.",
+                    private=False,
+                    exists_ok=True,
+                )
+        validate_huggingface_environment_collection(collection, owner=namespace)
         slug = str(collection.slug)
+        if selected_slug != slug:
+            state["huggingface_collection"] = slug
+            self._save_state(state_path, state)
         repo_id = str(request["repo_id"])
         version = str(request["release_version"])
         immutable_url = f"https://huggingface.co/{repo_id}/tree/{version}"
         note = f"Immutable research release: {immutable_url}"
-        current_collection = api.get_collection(slug)
         matching = [
             item
-            for item in current_collection.items
+            for item in collection.items
             if str(item.item_type) == "model" and str(item.item_id) == repo_id
         ]
         if len(matching) > 1:
@@ -758,7 +767,9 @@ class PlayerPublicationJobHandler:
             )
         else:
             api.add_collection_item(slug, repo_id, "model", note=note, exists_ok=False)
-        playlist_id = client.find_or_create_playlist(title, privacy="public")
+        playlist_id = client.find_or_create_playlist(
+            str(request["metadata"]["container_name"]), privacy="public"
+        )
         client.add_video_to_playlist(
             playlist_id=playlist_id,
             video_id=str(state["youtube_video_id"]),
@@ -779,7 +790,6 @@ class PlayerPublicationJobHandler:
         )
         state["youtube_final_description"] = final_description
         state["youtube_playlist_id"] = playlist_id
-        state["huggingface_collection"] = slug
         state["phase"] = "containers_complete"
         state["urls"] = {
             **dict(state.get("urls") or {}),
