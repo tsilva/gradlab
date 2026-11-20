@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.metadata
 import io
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -31,6 +32,8 @@ DEFAULT_IMAGE_ARTIFACT_FILE = "gradlab-train-image.json"
 DEFAULT_MODAL_WORKFLOW = "gradlab Modal eval deployment"
 DEFAULT_MODAL_ARTIFACT = "gradlab-modal-eval-readiness"
 DEFAULT_MODAL_ARTIFACT_FILE = "gradlab-modal-eval-readiness.json"
+ACTIONS_READ_EXECUTOR_ENV = "GRADLAB_ACTIONS_READ_EXECUTOR"
+ACTIONS_DISPATCH_EXECUTOR_ENV = "GRADLAB_ACTIONS_DISPATCH_EXECUTOR"
 MODAL_READINESS_SCHEMA_VERSION = 3
 VIZDOOM_SMOKE_CONTRACT_VERSION = 3
 DEFAULT_RUNTIME_READINESS_TIMEOUT_SECONDS = 20 * 60
@@ -42,6 +45,10 @@ BuildSourceSha = Annotated[
     str,
     StringConstraints(strip_whitespace=True, pattern=r"^[0-9a-fA-F]{40,64}$"),
 ]
+
+
+class ActionsExecutorError(RuntimeError):
+    """A configured Actions route failed before it could answer the request."""
 
 
 class _BaseImages(BoundaryModel):
@@ -379,61 +386,106 @@ def _gh_executable() -> str:
     raise RuntimeError("gh CLI is required to resolve runtime artifacts")
 
 
-def _resolved_gh_command(command: Sequence[str]) -> list[str]:
+def _actions_executor(*, dispatch: bool) -> list[str] | None:
+    read = os.environ.get(ACTIONS_READ_EXECUTOR_ENV)
+    write = os.environ.get(ACTIONS_DISPATCH_EXECUTOR_ENV)
+    if read is None and write is None:
+        return None
+    name = ACTIONS_DISPATCH_EXECUTOR_ENV if dispatch else ACTIONS_READ_EXECUTOR_ENV
+    value = write if dispatch else read
+    if value is None:
+        raise ActionsExecutorError(f"Set {name} to use an external GitHub Actions executor")
+    try:
+        command = json.loads(value)
+    except ValueError:
+        command = None
+    if (
+        not isinstance(command, list)
+        or not command
+        or any(not isinstance(arg, str) or not arg or "\0" in arg for arg in command)
+        or not Path(command[0]).is_absolute()
+    ):
+        raise ActionsExecutorError(f"{name} requires an absolute command array")
+    return command
+
+
+def _resolved_gh_command(command: Sequence[str], executor: list[str] | None = None) -> list[str]:
     parts = [str(part) for part in command]
     if not parts or parts[0] != "gh":
         raise ValueError("GitHub command must begin with gh")
-    parts[0] = _gh_executable()
-    return parts
+    return [*(executor if executor is not None else [_gh_executable()]), *parts[1:]]
 
 
-def _run_gh_json(command: Sequence[str]) -> Any:
+def _run_github(
+    command: Sequence[str], *, text: bool, executor: list[str] | None, purpose: str
+) -> str | bytes:
+    options: dict[str, Any] = {}
+    if executor is not None:
+        # A configured executor owns authentication independently of this process.
+        environment = ("HOME", "PATH", "TMPDIR", "XDG_CONFIG_HOME", "XDG_RUNTIME_DIR", "LANG", "LC_ALL")
+        options["env"] = {key: os.environ[key] for key in environment if key in os.environ}
     try:
         result = subprocess.run(
-            _resolved_gh_command(command),
+            _resolved_gh_command(command, executor),
             check=False,
-            text=True,
+            text=text,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
+            **options,
         )
-    except FileNotFoundError as exc:
-        raise RuntimeError("gh CLI is required to resolve the latest runtime image") from exc
-    if result.returncode != 0:
-        output = "\n".join(part for part in (result.stdout.strip(), result.stderr.strip()) if part)
-        raise RuntimeError(f"gh command failed: {' '.join(command)}\n{output}")
-    return json.loads(result.stdout or "null")
+    except (OSError, UnicodeError) as exc:
+        if executor is not None:
+            raise ActionsExecutorError(
+                f"External GitHub Actions executor could not {purpose}"
+            ) from None
+        if isinstance(exc, FileNotFoundError):
+            raise RuntimeError(f"gh CLI is required to {purpose}") from exc
+        raise
+    if result.returncode == 0:
+        return result.stdout
+    if executor is not None:
+        raise ActionsExecutorError(f"External GitHub Actions executor failed to {purpose}")
+    if text:
+        detail = "\n".join(part for part in (result.stdout.strip(), result.stderr.strip()) if part)
+    else:
+        detail = result.stderr.decode("utf-8", errors="replace").strip()
+    raise RuntimeError(f"gh command failed: {' '.join(command)}\n{detail}")
+
+
+def _run_gh_json(command: Sequence[str], *, expected: type) -> Any:
+    executor = _actions_executor(dispatch=False)
+    output = _run_github(
+        command, text=True, executor=executor, purpose="resolve the latest runtime image"
+    )
+    try:
+        result = json.loads(output or "null")
+    except ValueError:
+        if executor is None:
+            raise
+        raise ActionsExecutorError("External GitHub Actions executor returned invalid JSON") from None
+    if executor is not None and not isinstance(result, expected):
+        raise ActionsExecutorError("External GitHub Actions executor returned unexpected JSON")
+    return result
 
 
 def _run_gh_bytes(command: Sequence[str]) -> bytes:
-    try:
-        result = subprocess.run(
-            _resolved_gh_command(command),
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-    except FileNotFoundError as exc:
-        raise RuntimeError("gh CLI is required to download runtime artifacts") from exc
-    if result.returncode != 0:
-        error = result.stderr.decode("utf-8", errors="replace").strip()
-        raise RuntimeError(f"gh command failed: {' '.join(command)}\n{error}")
-    return bytes(result.stdout)
+    result = _run_github(
+        command,
+        text=False,
+        executor=_actions_executor(dispatch=False),
+        purpose="download runtime artifacts",
+    )
+    assert isinstance(result, bytes)
+    return result
 
 
 def _run_gh(command: Sequence[str]) -> None:
-    try:
-        result = subprocess.run(
-            _resolved_gh_command(command),
-            check=False,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-    except FileNotFoundError as exc:
-        raise RuntimeError("gh CLI is required to dispatch the runtime workflow") from exc
-    if result.returncode != 0:
-        output = "\n".join(part for part in (result.stdout.strip(), result.stderr.strip()) if part)
-        raise RuntimeError(f"gh command failed: {' '.join(command)}\n{output}")
+    _run_github(
+        command,
+        text=True,
+        executor=_actions_executor(dispatch=True),
+        purpose="dispatch the runtime workflow",
+    )
 
 
 def nonterminal_modal_app_names(repo_root: Path | str = ".") -> tuple[str, ...]:
@@ -491,13 +543,25 @@ def _modal_cleanup_arguments(
     ]
 
 
-@lru_cache(maxsize=1)
-def _repository_name() -> str:
-    payload = _run_gh_json(["gh", "repo", "view", "--json", "nameWithOwner"])
+def _read_repository_name() -> str:
+    payload = _run_gh_json(["gh", "repo", "view", "--json", "nameWithOwner"], expected=dict)
     name = str(payload.get("nameWithOwner") or "") if isinstance(payload, Mapping) else ""
     if not name:
+        if _actions_executor(dispatch=False) is not None:
+            raise ActionsExecutorError("External GitHub Actions executor did not return nameWithOwner")
         raise RuntimeError("gh repo view did not return nameWithOwner")
     return name
+
+
+@lru_cache(maxsize=1)
+def _native_repository_name() -> str:
+    return _read_repository_name()
+
+
+def _repository_name() -> str:
+    if _actions_executor(dispatch=False) is not None:
+        return _read_repository_name()
+    return _native_repository_name()
 
 
 def _artifact_payload_for_run(
@@ -511,8 +575,13 @@ def _artifact_payload_for_run(
             "gh",
             "api",
             f"repos/{repository}/actions/runs/{run_id}/artifacts?per_page=100",
-        ]
+        ],
+        expected=dict,
     )
+    if _actions_executor(dispatch=False) is not None and not isinstance(
+        listing.get("artifacts"), list
+    ):
+        raise ActionsExecutorError("External GitHub Actions executor did not return an artifact list")
     artifacts = listing.get("artifacts", []) if isinstance(listing, Mapping) else []
     artifact = next(
         (
@@ -528,18 +597,24 @@ def _artifact_payload_for_run(
         return None
     artifact_id = str(artifact.get("id") or "").strip()
     if not artifact_id:
+        if _actions_executor(dispatch=False) is not None:
+            raise ActionsExecutorError("External GitHub Actions executor returned an artifact without an ID")
         raise RuntimeError(f"artifact {artifact_name!r} from run {run_id} has no id")
     archive = _run_gh_bytes(
         ["gh", "api", f"repos/{repository}/actions/artifacts/{artifact_id}/zip"]
     )
-    with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
-        try:
+    try:
+        with zipfile.ZipFile(io.BytesIO(archive)) as bundle:
             text = bundle.read(artifact_file).decode("utf-8")
-        except KeyError as exc:
-            raise RuntimeError(
-                f"artifact {artifact_name!r} from run {run_id} lacks {artifact_file}"
-            ) from exc
-    payload = json.loads(text)
+        payload = json.loads(text)
+    except KeyError as exc:
+        raise RuntimeError(
+            f"artifact {artifact_name!r} from run {run_id} lacks {artifact_file}"
+        ) from exc
+    except (zipfile.BadZipFile, ValueError):
+        if _actions_executor(dispatch=False) is None:
+            raise
+        raise ActionsExecutorError("External GitHub Actions executor returned an invalid archive") from None
     if not isinstance(payload, dict):
         raise ValueError(f"artifact {artifact_name!r} from run {run_id} must contain an object")
     return dict(payload)
@@ -561,7 +636,7 @@ def _workflow_runs(
     ]
     if branch:
         command[5:5] = ["--branch", branch]
-    payload = _run_gh_json(command)
+    payload = _run_gh_json(command, expected=list)
     return (
         [dict(row) for row in payload if isinstance(row, Mapping)]
         if isinstance(payload, list)
@@ -610,6 +685,8 @@ def runtime_release_for_source(
                 ).strip(),
                 workflow_run_id=info.workflow_run_id or run_id,
             )
+        except ActionsExecutorError:
+            raise
         except Exception as exc:
             errors.append(f"run {run_id}: {exc}")
     detail = f"no {workflow!r} workflow run exists for {source_sha}"
@@ -655,6 +732,8 @@ def wait_for_runtime_release(
                 branch=None,
                 artifact_name=artifact_name,
             )
+        except ActionsExecutorError:
+            raise
         except RuntimeError as receipt_error:
             runs = _matching_runs(source_sha=source_sha, workflow=workflow)
             active_runs = [
@@ -670,6 +749,7 @@ def wait_for_runtime_release(
                     f"{_workflow_status_detail(runs)}"
                 ) from receipt_error
             if not active and not dispatched:
+                _actions_executor(dispatch=True)
                 run_ids_before_dispatch = {str(row.get("databaseId") or "") for row in runs}
                 require_remote_source(source_sha, branch=branch, repo_root=repo_root)
                 cleanup_arguments = _modal_cleanup_arguments(
@@ -736,6 +816,8 @@ def modal_readiness_for_release(
                 expected_runtime_input_sha256=release.runtime_input_sha256,
                 expected_runtime_build_source_sha=release.runtime_build_source_sha,
             )
+        except ActionsExecutorError:
+            raise
         except Exception as exc:
             errors.append(f"run {run_id}: {exc}")
     detail = "; ".join(errors) if errors else "readiness artifact is not available"
@@ -767,6 +849,8 @@ def wait_for_modal_readiness(
                 modal_app_name=readiness.modal_app_name,
                 startup_probe=readiness.startup_probe,
             )
+        except ActionsExecutorError:
+            raise
         except RuntimeError as readiness_error:
             image_runs = _matching_runs(source_sha=release.source_sha, workflow=image_workflow)
             modal_runs = _matching_runs(
@@ -784,6 +868,7 @@ def wait_for_modal_readiness(
                     f"{release.runtime_image_ref}; {_workflow_status_detail(runs)}"
                 ) from readiness_error
             if not active and not dispatched:
+                _actions_executor(dispatch=True)
                 selected_branch = str(branch or "").strip()
                 if not selected_branch:
                     selected_branch = current_git_branch(repo_root)

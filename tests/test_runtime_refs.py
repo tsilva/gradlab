@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import importlib.metadata
+import json
+import os
+import sys
 import tempfile
 import unittest
+import zipfile
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -61,6 +65,104 @@ def image_info() -> runtime_refs.RuntimeImageInfo:
 
 
 class RuntimeRefsTests(unittest.TestCase):
+    def test_external_executor_reads_exact_runtime_archive_and_dispatches_separately(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            receipt = root / "receipt.zip"
+            dispatch_log = root / "dispatch.json"
+            with zipfile.ZipFile(receipt, mode="w") as bundle:
+                bundle.writestr(runtime_refs.DEFAULT_IMAGE_ARTIFACT_FILE, json.dumps(image_payload()))
+            executor = root / "executor.py"
+            executor.write_text(
+                """\
+import json
+import os
+import sys
+from pathlib import Path
+
+assert not {"GH_TOKEN", "GITHUB_TOKEN", "GH_CONFIG_DIR", "HTTPS_PROXY"} & os.environ.keys()
+role, path, source, *args = sys.argv[1:]
+if role == "dispatch":
+    assert args[:2] == ["workflow", "run"]
+    Path(path).write_text(json.dumps(args))
+elif args[:2] == ["run", "list"]:
+    print(json.dumps([{"databaseId": 11, "headSha": source, "status": "completed"}]))
+elif args == ["repo", "view", "--json", "nameWithOwner"]:
+    print(json.dumps({"nameWithOwner": "tsilva/gradlab"}))
+elif args == ["api", "repos/tsilva/gradlab/actions/runs/11/artifacts?per_page=100"]:
+    print(json.dumps({"artifacts": [{"name": "gradlab-train-image", "id": 42}]}))
+elif args == ["api", "repos/tsilva/gradlab/actions/artifacts/42/zip"]:
+    if role == "rejected":
+        print("synthetic-credential", file=sys.stderr)
+        sys.exit(1)
+    sys.stdout.buffer.write(Path(path).read_bytes())
+else:
+    raise AssertionError(args)
+""",
+                encoding="utf-8",
+            )
+            reader = [sys.executable, str(executor), "read", str(receipt), SOURCE_SHA]
+            writer = [sys.executable, str(executor), "dispatch", str(dispatch_log), SOURCE_SHA]
+            with (
+                mock.patch.dict(os.environ, {
+                    runtime_refs.ACTIONS_READ_EXECUTOR_ENV: json.dumps(reader),
+                    runtime_refs.ACTIONS_DISPATCH_EXECUTOR_ENV: json.dumps(writer),
+                    "GH_TOKEN": "synthetic",
+                    "GITHUB_TOKEN": "synthetic",
+                    "GH_CONFIG_DIR": "synthetic",
+                    "HTTPS_PROXY": "synthetic",
+                }),
+                mock.patch.object(runtime_refs, "_gh_executable") as native,
+                mock.patch.object(runtime_refs, "require_remote_source") as require_remote,
+            ):
+                release = runtime_refs.runtime_release_for_source(source_sha=SOURCE_SHA)
+                self.assertEqual(release.runtime_image_ref, RUNTIME_IMAGE_REF)
+                self.assertFalse(dispatch_log.exists())
+
+                reader[2] = "rejected"
+                os.environ[runtime_refs.ACTIONS_READ_EXECUTOR_ENV] = json.dumps(reader)
+                with self.assertRaisesRegex(
+                    runtime_refs.ActionsExecutorError, "failed to download runtime artifacts"
+                ) as error:
+                    runtime_refs.wait_for_runtime_release(
+                        source_sha=SOURCE_SHA,
+                        workflow=runtime_refs.DEFAULT_IMAGE_WORKFLOW,
+                        branch="main",
+                        artifact_name=runtime_refs.DEFAULT_IMAGE_ARTIFACT,
+                        timeout=10,
+                    )
+                self.assertNotIn("synthetic-credential", str(error.exception))
+                self.assertFalse(dispatch_log.exists())
+                require_remote.assert_not_called()
+
+                dispatch = ["workflow", "run", runtime_refs.DEFAULT_IMAGE_WORKFLOW, "--ref", "main"]
+                runtime_refs._run_gh(["gh", *dispatch])
+                self.assertEqual(json.loads(dispatch_log.read_text()), dispatch)
+                native.assert_not_called()
+
+    def test_read_only_executor_rejects_missing_dispatcher_before_dispatch_prerequisites(self) -> None:
+        with (
+            mock.patch.dict(os.environ, {
+                runtime_refs.ACTIONS_READ_EXECUTOR_ENV: json.dumps([sys.executable]),
+            }, clear=True),
+            mock.patch.object(runtime_refs, "runtime_release_for_source", side_effect=RuntimeError),
+            mock.patch.object(runtime_refs, "_matching_runs", return_value=[]),
+            mock.patch.object(runtime_refs, "require_remote_source") as require_remote,
+            mock.patch.object(runtime_refs, "_run_gh") as dispatch,
+        ):
+            with self.assertRaisesRegex(
+                runtime_refs.ActionsExecutorError, runtime_refs.ACTIONS_DISPATCH_EXECUTOR_ENV
+            ):
+                runtime_refs.wait_for_runtime_release(
+                    source_sha=SOURCE_SHA,
+                    workflow=runtime_refs.DEFAULT_IMAGE_WORKFLOW,
+                    branch="main",
+                    artifact_name=runtime_refs.DEFAULT_IMAGE_ARTIFACT,
+                    timeout=10,
+                )
+        require_remote.assert_not_called()
+        dispatch.assert_not_called()
+
     def test_runtime_image_descriptor_requires_current_json_document(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "runtime-image.json"

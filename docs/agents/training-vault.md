@@ -42,6 +42,14 @@ catalog reads. Its reviewed runtime enables Runbox's shared forwarding on a
 dedicated local port. Each player closes its own connection on exit. Runbox
 keeps the forward available until the last catalog helper exits.
 
+GradLab accepts `GRADLAB_ACTIONS_READ_EXECUTOR` for GitHub Actions run listings
+and runtime artifact downloads, and `GRADLAB_ACTIONS_DISPATCH_EXECUTOR` for
+workflow dispatch. Each takes a JSON array starting with an absolute executable.
+GradLab appends the GitHub CLI arguments and expects the same JSON or ZIP output.
+Set the read executor alone for read-only access. With either executor configured,
+an operation whose executor is missing or fails stops. When both are unset,
+GradLab uses the operator's GitHub CLI as usual.
+
 Installation, bootstrap and rotation are trusted administrative operations,
 separate from application startup. The administrative helper validates source
 scope and current native fake-credential proof. Runtime refresh prepares a
