@@ -8,7 +8,7 @@ This specification applies to GradLab's current publication providers and public
 - YouTube must remain the current representative-replay publication provider.
 - Hugging Face must use one stable model repository for each Research Goal identity.
 - Goal Revisions, Goal Variants, and Policy Lineages must remain explicit within immutable Release tags instead of creating one repository for each lineage.
-- Use `GradLab — <canonical environment ID>` for environment-scoped YouTube playlists and as the default title for new Hugging Face collections. Reuse the verified collection when the owner chooses a different title.
+- Name environment-scoped YouTube playlists `GradLab — <canonical environment ID>`. For new Hugging Face game collections, default to `Policies - <canonical environment ID>` with the description `Policies that play <canonical environment ID>.` Reuse the verified collection when the owner chooses different metadata.
 - Only a curated index that spans environments may use a name that is not an environment name.
 - Each publication-enabled Run must declare a Publication Policy that selects its publishable periodic and final Checkpoints.
 - Checkpoint Publication must remain independent of evaluation status and must not imply Acceptance, Promotion, or Release.

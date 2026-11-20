@@ -72,8 +72,10 @@ player's representative capture and the normal Publication controls.
    write to a legacy redirect target.
    For games, resolve the owner's canonical collection for the environment and
    add the model once. Reuse its verified ID even after an owner-approved rename.
-   Use `GradLab — <canonical environment ID>` when creating a collection unless
-   the owner specifies a title. Preserve existing entries and descriptions.
+   When creating a collection, default to `Policies - <canonical environment ID>`
+   as the title and `Policies that play <canonical environment ID>.` as the
+   description. Use owner-specified metadata when provided. Preserve existing
+   entries and metadata during ordinary uploads.
    For accepted Releases, the durable publisher owns the collection step.
 4. Verify the published files against the staged hashes at the immutable
    revision and confirm the live card. For a selected Checkpoint, verify its
