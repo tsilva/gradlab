@@ -15,7 +15,7 @@ from gradlab.publication_jobs import (
 )
 
 
-def _snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[dict[str, str], Path]:
+def _snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, dashboard: str | None = None) -> tuple[dict[str, str], Path]:
     repo = tmp_path / "repo"
     queue = tmp_path / "queue"
     repo.mkdir()
@@ -57,6 +57,8 @@ def _snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[dict[str
         "history": [],
         "feature": False,
     }
+    if dashboard is not None:
+        basis["metadata"]["dashboard_repo_id"] = dashboard
     fingerprint = canonical_json_sha256(basis)
     marker = f"gradlab-publication-{fingerprint}"
     metadata = {**basis["metadata"], "tags": ["gradlab", marker]}
@@ -81,6 +83,8 @@ def _snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[dict[str
     (root / "capture/capture.json").write_text(json.dumps(capture), encoding="utf-8")
     (root / "request.json").write_text(json.dumps(request), encoding="utf-8")
     (root / "provisional_release/dummy").write_text("release", encoding="utf-8")
+    for name in ("evaluation_evidence.json", "recipe.json"):
+        (root / "provisional_release" / name).write_text("{}", encoding="utf-8")
     hashes = {
         path.relative_to(root).as_posix(): file_sha256(path)
         for path in root.rglob("*")
@@ -95,7 +99,7 @@ def _snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[dict[str
         "gradlab.publication_jobs.validate_release_bundle",
         lambda _root: {
             "publication": {"request_fingerprint": fingerprint},
-            "repository": {"canonical_environment_id": "Example-v0"},
+            "repository": {"repo_id": basis["repo_id"], "canonical_environment_id": "Example-v0"},
         },
     )
     payload = {
@@ -133,6 +137,50 @@ def test_publication_snapshot_rejects_symlink(
 
     with pytest.raises(ValueError, match="symlink"):
         PlayerPublicationJobHandler()._snapshot(payload)
+
+
+def test_publication_snapshot_rejects_wrong_dashboard(tmp_path, monkeypatch):
+    payload, _ = _snapshot(tmp_path, monkeypatch, dashboard="tsilva/Other_Dashboard")
+    with pytest.raises(ValueError, match="dashboard destination"):
+        PlayerPublicationJobHandler()._snapshot(payload)
+
+
+@pytest.mark.parametrize("dashboard", [None, "tsilva/Example-v0_Dashboard"])
+def test_release_retries_dashboard_without_republishing(tmp_path, monkeypatch, dashboard):
+    from gradlab.job_queue import JobStore
+
+    payload, _ = _snapshot(tmp_path, monkeypatch, dashboard=dashboard)
+    handler = PlayerPublicationJobHandler()
+    store = JobStore(payload["queue_root"])
+    store.init()
+    job = {"job_id": "job", "payload": payload, "attempts": 1}
+    path, _ = handler._state(store, "job")
+    model_url = "https://huggingface.co/tsilva/example/tree/v1"
+    handler._save_state(path, {
+        "phase": "containers_complete", "urls": {"huggingface": model_url},
+        "huggingface_collection": "tsilva/collection", "huggingface_commit": "a" * 40,
+    })
+    audit = Mock()
+    access = Mock(return_value=(Mock(), "fixture"))
+    url = "https://huggingface.co/spaces/tsilva/Example-v0_Dashboard"
+    refresh = Mock(side_effect=[OSError("temporary outage"), url])
+    monkeypatch.setattr(handler, "_audit", audit)
+    monkeypatch.setattr(handler, "_checkpoint", Mock())
+    monkeypatch.setattr(handler, "_hf_access", access)
+    monkeypatch.setattr("gradlab.publication_jobs.publish_game_dashboard", refresh)
+
+    result = handler.advance(job)
+    if dashboard is not None:
+        assert result.state == "retry_wait"
+        assert json.loads(path.read_text())["phase"] == "release_verified"
+        assert json.loads(path.read_text())["urls"] == {"huggingface": model_url}
+        result = handler.advance(job)
+        assert refresh.call_count == 2
+        assert json.loads(path.read_text())["urls"]["dashboard"] == url
+    else:
+        refresh.assert_not_called()
+    assert result.state == "succeeded"
+    audit.assert_called_once()
 
 
 def test_new_huggingface_repository_allows_only_generated_gitattributes() -> None:

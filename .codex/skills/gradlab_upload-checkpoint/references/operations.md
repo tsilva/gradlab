@@ -98,7 +98,7 @@ player's representative capture and the normal Publication controls.
 3. In the player's Publication controls, run credential preflight and preview
    the generated metadata. Confirm the requested privacy and optional editorial
    settings. The code resolves the goal repository, immutable next `vN` tag,
-   environment collection/playlist, evidence, and hashes.
+   environment collection/playlist, dashboard destination, evidence, and hashes.
 4. After the required public draft approval, admit once and retain the returned
    job ID and request fingerprint. Reconcile a conflict or uncertain response
    against the existing capture/job before submitting again.
@@ -126,7 +126,9 @@ gradlab jobs list --state blocked --state failed
 Keep following until the admitted job succeeds or reports an evidence-backed
 failure requiring action. The worker persists resumable YouTube sessions,
 verifies processing while unlisted before HF mutation, commits the exact bundle
-and immutable tag, verifies environment containers, and sets final privacy.
+and immutable tag, verifies environment containers, sets final privacy, and
+refreshes the dashboard for newly admitted Releases. Confirm that the approved
+Hub route supports Space commits and positioning collection items.
 Do not upload a duplicate to resolve an uncertain YouTube result. Use the
 player's existing-job retry or verified video-ID resolution; cancellation and
 cleanup require the corresponding request. Cleanup cannot remove active work.
@@ -135,10 +137,11 @@ cleanup require the corresponding request. Cleanup cannot remove active work.
 
 Require job `succeeded`, the immutable HF commit/tag and standardized bundle,
 the same root `replay.mp4`, successfully processed YouTube video, requested
-privacy, verified thumbnail, environment collection/playlist, and cross-links.
+privacy, verified thumbnail, environment collection/playlist, dashboard row and
+collection position, and cross-links.
 Use `scripts/audit_huggingface_release.py <repo-id> --revision <vN>` when an
 independent Hub audit is needed. Preserve historical tags and R2 sources.
 
 Report Run/Checkpoint identity, job/fingerprint, HF tag and commit links,
-YouTube and environment-container links, and staging/evidence paths. State
+YouTube, dashboard, and environment-container links, and staging/evidence paths. State
 Checkpoint Publication and accepted Release outcomes separately.

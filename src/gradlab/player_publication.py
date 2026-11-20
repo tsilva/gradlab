@@ -35,6 +35,7 @@ from gradlab.publication import (
     MIT_LICENSE_TEXT,
     build_model_repo_id,
     build_release_manifest,
+    dashboard_repo_id,
     latest_comparable_release,
     normalize_publication_evaluation,
     publication_identity_from_policy_bundle,
@@ -535,6 +536,7 @@ def generated_metadata(
         "tags": tags,
         "privacy": privacy,
         "container_name": f"GradLab — {identity.canonical_environment_id}",
+        "dashboard_repo_id": dashboard_repo_id(repo_id.split("/", 1)[0], identity.canonical_environment_id),
         "thumbnail_time": thumbnail_time,
         "operator_note": note,
         "feature": bool(settings.get("feature", False)),
@@ -808,6 +810,7 @@ class PlayerPublicationService:
             "comparison": comparison,
             "containers": {
                 "environment": metadata["container_name"],
+                "dashboard": metadata["dashboard_repo_id"],
             },
             "operator_note": metadata["operator_note"],
             "feature": metadata["feature"],

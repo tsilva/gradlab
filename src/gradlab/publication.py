@@ -513,10 +513,14 @@ def huggingface_environment_collection_title(environment_id: str) -> str:
     return f"Policies - {environment_id}"
 
 
+def dashboard_repo_id(owner: str, environment: str) -> str:
+    return f"{owner}/{environment}_Dashboard"
+
+
 def find_huggingface_environment_collection(
     api: HfApi, *, owner: str, environment_id: str
 ) -> Collection | None:
-    dashboard = f"spaces/{owner}/{environment_id}_Dashboard"
+    dashboard = f"spaces/{dashboard_repo_id(owner, environment_id)}"
     matches = list(api.list_collections(owner=owner, item=dashboard, limit=2))
     if not matches:
         names = {

@@ -12,6 +12,13 @@ authority for that decision.
 
 ## Surfaces and dimensions
 
+- Game dashboards display checkpoint training transitions and verified evaluation
+  results. The Mario dashboard's Clears divides completed clears by completed
+  evaluation episodes. Clear Steps uses successful episodes only. The dashboard
+  shows variation across base seeds when available and omits the sample standard
+  deviation for a single base seed. This dashboard clear fraction is a display
+  calculation. Registered full-evaluation success metrics retain their start-based
+  reductions.
 - The game panel's Render FPS, Decode ms, and Draw ms are browser-local diagnostics,
   never emitted to W&B. Render FPS counts changed canvases at most once per animation
   refresh divided by the actual elapsed sampling time, updated about once per second.

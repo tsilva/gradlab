@@ -483,6 +483,7 @@ function renderPublicationPreview(preview) {
     ["Acceptance", preview.acceptance?.passed ? "Accepted" : "Not accepted"],
     ["Replay", `${preview.replay?.status}: ${preview.replay?.outcome}`],
     ["Comparison", preview.comparison?.reason], ["Environment container", preview.containers?.environment],
+    ["Game dashboard", preview.containers?.dashboard],
     ["Operator note", preview.operator_note || "None"],
   ];
 }

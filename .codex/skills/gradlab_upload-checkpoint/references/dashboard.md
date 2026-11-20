@@ -2,8 +2,9 @@
 
 Use this procedure after a verified game checkpoint or Release upload, or for
 requested standalone dashboard creation, refresh, and evaluation backfills.
-The local renderer is shared across games. The model publisher owns model
-artifacts and Releases, and dashboard edits happen after model verification.
+The renderer is shared across games and both publication workflows. For a newly
+admitted accepted Release, the worker refreshes the dashboard named in the draft
+after verifying the model. A dashboard retry resumes from the verified Release.
 
 ## Identify the dashboard and its rows
 
@@ -45,6 +46,7 @@ Prepare a public JSON document with `version` 1 and these fields.
 | --- | --- |
 | `environment`, `provider`, `provider_url`, `collection_url` | Canonical environment and verified public links |
 | `metric_name`, `metric_column`, `metric_direction`, `methods` | Primary metric, short column label, preferred `ascending` or `descending` order, and evaluation definitions |
+| `metric_key` | Optional registered evaluation metric name or `stage_clear_rate` for the evaluated clear count divided by completed episodes |
 | `clear_steps` | Optional boolean that enables the Clear Steps column |
 | `stages` | Ordered rows, each with a stable `id` and a display `label` |
 
@@ -57,7 +59,14 @@ visible `display`, and optional `detail`. The table sorts by `value`.
 Use `current_recipe_url` for a maintained launchable recipe at a verified
 GitHub commit. The table shows one Recipe link per published stage, preferring
 the current recipe when supplied. Keep the exact checkpoint recipe in the
-model bundle and its source URL in the manifest.
+model bundle and its source reference in the manifest. An accepted Release can
+link its verified Hub `recipe.json` when a source recipe link is unavailable.
+
+The Release worker updates the selected stage when its row belongs to the
+Release's model repository or has no published model. It keeps a selection
+from another repository for owner review. It preserves verified metrics for
+the same Checkpoint and uses the new Release evidence for a replacement. The
+worker can migrate the first Mario dashboard from its published HTML and CSV.
 
 From the repository root, run the offline renderer on the reviewed data.
 

@@ -35,8 +35,8 @@ For a visual or interactive Checkpoint or Release going to a Hugging Face model
 repo, include a representative episode from the exact Policy as root `replay.mp4`
 in the verified bundle. For game uploads, add the model repo to the owner's
 canonical environment collection, creating it if absent.
-Create or refresh the game dashboard after verifying the model revision.
-Prepare its update through the [dashboard procedure](references/dashboard.md).
+Use the [dashboard procedure](references/dashboard.md) to refresh the game
+dashboard after verifying a Checkpoint upload.
 Follow the [model upload procedure](references/operations.md#publish-a-model-on-hugging-face)
 for authorization, transport, and verification. When the applicable outbound
 policy authorizes the selected Checkpoint upload from the owner's explicit
@@ -46,8 +46,9 @@ For accepted Releases, resolve the catalog Checkpoint, open `gradlab play --run 
 capture/render the current completed episode, run credential preflight, preview
 metadata, and admit once after the required public draft approval.
 Retain the job ID/fingerprint. The player service/worker owns generated metadata,
-resumable uploads, HF commits/tags, and final privacy. Quality fixes belong in the
-renderer or verified inputs. There is no standalone headless HF-release CLI.
+resumable uploads, HF commits/tags, final privacy, and the dashboard refresh.
+Confirm the dashboard destination in the Release draft. Quality fixes belong in
+the shared renderer or verified inputs. There is no standalone headless HF-release CLI.
 
 ## Recover
 

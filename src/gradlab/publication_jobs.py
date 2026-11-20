@@ -18,6 +18,7 @@ from huggingface_hub import (
 )
 from huggingface_hub.errors import HfHubHTTPError
 
+from gradlab.dashboard_publication import publish_game_dashboard
 from gradlab.file_utils import atomic_write_json, file_sha256
 from gradlab.job_queue import (
     HandlerResult,
@@ -38,6 +39,7 @@ from gradlab.player_publication import (
 from gradlab.policy_bundle import load_policy_bundle
 from gradlab.publication import (
     HUGGINGFACE_RELEASE_FILES,
+    dashboard_repo_id,
     find_huggingface_environment_collection,
     huggingface_environment_collection_title,
     validate_huggingface_environment_collection,
@@ -188,11 +190,21 @@ class PlayerPublicationJobHandler:
         provisional = validate_release_bundle(root / "provisional_release")
         if provisional.get("publication", {}).get("request_fingerprint") != fingerprint:
             raise ValueError("provisional release differs from the admitted request")
+        environment_id = provisional["repository"]["canonical_environment_id"]
+        if "dashboard_repo_id" in metadata:
+            repo_id = str(request["repo_id"])
+            dashboard = dashboard_repo_id(repo_id.split("/", 1)[0], environment_id)
+            if (
+                provisional["repository"]["repo_id"] != repo_id
+                or metadata["dashboard_repo_id"] != dashboard
+            ):
+                raise ValueError("dashboard destination differs from the admitted release")
         return {
             "root": root,
             "request": request,
             "capture": capture,
-            "environment_id": provisional["repository"]["canonical_environment_id"],
+            "environment_id": environment_id,
+            "manifest": provisional,
         }
 
     def _state(self, store: JobStore, job_id: str) -> tuple[Path, dict[str, Any]]:
@@ -911,8 +923,26 @@ class PlayerPublicationJobHandler:
                     snapshot=snapshot,
                     state=state,
                 )
-                state["phase"] = "succeeded"
+                state["phase"] = "release_verified"
                 state["message"] = "YouTube, Hugging Face, and environment containers verified"
+                self._save_state(state_path, state)
+            if state["phase"] == "release_verified":
+                if request["metadata"].get("dashboard_repo_id"):
+                    self._checkpoint(store, str(job["job_id"]), request, state, kind="release_verified")
+                    api, token = self._hf_access(request)
+                    root = snapshot["root"] / "provisional_release"
+                    state["urls"]["dashboard"] = publish_game_dashboard(
+                        api,
+                        self.hub_download,
+                        token=token,
+                        collection_slug=state["huggingface_collection"],
+                        manifest=snapshot["manifest"],
+                        evidence=_json_object(root / "evaluation_evidence.json", label="dashboard evaluation evidence"),
+                        recipe=_json_object(root / "recipe.json", label="dashboard recipe"),
+                        commit=state["huggingface_commit"],
+                    )
+                    state["message"] = "Release and game dashboard verified"
+                state["phase"] = "succeeded"
                 self._save_state(state_path, state)
             if state["phase"] != "succeeded":
                 raise RuntimeError(f"unsupported publication phase: {state['phase']}")
@@ -939,7 +969,8 @@ class PlayerPublicationJobHandler:
             return self._block(request, state, state_path, str(exc))
         except HfHubHTTPError as exc:
             status = _http_status(exc)
-            if status == 429 or (status is not None and status >= 500):
+            dashboard_conflict = state["phase"] == "release_verified" and status in {409, 412}
+            if dashboard_conflict or status == 429 or (status is not None and status >= 500):
                 return self._retry(job, request, state, state_path, str(exc))
             return self._block(request, state, state_path, str(exc))
         except (OSError, TimeoutError) as exc:
