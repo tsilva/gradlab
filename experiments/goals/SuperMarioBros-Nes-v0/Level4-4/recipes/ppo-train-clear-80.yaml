@@ -1,13 +1,12 @@
 defaults:
-- ../../../../recipes/_presets/mario-actor-sil-ppo@_global_
-- ../../../../recipes/_presets/mario-training-clear-80@_global_
+- ../../../../recipes/_presets/mario-campaign-ppo-sil@_global_
 - _self_
 recipe_id: ppo-train-clear-80
 description: Actor-only SIL and PPO with the rewind penalty used for the retained {{ goal_id }} checkpoint.
 reward_shape: sft-ppo-rewind-penalty-v1
-seeds: [2801]
+seeds:
+- 2801
 train:
-  timesteps: 16777216
   backend:
     config:
       ent_coef: 0.025

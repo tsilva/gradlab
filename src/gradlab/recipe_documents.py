@@ -66,7 +66,9 @@ SOURCE_RECIPE_FIELDS = frozenset(
         "tracking",
     }
 )
-SOURCE_PRESET_FIELDS = frozenset({"defaults", "logging", TEMPLATE_VARS_KEY, "train", "tracking"})
+SOURCE_PRESET_FIELDS = frozenset(
+    {"defaults", "description", "logging", "reward_shape", "seeds", TEMPLATE_VARS_KEY, "train", "tracking"}
+)
 RECIPE_DEFERRED_TEMPLATE_FIELDS: dict[tuple[str, ...], frozenset[str]] = {
     ("description",): RECIPE_TEMPLATE_FIELDS,
     ("goal", "description"): RECIPE_TEMPLATE_FIELDS,
@@ -599,6 +601,7 @@ def validate_source_recipe_shape(
     label: str,
     preset: bool = False,
     allow_goal_train_fields: bool = False,
+    require_description: bool = True,
 ) -> None:
     allowed_fields = SOURCE_PRESET_FIELDS if preset else SOURCE_RECIPE_FIELDS
     unknown = sorted(str(key) for key in set(document) - allowed_fields)
@@ -635,6 +638,7 @@ def validate_source_recipe_shape(
             raise ValueError(f"{label}.recipe_id is required")
         if recipe_id == "base":
             raise ValueError(f"{label}.recipe_id=base is unsupported; use an explicit recipe id")
+    if "description" in document or (not preset and require_description):
         description = document.get("description")
         if not isinstance(description, str) or not description.strip():
             raise ValueError(f"{label}.description is required")
@@ -644,6 +648,7 @@ def load_recipe_source_document(path: Path) -> ComposedDocument:
     validate_source_recipe_shape(
         load_mapping_document(path, label=f"recipe file {path}"),
         label=f"recipe file {path}",
+        require_description=False,
     )
     composed = load_composed_mapping(
         path,

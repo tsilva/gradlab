@@ -24,6 +24,7 @@ from gradlab.recipe_documents import (
     _load_rendered_goal_composition,
     compose_train_document,
     load_goal_contract,
+    load_recipe_source_document,
 )
 from gradlab.recipe_schema import validate_materialized_train_recipe
 from gradlab.resolved_training import ResolvedTrainConfig
@@ -159,6 +160,24 @@ class ConfigValidationTests(unittest.TestCase):
             finally:
                 os.chdir(previous)
         self.assertEqual(document["recipe_id"], "ppo")
+
+    def test_launchable_recipe_can_inherit_its_required_description(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            experiments = Path(temporary) / "experiments"
+            preset = experiments / "recipes/_presets/shared.yaml"
+            recipe = experiments / "goals/Game/recipes/ppo.yaml"
+            for path in (preset, recipe):
+                path.parent.mkdir(parents=True)
+            recipe.write_text(
+                "defaults:\n- ../../../recipes/_presets/shared@_global_\n- _self_\nrecipe_id: ppo\n"
+            )
+            preset.write_text("description: Shared PPO recipe\n")
+            composed = load_recipe_source_document(recipe)
+            self.assertEqual(composed.document["description"], "Shared PPO recipe")
+
+            preset.write_text("{}\n")
+            with self.assertRaisesRegex(ValueError, r"\.description is required"):
+                load_recipe_source_document(recipe)
 
     def test_explicit_goal_arg_contract_covers_provider_signatures(self) -> None:
         from ale_py.vector_env import AtariVectorEnv

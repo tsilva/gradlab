@@ -20,9 +20,11 @@ these to offline learners. A lost admission acknowledgement must not revoke an
 admitted worker. Preserve active immutable run snapshots and the
 [worker-access contract](docs/agents/training-vault.md).
 
-Hub upload content and destinations retain their approval requirements. Standalone
-Hub maintenance does not qualify LFS/Xet transfers, YouTube, Modal or durable
-Publication; those operations need their own compatible access and workflow.
+Follow the applicable outbound approval policy and
+[$gradlab_upload-checkpoint](.codex/skills/gradlab_upload-checkpoint/SKILL.md)
+for Hub uploads. Standalone Hub maintenance does not qualify LFS/Xet transfers,
+YouTube, Modal or durable Publication; those operations need their own
+compatible access and workflow.
 
 ## GPU Instances
 

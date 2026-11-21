@@ -1,0 +1,7 @@
+defaults:
+- mario-single-ppo@_global_
+- mario-training-clear-80@_global_
+- _self_
+description: Fresh PPO training screen for {{ goal_id }}, preferring 100 genuine clears in the latest 100 target episodes, with a retained 80-clear fallback when progress stalls.
+reward_shape: speedrun-v1
+seeds: [12]

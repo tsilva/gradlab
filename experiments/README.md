@@ -91,6 +91,12 @@ checkpoint and occupancy settings. Mario mixed-state PPO inherits the common
 Mario optimizer and checkpoint schedule, overriding its policy fusion and
 advantage grouping. The Mario family owns its shared reward catalog.
 
+The per-level Mario campaign recipes inherit either
+[`mario-campaign-ppo`](recipes/_presets/mario-campaign-ppo.yaml) or
+[`mario-campaign-ppo-sil`](recipes/_presets/mario-campaign-ppo-sil.yaml).
+Each level declares its recipe ID and overrides only the fields it needs.
+Presets can supply the description, reward shape, and seeds.
+
 Mario reward shapes can opt in to `progress_x_signed_16bit: true` when the
 provider's position wraps at the 16-bit boundary. The task decodes the position
 before updating furthest progress and stall timing. This setting is part of the

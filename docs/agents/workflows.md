@@ -54,10 +54,11 @@ intent again before finishing as required by the specification policy.
 
 The Hub domain client uses the actual publication credential resolver and installed
 SDK. It accepts identity, repository-file listing and explicit small-file/folder
-upload operations, returning sanitized summaries. Upload content and destination
-still need approval. Private notes, credential files and repository internals are
-excluded; prepared private payloads stay within the explicitly selected payload
-scope. LFS/Xet transfers remain unsupported. No raw keys or cached-login fallback.
+upload operations, returning sanitized summaries. Follow the applicable outbound
+approval policy for upload content and destination. Private notes, credential
+files and repository internals are excluded. Prepared private payloads stay
+within the explicitly selected payload scope. LFS/Xet transfers remain
+unsupported. No raw keys or cached-login fallback.
 
 The [worker-access contract](training-vault.md) separates operator and
 supervisor capabilities. Supervisors survive client exit, own bounded sessions and
