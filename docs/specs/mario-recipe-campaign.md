@@ -53,6 +53,11 @@ Level8-4 uses the same canonical-start training qualification criterion. A clear
 requires the game-completion event at the final castle. It has two fresh recipes
 with Down available for entering pipes and the same completion reward. Run PPO
 first and use PPO with actor-only SIL if the baseline ends without qualifying.
+Follow-up recipes may reward ordered route milestones once per episode using
+provider signals. Use those signals only for rewards. The policy still receives
+pixels, and qualification still requires the final game-completion event.
+Select `sft-ppo-8-4-route-v1` as a reward override on the PPO+SIL recipe to
+use the 8-4 route milestones. Both baseline recipes keep `sft-ppo-v1`.
 
 ## Rolling metric interpretation
 

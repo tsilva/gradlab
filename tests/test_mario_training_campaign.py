@@ -5,6 +5,7 @@ import pytest
 
 from gradlab.action_contract import declared_action_contract
 from gradlab.early_stop import MetricEarlyStopStateMachine, MetricSample
+from gradlab.env_providers import provider_native_vec_kwargs
 from gradlab.recipe_documents import compose_resolved_train_documents
 from gradlab.training_metrics import EpisodeMetricsReducer
 from gradlab.checkpoint_schedule import CheckpointSchedule
@@ -100,6 +101,7 @@ def test_final_castle_recipes_share_pipe_controls_and_qualified_victory(name, us
     assert config["checkpoint_eval_backend"] == "none"
     assert config["reward_shape"] == "sft-ppo-v1"
     assert config["task"]["reward"]["completion_reward"] > 0
+    assert "progress_milestones" not in config["task"]["reward"]
     assert ["DOWN"] in declared_action_contract(config)["table"]
     assert bool(config["training_backend"]["config"].get("sil", {}).get("enabled")) == uses_sil
     for phase in ("train", "eval"):
@@ -114,6 +116,36 @@ def test_final_castle_recipes_share_pipe_controls_and_qualified_victory(name, us
             "value": 2,
             "when": {"signal": "level", "value": [7, 3]},
         }
+
+
+def test_final_castle_named_route_shape_adds_only_the_milestone_rewards():
+    goal = GOALS / "Level8-4" / "_goal.yaml"
+    recipe = goal.parent / "recipes/ppo-sil.yaml"
+    baseline = compose_resolved_train_documents(goal, recipe)
+    route = compose_resolved_train_documents(
+        goal, recipe, recipe_overrides=("reward_shape=sft-ppo-8-4-route-v1",),
+    )
+    control = baseline.effective["train_config"]
+    candidate = route.effective["train_config"]
+    assert candidate["reward_shape"] == "sft-ppo-8-4-route-v1"
+    assert candidate["reward_shape_sha256"] != control["reward_shape_sha256"]
+    assert candidate["training_backend"] == control["training_backend"]
+    original_task = control["task"]
+    route_task = candidate["task"]
+    reward = dict(route_task["reward"])
+    milestones = reward.pop("progress_milestones")
+    assert [item["reward"] for item in milestones] == [300, 350, 650, 550, 300, 750]
+    assert {**route_task, "reward": reward} == original_task
+
+    def info_keys(documents):
+        kwargs = provider_native_vec_kwargs(
+            documents.effective_training.environment, n_envs=1,
+            native_obs_crop=lambda _: None, state_weight_mapping=lambda _: {},
+        )
+        return set(kwargs["info_filter"]["keys"])
+
+    assert info_keys(route) - info_keys(baseline) == {"area_type"}
+    assert "coins" in info_keys(route)
 
 
 def episode(success, *, origin="target"):

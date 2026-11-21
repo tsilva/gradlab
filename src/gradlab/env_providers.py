@@ -457,6 +457,10 @@ def _turbo_native_vec_kwargs(
         if isinstance(signals, Mapping):
             for source in signals.values():
                 required_info_keys.update((source,) if isinstance(source, str) else source)
+        reward = task.get("reward")
+        if isinstance(reward, Mapping):
+            for milestone in reward.get("progress_milestones", ()):
+                required_info_keys.update(name for name in milestone["conditions"] if name not in signals)
         configured_filter = defaults.get("info_filter")
         if configured_filter is None or str(configured_filter) == "all":
             defaults["info_filter"] = {

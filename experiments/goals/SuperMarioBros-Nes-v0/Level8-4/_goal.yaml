@@ -2,6 +2,90 @@ defaults:
 - ../_goal-common@_global_
 - _self_
 
+reward_shapes:
+  definitions:
+    sft-ppo-8-4-route-v1:
+      # Keep the sft-ppo-v1 reward settings and add the route bonuses below.
+      reward_mode: additive
+      use_native_reward: false
+      reward_clip: false
+      progress_reward_cap: 30.0
+      progress_reward_scale: 1.0
+      progress_reward_boost_start_x: 0.0
+      progress_reward_boost_scale: 0.0
+      terminal_reward: 50.0
+      reward_scale: 0.001
+      time_penalty: 0.001
+      death_penalty: 25.0
+      completion_reward: 1000.0
+      score_progress_clipped: false
+      progress_milestones:
+        # Check only the next unpaid milestone on each nonterminal step.
+        # All conditions must match. [low, high] is inclusive.
+        # Each bonus pays once per episode. reward_scale turns 300 into +0.30.
+        #
+        # player_task is the routine the game is running for Mario:
+        #   2 = vertical pipe-entry routine
+        #   3 = side pipe-entry routine
+        #   7 = entrance routine as Mario arrives in a room
+        #   8 = normal player control
+        #  11 = death animation
+        # The floating-pipe replay reported task 3 after Mario pressed Down.
+        #
+        # area_type describes the current room:
+        #   0 = underwater, 1 = above ground, 2 = underground, 3 = castle
+        # The room type changes within 8-4 as Mario enters or exits the water.
+        #
+        # x_pos and y_pos are Mario's native emulator coordinates.
+        # These signals are used to calculate rewards. The policy sees pixels.
+
+        # 1. Detect evidence that Mario revealed the hidden coin block.
+        - reward: 300
+          conditions:
+            x_pos: [2380, 2412]    # Near the hidden block.
+            y_pos: [382, 418]      # Height window around the block-hit jump.
+            coins: [1, 99]         # At least one coin in the current count.
+            player_task: [8, 8]    # Normal player control.
+            area_type: [3, 3]      # Castle.
+
+        # 2. Detect Mario standing on the revealed block.
+        - reward: 350
+          conditions:
+            x_pos: [2386, 2407]    # Horizontal window over the block.
+            y_pos: [368, 368]      # The standing height observed on the block.
+            player_motion: [0, 0]  # 0 = grounded, so an airborne pass won't pay.
+            player_task: [8, 8]    # Normal player control.
+            area_type: [3, 3]      # Castle.
+
+        # 3. Detect entry into the floating pipe.
+        - reward: 650
+          conditions:
+            x_pos: [2428, 2444]    # Horizontal window at this pipe's opening.
+            y_pos: [318, 350]      # Height window at the opening.
+            player_task: [2, 3]    # Either pipe-entry routine is accepted.
+            area_type: [3, 3]      # Still in the castle during entry.
+
+        # 4. Detect when Mario regains control in the underwater room.
+        - reward: 550
+          conditions:
+            x_pos: [48, 141]       # Near the entrance in underwater coordinates.
+            player_task: [8, 8]    # Control returned after the entrance routine.
+            area_type: [0, 0]      # Underwater.
+
+        # 5. Detect progress past the first underwater firebar.
+        - reward: 300
+          conditions:
+            x_pos: [680, 760]      # Position window beyond the firebar.
+            player_task: [8, 8]    # Normal player control.
+            area_type: [0, 0]      # Still underwater.
+
+        # 6. Detect when Mario regains control in the final castle section.
+        - reward: 750
+          conditions:
+            x_pos: [4096, 4224]    # Near the exit from the water into the castle.
+            player_task: [8, 8]    # Control returned after the transition.
+            area_type: [3, 3]      # Back in the castle.
+
 train:
   environment:
     env_config: &castle_controls

@@ -20,6 +20,7 @@ from gradlab.action_codecs import (
 from gradlab.json_utils import canonical_json_sha256
 from gradlab.reward_programs import (
     MARIO_PROGRESS_REWIND_MIN_DISTANCE,
+    normalize_mario_progress_milestones,
     normalize_vizdoom_deathmatch_reward,
     vizdoom_deathmatch_reward_semantic_sha256,
 )
@@ -2753,6 +2754,7 @@ class MarioTaskConfig:
     progress_rewind_penalty_scale: float = 0.0
     progress_rewind_min_distance: float = MARIO_PROGRESS_REWIND_MIN_DISTANCE
     loop_check_pass_reward: float = 0.0
+    progress_milestones: tuple[tuple[float, tuple[tuple[str, int, int], ...]], ...] = ()
     terminal_reward: float = 50.0
     time_penalty: float = 0.0
     death_penalty: float = 25.0
@@ -2888,6 +2890,9 @@ class MarioTaskConfig:
         reward_mode = str(reward_value("reward_mode", "baseline"))
         if reward_mode not in {"native", "bounded", "baseline", "score", "additive"}:
             raise ValueError(f"unsupported Mario reward mode {reward_mode!r}")
+        progress_milestones = normalize_mario_progress_milestones(
+            reward_value("progress_milestones", []), label="Mario reward progress_milestones",
+        )
 
         return cls(
             x=signal_value("x", cls.x),
@@ -2908,6 +2913,12 @@ class MarioTaskConfig:
                 "progress_rewind_min_distance", MARIO_PROGRESS_REWIND_MIN_DISTANCE,
             ),
             loop_check_pass_reward=reward_value("loop_check_pass_reward", 0.0),
+            progress_milestones=tuple(
+                (milestone["reward"], tuple(
+                    (signal, *bounds) for signal, bounds in milestone["conditions"].items()
+                ))
+                for milestone in progress_milestones
+            ),
             terminal_reward=reward_value("terminal_reward", 50.0),
             time_penalty=reward_value("time_penalty", 0.0),
             death_penalty=reward_value("death_penalty", 25.0),
@@ -2970,7 +2981,19 @@ class MarioTaskKernel:
         )
         if config.game_mode is not None:
             signal_sources["game_mode"] = config.game_mode
+        for _, conditions in config.progress_milestones:
+            for name, _, _ in conditions:
+                signal_sources.setdefault(name, name)
         self.bindings = SignalBindings(descriptor, signal_sources, self.num_envs)
+        self._next_progress_milestone: np.ndarray | None = None
+        if config.progress_milestones:
+            if config.reward_mode not in {"additive", "score"}:
+                raise ValueError("Mario progress milestones require additive or score reward")
+            for _, conditions in config.progress_milestones:
+                for name, _, _ in conditions:
+                    if self.bindings.scalar_dtype(name).kind not in "biu":
+                        raise ValueError(f"Mario progress milestone signal {name!r} must be integer")
+            self._next_progress_milestone = np.zeros(self.num_envs, dtype=np.int16)
         self._loop_active: np.ndarray | None = None
         if config.loop_check_pass_reward > 0.0:
             (loop_flag_dtype,) = self.bindings.scalar_source_dtypes(
@@ -3395,6 +3418,8 @@ class MarioTaskKernel:
             }
             if self._loop_active is not None:
                 values["loop_command_active"] = int(self._loop_active[lane])
+            if self._next_progress_milestone is not None:
+                values["next_progress_milestone"] = int(self._next_progress_milestone[lane])
             states.append(TaskLaneState(schema_id="gradlab.mario-task-lane-v2", values=values))
         return tuple(states)
 
@@ -3424,6 +3449,8 @@ class MarioTaskKernel:
         expected = set(names)
         if self._loop_active is not None:
             expected.add("loop_command_active")
+        if self._next_progress_milestone is not None:
+            expected.add("next_progress_milestone")
         for lane in np.flatnonzero(selected):
             lane_index = int(lane)
             state = states[lane_index]
@@ -3433,6 +3460,11 @@ class MarioTaskKernel:
                 raise ValueError(
                     f"archive lane {lane_index} Mario task state fields do not match task"
                 )
+            if self._next_progress_milestone is not None:
+                milestone = int(state.values["next_progress_milestone"])
+                if not 0 <= milestone <= len(self.config.progress_milestones):
+                    raise ValueError(f"archive lane {lane_index} has an invalid Mario milestone")
+                self._next_progress_milestone[lane_index] = milestone
             for name, array in zip(names, self._compiled_state, strict=True):
                 array[lane_index] = int(state.values[name])
             if self._loop_active is not None:
@@ -3492,6 +3524,22 @@ class MarioTaskKernel:
             self._progress_reward_component[passed] += bonus
             self._loop_active[:] = current_loop
 
+        if self._next_progress_milestone is not None:
+            active = ~(self._terminated | self._truncated | provider_terminated | provider_truncated)
+            # Evaluate higher milestones first so a lane can advance only once per step.
+            for index in range(len(self.config.progress_milestones) - 1, -1, -1):
+                candidates = active & (self._next_progress_milestone == index)
+                if not candidates.any():
+                    continue
+                bonus, conditions = self.config.progress_milestones[index]
+                for name, low, high in conditions:
+                    values = self.bindings.scalar(name, signals)
+                    candidates &= (low <= values) & (values <= high)
+                self._next_progress_milestone[candidates] += 1
+                self._rewards[candidates] += bonus
+                self._raw_reward[candidates] += bonus
+                self._progress_reward_component[candidates] += bonus
+
         return self._task_step
 
     def on_reset(
@@ -3512,6 +3560,8 @@ class MarioTaskKernel:
         if self._loop_active is not None:
             flags = self.bindings.scalar("loop_command_active", reset_signals, mask=mask)
             self._loop_active[mask] = flags[mask] != 0
+        if self._next_progress_milestone is not None:
+            self._next_progress_milestone[mask] = 0
         self._x[mask] = x[mask]
         self._max_x[mask] = x[mask]
         self._level_max_x[mask] = x[mask]

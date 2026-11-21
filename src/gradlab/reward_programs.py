@@ -36,6 +36,7 @@ MARIO_REWARD_FIELDS = (
     "progress_rewind_penalty_scale",
     "progress_rewind_min_distance",
     "loop_check_pass_reward",
+    "progress_milestones",
 )
 MARIO_REWARD_FIELD_SET = frozenset(MARIO_REWARD_FIELDS)
 MARIO_REWARD_MODES = frozenset({"native", "bounded", "baseline", "score", "additive"})
@@ -44,11 +45,12 @@ MARIO_OPTIONAL_REWARD_FIELDS = frozenset({
     "progress_rewind_penalty_scale",
     "progress_rewind_min_distance",
     "loop_check_pass_reward",
+    "progress_milestones",
 })
 MARIO_PROGRESS_REWIND_MIN_DISTANCE = 512.0
 MARIO_BOOL_FIELDS = frozenset({"use_native_reward", "score_progress_clipped", "progress_x_signed_16bit"})
 MARIO_NUMBER_FIELDS = frozenset(
-    MARIO_REWARD_FIELD_SET - MARIO_BOOL_FIELDS - {"reward_mode", "reward_clip"}
+    MARIO_REWARD_FIELD_SET - MARIO_BOOL_FIELDS - {"reward_mode", "reward_clip", "progress_milestones"}
 )
 
 # Mario signal arithmetic is currently int64-backed and reward outputs are float32.
@@ -118,6 +120,38 @@ def _normalize_zero(value: float) -> float:
     return 0.0 if value == 0.0 else value
 
 
+def normalize_mario_progress_milestones(value: Any, *, label: str) -> list[dict[str, Any]]:
+    if not isinstance(value, list) or len(value) > 16:
+        raise ValueError(f"{label} must be a list of at most 16 milestones")
+    normalized = []
+    for index, item in enumerate(value):
+        milestone = f"{label}[{index}]"
+        if not isinstance(item, Mapping) or set(item) != {"reward", "conditions"}:
+            raise ValueError(f"{milestone} requires reward and conditions")
+        reward = item["reward"]
+        if (
+            isinstance(reward, bool)
+            or not isinstance(reward, Real)
+            or not 0.0 < reward <= _MARIO_SAFE_COEFFICIENT_ABS_MAX
+        ):
+            raise ValueError(f"{milestone}.reward must be positive and within the Mario float32 bound")
+        conditions = item["conditions"]
+        if not isinstance(conditions, Mapping) or not conditions:
+            raise ValueError(f"{milestone}.conditions requires at least one scalar signal")
+        for signal, bounds in conditions.items():
+            if (
+                not isinstance(signal, str)
+                or not signal.strip()
+                or not isinstance(bounds, list)
+                or len(bounds) != 2
+                or any(type(bound) is not int or not -(2**31) <= bound < 2**31 for bound in bounds)
+                or bounds[0] > bounds[1]
+            ):
+                raise ValueError(f"{milestone}.conditions requires ordered integer pairs")
+        normalized.append({"reward": float(reward), "conditions": dict(sorted(conditions.items()))})
+    return normalized
+
+
 def normalize_mario_reward(
     value: Mapping[str, Any],
     *,
@@ -175,6 +209,14 @@ def normalize_mario_reward(
         "reward_mode", "additive"
     ) not in {"additive", "score"}:
         raise ValueError(f"{label}.loop_check_pass_reward requires additive or score reward")
+    if "progress_milestones" in value:
+        milestones = normalize_mario_progress_milestones(
+            value["progress_milestones"], label=f"{label}.progress_milestones",
+        )
+        if milestones and normalized.get("reward_mode", "additive") not in {"additive", "score"}:
+            raise ValueError(f"{label}.progress_milestones requires additive or score reward")
+        if milestones:
+            normalized["progress_milestones"] = milestones
     if "reward_scale" in value:
         normalized["reward_scale"] = normalize_reward_mapping(
             {"reward_scale": value["reward_scale"]},
@@ -343,6 +385,8 @@ def _mario_compiled_semantics(reward: Mapping[str, Any]) -> dict[str, Any]:
         loop_pass_reward = reward.get("loop_check_pass_reward", 0.0)
         if loop_pass_reward > 0.0:
             semantics["loop_check_pass_reward"] = float(loop_pass_reward)
+        if milestones := reward.get("progress_milestones"):
+            semantics["progress_milestones"] = milestones
         if mode == "score":
             clipped = bool(reward["score_progress_clipped"])
             semantics["score_progress_clipped"] = clipped

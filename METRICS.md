@@ -347,6 +347,9 @@ resuming as its cause without a matched uninterrupted continuation.
   uses the episode maximum.
   The optional `loop_check_pass_reward` adds to the progress component when an
   active castle check ends without rewinding on a nonterminal transition.
+  Optional `progress_milestones` add bonuses to the same component. Award each
+  milestone once per episode in order on a nonterminal transition where its
+  declared scalar signals fall within their inclusive ranges.
   `y_pos`, `player_motion`, and `player_task` in Mario playback remain provider
   fields: world-space vertical position, ROM movement state, and ROM player task.
   Movement state 1 means jumping or swimming, not necessarily ascending; task 8

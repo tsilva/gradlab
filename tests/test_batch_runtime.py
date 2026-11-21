@@ -1277,6 +1277,40 @@ class MarioKernelTests(unittest.TestCase):
         self.assertFalse(np.any(done_flags(step)))
         np.testing.assert_array_equal(kernel.process(native, false, false, resolved).rewards, [0, 0])
 
+    def test_mario_progress_milestones_are_ordered_and_preserved_across_lane_restore(self):
+        provider = DeterministicNativeVectorProvider()
+        config = MarioTaskConfig(
+            x="x", score="score", lives="lives", level=("level_hi", "level_lo"),
+            reward_mode="additive", progress_reward_scale=0,
+            progress_milestones=(
+                (100.0, (("score", 1, 10),)),
+                (250.0, (("score", 2, 10),)),
+            ),
+        )
+        kernel = MarioTaskDefinition(config).bind(descriptor_for(provider), provider.num_envs)
+        nonterminal = np.zeros(provider.num_envs, dtype=bool)
+        native = np.zeros(provider.num_envs, dtype=np.float32)
+        reset_signals = provider._infos()
+        kernel.on_reset(None, reset_signals, ~nonterminal)
+
+        first = {**reset_signals, "score": np.asarray([3, 0])}
+        np.testing.assert_array_equal(kernel.process(native, nonterminal, nonterminal, first).rewards,
+                                      [100, 0])
+        saved = kernel.capture_lane_states(~nonterminal)
+        kernel.on_reset(None, reset_signals, ~nonterminal)
+        kernel.restore_lane_states(saved, ~nonterminal)
+
+        both = {**reset_signals, "score": np.asarray([3, 3])}
+        step = kernel.process(native, nonterminal, nonterminal, both)
+        np.testing.assert_array_equal(step.rewards, [250, 100])
+        np.testing.assert_array_equal(step.metrics["progress_reward_component"], [250, 100])
+        np.testing.assert_array_equal(
+            kernel.process(native, np.asarray([False, True]), nonterminal, both).rewards, [0, 0],
+        )
+        kernel.on_reset(None, reset_signals, np.asarray([True, False]))
+        np.testing.assert_array_equal(kernel.process(native, nonterminal, nonterminal, both).rewards,
+                                      [100, 250])
+
     def test_canonical_task_softcodes_signal_bindings_and_stall_outcome(self):
         config = EnvConfig(
             game="SuperMarioBros-Nes-v0",
