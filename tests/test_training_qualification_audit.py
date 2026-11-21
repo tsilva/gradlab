@@ -2,6 +2,7 @@ import hashlib
 import json
 from copy import deepcopy
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -11,18 +12,33 @@ from gradlab.experiment_cli import TrainingQualificationError, _audit_training_r
 from gradlab.metric_names import ORCHESTRATION_EVENT_SEQUENCE
 from gradlab.mlflow_delivery import RUN_ID_TAG
 from gradlab.env_identity import environment_hash, environment_identity_from_train_config
+from gradlab.policy_bundle import build_recipe_document
 from gradlab.r2_store import ObjectReadInterrupted
+from gradlab.recipe_documents import compose_resolved_train_documents
 from gradlab.run_contracts import new_attempt_id, new_run_id
 from tests import test_run_authority as authority_fixtures
-from tests.test_policy_bundle import MARIO_ASSET, level1_1_recipe_document
+from tests.test_policy_bundle import MARIO_ASSET, RUNTIME, bind_mario_asset, level1_1_recipe_document
 
 
 @pytest.fixture
-def audit_case():
+def audit_case(request):
     fixture = authority_fixtures.RunAuthorityTests()
     fixture.setUp()
     authority = fixture.authority
-    document = level1_1_recipe_document(seed=12)
+    level = getattr(request, "param", "Level1-1")
+    if level == "Level8-4":
+        goal = Path("experiments/goals/SuperMarioBros-Nes-v0/Level8-4")
+        resolved = compose_resolved_train_documents(
+            goal / "_goal.yaml", goal / "recipes/ppo.yaml", source_sha="a" * 40,
+        )
+        bind_mario_asset(resolved)
+        document = build_recipe_document(
+            resolved.effective, repo_root=Path.cwd(), source_commit="a" * 40,
+            run_description="Final castle qualification fixture", seed=12, runtime_image_ref=RUNTIME,
+            base_materialized_recipe=resolved.base, canonical_goal=resolved.canonical_goal,
+        )
+    else:
+        document = level1_1_recipe_document(seed=12)
     recipe_sha = authority.put_recipe_document(document)
     config = document["recipe"]["train_config"]
     manifest = fixture.manifest(new_run_id(), new_attempt_id())
@@ -32,6 +48,7 @@ def audit_case():
         source_sha=document["provenance"]["source_commit"],
         image_digest=document["provenance"]["runtime"]["image_ref"],
         recipe_sha256=recipe_sha,
+        goal_slug=f"SuperMarioBros-Nes-v0/{level}",
         environment_sha256=environment_hash(
             environment_identity_from_train_config(config)
         ).removeprefix("sha256:"),
@@ -53,7 +70,7 @@ def audit_case():
             "payload": {
                 "train/success/min": fraction,
                 "train/episodes/count": float(count),
-                "train/success/Level1-1/count": float(clears),
+                f"train/success/{level}/count": float(clears),
             },
         }
         for i, (fraction, count, clears) in enumerate([(0.8, 200, 100), (0.95, 400, 280)], 1)
@@ -153,6 +170,7 @@ def audit(case):
     return _audit_training_run(case.authority, case.status, mlflow_client=case.client)
 
 
+@pytest.mark.parametrize("audit_case", ["Level1-1", "Level8-4"], indirect=True)
 def test_completed_window_model_and_service_are_independently_verified_without_mutation(audit_case):
     seal(audit_case)
     before = sorted(audit_case.authority.control.iter_keys(""))

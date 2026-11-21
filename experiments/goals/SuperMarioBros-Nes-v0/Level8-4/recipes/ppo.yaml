@@ -1,0 +1,5 @@
+defaults:
+- ../../../../recipes/_presets/mario-campaign-ppo@_global_
+- _self_
+recipe_id: ppo
+reward_shape: sft-ppo-v1

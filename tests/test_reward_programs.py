@@ -68,6 +68,8 @@ def test_mario_recipes_select_the_declared_reward_shape() -> None:
         "Level7-2/recipes/ppo.yaml",
         "Level7-3/recipes/ppo.yaml",
         "Level7-4/recipes/ppo.yaml",
+        "Level8-4/recipes/ppo.yaml",
+        "Level8-4/recipes/ppo-sil.yaml",
     }
     reward_shapes = dict.fromkeys(sft_variants, "sft-ppo-v1")
     reward_shapes["Level4-4/recipes/ppo-train-clear-80.yaml"] = "sft-ppo-rewind-penalty-v1"

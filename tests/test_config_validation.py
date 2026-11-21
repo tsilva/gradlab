@@ -415,13 +415,13 @@ class ConfigValidationTests(unittest.TestCase):
                     },
                 )
 
-        self.assertEqual(actor_critic_recipes, 62)
+        self.assertEqual(actor_critic_recipes, 64)
 
     def test_every_mario_recipe_disables_eval_and_preserves_its_clear_contract(self) -> None:
         mario_root = Path("experiments/goals/SuperMarioBros-Nes-v0")
         recipes = sorted(mario_root.glob("*/recipes/*.yaml"))
 
-        self.assertEqual(len(recipes), 31)
+        self.assertEqual(len(recipes), 33)
         for recipe_path in recipes:
             with self.subTest(recipe=recipe_path):
                 goal_path = recipe_path.parent.parent / "_goal.yaml"
@@ -434,7 +434,7 @@ class ConfigValidationTests(unittest.TestCase):
                 self.assertEqual(conditions["clear_80"]["threshold"], 0.8)
                 self.assertEqual(conditions["clear_80"]["action"], "observe")
                 self.assertEqual(conditions["qualified_plateau"]["activation_threshold"], 0.8)
-                if recipe_path.parent.parent.name in {
+                if recipe_path.name == "ppo-sil.yaml" or recipe_path.parent.parent.name in {
                     "Level1-3", "Level2-2", "Level2-4", "Level3-3", "Level4-2", "Level4-3",
                     "Level4-4", "Level6-1", "Level6-3", "Level7-2", "Level7-3", "Level7-4",
                 }:
@@ -537,7 +537,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(report.counts["json_files"], 0)
         self.assertGreaterEqual(report.counts["yaml_files"], 15)
         self.assertGreaterEqual(report.counts["goals"], 1)
-        self.assertEqual(report.counts["train_recipes"], 63)
+        self.assertEqual(report.counts["train_recipes"], 65)
         self.assertGreaterEqual(report.counts["env_configs"], 0)
         self.assertEqual(report.counts["benchmark_profiles"], 4)
         self.assertEqual(report.counts["workspace_manifests"], 1)
@@ -1036,7 +1036,7 @@ class ConfigValidationTests(unittest.TestCase):
         expected_stalled = {"signal": "x", "operation": "unchanged_for", "steps": 300}
         goal_paths = sorted(root.glob("*/_goal.yaml"))
 
-        self.assertEqual(len(goal_paths), 31)
+        self.assertEqual(len(goal_paths), 32)
         for goal_path in goal_paths:
             document = load_goal_contract(goal_path)
             for phase in ("train", "eval"):
@@ -1049,7 +1049,7 @@ class ConfigValidationTests(unittest.TestCase):
                     )
                     self.assertEqual(
                         task["termination"]["success"],
-                        ["level_change"],
+                        ["game_complete" if goal_path.parent.name == "Level8-4" else "level_change"],
                     )
                     self.assertEqual(task["termination"]["timeout"], ["stalled"])
 

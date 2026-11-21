@@ -1,0 +1,5 @@
+defaults:
+- ../../../../recipes/_presets/mario-campaign-ppo-sil@_global_
+- _self_
+recipe_id: ppo-sil
+description: Fresh PPO with actor-only SIL for the final Mario castle.

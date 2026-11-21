@@ -1,0 +1,25 @@
+defaults:
+- ../_goal-common@_global_
+- _self_
+
+train:
+  environment:
+    env_config: &castle_controls
+      env_args:
+        use_restricted_actions: standard
+    task: &castle_success
+      signals:
+        game_mode: game_mode
+      events:
+        game_complete:
+          signal: game_mode
+          operation: equals
+          value: 2
+          when: {signal: level, value: [7, 3]}
+      termination:
+        success: [game_complete]
+
+eval:
+  environment:
+    env_config: *castle_controls
+    task: *castle_success

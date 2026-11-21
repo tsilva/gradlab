@@ -1,10 +1,9 @@
 # Mario per-level training recipe qualification
 
 This campaign qualifies current launchable recipes independently for ordinary
-Super Mario Bros. Levels 1-1 through 8-3. Level8-4 is explicitly deferred; it
-remains unfinished scope of the original all-level objective. The active Mario
-catalog keeps one launchable goal and recipe per published campaign checkpoint
-stage. Mixed-level and end-to-end experiments remain available in Git history.
+Super Mario Bros. Levels 1-1 through 8-3. The active Mario catalog keeps one
+launchable goal and recipe per published campaign checkpoint stage. Mixed-level
+and end-to-end experiments remain available in Git history.
 
 - A recipe qualifies only after fresh training reaches at least 80 genuine
   level clears in a full latest rolling window of 100 completed target-origin
@@ -47,6 +46,13 @@ stage. Mixed-level and end-to-end experiments remain available in Git history.
   World 4-4 checkpoint gives that unresolved stage a launchable starting point.
   Preserve used shared presets, resolved historical configurations,
   initialization assets, checkpoints, datasets and research evidence.
+
+## Final-stage experiment
+
+Level8-4 uses the same canonical-start training qualification criterion. A clear
+requires the game-completion event at the final castle. It has two fresh recipes
+with Down available for entering pipes and the same completion reward. Run PPO
+first and use PPO with actor-only SIL if the baseline ends without qualifying.
 
 ## Rolling metric interpretation
 

@@ -1738,9 +1738,23 @@ def _audit_training_run(
         )
     level = manifest.goal_slug.rsplit("/", 1)[-1]
     backend = config["training_backend"]
+    if level == "Level8-4":
+        task = config["task"]
+        if (
+            task["termination"].get("success") != ["game_complete"]
+            or task["signals"].get("game_mode") != "game_mode"
+            or task["events"].get("game_complete") != {
+                "signal": "game_mode",
+                "operation": "equals",
+                "value": 2,
+                "when": {"signal": "level", "value": [7, 3]},
+            }
+        ):
+            raise TrainingQualificationError(
+                "Level8-4 audit requires the final-stage game completion contract"
+            )
     if (
         not re.fullmatch(r"SuperMarioBros-Nes-v0/Level[1-8]-[1-4]", manifest.goal_slug)
-        or level == "Level8-4"
         or config.get("state") != level
         or config.get("states")
         or config.get("state_probs")

@@ -3,6 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from gradlab.action_contract import declared_action_contract
 from gradlab.early_stop import MetricEarlyStopStateMachine, MetricSample
 from gradlab.recipe_documents import compose_resolved_train_documents
 from gradlab.training_metrics import EpisodeMetricsReducer
@@ -81,11 +82,38 @@ def test_campaign_recipe_preserves_full_start_and_separate_acceptance(level):
 
 def test_campaign_covers_exactly_31_ordinary_levels_without_final_level():
     recipes = [campaign_recipe(level) for level in LEVELS]
-    assert set(GOALS.glob("*/recipes/*.yaml")) == set(recipes)
-    assert {path.parent.name for path in GOALS.glob("*/_goal.yaml")} == set(LEVELS)
+    final_goal = GOALS / "Level8-4"
+    assert set(GOALS.glob("*/recipes/*.yaml")) == {
+        *recipes, final_goal / "recipes/ppo.yaml", final_goal / "recipes/ppo-sil.yaml",
+    }
+    assert {path.parent.name for path in GOALS.glob("*/_goal.yaml")} == {*LEVELS, "Level8-4"}
     assert {path.parent.parent.name for path in recipes} == set(LEVELS)
     assert len(recipes) == len(LEVELS) == 31
-    assert not (GOALS / "Level8-4").exists()
+
+
+@pytest.mark.parametrize("name, uses_sil", [("ppo", False), ("ppo-sil", True)])
+def test_final_castle_recipes_share_pipe_controls_and_qualified_victory(name, uses_sil):
+    goal = GOALS / "Level8-4"
+    resolved = compose_resolved_train_documents(goal / "_goal.yaml", goal / "recipes" / f"{name}.yaml")
+    config = resolved.effective["train_config"]
+    assert config["state"] == "Level8-4"
+    assert config["checkpoint_eval_backend"] == "none"
+    assert config["reward_shape"] == "sft-ppo-v1"
+    assert config["task"]["reward"]["completion_reward"] > 0
+    assert ["DOWN"] in declared_action_contract(config)["table"]
+    assert bool(config["training_backend"]["config"].get("sil", {}).get("enabled")) == uses_sil
+    for phase in ("train", "eval"):
+        environment = resolved.effective["goal"][phase]["environment"]
+        assert environment["env_config"]["state"] == "Level8-4"
+        task = environment["task"]
+        assert task["signals"]["game_mode"] == "game_mode"
+        assert task["termination"]["success"] == ["game_complete"]
+        assert task["events"]["game_complete"] == {
+            "signal": "game_mode",
+            "operation": "equals",
+            "value": 2,
+            "when": {"signal": "level", "value": [7, 3]},
+        }
 
 
 def episode(success, *, origin="target"):
