@@ -408,10 +408,14 @@ def render_template_vars(
     )
 
 
+def load_yaml_document(text: str) -> Any:
+    return yaml.load(text, Loader=_UniqueKeySafeLoader)
+
+
 def load_config_document(path: Path, *, default: Any = None) -> Any:
     text = path.read_text(encoding="utf-8")
     if path.suffix.lower() in YAML_EXTENSIONS:
-        loaded = yaml.load(text, Loader=_UniqueKeySafeLoader)
+        loaded = load_yaml_document(text)
     else:
         loaded = json.loads(text)
     return default if loaded is None else loaded

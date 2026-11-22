@@ -18,7 +18,11 @@ from huggingface_hub.errors import HfHubHTTPError, RepositoryNotFoundError
 
 from gradlab.eval_metrics import episode_is_complete
 from gradlab.game_dashboard import dashboard_files
-from gradlab.publication import dashboard_repo_id, validate_huggingface_environment_collection
+from gradlab.publication import (
+    dashboard_repo_id,
+    release_recipe_filename,
+    validate_huggingface_environment_collection,
+)
 from gradlab.recipe_catalog import experiments_root
 
 
@@ -202,7 +206,7 @@ def _release_row(
         "checkpoint_sha256": sha,
         "model_url": f"{base}/tree/{commit}",
         "replay_url": f"{base}/resolve/{commit}/replay.mp4",
-        "recipe_url": f"{base}/blob/{commit}/recipe.json",
+        "recipe_url": f"{base}/blob/{commit}/{release_recipe_filename(manifest.get('artifacts', {}))}",
     })
     episodes = evidence["episode_results"]
     clear_steps = [row["steps"] for row in episodes if episode_is_complete(row)]

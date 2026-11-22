@@ -4,7 +4,6 @@ import argparse
 import json
 import shutil
 from collections.abc import Mapping
-from copy import deepcopy
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -26,13 +25,13 @@ from gradlab.publication import (
 )
 from gradlab.policy_bundle import (
     PolicyBundle,
-    build_model_document,
     evaluation_contract_sha256,
     load_model_document,
     load_policy_bundle,
     load_recipe_document,
     sha256_file,
     write_canonical_json,
+    write_huggingface_recipe,
 )
 from gradlab.publication_evidence import validate_evaluation_evidence_document
 
@@ -140,25 +139,13 @@ def main(argv: list[str] | None = None) -> int:
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     shutil.copy2(args.model, args.output_dir / "model.zip")
-    shutil.copy2(args.recipe, args.output_dir / "recipe.json")
-    recipe_document = load_recipe_document(args.output_dir / "recipe.json")
+    recipe_document = load_recipe_document(args.recipe)
+    write_huggingface_recipe(source_model, recipe_document, args.output_dir)
     shutil.copy2(args.replay, args.output_dir / "replay.mp4")
     (args.output_dir / ".gitattributes").write_text(GITATTRIBUTES_TEXT, encoding="utf-8")
     (args.output_dir / "LICENSE").write_text(MIT_LICENSE_TEXT, encoding="utf-8")
     write_canonical_json(
         args.output_dir / "evaluation_evidence.json", evaluation_evidence_document
-    )
-    metadata = deepcopy(dict(source_model["provenance"]))
-    metadata.update(source_model["policy"])
-    metadata["checkpoint_step"] = source_model["checkpoint"].get("step")
-    metadata["kind"] = source_model["checkpoint"].get("kind")
-    write_canonical_json(
-        args.output_dir / "model.json",
-        build_model_document(
-            args.output_dir / "model.zip",
-            args.output_dir / "recipe.json",
-            metadata,
-        ),
     )
     bundle = load_policy_bundle(args.output_dir, source=str(args.output_dir))
     identity = publication_identity_from_policy_bundle(goal.get("goal_id"), bundle)
@@ -174,7 +161,7 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("release evaluation is missing evaluation_evidence")
     expected_evidence = {
         "checkpoint_sha256": sha256_file(args.output_dir / "model.zip"),
-        "recipe_sha256": sha256_file(args.output_dir / "recipe.json"),
+        "recipe_sha256": bundle.recipe_sha256,
         "recipe_format_version": int(recipe_document["format_version"]),
         "evaluation_contract_sha256": evaluation_contract_sha256(recipe_document),
     }

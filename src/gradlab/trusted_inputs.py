@@ -16,6 +16,7 @@ from typing import Any
 
 from gradlab.dotenv import load_env_file
 from gradlab.json_utils import canonical_json_sha256
+from gradlab.policy_bundle import HUB_RECIPE_FILENAME, RECIPE_FILENAME
 
 
 MAX_MODEL_FILES = 64
@@ -152,7 +153,14 @@ def _closure_paths(model_path: Path) -> tuple[Path, ...]:
     versioned_recipe = model_path.with_suffix(".recipe.json")
     if model_path.name == "model.zip":
         versioned_model = parent / "model.json"
-        versioned_recipe = parent / "recipe.json"
+        model_document = _bounded_json(versioned_model)
+        binding = model_document.get("recipe") if model_document else None
+        recipe_filename = (
+            HUB_RECIPE_FILENAME
+            if isinstance(binding, Mapping) and binding.get("filename") == HUB_RECIPE_FILENAME
+            else RECIPE_FILENAME
+        )
+        versioned_recipe = parent / recipe_filename
     missing = [
         path.name
         for path in (versioned_model, versioned_recipe)
@@ -185,6 +193,8 @@ def _closure_paths(model_path: Path) -> tuple[Path, ...]:
     for path in paths:
         if path.suffix == ".json":
             _bounded_json(path)
+        elif path.name == HUB_RECIPE_FILENAME and path.stat().st_size > MAX_METADATA_BYTES:
+            raise ValueError(f"metadata file exceeds {MAX_METADATA_BYTES} bytes: {path}")
     return paths
 
 

@@ -30,14 +30,21 @@ def _checkpoint(root: Path) -> Path:
     return checkpoint
 
 
-def test_staging_copies_known_bundle_closure_with_private_permissions() -> None:
+@pytest.mark.parametrize("recipe_name", ["recipe.json", "recipe.yaml"])
+def test_staging_copies_known_bundle_closure_with_private_permissions(recipe_name: str) -> None:
     with tempfile.TemporaryDirectory() as temporary:
-        staged = stage_model_input(_checkpoint(Path(temporary)))
+        root = Path(temporary)
+        checkpoint = _checkpoint(root)
+        if recipe_name == "recipe.yaml":
+            (root / "recipe.json").unlink()
+            (root / recipe_name).write_text("document_type: gradlab.recipe\n")
+            (root / "model.json").write_text(json.dumps({"recipe": {"filename": recipe_name}}))
+        staged = stage_model_input(checkpoint)
         try:
             assert {entry.path for entry in staged.manifest} == {
                 "model.json",
                 "model.zip",
-                "recipe.json",
+                recipe_name,
             }
             assert staged.model_path.read_bytes() != b""
             assert os.stat(staged.root).st_mode & 0o777 == 0o700

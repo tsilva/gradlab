@@ -60,7 +60,8 @@ Use `current_recipe_url` for a maintained launchable recipe at a verified
 GitHub commit. The table shows one Recipe link per published stage, preferring
 the current recipe when supplied. Keep the exact checkpoint recipe in the
 model bundle and its source reference in the manifest. An accepted Release can
-link its verified Hub `recipe.json` when a source recipe link is unavailable.
+link its verified Hub recipe when a source recipe link is unavailable. Use
+`recipe.yaml` for new bundles and the recorded recipe filename for older ones.
 
 The Release worker updates the selected stage when its row belongs to the
 Release's model repository or has no published model. It keeps a selection

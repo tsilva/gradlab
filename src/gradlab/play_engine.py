@@ -1019,13 +1019,11 @@ class WebPlaybackRunner(_PlaybackRunnerProtocol):
         self._recording_options = dict(recording_options or {})
         self._checkpoint_root: Path | None = None
         if trajectory_bundle is not None:
+            from gradlab.policy_bundle import write_json_recipe
+
             self._checkpoint_root = Path(tempfile.mkdtemp(prefix="gradlab-trajectory-checkpoint-"))
-            for name, path in (
-                ("model.zip", trajectory_bundle.checkpoint_path),
-                ("model.json", trajectory_bundle.model_path),
-                ("recipe.json", trajectory_bundle.recipe_path),
-            ):
-                shutil.copyfile(path, self._checkpoint_root / name)
+            shutil.copyfile(trajectory_bundle.checkpoint_path, self._checkpoint_root / "model.zip")
+            write_json_recipe(trajectory_bundle, self._checkpoint_root)
             self._begin_recording()
 
     def _begin_recording(self) -> None:

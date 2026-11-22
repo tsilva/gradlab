@@ -51,7 +51,12 @@ player's representative capture and the normal Publication controls.
    representative completed episode in Faithful Playback or reuse a verified
    recording of that Policy under the recorded execution rules. Render it as
    root `replay.mp4` and verify it decodes. Treat the episode as a preview.
-2. Stage the complete public bundle. For a selected Checkpoint, use
+2. Stage the complete public bundle. Prepare the Hugging Face representation
+   with `python scripts/prepare_huggingface_checkpoint.py SOURCE OUTPUT` from
+   the verified source bundle. This writes `recipe.yaml` and updates its
+   binding in `model.json` while preserving the original Run recipe digest.
+   Use the resulting directory for draft review and publication, and name
+   `recipe.yaml` in the model card's file list. For a selected Checkpoint, use
    `gradlab play 'hf://<owner>/<model-repo>'` in the card's Quick start, with
    any required environment arguments. Use the exact destination and omit
    `@revision` so playback follows the current Hugging Face `main` branch.

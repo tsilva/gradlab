@@ -23,11 +23,13 @@ from gradlab.json_utils import canonical_json_sha256
 from gradlab.local_paths import default_runs_dir
 from gradlab.operator_environment import load_repository_operator_environment
 from gradlab.policy_bundle import (
+    HUB_RECIPE_FILENAME,
     PolicyBundle,
-    build_model_document,
     evaluation_contract_sha256,
     load_policy_bundle,
     write_canonical_json,
+    write_huggingface_recipe,
+    write_json_recipe,
 )
 from gradlab.publication import (
     GITATTRIBUTES_TEXT,
@@ -565,25 +567,20 @@ def prepare_release_bundle(
     history: Sequence[Mapping[str, Any]] = (),
     featured: bool = False,
     correction_note: str | None = None,
+    recipe_filename: str = HUB_RECIPE_FILENAME,
 ) -> dict[str, Any]:
     if output.exists() and any(output.iterdir()):
         raise FileExistsError(f"release output directory is not empty: {output}")
     output.mkdir(parents=True, exist_ok=True, mode=0o700)
     _copy_regular(source_bundle.checkpoint_path, output / "model.zip")
-    _copy_regular(source_bundle.recipe_path, output / "recipe.json")
+    if recipe_filename == HUB_RECIPE_FILENAME:
+        write_huggingface_recipe(source_bundle.model, source_bundle.recipe, output)
+    else:
+        write_json_recipe(source_bundle, output)
     _copy_regular(replay_path, output / "replay.mp4")
     (output / ".gitattributes").write_text(GITATTRIBUTES_TEXT, encoding="utf-8")
     (output / "LICENSE").write_text(MIT_LICENSE_TEXT, encoding="utf-8")
     write_canonical_json(output / "evaluation_evidence.json", evaluation_evidence_document)
-    source_model = source_bundle.model
-    metadata = deepcopy(dict(source_model["provenance"]))
-    metadata.update(source_model["policy"])
-    metadata["checkpoint_step"] = source_model["checkpoint"].get("step")
-    metadata["kind"] = source_model["checkpoint"].get("kind")
-    write_canonical_json(
-        output / "model.json",
-        build_model_document(output / "model.zip", output / "recipe.json", metadata),
-    )
     bundle = load_policy_bundle(output, source=str(output))
     goal = _required_mapping(capture.get("goal"), label="capture goal")
     identity = publication_identity_from_policy_bundle(goal.get("goal_id"), bundle)
@@ -614,7 +611,7 @@ def prepare_release_bundle(
     if replay["checkpoint_sha256"] != bundle.checkpoint_sha256:
         raise ValueError("captured checkpoint does not match release model.zip")
     if replay["recipe_sha256"] != bundle.recipe_sha256:
-        raise ValueError("captured recipe does not match release recipe.json")
+        raise ValueError("captured recipe does not match the release source recipe")
     provisional = build_release_manifest(
         identity,
         bundle,
@@ -1234,8 +1231,7 @@ class PlayerPublicationService:
         try:
             source_root = temporary / "source"
             _copy_regular(bundle.checkpoint_path, source_root / "model.zip")
-            _copy_regular(bundle.model_path, source_root / "model.json")
-            _copy_regular(bundle.recipe_path, source_root / "recipe.json")
+            write_json_recipe(bundle, source_root)
             capture_root = temporary / "capture"
             capture_source = self.root / "captures" / str(capture["capture_id"])
             _copy_regular(capture_source / "capture.json", capture_root / "capture.json")

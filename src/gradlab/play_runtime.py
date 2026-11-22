@@ -656,7 +656,7 @@ class PlaybackLoader:
                 "run_id": run_id,
                 "checkpoint_id": resolved_checkpoint_id,
                 "checkpoint_sha256": checkpoint_sha256,
-                "recipe_sha256": file_sha256(candidate.source.bundle.recipe_path),
+                "recipe_sha256": candidate.source.bundle.recipe_sha256,
                 "goal": deepcopy(recipe.get("goal")),
                 "contract": deepcopy(candidate.contract_details),
                 "source": {

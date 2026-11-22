@@ -11,8 +11,8 @@ from huggingface_hub import HfApi, hf_hub_download
 
 from gradlab.cli_parser import ExactArgumentParser
 from gradlab.publication import (
-    HUGGINGFACE_RELEASE_FILES,
     find_huggingface_environment_collection,
+    release_files,
     validate_huggingface_environment_collection,
     validate_release_bundle,
     verify_replay,
@@ -51,9 +51,9 @@ def audit_huggingface_release(
     if tags.get(revision) != str(tagged.sha):
         raise ValueError(f"tag {revision!r} is missing or does not point to {tagged.sha}")
 
-    expected_files = set(HUGGINGFACE_RELEASE_FILES)
     main_files = set(api.list_repo_files(repo_id, repo_type="model"))
     tagged_files = set(api.list_repo_files(repo_id, revision=revision, repo_type="model"))
+    expected_files = release_files(tagged_files)
     if main_files != expected_files:
         raise ValueError(
             f"main file set mismatch; missing={sorted(expected_files - main_files)}, "
@@ -67,7 +67,7 @@ def audit_huggingface_release(
 
     with tempfile.TemporaryDirectory(prefix="gradlab-hf-audit-") as temporary:
         root = Path(temporary)
-        for filename in sorted(HUGGINGFACE_RELEASE_FILES):
+        for filename in sorted(expected_files):
             cached = hf_hub_download(
                 repo_id,
                 filename,

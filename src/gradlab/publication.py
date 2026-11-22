@@ -4,7 +4,7 @@ import json
 import re
 import shutil
 import subprocess
-from collections.abc import Mapping, Sequence
+from collections.abc import Container, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import asdict, dataclass
 from pathlib import Path, PureWindowsPath
@@ -33,6 +33,8 @@ from gradlab.metric_names import (
 from gradlab.model_sources import DEFAULT_PUBLIC_MODELS_BASE_URL
 from gradlab.env_registry import environment_spec
 from gradlab.policy_bundle import (
+    HUB_RECIPE_FILENAME,
+    RECIPE_FILENAME,
     PolicyBundle,
     PolicyDocumentError,
     UnsupportedPolicyDocumentVersion,
@@ -65,7 +67,7 @@ HUGGINGFACE_RELEASE_FILES = frozenset(
         "LICENSE",
         "model.zip",
         "model.json",
-        "recipe.json",
+        RECIPE_FILENAME,
         "evaluation_evidence.json",
         "release_manifest.json",
         "replay.mp4",
@@ -1088,6 +1090,7 @@ def render_model_card(
                 )
             ),
             "manifest_purpose": manifest_purpose,
+            "recipe_filename": release_recipe_filename({bundle.recipe_path.name}),
             "lineage_digest": lineage.get("digest"),
             "history_rows": history_rows,
             "comparison_status": (
@@ -1294,13 +1297,22 @@ def verify_replay(path: Path) -> dict[str, object]:
 
 
 def release_artifact_records(root: Path) -> dict[str, dict[str, int | str]]:
+    names = release_files({path.name for path in root.iterdir()}) - {"release_manifest.json"}
     return {
         filename: {
             "sha256": sha256_file(root / filename),
             "size_bytes": (root / filename).stat().st_size,
         }
-        for filename in sorted(HASHED_RELEASE_FILES)
+        for filename in sorted(names)
     }
+
+
+def release_recipe_filename(entries: Container[str]) -> str:
+    return HUB_RECIPE_FILENAME if HUB_RECIPE_FILENAME in entries else RECIPE_FILENAME
+
+
+def release_files(entries: Container[str]) -> frozenset[str]:
+    return (HUGGINGFACE_RELEASE_FILES - {RECIPE_FILENAME}) | {release_recipe_filename(entries)}
 
 
 def _assert_no_absolute_paths(value: object, *, path: str = "manifest") -> None:
@@ -1570,9 +1582,10 @@ def _validate_release_manifest_v4(document: Mapping[str, Any], source: str) -> d
         label=source,
         error_type=PolicyDocumentError,
     )
-    if set(manifest.artifacts) != HASHED_RELEASE_FILES:
+    expected = release_files(manifest.artifacts) - {"release_manifest.json"}
+    if set(manifest.artifacts) != expected:
         raise PolicyDocumentError(
-            f"{source}.artifacts must describe exactly: " + ", ".join(sorted(HASHED_RELEASE_FILES))
+            f"{source}.artifacts must describe exactly: " + ", ".join(sorted(expected))
         )
     if re.fullmatch(r"v[1-9][0-9]*", manifest.release.version) is None:
         raise PolicyDocumentError(f"{source}.release.version must be a sequential vN tag")
@@ -1607,6 +1620,8 @@ def _validate_release_manifest_v4(document: Mapping[str, Any], source: str) -> d
         if not isinstance(manifest.evaluation, Mapping) or manifest.evaluation.get("accepted") is not True:
             raise PolicyDocumentError(f"{source}.research evaluation must be accepted")
     else:
+        if HUB_RECIPE_FILENAME in manifest.artifacts:
+            raise PolicyDocumentError(f"{source}.historical import must preserve its original artifact names")
         if manifest.featured:
             raise PolicyDocumentError(f"{source}.historical imports cannot be featured")
         if not isinstance(manifest.historical_import, Mapping):
@@ -1655,9 +1670,10 @@ def validate_release_manifest_document(
 
 def validate_release_bundle(root: Path) -> dict[str, Any]:
     actual_entries = {path.name for path in root.iterdir()}
-    if actual_entries != HUGGINGFACE_RELEASE_FILES:
-        missing = sorted(HUGGINGFACE_RELEASE_FILES - actual_entries)
-        extra = sorted(actual_entries - HUGGINGFACE_RELEASE_FILES)
+    expected = release_files(actual_entries)
+    if actual_entries != expected:
+        missing = sorted(expected - actual_entries)
+        extra = sorted(actual_entries - expected)
         raise ValueError(f"release file set mismatch; missing={missing}, extra={extra}")
     non_files = sorted(path.name for path in root.iterdir() if not path.is_file())
     if non_files:

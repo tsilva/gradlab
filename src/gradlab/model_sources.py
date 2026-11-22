@@ -22,6 +22,7 @@ from gradlab.policy_bundle import (
     MODEL_FILENAME,
     RECIPE_FILENAME,
     PolicyBundle,
+    load_model_document,
     load_policy_bundle,
     load_policy_bundle_from_checkpoint,
 )
@@ -445,7 +446,19 @@ def download_huggingface_model_source(
         raise SystemExit(f"Could not inspect Hugging Face model {ref}: {exc}") from exc
     target_dir = root / _safe_stem(f"{repo_id}@{immutable_revision}")
     target_dir.mkdir(parents=True, exist_ok=True)
-    for bundle_filename in (CHECKPOINT_FILENAME, MODEL_FILENAME, RECIPE_FILENAME):
+    if MODEL_FILENAME not in repo_files:
+        raise SystemExit(
+            f"Hugging Face bundle {repo_id}@{immutable_revision} is missing {MODEL_FILENAME}"
+        )
+    model_path = Path(hf_hub_download(
+        repo_id=repo_id,
+        repo_type="model",
+        revision=immutable_revision,
+        filename=MODEL_FILENAME,
+        local_dir=target_dir,
+    ))
+    recipe_filename = load_model_document(model_path)["recipe"]["filename"]
+    for bundle_filename in (CHECKPOINT_FILENAME, recipe_filename):
         if bundle_filename not in repo_files:
             raise SystemExit(
                 f"Hugging Face bundle {repo_id}@{immutable_revision} is missing {bundle_filename}"

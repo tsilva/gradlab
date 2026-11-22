@@ -16,6 +16,7 @@ from gradlab.env import resolve_env_config
 from gradlab.env_config import env_config_from_mapping
 from gradlab.env_metadata import training_metadata
 from gradlab.policy_bundle import (
+    HUB_RECIPE_FILENAME,
     MODEL_DOCUMENT_TYPE,
     PolicyDocumentError,
     UnsupportedPolicyDocumentVersion,
@@ -32,6 +33,8 @@ from gradlab.policy_bundle import (
     load_recipe_document,
     validate_recipe_document,
     write_canonical_json,
+    write_huggingface_recipe,
+    write_json_recipe,
 )
 from gradlab.eval_runner import normalized_evaluation_request
 from gradlab.recipe_documents import (
@@ -527,6 +530,57 @@ def write_bundle(root: Path) -> None:
         root / "model.json",
         build_model_document(checkpoint, recipe_path, metadata),
     )
+
+
+def test_huggingface_yaml_bundle_preserves_and_verifies_the_source_recipe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from shutil import copyfile
+
+    from gradlab.model_sources import download_huggingface_model_source
+
+    source = tmp_path / "source"
+    source.mkdir()
+    write_bundle(source)
+    original = load_policy_bundle(source)
+    published = tmp_path / "published"
+    published.mkdir()
+    copyfile(original.checkpoint_path, published / "model.zip")
+    write_huggingface_recipe(original.model, original.recipe, published)
+
+    revision = "a" * 40
+    files = {path.name for path in published.iterdir()}
+    assert files == {"model.zip", "model.json", HUB_RECIPE_FILENAME}
+    monkeypatch.setattr("huggingface_hub.HfApi", lambda: SimpleNamespace(
+        model_info=lambda **_: SimpleNamespace(sha=revision),
+        list_repo_files=lambda **_: files,
+    ))
+
+    def download(*, filename: str, local_dir: Path, **kwargs: object) -> str:
+        assert kwargs["revision"] == revision
+        target = local_dir / filename
+        copyfile(published / filename, target)
+        return str(target)
+
+    monkeypatch.setattr("huggingface_hub.hf_hub_download", download)
+    bundle = download_huggingface_model_source(
+        "hf://owner/model", root=tmp_path / "cache"
+    ).bundle
+    assert bundle is not None
+    assert bundle.recipe == original.recipe
+    assert bundle.recipe_sha256 == original.recipe_sha256
+    assert bundle.checkpoint_sha256 == original.checkpoint_sha256
+    restored = tmp_path / "restored"
+    restored.mkdir()
+    write_json_recipe(bundle, restored)
+    for name in ("model.json", "recipe.json"):
+        assert (restored / name).read_bytes() == (source / name).read_bytes()
+
+    broken = dict(bundle.model)
+    broken["recipe"] = {**broken["recipe"], "source_json_sha256": "0" * 64}
+    write_canonical_json(published / "model.json", broken)
+    with pytest.raises(PolicyDocumentError, match="source JSON digest"):
+        load_policy_bundle(published)
 
 
 def test_level1_1_recipe_fixture_preserves_aligned_train_and_eval_contracts() -> None:

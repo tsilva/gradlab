@@ -36,7 +36,7 @@ def add_play_source_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--model",
         default=None,
-        help="Local gradlab policy path. The artifact must have model.json and recipe.json sidecars.",
+        help="Local GradLab policy path with model metadata and its bound recipe.",
     )
     parser.add_argument(
         "--recording",

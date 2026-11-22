@@ -36,12 +36,17 @@ from gradlab.player_publication import (
     _youtube_access,
     prepare_release_bundle,
 )
-from gradlab.policy_bundle import load_policy_bundle
+from gradlab.policy_bundle import (
+    RECIPE_FILENAME,
+    load_policy_bundle,
+    load_recipe_document,
+)
 from gradlab.publication import (
-    HUGGINGFACE_RELEASE_FILES,
     dashboard_repo_id,
     find_huggingface_environment_collection,
     huggingface_environment_collection_title,
+    release_files,
+    release_recipe_filename,
     validate_huggingface_environment_collection,
     validate_release_bundle,
     verify_replay,
@@ -528,6 +533,7 @@ class PlayerPublicationJobHandler:
             comparison=request.get("comparison"),
             history=request.get("history") or (),
             featured=bool(request.get("feature")),
+            recipe_filename=release_recipe_filename(snapshot["manifest"]["artifacts"]),
         )
         if manifest.get("publication", {}).get("request_fingerprint") != request[
             "request_fingerprint"
@@ -536,7 +542,7 @@ class PlayerPublicationJobHandler:
         state["phase"] = "release_built"
         state["release_hashes"] = {
             name: file_sha256(release_root / name)
-            for name in sorted(HUGGINGFACE_RELEASE_FILES)
+            for name in sorted(release_files(manifest["artifacts"]))
         }
         self._save_state(state_path, state)
 
@@ -630,16 +636,17 @@ class PlayerPublicationJobHandler:
                         )
             if state["phase"] == "release_built":
                 existing_files = set(api.list_repo_files(repo_id, repo_type="model"))
+                expected_files = release_files(state["release_hashes"])
                 operations: list[Any] = [
                     CommitOperationAdd(
                         path_in_repo=name,
                         path_or_fileobj=str(release_root / name),
                     )
-                    for name in sorted(HUGGINGFACE_RELEASE_FILES)
+                    for name in sorted(expected_files)
                 ]
                 operations.extend(
                     CommitOperationDelete(path_in_repo=name)
-                    for name in sorted(existing_files - HUGGINGFACE_RELEASE_FILES)
+                    for name in sorted(existing_files - expected_files)
                 )
                 try:
                     result = api.create_commit(
@@ -711,7 +718,7 @@ class PlayerPublicationJobHandler:
             version = str(request["release_version"])
             with tempfile.TemporaryDirectory(prefix="gradlab-hf-release-verify-") as name:
                 downloaded_root = Path(name)
-                for filename in sorted(HUGGINGFACE_RELEASE_FILES):
+                for filename in sorted(release_files(state["release_hashes"])):
                     downloaded = self.hub_download(
                         repo_id,
                         filename,
@@ -835,13 +842,12 @@ class PlayerPublicationJobHandler:
         info = api.model_info(repo_id=repo_id, revision=version)
         if str(getattr(info, "sha", "")) != str(state["huggingface_commit"]):
             raise ValueError("Hugging Face tag changed before final audit")
-        if set(api.list_repo_files(repo_id, revision=version, repo_type="model")) != set(
-            HUGGINGFACE_RELEASE_FILES
-        ):
+        expected_files = release_files(state["release_hashes"])
+        if set(api.list_repo_files(repo_id, revision=version, repo_type="model")) != expected_files:
             raise ValueError("Hugging Face release file set failed final audit")
         with tempfile.TemporaryDirectory(prefix="gradlab-player-publication-audit-") as name:
             root = Path(name)
-            for filename in sorted(HUGGINGFACE_RELEASE_FILES):
+            for filename in sorted(expected_files):
                 downloaded = self.hub_download(
                     repo_id,
                     filename,
@@ -931,6 +937,12 @@ class PlayerPublicationJobHandler:
                     self._checkpoint(store, str(job["job_id"]), request, state, kind="release_verified")
                     api, token = self._hf_access(request)
                     root = snapshot["root"] / "provisional_release"
+                    recipe_path = root / release_recipe_filename(snapshot["manifest"]["artifacts"])
+                    recipe = (
+                        _json_object(recipe_path, label="dashboard recipe")
+                        if recipe_path.name == RECIPE_FILENAME
+                        else load_recipe_document(recipe_path)
+                    )
                     state["urls"]["dashboard"] = publish_game_dashboard(
                         api,
                         self.hub_download,
@@ -938,7 +950,7 @@ class PlayerPublicationJobHandler:
                         collection_slug=state["huggingface_collection"],
                         manifest=snapshot["manifest"],
                         evidence=_json_object(root / "evaluation_evidence.json", label="dashboard evaluation evidence"),
-                        recipe=_json_object(root / "recipe.json", label="dashboard recipe"),
+                        recipe=recipe,
                         commit=state["huggingface_commit"],
                     )
                     state["message"] = "Release and game dashboard verified"

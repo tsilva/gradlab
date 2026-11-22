@@ -31,6 +31,7 @@ MODEL_DOCUMENT_TYPE = "gradlab.model"
 MODEL_FORMAT_VERSION = 3
 
 RECIPE_FILENAME = "recipe.json"
+HUB_RECIPE_FILENAME = "recipe.yaml"
 MODEL_FILENAME = "model.json"
 CHECKPOINT_FILENAME = "model.zip"
 
@@ -182,11 +183,18 @@ class _CheckpointDocument(BoundaryModel):
 
 
 class _RecipeBindingDocument(BoundaryModel):
-    filename: Literal[RECIPE_FILENAME]
+    filename: Literal[RECIPE_FILENAME, HUB_RECIPE_FILENAME]
     document_type: Literal[RECIPE_DOCUMENT_TYPE]
     format_version: Literal[RECIPE_FORMAT_VERSION]
     sha256: Sha256
     size_bytes: PositiveInt
+    source_json_sha256: Sha256 | None = None
+
+    @model_validator(mode="after")
+    def validate_source_json(self) -> _RecipeBindingDocument:
+        if (self.filename == HUB_RECIPE_FILENAME) != (self.source_json_sha256 is not None):
+            raise ValueError("only a YAML recipe binds a source JSON digest")
+        return self
 
 
 class _PolicyDocument(BoundaryModel):
@@ -318,7 +326,8 @@ class PolicyBundle:
 
     @property
     def recipe_sha256(self) -> str:
-        return str(self.model["recipe"]["sha256"])
+        binding = self.model["recipe"]
+        return str(binding.get("source_json_sha256") or binding["sha256"])
 
 
 def canonical_json_bytes(value: object) -> bytes:
@@ -839,7 +848,22 @@ def _validate_recipe(
 
 
 def load_recipe_document(path: Path) -> dict[str, Any]:
-    value = load_json_object(path)
+    if path.name == HUB_RECIPE_FILENAME:
+        import yaml
+
+        from gradlab.config_loader import load_yaml_document
+
+        try:
+            if path.stat().st_size > 8 * 1024**2:
+                raise PolicyDocumentError(f"YAML recipe {path} exceeds 8 MiB")
+            text = path.read_text(encoding="utf-8")
+            if any(isinstance(event, yaml.events.AliasEvent) for event in yaml.parse(text)):
+                raise PolicyDocumentError(f"YAML recipe {path} contains an alias")
+            value = _required_mapping(load_yaml_document(text), label=str(path))
+        except (OSError, UnicodeError, ValueError, yaml.YAMLError, RecursionError) as exc:
+            raise PolicyDocumentError(f"Could not read YAML recipe {path}: {exc}") from exc
+    else:
+        value = load_json_object(path)
     return preflight_document(
         value,
         source=str(path),
@@ -968,6 +992,55 @@ def load_model_document(path: Path) -> dict[str, Any]:
         current_version=MODEL_FORMAT_VERSION,
         validator=_validate_model,
     )
+
+
+def write_huggingface_recipe(
+    model: Mapping[str, Any], recipe: Mapping[str, Any], root: Path,
+) -> None:
+    """Bind a human-readable projection to the unchanged canonical Run recipe."""
+    import yaml
+
+    binding = model["recipe"]
+    source_digest = binding.get("source_json_sha256") or binding["sha256"]
+    recipe = validate_recipe_document(recipe)
+    source_json = canonical_json_bytes(recipe)
+    if hashlib.sha256(source_json).hexdigest() != source_digest:
+        raise PolicyDocumentError("YAML publication requires the exact canonical JSON recipe")
+    # JSON decoding removes any object sharing before serializing the YAML tree.
+    content = yaml.safe_dump(json.loads(source_json), sort_keys=False, allow_unicode=True).encode("utf-8")
+    path = root / HUB_RECIPE_FILENAME
+    path.write_bytes(content)
+    if canonical_json_bytes(load_recipe_document(path)) != source_json:
+        raise PolicyDocumentError("YAML publication changed the recipe data")
+    updated_model = dict(model)
+    updated_model["recipe"] = {
+        **binding,
+        "filename": HUB_RECIPE_FILENAME,
+        "sha256": hashlib.sha256(content).hexdigest(),
+        "size_bytes": len(content),
+        "source_json_sha256": source_digest,
+    }
+    write_canonical_json(root / MODEL_FILENAME, _validate_model(updated_model, MODEL_FILENAME))
+
+
+def write_json_recipe(bundle: PolicyBundle, root: Path) -> None:
+    """Write the original recipe and a matching model document for internal uses."""
+    if bundle.recipe_path.name != HUB_RECIPE_FILENAME:
+        (root / RECIPE_FILENAME).write_bytes(bundle.recipe_path.read_bytes())
+        (root / MODEL_FILENAME).write_bytes(bundle.model_path.read_bytes())
+        return
+    content = canonical_json_bytes(bundle.recipe)
+    if hashlib.sha256(content).hexdigest() != bundle.recipe_sha256:
+        raise PolicyDocumentError("YAML recipe no longer matches the source JSON digest")
+    (root / RECIPE_FILENAME).write_bytes(content)
+    model = dict(bundle.model)
+    binding = dict(model["recipe"])
+    binding.pop("source_json_sha256")
+    model["recipe"] = {
+        **binding, "filename": RECIPE_FILENAME,
+        "sha256": bundle.recipe_sha256, "size_bytes": len(content),
+    }
+    write_canonical_json(root / MODEL_FILENAME, model)
 
 
 def model_document_path(checkpoint_path: Path) -> Path:
@@ -1330,6 +1403,8 @@ def build_model_document(
     recipe_path: Path,
     metadata: Mapping[str, Any],
 ) -> dict[str, Any]:
+    if recipe_path.name == HUB_RECIPE_FILENAME:
+        raise PolicyDocumentError("build the model from its Run recipe before projecting it to YAML")
     recipe_document = load_recipe_document(recipe_path)
     step = metadata.get("checkpoint_step")
     provenance = {
@@ -1454,9 +1529,12 @@ def _load_policy_bundle_paths(
     *,
     source: str,
     revision: str | None,
+    model: dict[str, Any] | None = None,
 ) -> PolicyBundle:
-    model = load_model_document(model_path)
-    recipe = load_recipe_document(recipe_path)
+    if model is None:
+        model = load_model_document(model_path)
+    is_yaml = model["recipe"]["filename"] == HUB_RECIPE_FILENAME
+    recipe = None if is_yaml else load_recipe_document(recipe_path)
     for path, binding in (
         (checkpoint_path, model["checkpoint"]),
         (recipe_path, model["recipe"]),
@@ -1465,6 +1543,12 @@ def _load_policy_bundle_paths(
             raise PolicyDocumentError(f"{path} hash does not match {model_path}")
         if path.stat().st_size != binding["size_bytes"]:
             raise PolicyDocumentError(f"{path} size does not match {model_path}")
+    if recipe is None:
+        if recipe_path.name != HUB_RECIPE_FILENAME:
+            raise PolicyDocumentError(f"{recipe_path} is not the bound YAML recipe")
+        recipe = load_recipe_document(recipe_path)
+        if canonical_json_sha256(recipe) != model["recipe"]["source_json_sha256"]:
+            raise PolicyDocumentError(f"{recipe_path} does not match its source JSON digest")
     _validate_cross_document_contract(model, recipe)
     return PolicyBundle(
         checkpoint_path=checkpoint_path,
@@ -1485,18 +1569,20 @@ def load_policy_bundle(
 ) -> PolicyBundle:
     checkpoint_path = root / CHECKPOINT_FILENAME
     model_path = root / MODEL_FILENAME
-    recipe_path = root / RECIPE_FILENAME
-    missing = [
-        path.name for path in (checkpoint_path, model_path, recipe_path) if not path.is_file()
-    ]
+    missing = [path.name for path in (checkpoint_path, model_path) if not path.is_file()]
     if missing:
         raise PolicyDocumentError(f"policy bundle {root} is missing: {', '.join(missing)}")
+    model = load_model_document(model_path)
+    recipe_path = root / model["recipe"]["filename"]
+    if not recipe_path.is_file():
+        raise PolicyDocumentError(f"policy bundle {root} is missing: {recipe_path.name}")
     return _load_policy_bundle_paths(
         checkpoint_path,
         model_path,
         recipe_path,
         source=source or str(root),
         revision=revision,
+        model=model,
     )
 
 
@@ -1509,6 +1595,7 @@ def load_policy_bundle_from_checkpoint(
     if checkpoint_path.name == CHECKPOINT_FILENAME and (
         checkpoint_path.with_name(MODEL_FILENAME).is_file()
         or checkpoint_path.with_name(RECIPE_FILENAME).is_file()
+        or checkpoint_path.with_name(HUB_RECIPE_FILENAME).is_file()
     ):
         return load_policy_bundle(
             checkpoint_path.parent,

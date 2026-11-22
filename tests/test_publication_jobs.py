@@ -98,6 +98,7 @@ def _snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, dashboard: str
     monkeypatch.setattr(
         "gradlab.publication_jobs.validate_release_bundle",
         lambda _root: {
+            "artifacts": {"recipe.json": {}},
             "publication": {"request_fingerprint": fingerprint},
             "repository": {"repo_id": basis["repo_id"], "canonical_environment_id": "Example-v0"},
         },
