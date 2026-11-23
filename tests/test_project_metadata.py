@@ -16,7 +16,7 @@ def test_project_declares_and_distributes_mit_license() -> None:
         "include"
     ]
     assert license_text.startswith("MIT License\n\nCopyright (c) 2026 Tiago Silva")
-    assert "[MIT License](LICENSE)" in readme
+    assert "[MIT License](https://github.com/tsilva/gradlab/blob/main/LICENSE)" in readme
 
 
 def test_uv_tool_config_matches_project_resolution_policy() -> None:
