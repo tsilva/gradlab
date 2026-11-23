@@ -75,7 +75,7 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
         self.assertEqual(len(first), 25)
         self.assertEqual(
             {spec.profile_id for spec in first},
-            {"training", "breakout_training"},
+            {"training", "breakout_training", "mario_training"},
         )
         self.assertIn("SuperMarioBros-Nes-v0", {spec.project for spec in first})
         self.assertIn("VizdoomDeathmatch-v1", {spec.project for spec in first})
@@ -163,6 +163,8 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
             for metric in (*panel.y, *panel.metric_templates)
         }
         self.assertIn("train/value_loss/mean", mario_metrics)
+        self.assertIn("train/distill/cross_entropy/mean", mario_metrics)
+        self.assertIn("eval/return/mean", mario_metrics)
         self.assertFalse(any("/a2c/" in metric or "/ppo/" in metric for metric in mario_metrics))
 
     def test_every_declared_panel_metric_is_registered_history(self) -> None:
@@ -214,14 +216,15 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
             "max_runs": 5,
             "sections": ["training_essentials"],
         }
-        document["projects"] = {"Bandit-v0": {"profile": "compact"}}
+        document["projects"].pop("Breakout-Atari2600-v0")
+        document["projects"]["Bandit-v0"] = {"profile": "compact"}
 
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "_workspaces.yaml"
             path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
             specs = load_workspace_declaration(
                 path,
-                projects=("Bandit-v0", "Breakout-Atari2600-v0"),
+                projects=("Bandit-v0", "Breakout-Atari2600-v0", "SuperMarioBros-Nes-v0"),
             )
 
         by_project = {spec.project: spec for spec in specs}
@@ -243,7 +246,7 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "unknown panel.*unknown"):
                 load_workspace_declaration(
                     path,
-                    projects=("Bandit-v0", "Breakout-Atari2600-v0"),
+                    projects=("Bandit-v0", "Breakout-Atari2600-v0", "SuperMarioBros-Nes-v0"),
                 )
 
     def test_project_override_rejects_unknown_excluded_metric(self) -> None:
@@ -256,7 +259,7 @@ class WandbWorkspaceDeclarationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "unknown metric.*train/not_registered"):
                 load_workspace_declaration(
                     path,
-                    projects=("Bandit-v0", "Breakout-Atari2600-v0"),
+                    projects=("Bandit-v0", "Breakout-Atari2600-v0", "SuperMarioBros-Nes-v0"),
                 )
 
     def test_unknown_panel_metric_is_rejected(self) -> None:

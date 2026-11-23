@@ -52,9 +52,9 @@ def test_mario_reward_shape_defaults_and_cli_override_materialize_both_phases() 
     assert "reward_shapes" not in selected["goal"]
 
 
-def test_mario_recipes_select_the_declared_reward_shape() -> None:
+def test_mario_level_recipes_select_the_declared_reward_shape() -> None:
     goal_root = Path("experiments/goals/SuperMarioBros-Nes-v0")
-    recipes = sorted(goal_root.glob("*/recipes/*.yaml"))
+    recipes = sorted(goal_root.glob("Level[1-8]-[1-4]/recipes/*.yaml"))
     assert recipes
     sft_variants = {
         "Level1-3/recipes/ppo.yaml",

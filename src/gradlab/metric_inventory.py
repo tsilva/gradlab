@@ -198,7 +198,7 @@ def resolve_metric_inventory(config: Mapping[str, Any]) -> MetricInventory:
             continue
         if any(
             name.startswith(f"train/{candidate}/") and algorithm != candidate
-            for candidate in ("go-explore", "jerk")
+            for candidate in ("go-explore", "jerk", "distill")
         ):
             continue
         fields = re.findall(r"\{([a-z_]+)\}", name)

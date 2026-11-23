@@ -84,10 +84,12 @@ def test_campaign_recipe_preserves_full_start_and_separate_acceptance(level):
 def test_campaign_covers_exactly_31_ordinary_levels_without_final_level():
     recipes = [campaign_recipe(level) for level in LEVELS]
     final_goal = GOALS / "Level8-4"
-    assert set(GOALS.glob("*/recipes/*.yaml")) == {
+    assert set(GOALS.glob("Level[1-8]-[1-4]/recipes/*.yaml")) == {
         *recipes, final_goal / "recipes/ppo.yaml", final_goal / "recipes/ppo-sil.yaml",
     }
-    assert {path.parent.name for path in GOALS.glob("*/_goal.yaml")} == {*LEVELS, "Level8-4"}
+    assert {path.parent.name for path in GOALS.glob("Level[1-8]-[1-4]/_goal.yaml")} == {
+        *LEVELS, "Level8-4",
+    }
     assert {path.parent.parent.name for path in recipes} == set(LEVELS)
     assert len(recipes) == len(LEVELS) == 31
 

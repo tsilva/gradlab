@@ -417,9 +417,9 @@ class ConfigValidationTests(unittest.TestCase):
 
         self.assertEqual(actor_critic_recipes, 64)
 
-    def test_every_mario_recipe_disables_eval_and_preserves_its_clear_contract(self) -> None:
+    def test_every_mario_level_recipe_disables_eval_and_preserves_its_clear_contract(self) -> None:
         mario_root = Path("experiments/goals/SuperMarioBros-Nes-v0")
-        recipes = sorted(mario_root.glob("*/recipes/*.yaml"))
+        recipes = sorted(mario_root.glob("Level[1-8]-[1-4]/recipes/*.yaml"))
 
         self.assertEqual(len(recipes), 33)
         for recipe_path in recipes:
@@ -537,7 +537,7 @@ class ConfigValidationTests(unittest.TestCase):
         self.assertEqual(report.counts["json_files"], 0)
         self.assertGreaterEqual(report.counts["yaml_files"], 15)
         self.assertGreaterEqual(report.counts["goals"], 1)
-        self.assertEqual(report.counts["train_recipes"], 65)
+        self.assertEqual(report.counts["train_recipes"], 66)
         self.assertGreaterEqual(report.counts["env_configs"], 0)
         self.assertEqual(report.counts["benchmark_profiles"], 4)
         self.assertEqual(report.counts["workspace_manifests"], 1)
@@ -1034,7 +1034,7 @@ class ConfigValidationTests(unittest.TestCase):
     def test_all_mario_level_goals_share_attempt_termination_contract(self) -> None:
         root = self.MARIO_L11_GOAL.parent.parent
         expected_stalled = {"signal": "x", "operation": "unchanged_for", "steps": 300}
-        goal_paths = sorted(root.glob("*/_goal.yaml"))
+        goal_paths = sorted(root.glob("Level[1-8]-[1-4]/_goal.yaml"))
 
         self.assertEqual(len(goal_paths), 32)
         for goal_path in goal_paths:

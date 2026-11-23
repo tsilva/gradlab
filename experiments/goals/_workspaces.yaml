@@ -3,6 +3,37 @@ view_id: training
 default_profile: training
 
 sections:
+  goal_primary:
+    title: Primary metrics
+    pinned: true
+    open: true
+    columns: 2
+    panels:
+    - id: primary_0
+      kind: line
+      x: eval/step
+      y: [eval/return/mean]
+      y_title: return
+      width: 12
+      height: 8
+  mario_distillation:
+    title: Offline distillation
+    pinned: false
+    open: true
+    columns: 2
+    panels:
+    - id: distillation_cross_entropy
+      kind: line
+      x: train/step
+      y: [train/distill/cross_entropy/mean]
+    - id: distillation_development_clear
+      kind: line
+      x: train/step
+      y: [train/distill/development/clear/fraction]
+    - id: distillation_development_gap
+      kind: line
+      x: train/step
+      y: [train/distill/development/worst_teacher_gap/fraction]
   occupancy_totals:
     title: Total experience by bucket
     pinned: false
@@ -264,10 +295,23 @@ profiles:
     - occupancy_totals
     - occupancy
     - curriculum_inventory
+  mario_training:
+    display_name: GradLab Training
+    primary_metrics: none
+    run_scope: current_metrics_schema
+    max_runs: 25
+    sections:
+    - goal_primary
+    - mario_distillation
+    - training_essentials
+    - occupancy
+    - curriculum_inventory
 
 # Every W&B project resolved from a checked-in active goal inherits the default profile.
 # Project overrides may select another complete profile or omit panels whose metrics do not apply.
 projects:
+  SuperMarioBros-Nes-v0:
+    profile: mario_training
   Breakout-Atari2600-v0:
     profile: breakout_training
     exclude_panels:
