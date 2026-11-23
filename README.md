@@ -18,7 +18,7 @@ credentials, ROM, or tracking service. GradLab uses Python 3.14, which uv can
 install automatically.
 
 ```bash
-uvx gradlab@0.2.6 train gradlab__bandit/ppo
+uvx gradlab@0.2.7 train gradlab__bandit/ppo
 ```
 
 A completed run saves a playable policy under `~/.config/gradlab/runs/`.
