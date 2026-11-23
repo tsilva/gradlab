@@ -102,15 +102,15 @@ def test_local_recipe_path_infers_owning_goal() -> None:
     assert source.repository_root == Path.cwd()
 
 
-def test_turbo_demo_uses_the_standard_mario_ppo_contract() -> None:
-    source = resolve_recipe_source("SuperMarioBros-Nes-v0/Level1-1/turbo-demo")
+def test_level1_1_uses_the_standard_mario_ppo_contract() -> None:
+    source = resolve_recipe_source("SuperMarioBros-Nes-v0/Level1-1/ppo")
     from gradlab.recipe_documents import compose_train_document
 
     document = compose_train_document(source.goal_path, source.recipe_path)
     config = document["train_config"]
     backend = config["training_backend"]
 
-    assert config["timesteps"] == 98_304
+    assert config["timesteps"] == 16_777_216
     assert config["n_envs"] == 16
     assert backend["id"] == "gradlab.ppo"
     assert backend["config"]["precision"] == "fp32"
@@ -414,7 +414,7 @@ def test_local_mario_train_binds_registered_rom_cache(
         assert (
             main(
                 [
-                    "SuperMarioBros-Nes-v0/Level1-1/dstack-smoke",
+                    "SuperMarioBros-Nes-v0/Level1-1/ppo",
                     "--runs-dir",
                     str(tmp_path),
                     "--run-name",
@@ -484,7 +484,7 @@ def test_local_mario_train_uses_direct_rom_without_registry_or_cache_mutation(
         assert (
             main(
                 [
-                    "SuperMarioBros-Nes-v0/Level1-1/turbo-demo",
+                    "SuperMarioBros-Nes-v0/Level1-1/ppo",
                     "--rom-path",
                     str(rom),
                     "--runs-dir",
@@ -627,7 +627,7 @@ def test_local_mario_direct_rom_failure_precedes_run_creation(tmp_path: Path) ->
     ):
         main(
             [
-                "SuperMarioBros-Nes-v0/Level1-1/turbo-demo",
+                "SuperMarioBros-Nes-v0/Level1-1/ppo",
                 "--rom-path",
                 str(rom),
                 "--runs-dir",
@@ -652,7 +652,7 @@ def test_local_mario_train_rejects_missing_rom_before_creating_run(
     ):
         main(
             [
-                "SuperMarioBros-Nes-v0/Level1-1/dstack-smoke",
+                "SuperMarioBros-Nes-v0/Level1-1/ppo",
                 "--runs-dir",
                 str(tmp_path),
                 "--run-name",
