@@ -78,6 +78,10 @@ def run_parameters(config: Mapping[str, Any]) -> dict[str, str]:
                 visit(f"{key}.{child}", item)
         elif value is not None:
             text = value if isinstance(value, str) else json.dumps(value, sort_keys=True)
+            if len(text) > 6000 and isinstance(value, (list, tuple)):
+                # The frozen recipe retains the full ordered list.
+                digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+                text = f"sha256:{digest} ({len(value)} items)"
             if len(key) > 250 or len(text) > 6000:
                 raise ValueError(f"MLflow parameter exceeds its bound: {key}")
             result[key] = text

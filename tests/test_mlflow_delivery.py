@@ -500,3 +500,33 @@ def test_run_parameters_search_and_artifact_reference_roundtrip(tmp_path):
     path = service.client.download_artifacts(service.run_id,'gradlab/run-configuration.json',str(tmp_path))
     assert json.loads(Path(path).read_text())['parameters'] == run.data.params
     assert 'Debugging training evidence' in run.data.tags['mlflow.note.content']
+
+
+def test_oversized_recipe_list_preserves_a_searchable_identity(tmp_path):
+    teachers = [
+        {
+            "id": f"task-{index}",
+            "revision": "a" * 40,
+            "checkpoint_sha256": "b" * 64,
+            "recipe_sha256": "c" * 64,
+        }
+        for index in range(32)
+    ]
+    config = {
+        "recipe_sha256": "d" * 64,
+        "training_backend": {"id": "gradlab.distill", "config": {"teachers": teachers}},
+    }
+    serialized = json.dumps(teachers, sort_keys=True)
+    assert len(serialized) > 6000
+    digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+    service = MlflowDelivery.open(
+        tracking_uri=f"sqlite:///{tmp_path / 'tracking.db'}",
+        experiment_name="distillation",
+        gradlab_run_id="gradlab-" + "d" * 32,
+        created_at_ms=1000,
+        train_config=config,
+    )
+    service.publish_run_metadata(config)
+    parameters = service.client.get_run(service.run_id).data.params
+    assert parameters["training_backend.config.teachers"] == f"sha256:{digest} (32 items)"
+    assert parameters["recipe_sha256"] == config["recipe_sha256"]
