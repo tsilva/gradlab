@@ -42,6 +42,7 @@ intent again before finishing as required by the specification policy.
 | Evaluate a completed local source-overlay Run on its own host | `gradlab evaluate-local` with the recorded baseline and overlay receipts, exact checkpoint digest, and a private queue directory |
 | Tune this recipe's numeric PPO/A2C hyperparameters | `gradlab_autoresearch`, fixed training-only protocol |
 | Optimize architecture, rollout size, rewards, or another backend | Explicit experiment plan covering the requested axes |
+| Distill pinned categorical teachers | Compile a `gradlab.distill` recipe and verify the input snapshot before the normal local launch path |
 | Publish this unevaluated Checkpoint | `gradlab_upload-checkpoint`, Checkpoint Publication path |
 | Publish this accepted Policy to HF/YouTube | `gradlab_upload-checkpoint`, accepted-release path |
 | Create or refresh this game's public dashboard | `gradlab_upload-checkpoint`, [dashboard procedure](../../.codex/skills/gradlab_upload-checkpoint/references/dashboard.md) |
@@ -51,6 +52,28 @@ intent again before finishing as required by the specification policy.
 | Certify or debug the orchestration lifecycle | `gradlab_certify-lifecycle` |
 
 ## Agent service access
+
+### Distillation inputs
+
+Stage each verified teacher's `model.zip`, `model.json`, and bound recipe under
+`teachers/<start-id>/`. To reuse recordings, also stage `dataset/dataset.json`,
+`dataset/shards.json` and the indexed per-start recordings. The shard index maps
+relative file paths to SHA-256 digests. The recipe pins both manifest and index.
+For fresh collection the backend writes the resulting manifests to the Run directory.
+
+For a local dstack launch an operator exposes the exact snapshot through a
+kernel read-only bind mount at `/var/lib/gradlab/distillation-cache/<input-id>`.
+The input ID is the pinned shard index digest for reuse or the canonical teacher
+list digest for fresh collection. GradLab attaches the snapshot only on the
+selected local fleet and verifies that `/distillation-input` is read-only inside
+the task. For a supervised local process, `GRADLAB_DISTILLATION_INPUT` points to
+the staged directory. Preserve the snapshot until the Run is terminal.
+
+The [Mario reproduction recipe](../../experiments/goals/SuperMarioBros-Nes-v0/DistillAllLevels/recipes/offline-distill.yaml)
+uses an explicit comparison protocol with Checkpoint Acceptance disabled. Its
+budget and progress steps count optimizer updates.
+
+### Credential-backed services
 
 The Hub domain client uses the actual publication credential resolver and installed
 SDK. It accepts identity, repository-file listing and explicit small-file/folder

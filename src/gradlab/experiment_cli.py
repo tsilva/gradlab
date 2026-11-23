@@ -677,6 +677,7 @@ def _task_request(manifest: RunManifest, *, manifest_uri: str) -> TaskRequest:
         resources=DstackResources.from_manifest(manifest.compute.get("resources")),
         plain_env=plain_env,
         secret_bindings=bindings,
+        distillation_input_id=manifest.compute.get("distillation_input_id"),
         secret_env=(
             *_required_operator_environment(
                 run_checkpoint_eval_backend(manifest),
@@ -908,6 +909,15 @@ def cmd_launch(args: argparse.Namespace) -> int:
         compute,
         resources=resources,
     )
+    distillation_input_id = None
+    backend = config["training_backend"]
+    if backend["id"] == "gradlab.distill":
+        if selected_compute.kind != "local":
+            raise ValueError("distillation input mounts require explicit local compute")
+        dataset = backend["config"].get("dataset")
+        distillation_input_id = (
+            dataset["shards_sha256"] if dataset else canonical_json_sha256(backend["config"]["teachers"])
+        )
     metrics_profile = (
         _preflight_mlflow_compute_route(selected_compute)
         if config["tracking"]["backend"] == "mlflow"
@@ -1016,6 +1026,8 @@ def cmd_launch(args: argparse.Namespace) -> int:
         "runtime_build_source_sha": release.runtime_build_source_sha,
         "submission_key": str(args.submission_key or ""),
     }
+    if distillation_input_id is not None:
+        manifest_compute["distillation_input_id"] = distillation_input_id
     from gradlab.training_vault import WORKER_CAPABILITY, worker_context
 
     vault_context = worker_context()

@@ -133,6 +133,7 @@ class TaskRequest:
     resources: DstackResources = field(default_factory=DstackResources)
     retry_duration: str = "24h"
     rom_mount: str | None = None
+    distillation_input_id: str | None = None
     secret_bindings: Mapping[str, str] = field(default_factory=dict)
 
     def validate(self) -> None:
@@ -203,6 +204,11 @@ class TaskRequest:
             source, separator, destination = self.rom_mount.partition(":")
             if separator != ":" or not source.startswith("/") or not destination.startswith("/"):
                 raise ValueError("ROM mount must be /host/path:/container/path")
+        if self.distillation_input_id is not None and (
+            self.compute.kind != "local"
+            or re.fullmatch(r"[0-9a-f]{64}", self.distillation_input_id) is None
+        ):
+            raise ValueError("distillation input mounts require local compute and a SHA-256 ID")
         self.compute.validate()
 
 
@@ -268,6 +274,12 @@ def render_task_config(request: TaskRequest) -> dict[str, Any]:
     if request.rom_mount:
         config["volumes"] = [request.rom_mount]
         config["env"].append("GRADLAB_ROM_CACHE_READ_ONLY=1")
+    if request.distillation_input_id:
+        from gradlab.training.distill import CONTAINER_INPUT, DATASET_CACHE_ENV
+
+        source = f"/var/lib/gradlab/distillation-cache/{request.distillation_input_id}"
+        config.setdefault("volumes", []).append(f"{source}:{CONTAINER_INPUT}")
+        config["env"].append(f"{DATASET_CACHE_ENV}={CONTAINER_INPUT}")
     target = str(compute.target or "").strip()
     if compute.kind == "auto" and compute.max_price is not None:
         config["creation_policy"] = "reuse-or-create"

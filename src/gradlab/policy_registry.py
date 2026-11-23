@@ -9,11 +9,12 @@ from typing import Any, Literal, TypeAlias, cast
 PolicyAlgorithmId: TypeAlias = Literal[
     "ppo",
     "a2c",
+    "distill",
     "action-program",
     "cell-graph",
 ]
 Sb3AlgorithmId: TypeAlias = Literal["ppo", "a2c"]
-PolicyRuntimeFamily: TypeAlias = Literal["sb3", "action-program", "cell-graph"]
+PolicyRuntimeFamily: TypeAlias = Literal["sb3", "distill", "action-program", "cell-graph"]
 
 ACTOR_DISTRIBUTION = "actor_distribution"
 STATE_VALUE = "state_value"
@@ -40,6 +41,13 @@ class TrainingBackendSpec:
 
 
 POLICY_ALGORITHM_SPECS: dict[PolicyAlgorithmId, PolicyAlgorithmSpec] = {
+    "distill": PolicyAlgorithmSpec(
+        ("gradlab.distillation_policy.DistilledPolicy",),
+        "distill",
+        "stochastic",
+        ("stochastic", "deterministic"),
+        frozenset({ACTOR_DISTRIBUTION, SELECTED_ACTION_LOG_PROBABILITY, ENTROPY}),
+    ),
     "ppo": PolicyAlgorithmSpec(
         (
             "gradlab.ppo.GradLabPPO",
@@ -91,6 +99,7 @@ POLICY_ALGORITHM_SPECS: dict[PolicyAlgorithmId, PolicyAlgorithmSpec] = {
 
 
 TRAINING_BACKEND_SPECS: dict[str, TrainingBackendSpec] = {
+    "gradlab.distill": TrainingBackendSpec("gradlab.training.distill", "distill"),
     "gradlab.ppo": TrainingBackendSpec("gradlab.training.ppo", "ppo"),
     "gradlab.go-explore": TrainingBackendSpec("gradlab.training.go_explore", "cell-graph"),
     "gradlab.jerk": TrainingBackendSpec("gradlab.training.jerk", "action-program"),

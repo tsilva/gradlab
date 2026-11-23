@@ -50,6 +50,7 @@ GradLab is a public, reproducible, general-purpose reinforcement-learning resear
 
 - Checked-in PPO recipes must use GradLab's custom PPO backend.
 - Native PPO recipes may opt into actor-only self-imitation with declared replay and update settings recorded in the Run Configuration. The self-imitation implementation must be reusable by other GradLab-owned actor-critic backends.
+- Offline distillation recipes may train a single categorical policy from pinned teacher action probabilities, with balanced sampling across named starts. Freeze the input recordings, teacher identities, evaluation panels, and student playback contract. Distillation comparisons do not grant Acceptance. See [offline distillation](docs/specs/training-datasets.md#offline-distillation).
 - GradLab must call a capability supported only when an authoritative project registry lists it and it passes its required contract checks.
 - Supported providers must isolate parallel lanes and provide deterministic, nonduplicated episode streams without cross-lane reset or boundary effects.
 - Equivalent Providers must preserve observations, actions, rewards, discounts, events, start states, and episode boundaries.

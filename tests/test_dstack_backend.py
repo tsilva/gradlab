@@ -81,11 +81,21 @@ class DstackBackendTests(unittest.TestCase):
                 )
             )
         )
-
         self.assertEqual(
             config["resources"],
             {"cpu": "12..", "memory": "28GB..", "gpu": "1", "disk": "50GB.."},
         )
+
+    def test_distillation_mount_is_bound_to_a_local_digest(self) -> None:
+        digest = "a" * 64
+        config = render_task_config(self.task(distillation_input_id=digest))
+        self.assertIn(
+            f"/var/lib/gradlab/distillation-cache/{digest}:/distillation-input",
+            config["volumes"],
+        )
+        self.assertIn("GRADLAB_DISTILLATION_INPUT=/distillation-input", config["env"])
+        with self.assertRaisesRegex(ValueError, "SHA-256 ID"):
+            render_task_config(self.task(distillation_input_id="../host"))
 
     def test_task_rejects_inline_secret_values(self) -> None:
         with self.assertRaisesRegex(ValueError, "names only"):

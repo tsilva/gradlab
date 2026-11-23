@@ -69,6 +69,9 @@ TRAIN_EARLY_STOP_ROOT = "train/patience"
 TRAIN_REWARD_ROOT = "train/reward"
 
 TRAIN_ALGORITHM_ROOT = "train"
+TRAIN_DISTILL_CROSS_ENTROPY = "train/distill/cross_entropy/mean"
+TRAIN_DISTILL_DEVELOPMENT_CLEAR = "train/distill/development/clear/fraction"
+TRAIN_DISTILL_DEVELOPMENT_WORST_GAP = "train/distill/development/worst_teacher_gap/fraction"
 TRAIN_ACTOR_CRITIC_ALGORITHMS = ("ppo", "a2c")
 TRAIN_ALGORITHM_JERK_ROOT = f"{TRAIN_ALGORITHM_ROOT}/jerk"
 TRAIN_ALGORITHM_JERK_RETAINED_COUNT = "train/jerk/programs/count"

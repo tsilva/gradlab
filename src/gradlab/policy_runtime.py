@@ -100,6 +100,8 @@ class PolicyRuntime:
 
     @property
     def supports_sampling_temperature(self) -> bool:
+        if self.capabilities.algorithm_id == "distill":
+            return True
         from stable_baselines3.common.distributions import (
             BernoulliDistribution, CategoricalDistribution,
             DiagGaussianDistribution, MultiCategoricalDistribution,
@@ -146,6 +148,14 @@ class PolicyRuntime:
                 deterministic=effective == "deterministic",
                 sampling_temperature=sampling_temperature,
             )
+        elif self.capabilities.algorithm_id == "distill":
+            decisions = self.model.policy_decisions(
+                observation,
+                action_selection_mode=effective,
+                execution_context=execution_context,
+                sampling_temperature=sampling_temperature,
+            )
+            sampling_temperature *= self.model.temperature
         else:
             custom = getattr(self.model, "policy_decisions", None)
             if not callable(custom):
@@ -192,6 +202,7 @@ class PolicyRuntime:
             "ppo": "deterministic",
             "a2c": "deterministic",
             "action-program": "program",
+            "distill": "deterministic",
             "cell-graph": "route",
         }[self.capabilities.algorithm_id]
         custom = getattr(self.model, "inspect_policy_decisions", None)

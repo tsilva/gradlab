@@ -12,6 +12,13 @@ authority for that decision.
 
 ## Surfaces and dimensions
 
+- The Mario distillation script records local JSON diagnostics.
+  `mean_cross_entropy` averages soft-target cross-entropy in nats across
+  equally sampled levels and the preceding 250 optimizer updates. Clear
+  counts use the teacher recipe's success event at the canonical level start.
+  Development selects student weights or action-sampling temperature on one
+  seed panel. The final comparison uses a separate panel matched between
+  teacher and student.
 - Game dashboards display checkpoint training transitions and verified evaluation
   results. The Mario dashboard's Clears divides completed clears by completed
   evaluation episodes. Clear Steps uses successful episodes only. The dashboard
@@ -886,6 +893,9 @@ and target-progress fields are not registry metrics and cannot enter the publish
 | `train/reward/event/{event}/fraction` | Reward event {event} activity rate | Fraction of policy transitions on which one declared event reward contributes a nonzero value; multiple units in one delta-reward transition count as one active transition. | fraction | report | history | last | train/step | training | - | - |
 | `train/kl/mean` | PPO approximate KL | Approximate KL divergence for the PPO update. | scalar | rollout | history | last | train/step | training | - | - |
 | `train/clip/fraction` | PPO clip fraction | Fraction of sampled policy ratios outside PPO's clipping interval. | fraction | rollout | history | last | train/step | training | - | - |
+| `train/distill/cross_entropy/mean` | Distillation cross-entropy | Mean soft-target cross-entropy over equally sampled tasks since the prior optimizer report. | nats | interval | history | last | train/step | training | - | - |
+| `train/distill/development/clear/fraction` | Distillation development clear fraction | Fraction of isolated development starts cleared by the student, equally weighted across tasks. | fraction | interval | history | last | train/step | training | - | - |
+| `train/distill/development/worst_teacher_gap/fraction` | Distillation worst teacher gap | Largest teacher clear fraction minus student clear fraction across tasks on the same development panel. | fraction | interval | history | last | train/step | training | - | - |
 | `train/jerk/programs/count` | JERK retained sequences | Distinct action sequences retained by JERK search. | sequences | rollout | history | last | train/step | training | - | - |
 | `train/jerk/return/mean` | JERK best return mean | Mean observed return of JERK's highest-ranked candidate, selected from retained sequences and live exploration prefixes; a live prefix contributes one return observation. | return | rollout | history | last | train/step | training | - | - |
 | `train/program/steps` | Selected program steps | Policy-transition instructions in the program selected by the run algorithm; JERK may select a live prefix and Go-Explore selects a retained trajectory. | steps | report | history | last | train/step | training | - | - |
@@ -939,7 +949,7 @@ and target-progress fields are not registry metrics and cannot enter the publish
 | `leader/artifact` | Leader artifact | Selected checkpoint immutable artifact reference. | metadata | selection | summary | none | - | selection | - | - |
 | `leader/source` | Leader evaluation source | Selected checkpoint evaluation source. | text | selection | summary | none | - | selection | - | - |
 | `leader/updated_at` | Leader projection time | Selected checkpoint projection update timestamp. | timestamp | selection | summary | none | - | selection | - | - |
-| `train/step` | Training global step | Scientific training X-axis: policy environment transitions consumed. | steps | frame | history | max | train/step | training | - | - |
+| `train/step` | Training global step | Scientific training X-axis. Counts policy environment transitions for online learners and optimizer updates for offline distillation. | steps | frame | history | max | train/step | training | - | - |
 | `eval/step` | Evaluation checkpoint step | Scientific evaluation X-axis: step of the evaluated checkpoint. | steps | evaluation | history | max | eval/step | acceptance | - | - |
 | `ops/sequence` | Orchestration event sequence | Monotonic local outbox event sequence used as selected-service delivery order. | events | frame | history | max | ops/sequence | operational | - | - |
 | `ops/outbox/count` | Pending outbox frames | Metric outbox frames not yet acknowledged by the selected service. | events | supervisor sample | history | last | ops/sequence | operational | - | - |

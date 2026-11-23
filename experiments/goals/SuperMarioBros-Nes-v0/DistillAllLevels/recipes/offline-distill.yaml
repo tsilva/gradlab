@@ -1,0 +1,202 @@
+recipe_id: offline-distill
+description: Reproduce the 32-stage Mario student from the frozen teacher recordings.
+train:
+  timesteps: 72000
+  checkpoint_eval_backend: none
+  backend:
+    id: gradlab.distill
+    config:
+      device: cuda
+      teachers:
+      - id: Level1-1
+        repo_id: tsilva/SuperMarioBros-Nes-v0_Level1-1
+        revision: 88fafa4eeef0cf25ce730f7692e41d535c49a6ae
+        checkpoint_sha256: 4ff49f51e5bbd21e6f0ceab38df60722a6466868e068db32b50b6744142a7c80
+        recipe_sha256: bb813babcf7c5103460a5e7e7985e18ed4af0cb5e94acc770d155a136ea01ef5
+      - id: Level1-2
+        repo_id: tsilva/SuperMarioBros-Nes-v0_Level1-2
+        revision: 561036ac848ff44b458d12117cfe6402fbcf6aa8
+        checkpoint_sha256: 4e71fe59fa4827def356d50731b2979ffe920edb5362aeb88a3baa53992c6620
+        recipe_sha256: 0ff7126a4548c414789be5766d26492809a28c4703a96ce4fa0821000aea45ac
+      - id: Level1-3
+        repo_id: tsilva/SuperMarioBros-Nes-v0_Level1-3
+        revision: 527bc3c96f0bd9b87412f72c5fff8917a4976afd
+        checkpoint_sha256: 5a4006950b60c52967481e42ed51c9a41703f7777013e65042542eede0aa2541
+        recipe_sha256: 8d076d7fa0ef1f8bdc1357806ca3b9e9d2d855019c236fb3ce7c0b633b99c412
+      - id: Level1-4
+        repo_id: tsilva/SuperMarioBros-Nes-v0_Level1-4
+        revision: 5f7bbea305ecec07a1e8c6b0f9e62fc75baf692d
+        checkpoint_sha256: cb8578c931c69b1dcb53bc13d061b990b969bb7ae565653d0e1b43a7612126e6
+        recipe_sha256: 97e0f4f802d8ee1e13f470706f740125090316cbe241603514afbc0ae7677a2b
+      - id: Level2-1
+        repo_id: tsilva/SuperMarioBros-Nes-v0_Level2-1
+        revision: 7020a104d2fc4844a921b34506116c9c9875db0b
+        checkpoint_sha256: fa509e1b0a933c8377861e373aeaf3e31a77195f79009108297a52e9bf6f072e
+        recipe_sha256: cb096d7aa2e7f89fdc84030213989061e6b659e712c4f110227462d0388ca283
+      - id: Level2-2
+        repo_id: tsilva/SuperMarioBros-Nes-v0_Level2-2
+        revision: 55715cd24b9d2379ae678de15b0b5061a42026fa
+        checkpoint_sha256: aba3cc4688a4fd9a426bfa7238b384a1fc6273076f0ac9c632edf23cebaeebe7
+        recipe_sha256: 78fdf86fa49eec1cd9cd4f9e59b71c89eb797ae7d48a7a6b4a18593eff9f06a5
+      - id: Level2-3
+        repo_id: tsilva/SuperMarioBros-Nes-v0_Level2-3
+        revision: 4b2c059bf5d0ce940a4f1025b6302e70cf32f884
+        checkpoint_sha256: 4269b1261b7ac9e85b7878581b911fb78101757019943667c34b4eea5e71e58c
+        recipe_sha256: 8e5142d5fba999368f8ffc4bc40019a9400889404df1de8381bc4b10a92d3d8c
+      - id: Level2-4
+        repo_id: tsilva/SuperMarioBros-Nes-v0_Level2-4
+        revision: 596d6f387a275138f2d2a01da0a05249a8a280d3
+        checkpoint_sha256: a095703629b52c634b3339a8df5f347965c5c0e91b9be4b2fe3cce4554cb8ba4
+        recipe_sha256: b363b56b0f408567d6241c825f1dabd71a37712079b9f2a8ab15ff3349db6463
+      - id: Level3-1
+        repo_id: tsilva/SuperMarioBros-Nes-v0_Level3-1
+        revision: 565e8a60c41c017cbf89373cd58f22a220fe4796
+        checkpoint_sha256: ed89c28b554142b24d6310da3d1e4d8570ba34a026ebfdef1f28c13cdb5c80a3
+        recipe_sha256: 7a21514200405bebcbece64c27fe2b4f8400f917a7a85eb6dec397e3b28477ea
+      - id: Level3-2
+        repo_id: tsilva/SuperMarioBros-Nes-v0_Level3-2
+        revision: c50a6205efea491c7a4903f750414dcbd2b6c529
+        checkpoint_sha256: 706aed0b953ab90416e7aedaa0bf38dda38dba5355e114f2f8290571eaa256b4
+        recipe_sha256: a138cdc99773a4edeb2158c07774ad6ad170d278ea3fb72c9e6b95d377255da7
+      - id: Level3-3
+        repo_id: tsilva/SuperMarioBros-Nes-v0_Level3-3
+        revision: d07808871faabd3b62281674e29b2cf8e9ff1a46
+        checkpoint_sha256: 98eac1c7baee59cf8184745348b139a64bfa01224bff84e9ebe6ecc1ccc723f7
+        recipe_sha256: 88f2f7a057c1a75b07763bd0b5a9b87e2a3557063c42065f4e6e87fdcd5faee9
+      - id: Level3-4
+        repo_id: tsilva/SuperMarioBros-Nes-v0_Level3-4
+        revision: cf928f6aceb9488ed75e779192a7d65d9e05ce93
+        checkpoint_sha256: cec220f5264c8f175febbb2dcfbc0cf1b6a221a05bb04e83d549e8f9caffaffc
+        recipe_sha256: eef0ad49b9d1a35f25914d63f42e42edd620fe0ac5faecb011d18695e3e8b573
+      - id: Level4-1
+        repo_id: tsilva/SuperMarioBros-Nes-v0_Level4-1
+        revision: f2273d670ce80222445f2c9cc6b2c8fe542f495a
+        checkpoint_sha256: 86597f65f2f145fe05336d18aa30784becc4a4c4a65f14951210c4f7d901f082
+        recipe_sha256: 4eab63a8e9c3c441926f322b83907048088afef8bca22ee57a3100ba761fd130
+      - id: Level4-2
+        repo_id: tsilva/SuperMarioBros-Nes-v0_Level4-2
+        revision: 4f38c79ca0a1a365a9e59e3f1e698f9607fa639b
+        checkpoint_sha256: 2debbb474e9ec5bcf60b2daff15d0097ee25dfa5b64e06014913689eec7b7b32
+        recipe_sha256: 8d81dab1090e706b80be6e27a4cc0519d04c6b0266b89b1577880192683ee14e
+      - id: Level4-3
+        repo_id: tsilva/SuperMarioBros-Nes-v0_Level4-3
+        revision: 6d5fa58085c9460d8547a73e365d27cf7944797f
+        checkpoint_sha256: 913fca5dc0058a8034b8a427012bdaff952ca853e9576f74206574743dab2757
+        recipe_sha256: 3b746dea3698efb4bbe6432f35bd08f4bf8e911ccb68539d21db2c1e1913c643
+      - id: Level4-4
+        repo_id: tsilva/SuperMarioBros-Nes-v0_Level4-4
+        revision: 9591e8ba6ca16306b179d617624f54f60cbe90e4
+        checkpoint_sha256: 1ca0a9ffc55043eeebdc48ffcb1c6aa1291e4075e707e8c727701c4e187ed8f8
+        recipe_sha256: 1e074510f342cf2ae99df760b56357324a3d54a522f7c73d6b1e8b1dfe95c508
+      - id: Level5-1
+        repo_id: tsilva/SuperMarioBros-Nes-v0_Level5-1
+        revision: f2c408aecf07a5db856d363bed3f94040bed8404
+        checkpoint_sha256: fd3e845f26dc2e0b7d03ede9e1fbc50c021e58e092455acf8b94e3a39b5098d9
+        recipe_sha256: c36e6172e6e8dbc945ccce18d6186431825908ea395ff3c563a568438c472805
+      - id: Level5-2
+        repo_id: tsilva/SuperMarioBros-Nes-v0_Level5-2
+        revision: bbc2107c2e1b90137136f59c09847ca6a171bfd0
+        checkpoint_sha256: 18d56433bf5222a6c8d30a4ae9cf162a2a85da5fc6bad001d01de83a69c1db50
+        recipe_sha256: 20576c302378fa4ade8ba69fa8d0b03d897affaa0ec144781b2def91b0b6e8c0
+      - id: Level5-3
+        repo_id: tsilva/SuperMarioBros-Nes-v0_Level5-3
+        revision: c2dbe2106b02882345ef033a4c1c165cf250f11d
+        checkpoint_sha256: 29200c0e3f06b08150a8d2e4d0db10532297c0fcfb38bdf4a5496763d914770d
+        recipe_sha256: 318701ec2e58f2863b16142e5bfdb98ee4bd9d12556de83cf3c747a856cee8b6
+      - id: Level5-4
+        repo_id: tsilva/SuperMarioBros-Nes-v0_Level5-4
+        revision: dcae4ce52b14cc0178272c57e8cc5ee7205759ce
+        checkpoint_sha256: 8c347d1fe7357f325df882dd78b637856e47ffcf121dede63585ce3198acf14e
+        recipe_sha256: 0b633520340d790a328cab7e7f5bff989d51d99ae835031afaac8b9cfdc84e80
+      - id: Level6-1
+        repo_id: tsilva/SuperMarioBros-Nes-v0_Level6-1
+        revision: bf1b53e51582b87ec1a5dd987636fda146989ff8
+        checkpoint_sha256: e51ad7fb23313128e244a47e872f06b88768bcd2aa20f32a1a9c0337e4bd4879
+        recipe_sha256: f360eb9567a672bf020e44d9596dc36d574232cc81380194aff3fc61434afa57
+      - id: Level6-2
+        repo_id: tsilva/SuperMarioBros-Nes-v0_Level6-2
+        revision: b2df6e5f763cad6254c8b5039d6116750e6f4bb4
+        checkpoint_sha256: f21dade919d4f45f17a1e3cb072e8e889bd95f293163775c15acb6334520162d
+        recipe_sha256: 71700ef772c39fafb365b858d8abeb3211c8b90a14850706dd427ca97c1e1c0a
+      - id: Level6-3
+        repo_id: tsilva/SuperMarioBros-Nes-v0_Level6-3
+        revision: ced7e3108a9bd449bee2923c21cef9afb86f1e6d
+        checkpoint_sha256: d6990bd3bb517d88439b94401350d0ba1362acdc1e07f528893d6e0b10e22b05
+        recipe_sha256: 3ecdeb756519656855f658fee61fe30cc6fa833d699eaa8d2ef01eded3801edb
+      - id: Level6-4
+        repo_id: tsilva/SuperMarioBros-Nes-v0_Level6-4
+        revision: 0f22265cb2148be0f5ec04b29966dc9986584a87
+        checkpoint_sha256: 460e5cdbc350db3b1e23b4d2d8af519aaecbe81b5553650e120d9a3453dedf82
+        recipe_sha256: 33dcd94c4f22eff0c0523b02e761082ac52112383e325b4856e77370f4af3c4c
+      - id: Level7-1
+        repo_id: tsilva/SuperMarioBros-Nes-v0_Level7-1
+        revision: cd2b0da049700cb81a1e63fc31d9df13c264c20d
+        checkpoint_sha256: f769be6850bd89d8778e2b7045023e5efc4d95e4f40ff6b0347758a38ed06c03
+        recipe_sha256: 1e55a6f1e6e91f301bbf76d24d2087d220e3890d3306ff5338777722e55cb2fd
+      - id: Level7-2
+        repo_id: tsilva/SuperMarioBros-Nes-v0_Level7-2
+        revision: 1c9d59b7abc4ce2135f69fdbf3fa90bd1b2bd086
+        checkpoint_sha256: c10f70e9d693fa3c4876adb1ce243c0d239978c1453630c980cb28b10e51b91f
+        recipe_sha256: 7cf188cd648e0be3b7435b78610ee5b0009b5b34bddb4f4bb344842a8d8238ba
+      - id: Level7-3
+        repo_id: tsilva/SuperMarioBros-Nes-v0_Level7-3
+        revision: b411fd79489ccf61bac93a54242491e3371c4346
+        checkpoint_sha256: 671e37782a474b523a18571175fff2af3d2d20946ed4044037e44c551fa79373
+        recipe_sha256: c13e8bf73256cd15fbf37acffaab1e74a4fb134c5714319051f15532b2555ea2
+      - id: Level7-4
+        repo_id: tsilva/SuperMarioBros-Nes-v0_Level7-4
+        revision: 8af1bf87a364fb5348059ebd00b49282ee5da2f4
+        checkpoint_sha256: f177a7dde7904311f09b044fe980857752ef1655d95f5762f7f4828b2800e6fe
+        recipe_sha256: 9c6d0c43f346f5330bece31db95f7a540a1f6dfe8b6b1e393ae6e97cff852f64
+      - id: Level8-1
+        repo_id: tsilva/SuperMarioBros-Nes-v0_Level8-1
+        revision: b3bf90f039dc1ed08eea2c89039714fba9d12f5b
+        checkpoint_sha256: dc06d4486eeffccac5f02d043889a3c683dd4c32ec44cb8cfe9262d66497b341
+        recipe_sha256: c22008f7feabc4114d844d9589a984132a4cbcae911b20693b122a1feddec127
+      - id: Level8-2
+        repo_id: tsilva/SuperMarioBros-Nes-v0_Level8-2
+        revision: 60080c248eb88c149235e8dfd21ca7d38f7aaab2
+        checkpoint_sha256: 70ede32bc9d7c909d68f9312e3eb3b81ba14ad4b6955d8e59d95d6ac396fe3c1
+        recipe_sha256: 959346438653186324105eeae1ce3f627c12dbf261dc1fb29a0aa00bcaab7b03
+      - id: Level8-3
+        repo_id: tsilva/SuperMarioBros-Nes-v0_Level8-3
+        revision: da0fcad74d3277354ccd5b787dfd85ce3181ef85
+        checkpoint_sha256: 9628934ee3823db9b11fb1fee892efbd8aee285d5c55bf258fc62c2b11e77743
+        recipe_sha256: 5282d5aaa4e12b0c25a001cad125e270ff83b4387b42a2fbf6b944f3b7ed8640
+      - id: Level8-4
+        repo_id: tsilva/SuperMarioBros-Nes-v0_Level8-4
+        revision: 83154eac98da247b0ce8574e9a54e6ec0c8717ec
+        checkpoint_sha256: 96ce3a93c7185ee42c74072c59d8b8f642196aff081a938cb4a18df25667ab1a
+        recipe_sha256: 4a4a771f511a104d8c90d08ffd034a3515e685656485d4d6a62739903785de42
+      dataset:
+        manifest_sha256: 64224d06861daa5d4ef8ec53976e22a045e6a46213cd2d7880c682bafcb52d93
+        shards_sha256: 949d2ca2b946988f885b03738976eebe64242c93a3d57781404101de9cf14a97
+      architecture: cnn_3conv_mlp512
+      samples_per_task: 12
+      phases:
+      - seed: 20261123
+        learning_rate: 0.0003
+        evaluate_at_updates:
+        - 10000
+        - 25000
+        - 42000
+        - 60000
+        heldout_seed: 600000
+      - seed: 20261125
+        learning_rate: 0.00015
+        evaluate_at_updates:
+        - 6000
+        - 12000
+        heldout_seed: 700000
+      evaluation:
+        lanes: 32
+        development_episodes: 64
+        development_seed: 100000
+        development_temperature: 0.7
+        heldout_episodes: 128
+        final_seed: 800000
+        temperatures:
+        - 0.7
+        - 0.5
+        - 0.6
+        - 0.85

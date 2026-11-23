@@ -768,6 +768,11 @@ class BatchRuntime:
         return [None if value is None else int(value) for value in seeds]
 
     @property
+    def episode_start_ids(self) -> tuple[str | None, ...]:
+        """Resolved start identities for the active episodes."""
+        return tuple(self._start_ids)
+
+    @property
     def episode_seeds(self) -> tuple[int | None, ...]:
         """Seeds of the active episode in each vector lane."""
 

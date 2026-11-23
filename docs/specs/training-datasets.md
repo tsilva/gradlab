@@ -10,6 +10,31 @@ contract and records one declared episode by default for visual environments.
 The opt-in monitoring described below is a separate, larger transition-dataset
 campaign; enabling it does not replace or relax Acceptance.
 
+## Offline distillation
+
+Distillation uses an explicit offline training dataset and a registered categorical
+student. It supports pixel observations and compatible, zero-based discrete
+action contracts from one game. Each teacher owns one named environment start.
+The learner requires matching preprocessing and validates shared action IDs
+against their controller semantics. Playback obtains its task ID from the
+active episode start and maps the saved semantic mask to the runtime action order.
+
+- A `gradlab.distill` recipe pins each teacher's Hub revision, Checkpoint digest,
+  and canonical recipe digest. Successful-only collection records policy inputs,
+  teacher probabilities, the action vocabulary and complete episode spans.
+- A recipe can collect a fresh bounded dataset or read an immutable recording
+  manifest and shard index. Reuse verifies every file's digest and teacher identity.
+  The fitter uses equal sample counts per task and never adds its own rollouts to the dataset.
+- Development starts select the checkpoint and shared sampling temperature.
+  Held-out teacher and student rollouts use the same seed panel and stay outside
+  selection. Saved-start comparisons cover their declared starts. A continuous-game
+  claim requires independent evidence from a continuous evaluation contract.
+- The output is a data-only student Checkpoint with the selected temperature and
+  comparison evidence. The distillation budget and Checkpoint steps count optimizer
+  updates. Distillation comparisons remain separate from Acceptance and Promotion.
+- Local dstack inputs use a digest-addressed, kernel read-only host bind mount.
+  The worker verifies the input snapshot and runs without teacher service credentials.
+
 ## Scientific contract
 
 - Initially support verified native Breakout Checkpoints produced by GradLab PPO and SB3 PPO/A2C, including Training-Only Goals without inventing Acceptance criteria.

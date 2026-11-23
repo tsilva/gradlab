@@ -134,6 +134,8 @@ class GradLabVecEnv(VecEnv):
         return step.observations, step.rewards, self._dones.copy(), infos
 
     def policy_execution_context(self, model: Any):
+        if getattr(model, "requires_episode_start_ids", False):
+            return self.runtime.episode_start_ids
         cell_config = getattr(model, "cell_detector_config", None)
         if not isinstance(cell_config, Mapping):
             return None

@@ -26,6 +26,10 @@ def load_policy_model(
         raise TypeError("load_policy_model requires an ApprovedModelInput")
     model_input.verify()
     path = model_input.model_path
+    if algorithm_id == "distill":
+        from gradlab.distillation_policy import DistilledPolicy
+
+        return DistilledPolicy.load(path, device=device)
     if algorithm_id == "action-program":
         from gradlab.action_program import ActionProgramPolicy
 
